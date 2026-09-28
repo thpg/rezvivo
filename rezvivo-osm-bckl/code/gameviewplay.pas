@@ -4957,7 +4957,7 @@ begin
       LogRec.InstantPower:=JournalPower(Accounting.Power);
       LogRec.InstantSpeed:=FActiveAvatarAgent.State.CurrentSpeed*3.6;
       LogRec.Distance:=Round(FActiveAvatarAgent.State.CumulativeDistance);
-      SensorLog.LogFrame(LogRec,SlopeDegToGradePct(FActiveAvatarAgent.State.CurrentSlopeAngle),MetricsDt);
+      SensorLog.LogFrame(LogRec,SlopeDegToGradePct(FActiveAvatarAgent.State.CurrentSlopeAngle),MetricsDt,DeviceService.ActivitySourceFlags);
     end;
   end;
   UpdateRideAudio(SecondsPassed,PhysDt>0);

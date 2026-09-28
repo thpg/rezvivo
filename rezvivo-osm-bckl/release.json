@@ -1,7 +1,7 @@
 {
-  "version": "0.2.0-alpha.1",
-  "build": 2,
-  "file_version": "0.2.0.2",
+  "version": "0.2.1-alpha.1",
+  "build": 3,
+  "file_version": "0.2.1.3",
   "channel": "alpha",
-  "notes": "Fix incomplete OSM tile caching and retry scheduling, wait for the start scene before reporting missing ground, and read FIT simulation through the shared decoder. Keep the simulation panel visible with a clear message when its FIT source is unavailable."
+  "notes": "Add the training schedule with Intervals.icu sync and today's workout shortcuts. Automatically upload completed smart-trainer rides and workout-only sessions to Intervals.icu, with durable retries, duplicate protection and simulation exclusion."
 }

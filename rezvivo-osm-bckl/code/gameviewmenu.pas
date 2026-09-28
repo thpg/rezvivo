@@ -30,7 +30,7 @@ uses GameMenuTheme,
   GameViewBikeFit,     { TBikeFitPage — встроенная страница «Байкфит» }
   GameViewEvents,      { TEventsPage — встроенная страница «События» }
   GameViewTraining,    { TTrainingPage — встроенная страница «Тренировки» }
-  GameViewRouteLibrary,
+  GameViewRouteLibrary, GameViewSchedule,
   GameViewRouteCreator, GameViewDreamWorld,
   GameViewProfile;     { TProfilePage — встроенная страница «Профиль» }
 
@@ -71,6 +71,8 @@ type
     FPendingTab: String;
     FStartPage:TStartPage;
     FHistoryPage:THistoryPage;
+    FSchedulePage:TSchedulePage;
+    FTileSchedule:TMenuTile;
     FTileHome,FTileHistory:TMenuTile;
     FPendingWorkout:TWorkoutFile;
     FPendingReference:Double;
@@ -84,6 +86,7 @@ type
     FChildReturnTab:String;
     procedure ClickHome(Sender:TObject);
     procedure ClickHistory(Sender:TObject);
+    procedure ClickSchedule(Sender:TObject);
     procedure LoadLastMap;
     procedure ApplyPendingWorkout;
     procedure ShowDevicePrompt;
@@ -387,6 +390,7 @@ begin
   FPageHost.Border.Bottom := 0;
   InsertFront(FPageHost);
   FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;
+  FSchedulePage:=nil;FTileSchedule:=nil;
   FRoutesPage := nil;
   FDreamPage := nil;
   FDevicesPage := nil;
@@ -508,6 +512,8 @@ begin
     @ClickTraining,
     'native:training');
   Col.InsertFront(FTileTraining);
+  FTileSchedule:=MakeTile(T('Schedule'),MenuAccent,@ClickSchedule,'native:calendar');
+  Col.InsertFront(FTileSchedule);
   Col.InsertFront(FTileBikeFit);
 
   FTileProfile := MakeTile(
@@ -537,10 +543,10 @@ begin
   if(EffectiveWidth<=0)or(EffectiveHeight<=0)then Exit;
   S:=Max(0.65,Min(1,UIScale));BottomInset:=8;
   TileW:=EnsureRange(EffectiveWidth*0.14,190/S,220/S);
-  TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-5*TILE_GAP)/6);
+  TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-6*TILE_GAP)/7);
   TileH:=Max(38/S,TileH);PageLeft:=TileW+40/S;
   SizeTile(FTileHome);SizeTile(FTileHistory);SizeTile(FTileRoutes);SizeTile(FTileDream);SizeTile(FTileDevices);
-  SizeTile(FTileBikeFit);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
+  SizeTile(FTileSchedule);SizeTile(FTileBikeFit);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
   if FTileCol<>nil then begin FTileCol.Anchor(vpTop,-100/S);FTileCol.Anchor(hpLeft,12/S);end;
   if FTileProfile<>nil then begin FTileProfile.Anchor(hpLeft,12/S);FTileProfile.Anchor(vpBottom,BottomInset+58/S);end;
   if FNavBackground<>nil then FNavBackground.Width:=TileW+24/S;
@@ -674,6 +680,7 @@ begin
   FVersionButton:=nil;
   FRoomButton:=nil;FRoomView:=nil;
   FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;
+  FSchedulePage:=nil;FTileSchedule:=nil;
   FRoutesPage := nil;
   FDreamPage := nil;
   FDevicesPage := nil;
@@ -708,6 +715,7 @@ function TViewMenu.Press(const Event:TInputPressRelease):Boolean;
 begin
   if Event.IsKey(keyEscape) then begin
     if FLaunchPane<>nil then begin CancelLaunch(nil);Exit(True);end;
+    if Assigned(FSchedulePage)and FSchedulePage.Exists and FSchedulePage.HandleBack then Exit(True);
     if Assigned(FHistoryPage)and FHistoryPage.Exists and FHistoryPage.HandleBack then Exit(True);
     if Assigned(FRoutesPage) and FRoutesPage.Exists and FRoutesPage.CloseDetails then Exit(True);
     if Assigned(FBikeFitPage) and FBikeFitPage.Exists and FBikeFitPage.HandleBack then Exit(True);
@@ -847,6 +855,9 @@ begin
       Exit(Container.CurrentViewStack[I-1]=ViewPlay);
 end;
 
+procedure TViewMenu.ClickSchedule(Sender:TObject);
+begin TogglePage(FSchedulePage,TSchedulePage,FTileSchedule);end;
+
 procedure TViewMenu.ClickTraining(Sender: TObject);
 begin
   TogglePage(FTrainingPage, TTrainingPage, FTileTraining);
@@ -914,7 +925,8 @@ begin
     FRoutesPage.PageHidden;
     FRoutesPage.Exists := False;
   end;
-  HidePage(FStartPage);HidePage(FHistoryPage);
+  HidePage(FStartPage);HidePage(FHistoryPage);HidePage(FSchedulePage);
+  if FTileSchedule<>nil then FTileSchedule.Selected:=False;
   if(FTileHome<>nil)then FTileHome.Selected:=False;
   if(FTileHistory<>nil)then FTileHistory.Selected:=False;
   if(FDreamPage<>nil)and FDreamPage.AutoStart then FreeAndNil(FPendingWorkout);
@@ -1032,6 +1044,7 @@ begin
     Exit;
   end;
   if N='home' then begin ClickHome(nil);Exit;end;
+  if N='schedule' then begin ClickSchedule(nil);Exit;end;
   if N='history' then begin ClickHistory(nil);Exit;end;
   if N='result' then begin ClickHistory(nil);FHistoryPage.ShowResult;Exit;end;
   if N='rider' then begin TogglePage(FProfilePage,TProfilePage,FTileBikeFit);FProfilePage.ShowRider;Exit;end;

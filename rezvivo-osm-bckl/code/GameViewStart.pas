@@ -12,6 +12,11 @@ type
     FButtons:array[0..3]of TMenuButton;
     FRecovery:TJSONObject;
     FContinue,FFinishSaved:TMenuButton;
+    FTodayOnly:TMenuButton;
+    FTodayKey,FTodayName,FScheduleLanguage:String;
+    FScheduleRevision:QWord;
+    procedure UpdateToday;
+    procedure ClickTodayOnly(Sender:TObject);
     procedure ClickContinue(Sender:TObject);
     procedure ClickFinishSaved(Sender:TObject);
     procedure ClickAction(Sender:TObject);
@@ -19,6 +24,7 @@ type
     constructor Create(AOwner:TComponent);override;
     destructor Destroy;override;
     procedure PageShown;override;
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
     procedure Resize;override;
   end;
   THistoryPage=class(TMenuEmbeddedPage)
@@ -49,7 +55,7 @@ implementation
 uses Math,CastleVectors,CastleColors,CastleWindow,CastleURIUtils,CastleApplicationProperties,UiTranslations,
   CastleMessages,
   GameViewMenu,GameUserData,GameRideHistory,WorkoutFile,GameSensorLog,FitFile,
-  RideUploadQueue,VeloSiteAPI;
+  RideUploadQueue,VeloSiteAPI,GameWorkoutSchedule,GameViewSchedule;
 
 constructor TStartPage.Create(AOwner:TComponent);
 var I:Integer;
@@ -79,6 +85,10 @@ begin
       FCards[I].InsertFront(FButtons[I]);
     end else InsertFront(FButtons[I]);
   end;
+  FTodayOnly:=TMenuButton.Create(Self);FTodayOnly.Name:='TodayWorkoutOnly';
+  FTodayOnly.AutoSize:=False;FTodayOnly.AutoIcon:=False;FTodayOnly.Style:=mbGhost;
+  BindUiText(FTodayOnly,'Workout only');FTodayOnly.OnClick:=@ClickTodayOnly;
+  FTodayOnly.Exists:=False;FCards[1].InsertFront(FTodayOnly);
   FButtons[0].Style:=mbPrimary;
   FButtons[3].Style:=mbGhost;
   FContinue:=TMenuButton.Create(Self);FContinue.Name:='ContinueSavedRide';FContinue.AutoSize:=False;
@@ -106,14 +116,35 @@ begin
   inherited;FreeAndNil(FRecovery);
   if not ViewMenu.SessionUnderneath then FRecovery:=RideHistory.LatestUnfinished;
   FContinue.Exists:=FRecovery<>nil;FFinishSaved.Exists:=FRecovery<>nil;
+  WorkoutSchedule.Tick;UpdateToday;
   FButtons[3].Exists:=UserPreference('last_workout')<>'';Resize;
 end;
+procedure TStartPage.ClickTodayOnly(Sender:TObject);
+begin StartScheduledWorkout(FTodayKey,True);end;
+procedure TStartPage.UpdateToday;
+var E:TJSONObject;
+begin
+  FScheduleRevision:=WorkoutSchedule.Revision;FScheduleLanguage:=UiLanguage;E:=WorkoutSchedule.Today;
+  FTodayKey:='';
+  if E<>nil then begin
+    FTodayKey:=WorkoutSchedule.EventKey(E);
+    BindUiText(FCardTitles[1],'Today''s workout');
+    FTodayName:=E.Get('name','');
+    if E.Get('duration',0)>0 then FTodayName:=FTodayName+' · '+FormatWorkoutDuration(E.Get('duration',0));
+  end else begin
+    BindUiText(FCardTitles[1],'Intervals');BindUiText(FCardHints[1],'Ready workouts or your own');
+  end;
+  FTodayOnly.Exists:=E<>nil;Resize;
+end;
+procedure TStartPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+begin inherited;if(FScheduleRevision<>WorkoutSchedule.Revision)or(FScheduleLanguage<>UiLanguage)then UpdateToday;end;
 procedure TStartPage.Resize;
 var S,W,Top,TitleY,HintY,ButtonY,CardY,CardW:Single;I:Integer;
 begin
   inherited;if FButtons[3]=nil then Exit;S:=Max(0.65,Min(1,UIScale));
   W:=Min(580/S,Max(360/S,(EffectiveWidth-48/S)*0.51));
   W:=Min(W,EffectiveWidth-48/S);Top:=Max(24/S,Min(96/S,EffectiveHeight*0.12));
+  if EffectiveHeight<720/S then Top:=24/S;
   FEyebrow.FontSize:=12/S;FEyebrow.Anchor(hpLeft,24/S);FEyebrow.Anchor(vpTop,-Top);
   TitleY:=Top+38/S;
   FTitle.FontSize:=Min(52/S,W*0.115);FTitle.MaxWidth:=W;
@@ -143,12 +174,24 @@ begin
     FCardHints[I].FontSize:=13/S;FCardHints[I].MaxWidth:=CardW-36/S;
     FCardHints[I].Anchor(hpLeft,18/S);FCardHints[I].Anchor(vpTop,-(66/S+FCardTitles[I].EffectiveHeight+12/S));
   end;
+  if FTodayOnly<>nil then begin
+    FTodayOnly.Width:=CardW-20/S;FTodayOnly.Height:=32/S;FTodayOnly.FontSize:=13/S;
+    FTodayOnly.Anchor(hpLeft,10/S);FTodayOnly.Anchor(vpBottom,4/S);
+    FButtons[1].Border.Bottom:=0;
+    if FTodayOnly.Exists then begin
+      FButtons[1].Border.Bottom:=38/S;
+      FCardTitles[1].FontSize:=14/S;FCardHints[1].FontSize:=12/S;
+      FCardHints[1].Caption:=MenuSummary(FTodayName,FCardHints[1].Font,CardW-36/S,2);
+      FCardTitles[1].Anchor(vpTop,-44/S);
+      FCardHints[1].Anchor(vpTop,-(44/S+FCardTitles[1].EffectiveHeight+8/S));
+    end;
+  end;
   FButtons[3].Width:=W;FButtons[3].Height:=44/S;FButtons[3].FontSize:=14/S;
   FButtons[3].Anchor(hpLeft,24/S);FButtons[3].Anchor(vpTop,-(CardY+190/S));
 end;
 procedure TStartPage.ClickAction(Sender:TObject);
 begin case TComponent(Sender).Tag of
-  0:ViewMenu.QuickRide;1:ViewMenu.OpenTab('intervals');2:ViewMenu.OpenTab('routes');3:ViewMenu.RepeatWorkout;
+  0:ViewMenu.QuickRide;1:if FTodayKey<>''then StartScheduledWorkout(FTodayKey,False)else ViewMenu.OpenTab('intervals');2:ViewMenu.OpenTab('routes');3:ViewMenu.RepeatWorkout;
 end;end;
 
 constructor THistoryPage.Create(AOwner:TComponent);

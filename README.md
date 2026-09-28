@@ -20,6 +20,9 @@ data with handcrafted Dream Worlds, smart-trainer integration and interval train
   a futuristic district, a red canyon and an environment showcase.
 - **Interval training:** original built-in workouts, power targets, live intensity
   adjustments and a compact workout-only window.
+- **Intervals.icu:** a synced training schedule, one-click starts for today's workout,
+  and automatic uploads of completed smart-trainer sessions. Simulated sessions
+  are excluded from uploads.
 - **Devices and simulation:** Bluetooth trainer and sensor integration, plus
   FIT-based simulation for exploring without connected equipment.
 - **Bike fitting:** adjustable avatars, riding positions and parametric bicycles.

@@ -145,6 +145,9 @@ type
     function GetIntensityFactor: Single;
     function GetTSS: Single;
   public
+    { Local calendar origin; carried through clones and ride recovery. }
+    ScheduleUserId:Int64;
+    ScheduleKey:String;
     constructor Create;
     destructor Destroy; override;
 
@@ -725,6 +728,7 @@ begin
     Result.FAuthor := FAuthor;
     Result.FSportType := FSportType;
     Result.FUrl := FUrl;
+    Result.ScheduleUserId:=ScheduleUserId;Result.ScheduleKey:=ScheduleKey;
     Result.FCategory := FCategory;
     Result.FRawHeaderChildren.Assign(FRawHeaderChildren);
     for Src in FSegments do
@@ -1483,7 +1487,9 @@ var
         end;
       wskSteady:
         begin
-          DefPwr := AttrFloat(Node, 'Power', 0.6);
+          DefPwr := AttrFloat(Node, 'Power',
+            (AttrFloat(Node,'PowerLow',0.6)+AttrFloat(Node,'PowerHigh',
+              AttrFloat(Node,'PowerLow',0.6)))*0.5);
           Seg := AddSeg(wskSteady, AttrFloat(Node, 'Duration', 0),
             DefPwr, DefPwr, 0, False);
           Seg.Cadence := AttrInt(Node, 'Cadence', 0);
@@ -1522,8 +1528,12 @@ var
 
     OnDur := AttrFloat(Node, 'OnDuration', 30);
     OffDur := AttrFloat(Node, 'OffDuration', 30);
-    OnPwr := AttrFloat(Node, 'OnPower', 1.0);
-    OffPwr := AttrFloat(Node, 'OffPower', 0.5);
+    OnPwr := AttrFloat(Node, 'OnPower',
+      (AttrFloat(Node,'OnPowerLow',1.0)+AttrFloat(Node,'OnPowerHigh',
+        AttrFloat(Node,'OnPowerLow',1.0)))*0.5);
+    OffPwr := AttrFloat(Node, 'OffPower',
+      (AttrFloat(Node,'OffPowerLow',0.5)+AttrFloat(Node,'OffPowerHigh',
+        AttrFloat(Node,'OffPowerLow',0.5)))*0.5);
 
     OnCad  := AttrInt(Node, 'Cadence', 0);
     OffCad := AttrInt(Node, 'CadenceResting', 0);
@@ -1555,6 +1565,7 @@ var
 begin
   Result := False;
   FUrl := AUrl;
+  ScheduleUserId:=0;ScheduleKey:='';
   FName := ChangeFileExt(ExtractFileName(AUrl), '');
   FSegments.Clear;
   FRawHeaderChildren.Clear;

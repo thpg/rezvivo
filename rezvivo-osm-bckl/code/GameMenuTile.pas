@@ -231,6 +231,7 @@ begin
     else if AUrl='native:mountain'then FGlyph.Kind:=mgMountain
     else if AUrl='native:bicycle'then FGlyph.Kind:=mgBicycle
     else if AUrl='native:history'then FGlyph.Kind:=mgHistory
+    else if AUrl='native:calendar'then FGlyph.Kind:=mgCalendar
     else if AUrl='native:settings'then FGlyph.Kind:=mgSettings
     else FGlyph.Kind:=mgTraining;
     Exit;

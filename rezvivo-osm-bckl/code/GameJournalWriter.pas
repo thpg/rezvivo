@@ -94,7 +94,7 @@ begin
   Parts:=TStringList.Create;
   try
     Parts.StrictDelimiter:=True;Parts.Delimiter:=',';Parts.QuoteChar:=#0;Parts.DelimitedText:=Tail;
-    if(Parts.Count=17)and(Parts[14]='1')then begin
+    if(Parts.Count in[17,18])and(Parts[14]='1')then begin
       Parts[14]:='0';Parts[16]:='0';Tail:=Parts.DelimitedText+LineEnding;
       S.Position:=S.Size;S.WriteBuffer(Tail[1],Length(Tail));Durable(S);
     end;

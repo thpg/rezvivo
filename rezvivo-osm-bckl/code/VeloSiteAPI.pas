@@ -111,6 +111,7 @@ type
     из FIT. Source/Type/Kind не должны быть пустыми. }
   TVeloSiteRideUpload = record
     Source:        String;     { 'game' / 'strava' / 'upload' }
+    UploadIntervals:Boolean;
     UploadType:    String;     { 'free' / 'workout' / 'event' }
     Kind:          String;     { 'fit' / 'tcx' / 'gpx' }
     StartedAtUnix: Int64;      { 0 = не присылать }
@@ -1817,6 +1818,7 @@ begin
     MetaObj.Add('source',     AMeta.Source);
     MetaObj.Add('type',       AMeta.UploadType);
     MetaObj.Add('kind',       AMeta.Kind);
+    MetaObj.Add('upload_intervals',AMeta.UploadIntervals);
     if AMeta.StartedAtUnix > 0 then
       MetaObj.Add('started_at',
         FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"',
@@ -1835,6 +1837,9 @@ begin
       raise EVeloSiteError.Create(500, 'invalid_response',
         'UploadRide: unexpected response', nil);
     RespObj := TJSONObject(Resp);
+    if AMeta.UploadIntervals and(RespObj.Find('intervals_upload')=nil)then
+      raise EVeloSiteError.Create(503,'intervals_upload_unavailable',
+        'Server update required for Intervals upload; recording retained for retry',nil);
     Result.RideId     := JsonGetInt64(RespObj, 'ride_id', 0);
     Result.Idempotent := JsonGetBool(RespObj, 'idempotent', False);
     Result.Status     := JsonGetStr(RespObj, 'status', '');

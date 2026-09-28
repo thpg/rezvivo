@@ -11,7 +11,7 @@ unit GameSensorLog;
 interface
 
 uses
-  TrainerData, GameJournalWriter;
+  TrainerData, GameJournalWriter, GameActivitySource;
 
 type
   { Запись сессии прочитанная из CSV — используется FIT-writer'ом и
@@ -35,6 +35,7 @@ type
     TimerActive:      Boolean;
     Lap:             Integer;
     TargetWatts:      Word;
+    SourceFlags:      Byte; { cumulative provenance, survives crash/resume }
   end;
   TSensorSessionRecordArray = array of TSensorSessionRecord;
 
@@ -73,6 +74,7 @@ type
     FHasFrameData:Boolean;
     FFrameData:TTrainerDataRecord;
     FFrameSlope:Single;
+    FSourceFlags,FLastSourceFlags:Byte;
     procedure SetRecordingEnabled(Value:Boolean);
     function GetError:String;
     function GetElapsed:Double;
@@ -92,7 +94,8 @@ type
       use real time. LogFrame integrates precisely the same interval and power
       snapshot as activity/daily accounting, including slow/fast simulation. }
     procedure UseActivityClock;
-    procedure LogFrame(const Data:TTrainerDataRecord;ASlope:Single;Seconds:Double);
+    procedure LogFrame(const Data:TTrainerDataRecord;ASlope:Single;Seconds:Double;
+      SourceFlags:Byte=ActivitySourceUnknown);
 
     { Flush buffered data to disk immediately. }
     procedure Flush;
@@ -119,6 +122,7 @@ type
       session_YYYY-MM-DD_HH-MM-SS.csv (только так извлекается
       абсолютная отметка времени старта). }
     class function LoadSession(const AFileName: string): TSensorSessionRecordArray;
+    class function CanUploadIntervals(const Rows:TSensorSessionRecordArray):Boolean;
 
     { Извлечь абсолютное время старта из имени файла session_*.csv.
       Возвращает 0 при невалидном формате. }
@@ -205,7 +209,7 @@ begin
 
   FStartTime := Now;
   FStartTick:=GetTickCount64;FResumeElapsed:=0;FLastElapsed:=0;FClockElapsed:=0;
-  FHasFrameData:=False;
+  FHasFrameData:=False;FSourceFlags:=0;FLastSourceFlags:=0;
   FHasLast:=False;FLastWasZero:=False;FLastWriteTime:=0;FTotalLines:=0;FLinesSinceFlush:=0;
   Dir := ExtractFilePath(ParamStr(0)) + FSessionDir;
   if ExtractFileDrive(FSessionDir)<>''then Dir:=FSessionDir;
@@ -260,7 +264,7 @@ begin
     'Calories' + CSVSep +
     'ResistanceLevel' + CSVSep +
     'ElapsedTime_s' + CSVSep +
-    'IsMoving,TimerActive,Lap,TargetWatts',False,FOwnerKey);
+    'IsMoving,TimerActive,Lap,TargetWatts,SourceFlags',False,FOwnerKey);
 end;
 
 function TSensorLog.GetError:String;
@@ -289,8 +293,10 @@ begin
     the full multi-hour telemetry journal. A torn last line is not durable. }
   Rows:=ReadSession(Journal,True);
   FResumeElapsed:=Elapsed;FActivityClock:=True;FHasFrameData:=False;
+  FSourceFlags:=ActivitySourceUnknown;
   if Length(Rows)>0 then begin
     Last:=Rows[High(Rows)];FResumeElapsed:=Max(Elapsed,Last.ElapsedSec);
+    FSourceFlags:=Last.SourceFlags;
     FFrameData:=Default(TTrainerDataRecord);
     FFrameData.InstantPower:=Last.Power;FFrameData.InstantCadence:=Last.Cadence;
     FFrameData.HeartRate:=Last.HeartRate;FFrameData.InstantSpeed:=Last.SpeedKmh;
@@ -337,15 +343,22 @@ begin
 end;
 
 procedure TSensorLog.LogData(const Data: TTrainerDataRecord; ASlope: Single);
-begin WriteData(Data,ASlope,False);end;
+begin
+  if not FActivityClock then begin
+    if not FOpened then OpenFile;
+    FSourceFlags:=FSourceFlags or ActivitySourceUnknown;
+  end;
+  WriteData(Data,ASlope,False);
+end;
 
-procedure TSensorLog.LogFrame(const Data:TTrainerDataRecord;ASlope:Single;Seconds:Double);
+procedure TSensorLog.LogFrame(const Data:TTrainerDataRecord;ASlope:Single;Seconds:Double;SourceFlags:Byte);
 var StartData:TTrainerDataRecord;
 begin
   UseActivityClock;
   if not IsNan(Seconds)and not IsInfinite(Seconds)and(Seconds>0)and FRecordingEnabled then begin
     if not FOpened then OpenFile;
     if FOpened then begin
+      if FTimerActive then FSourceFlags:=FSourceFlags or SourceFlags;
       { Current accounting uses this frame's measured power over Seconds.
         Store it at the beginning, with the previous physical distance, then
         end with the new distance. FIT's preceding-sample integration now
@@ -420,7 +433,7 @@ begin
       (FTimerActive<>FLastTimerActive) or (FLap<>FLastLap) or(FTarget<>FLastTarget);
     if FActivityClock then SecondElapsed:=ElapsedSec-FLastElapsed>=1
     else SecondElapsed := GetTickCount64-FLastWriteTick>=1000;
-    if (not Changed) and (not SecondElapsed) then Exit;
+    if (not Changed) and (not SecondElapsed) and(FSourceFlags=FLastSourceFlags)then Exit;
   end;
 
   if Data.IsMoving then Moving := '1' else Moving := '0';
@@ -443,7 +456,7 @@ begin
       IntToStr(Data.TotalEnergy) + CSVSep +
       IntToStr(Data.ResistanceLevel) + CSVSep +
       IntToStr(Data.ElapsedTime) + CSVSep +
-      Moving+CSVSep+IntToStr(Ord(FTimerActive))+CSVSep+IntToStr(FLap)+CSVSep+IntToStr(FTarget));
+      Moving+CSVSep+IntToStr(Ord(FTimerActive))+CSVSep+IntToStr(FLap)+CSVSep+IntToStr(FTarget)+CSVSep+IntToStr(FSourceFlags));
     FLocalError:='';
 
     Inc(FTotalLines);
@@ -459,7 +472,7 @@ begin
     FLastElapsed:=ElapsedSec;
     FLastData:=Data;FLastSlope:=ASlope;
     FLastWriteTick:=GetTickCount64;FLastTimerActive:=FTimerActive;
-    FLastLap:=FLap;FLastTarget:=FTarget;
+    FLastLap:=FLap;FLastTarget:=FTarget;FLastSourceFlags:=FSourceFlags;
   except
     on E: Exception do
     begin
@@ -543,6 +556,20 @@ begin
 
   { CSV пишет local time, переводим в UTC. }
   Result := DateTimeToUnix(LocalTimeToUniversal(DT));
+end;
+
+class function TSensorLog.CanUploadIntervals(const Rows:TSensorSessionRecordArray):Boolean;
+var I:Integer;Flags:Byte;Measured:Boolean;
+begin
+  Flags:=0;Measured:=False;
+  for I:=0 to High(Rows)do begin
+    Flags:=Flags or Rows[I].SourceFlags;
+    if(I<High(Rows))and Rows[I].TimerActive and(Rows[I].Power<>$FFFF)and
+      (Rows[I+1].ElapsedSec>Rows[I].ElapsedSec)and
+      ((Rows[I].SourceFlags and ActivitySourceSmartTrainer)<>0)then Measured:=True;
+  end;
+  Result:=Measured and((Flags and ActivitySourceSmartTrainer)<>0)and
+    ((Flags and not(ActivitySourceSmartTrainer or ActivitySourceSensors))=0);
 end;
 
 class function TSensorLog.LoadSession(
@@ -682,7 +709,7 @@ begin
       SplitCsv(Line);
       { Older locale-dependent writers could split decimal numbers into
         extra columns. Do not silently import these shifted records. }
-      if (Length(Parts)<>FieldCount)and(Length(Parts)<>17)then Continue;
+      if (Length(Parts)<>FieldCount)and(Length(Parts)<>17)and(Length(Parts)<>18)then Continue;
       Rec:=Default(TSensorSessionRecord);
 
       Elapsed  := PartFloat(1, 0);
@@ -715,7 +742,8 @@ begin
       if Distance < 0 then Distance := 0;
       Rec.DistanceM := Distance;
       Rec.SlopePct  := Slope;
-      Rec.HasSessionState:=Length(Parts)=17;
+      Rec.HasSessionState:=Length(Parts)>=17;
+      Rec.SourceFlags:=EnsureRange(PartInt(17,ActivitySourceUnknown),0,255);
       Rec.TimerActive:=not Rec.HasSessionState or(PartInt(14,0)<>0);
       Rec.Lap:=PartInt(15,0);Rec.TargetWatts:=EnsureRange(PartInt(16,0),0,65535);
 

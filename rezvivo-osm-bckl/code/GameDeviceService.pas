@@ -32,7 +32,7 @@ interface
 uses
   Classes, SysUtils, fgl,
   TrainerData, GameTransportBase, GameDeviceManager, GameTrainerControl,
-  GameDeviceTypes, GameDeviceSensor, GameDeviceAssignments,
+  GameDeviceTypes, GameDeviceSensor, GameDeviceAssignments, GameActivitySource,
   BLEManager, SimpleBLEProvider, WinRTBLEProvider, ANTPlus, GameDeviceSim,
   AppSettings, DebugLog;
 
@@ -241,6 +241,7 @@ type
 
     function HasSensor(AKind: TSensorKind): Boolean; inline;
     function HasAnySensor: Boolean;
+    function ActivitySourceFlags: Byte;
 
     { ── Управление тренажёром (FTMS) ── }
 
@@ -1361,6 +1362,21 @@ begin
   begin
     Log('Control device <- ' + AEntry.DisplayName);
   end;
+end;
+
+function TGameDeviceService.ActivitySourceFlags:Byte;
+var P:TPowerSensor;E:TGameDeviceEntry;
+begin
+  if FSimulationEnabled then Exit(ActivitySourceSimulation);
+  P:=Power;
+  if(P=nil)or not P.HasData or(P.DataAgeSec>=3)then Exit(0);
+  if Pos('sim:',P.DeviceAddress)=1 then Exit(ActivitySourceSimulation);
+  E:=FindDeviceByAddress(P.DeviceAddress);
+  if(E=nil)or(E.ConnectionState<>gdcsConnected)then Exit(0);
+  if(E.DeviceInfo.TransportType=ttSim)then Exit(ActivitySourceSimulation);
+  if E.IsControllable or(HasControlDevice and
+    (FControlDevice.DeviceInfo.TransportType<>ttSim))then Exit(ActivitySourceSmartTrainer);
+  Result:=ActivitySourceSensors;
 end;
 
 function TGameDeviceService.HasControlDevice: Boolean;

@@ -149,7 +149,7 @@ begin
     EnsureRange(Round(WorkoutPlayer.TargetWatts),0,65535));
   Data:=FTelemetry.BLEData;Data.InstantPower:=JournalPower(Accounting.Power);
   Data.InstantSpeed:=Speed*3.6;Data.Distance:=Round(FDistance);
-  SensorLog.LogFrame(Data,0,Dt);
+  SensorLog.LogFrame(Data,0,Dt,DeviceService.ActivitySourceFlags);
   RideHistory.Step(Dt,FDistance,0,Accounting.Power.Watts,EffectiveRiderProfile.FtpW,
     Accounting.Running,Accounting.Power.Valid);
   FTelemetry.UpdatePowerMetrics(Dt,Accounting,SecondsPassed);

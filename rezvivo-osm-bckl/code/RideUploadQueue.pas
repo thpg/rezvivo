@@ -167,11 +167,12 @@ end;
 
 constructor TRideUploadThread.Create;
 begin
-  inherited Create(False);     { стартуем сразу }
+  inherited Create(True);      { initialize synchronization before starting }
   FreeOnTerminate := False;
   FLock := TCriticalSection.Create;
   FWakeEvent := TEvent.Create(nil, False, False, '');
   FShutdown := False;
+  Start;
 end;
 
 destructor TRideUploadThread.Destroy;
@@ -321,6 +322,7 @@ var
   Writer: TFitFileWriter;
   Meta: TVeloSiteRideUpload;
   Result: TVeloSiteRideUploadResult;
+  I:Integer;
 begin
   if not VeloSite.IsAuthorized or not JournalMayUpload(AItem.CsvPath)then
   begin AItem.Status:=usPending;Exit;end;
@@ -354,6 +356,9 @@ begin
   Meta.Source        := 'game';
   Meta.UploadType    := 'free';
   Meta.Kind          := 'fit';
+  Meta.UploadIntervals:=TSensorLog.CanUploadIntervals(Records);
+  for I:=0 to High(Records)do
+    if Records[I].Lap>0 then begin Meta.UploadType:='workout';Break;end;
   Meta.StartedAtUnix := Records[0].TimestampUtcUnix;
 
   try

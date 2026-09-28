@@ -33,7 +33,7 @@ type
     constructor Create(AOwner:TComponent); override;
     procedure Render; override;
   end;
-  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,mgArrow,mgBicycle);
+  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,mgArrow,mgBicycle,mgCalendar);
   TMenuGlyph=class(TCastleUserInterface)
   public
     Kind:TMenuGlyphKind;
@@ -203,6 +203,10 @@ begin
     end;
     mgMountain:begin Line([2,20,10,5,18,20,2,20]);Line([15,14,18,9,23,20,18,20]);Line([7,11,10,13,12,10]);end;
     mgTraining:begin Line([3,21,3,3]);Line([3,21,22,21]);Line([7,17,7,13,10,13,10,17]);Line([13,17,13,9,16,9,16,17]);Line([19,17,19,5,22,5,22,17]);end;
+    mgCalendar:begin
+      Line([3,5,21,5,21,21,3,21,3,5]);Line([3,10,21,10]);
+      Line([7,2,7,7]);Line([17,2,17,7]);Line([7,14,10,17,17,12]);
+    end;
     mgHistory:begin
       DrawCircleOutline(Vector2(R.Left+R.Width*0.52,R.Bottom+R.Height*0.50),R.Width*0.37,R.Height*0.37,Color,1.5*UIScale);
       Line([12,6,12,12,17,15]);Line([2,3,2,9,8,9]);

@@ -1,7 +1,7 @@
 unit GameWorkoutPlayer;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses SysUtils, WorkoutFile, fpjson;
+uses Classes, SysUtils, WorkoutFile, fpjson;
 type
   TWorkoutState=(wsIdle,wsReady,wsRunning,wsPaused,wsFinished);
   TWorkoutPlayer=class
@@ -21,6 +21,7 @@ type
     function GetRemaining:Double;
     function GetVisualPowerScale:Single;
   public
+    OnFinished:TNotifyEvent;
     destructor Destroy;override;
     procedure Start(Plan:TWorkoutFile;ReferenceWatts:Double;WaitForPedal,RequireSignal:Boolean);
     procedure Stop;
@@ -72,6 +73,7 @@ begin
   if FPlan=nil then Exit;
   Result.Add('name',FPlan.Name);Result.Add('url',FPlan.Url);
   Result.Add('description',FPlan.Description);Result.Add('author',FPlan.Author);
+  Result.Add('schedule_user',FPlan.ScheduleUserId);Result.Add('schedule_key',FPlan.ScheduleKey);
   Result.Add('index',FIndex);Result.Add('stage_time',FStageTime);Result.Add('elapsed',FElapsed);
   Result.Add('position',FPosition);Result.Add('reference',FReference);Result.Add('initial_reference',FInitialReference);
   Result.Add('intensity',FIntensity);Result.Add('stage_start',FStageStartElapsed);
@@ -99,6 +101,7 @@ begin
   W:=TWorkoutFile.Create;
   try
     W.Name:=O.Get('name','');W.Description:=O.Get('description','');W.Author:=O.Get('author','');
+    W.ScheduleUserId:=O.Get('schedule_user',Int64(0));W.ScheduleKey:=O.Get('schedule_key','');
     for I:=0 to A.Count-1 do begin
       if not(A.Items[I] is TJSONObject)then raise Exception.Create('Invalid saved interval');
       J:=TJSONObject(A.Items[I]);N:=J.Get('kind',-1);
@@ -168,7 +171,10 @@ begin
   FPosition:=FPosition+StageRemaining;
   Inc(FIndex);FStageTime:=0;
   FStageStartElapsed:=FElapsed;
-  if FIndex>=FPlan.Segments.Count then FState:=wsFinished;
+  if FIndex>=FPlan.Segments.Count then begin
+    FState:=wsFinished;
+    if Assigned(OnFinished)then OnFinished(Self);
+  end;
   Inc(FJournalLap);JournalState;
 end;
 

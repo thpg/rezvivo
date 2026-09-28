@@ -223,7 +223,7 @@ begin
   if Pos('view.', N) = 1 then
     Delete(N, 1, Length('view.'));
   if (N = 'devices') or (N = 'bikefit') or (N = 'events') or
-     (N='home')or(N='history')or(N='result')or(N='intervals')or(N='rider')or (N = 'training') or (N = 'profile') or (N='settings') or (N='connectors') or (N='route-library') or
+     (N='schedule')or(N='home')or(N='history')or(N='result')or(N='intervals')or(N='rider')or (N = 'training') or (N = 'profile') or (N='settings') or (N='connectors') or (N='route-library') or
      (N='routes') or (N='real-world') or (N='dream') or (N='dream-world') or (N='route-create') then
   begin
     EnsureMenuVisible;
