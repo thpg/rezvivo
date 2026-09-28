@@ -1,0 +1,212 @@
+{
+  "version": 2,
+  "params": {
+    "Preset": "road"
+  },
+  "colors": {
+    "Frame": [
+      0.65098,
+      0.184314,
+      0.184314
+    ],
+    "FrameSpec": [
+      0.34902,
+      0.501961,
+      0.94902
+    ],
+    "Chrome": [
+      0.88,
+      0.9,
+      0.92
+    ],
+    "ChromeSpec": [
+      1,
+      1,
+      1
+    ],
+    "Dark": [
+      0.08,
+      0.08,
+      0.1
+    ],
+    "Tire": [
+      0.039216,
+      0.039216,
+      0.05098
+    ],
+    "Seat": [
+      0.058824,
+      0.058824,
+      0.070588
+    ],
+    "Tape": [
+      0.058824,
+      0.058824,
+      0.078431
+    ],
+    "Spoke": [
+      0.72,
+      0.74,
+      0.76
+    ],
+    "Rim": [
+      0.101961,
+      0.101961,
+      0.121569
+    ],
+    "RimSpec": [
+      0.45098,
+      0.45098,
+      0.521569
+    ],
+    "TireSpec": [
+      0.101961,
+      0.101961,
+      0.101961
+    ]
+  },
+  "components": {
+    "Frame": {
+      "SeatTubeLength": 460,
+      "SeatTubeAngle": 74.5,
+      "HeadTubeAngle": 70,
+      "HeadTubeLength": 110,
+      "ChainstayLength": 420,
+      "BBDrop": 50,
+      "Wheelbase": 1001,
+      "Stack": 509,
+      "Reach": 367,
+      "EffectiveTopTubeLength": 0,
+      "TopTubeHTRatio": 0.463964,
+      "DownTubeHTRatio": 0.463964,
+      "TopTubeSeatRatio": 0.922391,
+      "TopTubeSlope": 7.64,
+      "BBShellWidth": 68,
+      "RearDropoutSpacing": 130,
+      "FrontDropoutSpacing": 100,
+      "SeatStayJctRatio": 0.6,
+      "SeatStayJctHeight": 0,
+      "DownTubeDia": 36,
+      "SeatTubeDia": 32,
+      "TopTubeDia": 30,
+      "HeadTubeDia": 44,
+      "ChainstayDia": 20,
+      "SeatstayDia": 14,
+      "RearTravel": 0
+    },
+    "Fork": {
+      "ForkAxleToCrown": 387.62,
+      "ForkRake": 45,
+      "ForkBladeDia": 20,
+      "ForkTipDia": 14,
+      "ForkTravel": 0,
+      "HeadsetSpacer": 20,
+      "StemLength": 90,
+      "StemAngle": 7,
+      "StemDia": 24
+    },
+    "DropBar": {
+      "BarWidth": 420,
+      "BarDrop": 130,
+      "BarReach": 80,
+      "HoodLength": 102,
+      "HoodAngle": 45,
+      "TapeColor": -1,
+      "UseModel": true,
+      "ModelURL": "bike/dropbar.glb",
+      "ModelScale": 1,
+      "ModelOffsetX": 0,
+      "ModelOffsetY": 0,
+      "ModelOffsetZ": 0,
+      "ModelRotX": 0,
+      "ModelRotY": 0,
+      "ModelRotZ": 0,
+      "ModelHasStem": true,
+      "ModelSteererBone": "fork_stock"
+    },
+    "Seat": {
+      "SeatpostExtension": 50,
+      "SaddleLength": 270,
+      "SaddleWidth": 140,
+      "SeatpostDia": 24,
+      "UseModel": true,
+      "ModelURL": "bike/seat.glb",
+      "ModelScale": 1,
+      "ModelOffsetX": 0,
+      "ModelOffsetY": 0,
+      "ModelOffsetZ": 0,
+      "ModelRotX": 0,
+      "ModelRotY": 0,
+      "ModelRotZ": 0,
+      "ModelHasPost": false,
+      "UseBoneAngle": true,
+      "RodBone": "seat_rod"
+    },
+    "Wheels": {
+      "WheelRadius": 314.5,
+      "TireWidth": 17.5,
+      "FrontRimHeight": 30,
+      "RearRimHeight": 30,
+      "SpokeCount": 16,
+      "HubWidth": 60
+    },
+    "Crankset": {
+      "CrankLength": 170,
+      "ChainringRadius": 100,
+      "ChainringTeeth": 50,
+      "QFactorHalf": 74,
+      "CrankTexturePathR": "Crank-Shimano-FC-R9200-R.png",
+      "CrankTexturePathL": "Crank-Shimano-FC-R9200-L.png"
+    },
+    "Drivetrain": {
+      "CassetteSprocketCount": 5,
+      "CassetteWidth": 35,
+      "CassetteTexturePath": "Cassette_Shimano_Dura_Ace.png",
+      "CassetteSprockets": [
+        22,
+        28,
+        35,
+        44,
+        56
+      ],
+      "CassetteTeeth": [
+        11,
+        14,
+        17,
+        22,
+        28
+      ]
+    },
+    "Animation": {
+      "CrankCycleInterval": 1.2,
+      "RiderWeight": 75,
+      "BikeWeight": 10,
+      "DragCoefficient": 0.88,
+      "FrontalArea": 0.4,
+      "RollingResistance": 0.005
+    }
+  },
+  "tripoRider": {
+    "path": "castle-data:/avatars/FEM.glb",
+    "scale": 1,
+    "yaw": 0,
+    "pedalDir": -1,
+    "showRider": true,
+    "ankleOffX": 0,
+    "ankleOffY": 0,
+    "ankleOffZ": 0,
+    "stanceHalf": 140,
+    "bobPeriod": 1,
+    "bulk": 0,
+    "belly": 0,
+    "heightScale": -0.01,
+    "legLen": 1,
+    "armLen": 0,
+    "shoulderWidth": 0,
+    "pelvisWidth": 0,
+    "torsoLen": 1,
+    "roughnessK": 1.5,
+    "metallicK": 3,
+    "helmetColor": "#3AE795"
+  }
+}

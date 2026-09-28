@@ -1,0 +1,157 @@
+[
+  {
+    "filename": "fmt.dll",
+    "bytes": 136192,
+    "sha256": "30f2fcadea0059f0c2b23c12db9e433dfdfbe44b5dd9cba2f5623e92c4e80f1e",
+    "version": null,
+    "product": null,
+    "upstream": "https://github.com/fmtlib/fmt",
+    "license": "MIT",
+    "redistributed_in_git": false,
+    "status": "exact source/build provenance required"
+  },
+  {
+    "filename": "freetype.dll",
+    "bytes": 694272,
+    "sha256": "53ced2814011c4a128da5e6f84fa2b3677207c1709ac3647059e0c0d0b09191b",
+    "version": "2.14.3",
+    "product": "FreeType",
+    "upstream": "https://freetype.org/download.html",
+    "license": "FTL or GPL-2.0-or-later",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "libcrypto-1_1-x64.dll",
+    "bytes": 3482288,
+    "sha256": "ca83a9d6a39b15fe49dd99d38b2d324fc3f75143d83d7a08b538a0880984b43e",
+    "version": "1.1.1l",
+    "product": "The OpenSSL Toolkit",
+    "upstream": "https://github.com/openssl/openssl/tree/OpenSSL_1_1_1l",
+    "license": "OpenSSL / SSLeay (legacy)",
+    "redistributed_in_git": false,
+    "status": "GPL compatibility decision required before binary redistribution"
+  },
+  {
+    "filename": "libogg.dll",
+    "bytes": 20480,
+    "sha256": "050c94dce5672472479bb39721526615302f20cf73c15443c275f2c866363ebe",
+    "version": null,
+    "product": null,
+    "upstream": "https://xiph.org/downloads/",
+    "license": "BSD-3-Clause",
+    "redistributed_in_git": false,
+    "status": "exact source/build provenance required"
+  },
+  {
+    "filename": "libvorbis.dll",
+    "bytes": 734720,
+    "sha256": "f04ad2920decb89f5ebabd311f2be40a2a280dee1a1e1403da60ee4e80549c78",
+    "version": null,
+    "product": null,
+    "upstream": "https://xiph.org/downloads/",
+    "license": "BSD-3-Clause",
+    "redistributed_in_git": false,
+    "status": "exact source/build provenance required"
+  },
+  {
+    "filename": "libpng14-14.dll",
+    "bytes": 260456,
+    "sha256": "28e614df9356cb667c8dd4cac11f90aa6be53094e3b4d61cbebf9dce30856c8e",
+    "version": null,
+    "product": null,
+    "upstream": "https://www.libpng.org/pub/png/libpng.html",
+    "license": "libpng",
+    "redistributed_in_git": false,
+    "status": "exact source/build provenance required"
+  },
+  {
+    "filename": "libssl-1_1-x64.dll",
+    "bytes": 694448,
+    "sha256": "71d7523dd2cfcff52bb35baef2d703fff22271fabce8755a171d0ebf46b911ba",
+    "version": "1.1.1l",
+    "product": "The OpenSSL Toolkit",
+    "upstream": "https://github.com/openssl/openssl/tree/OpenSSL_1_1_1l",
+    "license": "OpenSSL / SSLeay (legacy)",
+    "redistributed_in_git": false,
+    "status": "GPL compatibility decision required before binary redistribution"
+  },
+  {
+    "filename": "OpenAL32.dll",
+    "bytes": 3834368,
+    "sha256": "3963b06e319180700be0bcc0d027336664bb3a4975876b4a5442f10746fab5b4",
+    "version": "1.25.1",
+    "product": "OpenAL Soft",
+    "upstream": "https://github.com/kcat/openal-soft/tree/1.25.1",
+    "license": "LGPL-2.0-or-later",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "simplecble.dll",
+    "bytes": 55808,
+    "sha256": "1c3106cce7888e34229067b36d4286040afb0e95196fc9c092cf0d7ab8fb26c8",
+    "version": null,
+    "product": null,
+    "upstream": "https://github.com/simpleble/simpleble",
+    "license": "UNVERIFIED: determine the exact source revision",
+    "redistributed_in_git": false,
+    "status": "unverified source/license; current package also lacks dependent simpleble.dll",
+    "missing_dependency": "simpleble.dll"
+  },
+  {
+    "filename": "sqlite3.dll",
+    "bytes": 3256320,
+    "sha256": "bd462343167bf2ac7eb74efef296108dcf6bc3f2d46d66b0f336ded3a23090cb",
+    "version": "3.53.0",
+    "product": "SQLite",
+    "upstream": "https://sqlite.org/download.html",
+    "license": "Public domain",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "vcruntime140.dll",
+    "bytes": 87880,
+    "sha256": "373b674f24425ea3f472509dd77e443534ef0edb0573c23b39960ec302bf6241",
+    "version": "14.00.24123.0 built by: VCTOOLSREL",
+    "product": "Microsoft® Visual Studio® 2015",
+    "upstream": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist",
+    "license": "Microsoft redistributable license",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "msvcr120.dll",
+    "bytes": 963240,
+    "sha256": "753ac30c30aae62415cc225e3d057b8b6254afe280696e0a43f1a7c3132632a6",
+    "version": "12.00.40664.0 built by: VSULDR",
+    "product": "Microsoft® Visual Studio® 2013",
+    "upstream": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist",
+    "license": "Microsoft redistributable license",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "vorbisfile.dll",
+    "bytes": 34304,
+    "sha256": "6ef4b337c176d7a42f67abb1cabf63e0e87a5b9a4f99fb1dd292cb7d81b29a4d",
+    "version": null,
+    "product": null,
+    "upstream": "https://xiph.org/downloads/",
+    "license": "BSD-3-Clause",
+    "redistributed_in_git": false,
+    "status": "exact source/build provenance required"
+  },
+  {
+    "filename": "zlib1.dll",
+    "bytes": 179633,
+    "sha256": "7559906b413223268b0bac1714932deeaed935dd74f19c4ecf80cbcb789d3357",
+    "version": "1.2.3",
+    "product": "zlib",
+    "upstream": "https://www.zlib.net/fossils/",
+    "license": "Zlib",
+    "redistributed_in_git": false,
+    "status": "version metadata identified; review release notices/source requirements"
+  }
+]

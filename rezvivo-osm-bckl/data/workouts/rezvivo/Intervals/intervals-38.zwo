@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workout_file>
+  <author>REZVIVO</author>
+  <name>Five long repeats · 38 min</name>
+  <description>8 min warm-up, 5 × (3 min at 110% / 2 min at 50%), 5 min cool-down.</description>
+  <sportType>bike</sportType>
+  <workout>
+    <Warmup Duration="480" PowerLow="0.45" PowerHigh="0.7" />
+    <IntervalsT Repeat="5" OnDuration="180" OffDuration="120" OnPower="1.1" OffPower="0.5" />
+    <Cooldown Duration="300" PowerLow="0.6" PowerHigh="0.4" />
+  </workout>
+</workout_file>

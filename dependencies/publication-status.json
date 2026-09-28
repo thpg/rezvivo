@@ -1,0 +1,23 @@
+{
+  "license": "GPL-3.0-or-later",
+  "published": true,
+  "unresolved": [
+    {
+      "id": "remaining-asset-provenance",
+      "detail": "Resolve per-file REVIEW entries in dependencies/assets.json."
+    },
+    {
+      "id": "openssl-gpl-compatibility",
+      "detail": "OpenSSL 1.1.1 needs an explicit linking permission or replacement before binary distribution."
+    },
+    {
+      "id": "simpleble-provenance",
+      "detail": "Identify the bundled wrapper source/license and supply its missing dependency, or use a reviewed replacement/native BLE."
+    },
+    {
+      "id": "runtime-source-versions",
+      "detail": "Match unversioned runtime binaries to exact upstream source and redistribution notices."
+    }
+  ],
+  "binary_release_ready": false
+}

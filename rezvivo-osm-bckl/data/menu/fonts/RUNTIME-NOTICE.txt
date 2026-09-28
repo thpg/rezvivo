@@ -1,0 +1,12 @@
+The menu uses the FreeType font rendering library.
+Portions of this software are copyright (c) 2026 The FreeType Project
+(https://www.freetype.org). All rights reserved.
+See FREETYPE-LICENSE.txt in this directory.
+
+The Windows x64 freetype.dll and its vcruntime140.dll dependency are distributed
+from Castle Game Engine's external_libraries/x86_64-win64 directory.
+FreeType binary version: 2.14.3, CGE distribution updated 2026-05-02.
+Binary origin: https://github.com/ubawurinna/freetype-windows-binaries
+vcruntime140.dll: Microsoft Visual C++ Redistributable runtime.
+
+DejaVu Sans and DejaVu Sans Bold: see LICENSE.txt and AUTHORS.txt.

@@ -1,0 +1,189 @@
+{
+  "$$ClassName": "TCastleUserInterface",
+  "FullSize": true,
+  "Name": "RootGroup",
+  "$Children": [
+    {
+      "$$ClassName": "TCastleRectangleControl",
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Red": 0.065,
+        "Green": 0.09,
+        "Blue": 0.12,
+        "Alpha": 0.97
+      },
+      "FullSize": true,
+      "Name": "Background",
+      "$Children": [
+        {
+          "$$ClassName": "TMenuButton",
+          "Caption": "← Back",
+          "CustomBackgroundDisabled": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundFocused": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundNormal": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundPressed": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "FontScale": 1.2000000476837158,
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "Image": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "MinWidth": 160.0,
+          "Name": "ButtonBack",
+          "PaddingHorizontal": 16.0,
+          "PaddingVertical": 12.0,
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 20.0,
+            "Y": -20.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "FontScale": 1.7000000476837158,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "LabelTitle",
+          "Text": [
+            "Устройства"
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": -30.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        },
+        {
+          "$$ClassName": "TMenuButton",
+          "Caption": "SCAN",
+          "CustomBackgroundDisabled": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundFocused": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundNormal": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "CustomBackgroundPressed": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "FontScale": 1.2000000476837158,
+          "HorizontalAnchorParent": "hpRight",
+          "HorizontalAnchorSelf": "hpRight",
+          "Image": {
+            "$$ClassName": "TCastleImagePersistent"
+          },
+          "MinWidth": 160.0,
+          "Name": "ButtonScan",
+          "PaddingHorizontal": 16.0,
+          "PaddingVertical": 12.0,
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": -20.0,
+            "Y": -20.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "Name": "LabelStatus",
+          "Text": [
+            "BLE Status: idle"
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 40.0,
+            "Y": -86.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "Name": "LabelDevices",
+          "Text": [
+            "Devices found: 0"
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 40.0,
+            "Y": -114.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        },
+        {
+          "$$ClassName": "TCastleUserInterface",
+          "Height": 440.0,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "DevicesHost",
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": -150.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop",
+          "Width": 1100.0
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "Name": "LabelLog",
+          "Text": [
+            "Log is empty"
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 40.0,
+            "Y": 20.0
+          },
+          "VerticalAnchorParent": "vpBottom",
+          "VerticalAnchorSelf": "vpBottom",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        }
+      ]
+    }
+  ]
+}

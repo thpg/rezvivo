@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workout_file>
+  <author>REZVIVO</author>
+  <name>Steady ride · 45 min</name>
+  <description>8 min warm-up, 32 min at 68%, 5 min cool-down.</description>
+  <sportType>bike</sportType>
+  <workout>
+    <Warmup Duration="480" PowerLow="0.45" PowerHigh="0.7" />
+    <SteadyState Duration="1920" Power="0.68" />
+    <Cooldown Duration="300" PowerLow="0.6" PowerHigh="0.4" />
+  </workout>
+</workout_file>

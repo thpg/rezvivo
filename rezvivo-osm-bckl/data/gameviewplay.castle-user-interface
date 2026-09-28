@@ -1,0 +1,845 @@
+{
+  "$$ClassName": "TCastleUserInterface",
+  "FullSize": true,
+  "Name": "RootGroup",
+  "$Children": [
+    {
+      "$$ClassName": "TCastleViewport",
+      "Background": "Background1",
+      "BackgroundColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Blue": 0.7764706015586853,
+        "Green": 0.7764706015586853,
+        "Red": 0.7764706015586853
+      },
+      "Camera": "Camera2",
+      "DynamicBatching": true,
+      "FullSize": true,
+      "Items": {
+        "$$ClassName": "TCastleRootTransform",
+        "PhysicsProperties": {
+          "$$ClassName": "TPhysicsProperties",
+          "LayerCollisions": {
+            "$$ClassName": "TCastleLayerCollisions"
+          },
+          "LayerNames": {
+            "$$ClassName": "TCastleLayerNames"
+          }
+        },
+        "$NonVisualComponents": [
+          {
+            "$$ClassName": "TCastleBackground",
+            "GroundEquatorColorPersistent": {
+              "$$ClassName": "TCastleColorRGBPersistent",
+              "Blue": 0.0313725508749485,
+              "Green": 0.45098039507865906,
+              "Red": 0.2705882489681244
+            },
+            "Name": "Background1",
+            "SkyTopColorPersistent": {
+              "$$ClassName": "TCastleColorRGBPersistent",
+              "Green": 0.3294117748737335,
+              "Red": 0.3294117748737335
+            },
+            "TextureNegativeX": "castle-data:/clouds1/clouds1_west.bmp",
+            "TextureNegativeY": "castle-data:/clouds1/clouds1_down.bmp",
+            "TextureNegativeZ": "castle-data:/clouds1/clouds1_south.bmp",
+            "TexturePositiveX": "castle-data:/clouds1/clouds1_east.bmp",
+            "TexturePositiveY": "castle-data:/clouds1/clouds1_up.bmp",
+            "TexturePositiveZ": "castle-data:/clouds1/clouds1_north.bmp"
+          }
+        ],
+        "$Children": [
+          {
+            "$$ClassName": "TCastleTransform",
+            "Name": "AvatarTransform",
+            "TranslationPersistent": {
+              "$$ClassName": "TCastleVector3Persistent",
+              "Y": 65.46660614013672
+            },
+            "$Children": [
+              {
+                "$$ClassName": "TCastleScene",
+                "Cache": true,
+                "CastGlobalLights": true,
+                "DefaultAnimationTransition": 0.10000000149011612,
+                "ExposeTransforms": [],
+                "Name": "SceneAvatar",
+                "PreciseCollisions": true,
+                "ProcessEvents": true,
+                "RenderOptions": {
+                  "$$ClassName": "TCastleScene.TSceneRenderOptions"
+                },
+                "RotationPersistent": {
+                  "$$ClassName": "TCastleVector4RotationPersistent",
+                  "Y": 0.9999990463256836
+                }
+              }
+            ],
+            "$Behaviors": [
+              {
+                "$$ClassName": "TCastleCapsuleCollider",
+                "Friction": 0.10000000149011612,
+                "Name": "CapsuleCollider"
+              },
+              {
+                "$$ClassName": "TCastleRigidBody",
+                "LinearVelocityDamp": 0.0,
+                "LockRotation": [
+                  0,
+                  2
+                ],
+                "Name": "AvatarRigidBody"
+              }
+            ]
+          },
+          {
+            "$$ClassName": "TCastleCamera",
+            "Exists": false,
+            "Name": "Camera1",
+            "Orthographic": {
+              "$$ClassName": "TCastleOrthographic"
+            },
+            "Perspective": {
+              "$$ClassName": "TCastlePerspective"
+            },
+            "RotationPersistent": {
+              "$$ClassName": "TCastleVector4RotationPersistent",
+              "W": 3.137874126434326,
+              "X": -6.127199594629928e-05,
+              "Y": -1.0000001192092896,
+              "Z": -1.0150018852073117e-06
+            },
+            "TranslationPersistent": {
+              "$$ClassName": "TCastleVector3Persistent",
+              "X": 10960.1044921875,
+              "Y": 13493.7470703125,
+              "Z": -230.15927124023438
+            },
+            "$Children": [
+              {
+                "$$ClassName": "TCastleDirectionalLight",
+                "Name": "DirectionalLight1",
+                "Intensity": 0.4
+              }
+            ]
+          },
+          {
+            "$$ClassName": "TCastleDirectionalLight",
+            "Name": "DirectionalLight2",
+            "Intensity": 0.3,
+            "RotationPersistent": {
+              "$$ClassName": "TCastleVector4RotationPersistent",
+              "W": 3.5946204662323,
+              "X": 0.8108234405517578,
+              "Y": -0.053419195115566254,
+              "Z": -0.5828472375869751
+            },
+            "TranslationPersistent": {
+              "$$ClassName": "TCastleVector3Persistent",
+              "X": -167.19993591308594,
+              "Y": 80.7116470336914,
+              "Z": -49.91770553588867
+            }
+          },
+          {
+            "$$ClassName": "TCastleDirectionalLight",
+            "Name": "DirectionalLight3",
+            "Intensity": 0.3,
+            "RotationPersistent": {
+              "$$ClassName": "TCastleVector4RotationPersistent",
+              "W": 4.511109352111816,
+              "X": 0.743789553642273,
+              "Y": 0.641395092010498,
+              "Z": 0.18809224665164948
+            }
+          },
+          {
+            "$$ClassName": "TCastleCamera",
+            "Name": "Camera2",
+            "Orthographic": {
+              "$$ClassName": "TCastleOrthographic"
+            },
+            "Perspective": {
+              "$$ClassName": "TCastlePerspective"
+            },
+            "RotationPersistent": {
+              "$$ClassName": "TCastleVector4RotationPersistent",
+              "W": 1.2941087484359741,
+              "Y": 0.9999993443489075
+            },
+            "TranslationPersistent": {
+              "$$ClassName": "TCastleVector3Persistent",
+              "X": 351.77093505859375,
+              "Y": 86.48696899414062,
+              "Z": 16.13732147216797
+            }
+          }
+        ]
+      },
+      "Name": "MainViewport",
+      "$NonVisualComponents": [
+        {
+          "$$ClassName": "TCastleFog",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorRGBPersistent",
+            "Blue": 0.501960813999176,
+            "Green": 0.3529411852359772,
+            "Red": 0.125490203499794
+          },
+          "Name": "Fog1",
+          "VisibilityRange": 1000.0
+        }
+      ],
+      "$Children": [
+        {
+          "$$ClassName": "TCastleThirdPersonNavigation",
+          "AnimationFall": "bored",
+          "AnimationJump": "idle",
+          "Avatar": "SceneAvatar",
+          "AvatarHierarchy": "AvatarTransform",
+          "AvatarTargetPersistent": {
+            "$$ClassName": "TCastleVector3Persistent",
+            "Y": 1.0
+          },
+          "CheckCollisions": false,
+          "CrouchSpeed": 2.0,
+          "DistanceToAvatarTarget": 15.0,
+          "InitialHeightAboveTarget": 0.5,
+          "MoveSpeed": 3.75,
+          "Name": "ThirdPersonNavigation",
+          "RunSpeed": 8.0
+        }
+      ],
+      "InternalDesignCamera": {
+        "$$ClassName": "TCastleCamera",
+        "Name": "",
+        "Orthographic": {
+          "$$ClassName": "TCastleOrthographic"
+        },
+        "Perspective": {
+          "$$ClassName": "TCastlePerspective"
+        },
+        "RotationPersistent": {
+          "$$ClassName": "TCastleVector4RotationPersistent",
+          "Z": 1.0
+        },
+        "TranslationPersistent": {
+          "$$ClassName": "TCastleVector3Persistent",
+          "X": 453.44921875,
+          "Y": 274.9488830566406,
+          "Z": 351.9543762207031
+        }
+      },
+      "InternalDesignNavigationType": 2,
+      "InternalDesignNavigations[dnFly]": {
+        "$$ClassName": "TCastleWalkNavigationDesign",
+        "Exists": false,
+        "MoveSpeed": 10.797751426696777,
+        "Name": ""
+      },
+      "InternalDesignNavigations[dnExamine]": {
+        "$$ClassName": "TCastleExamineNavigationDesign",
+        "Exists": false,
+        "Name": ""
+      },
+      "InternalDesignNavigations[dn2D]": {
+        "$$ClassName": "TCastle2DNavigationDesign",
+        "Name": ""
+      }
+    },
+    {
+      "$$ClassName": "TCastleLabel",
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Green": 1.0,
+        "Red": 1.0
+      },
+      "FontSize": 20.0,
+      "Frame": true,
+      "HorizontalAnchorParent": "hpRight",
+      "HorizontalAnchorSelf": "hpRight",
+      "Name": "LabelFps",
+      "Text": [
+        "FPS: xxx"
+      ],
+      "TranslationPersistent": {
+        "$$ClassName": "TCastleVector2Persistent",
+        "X": -20.0,
+        "Y": -20.0
+      },
+      "VerticalAnchorParent": "vpTop",
+      "VerticalAnchorSelf": "vpTop"
+    },
+    {
+      "$$ClassName": "TCastleVerticalGroup",
+      "Alignment": "hpRight",
+      "AutoSizeHeight": false,
+      "BorderColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Alpha": 0.8745098114013672,
+        "Red": 0.7960784435272217
+      },
+      "Frame": true,
+      "Height": 670.0,
+      "HorizontalAnchorParent": "hpRight",
+      "Name": "VerticalGroup1",
+      "Padding": 10.0,
+      "Spacing": 10.0,
+      "TranslationPersistent": {
+        "$$ClassName": "TCastleVector2Persistent",
+        "X": -300.0,
+        "Y": -150.0
+      },
+      "VerticalAnchorParent": "vpTop",
+      "VerticalAnchorSelf": "vpTop",
+      "$Children": [
+        {
+          "$$ClassName": "TCastleCheckbox",
+          "Caption": "Camera Follows Avatar",
+          "CheckboxColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Blue": 1.0,
+            "Green": 1.0,
+            "Red": 1.0
+          },
+          "Checked": true,
+          "FontSize": 20.0,
+          "HorizontalAnchorParent": "hpRight",
+          "HorizontalAnchorSelf": "hpRight",
+          "Name": "CheckboxCameraFollows",
+          "TextColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Blue": 1.0,
+            "Green": 1.0,
+            "Red": 1.0
+          },
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": -10.0,
+            "Y": -10.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleCheckbox",
+          "Caption": "Debug Avatar Colliders",
+          "CheckboxColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Blue": 1.0,
+            "Green": 1.0,
+            "Red": 1.0
+          },
+          "FontSize": 20.0,
+          "HorizontalAnchorParent": "hpRight",
+          "HorizontalAnchorSelf": "hpRight",
+          "Name": "CheckboxDebugAvatarColliders",
+          "TextColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Blue": 1.0,
+            "Green": 1.0,
+            "Red": 1.0
+          },
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": -10.0,
+            "Y": -44.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        }
+      ]
+    },
+    {
+      "$$ClassName": "TCastleLabel",
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Blue": 0.3921568691730499,
+        "Green": 0.10980392247438431,
+        "Red": 0.003921568859368563
+      },
+      "Exists": false,
+      "FontSize": 20.0,
+      "Name": "LabelInfo",
+      "Text": [
+        "Move with AWSD QE and arrow keys.",
+        "Hold Shift to run when moving.",
+        "Hold Ctrl to crouch.",
+        "Space jumps (only when \"Change Transformation = Velocity\" now.)",
+        "",
+        "Rotate camera by moving the mouse.",
+        "Press Right Mouse Button to toggle \"mouse look\" (to be able to e.g. click on checkboxes).",
+        "",
+        "Left Click to shoot at the enemies.",
+        "Shoots along the avatar forward ray.",
+        "Use \"Debug Avatar\" to see a blue arrow indicating avatar forward ray.",
+        "",
+        "Use mouse wheel to get closer / further to the avatar.",
+        "",
+        "Press F5 to make a screenshot."
+      ],
+      "TranslationPersistent": {
+        "$$ClassName": "TCastleVector2Persistent",
+        "X": 40.0,
+        "Y": -560.0
+      },
+      "VerticalAnchorParent": "vpTop",
+      "VerticalAnchorSelf": "vpTop"
+    },
+    {
+      "$$ClassName": "TCastleRectangleControl",
+      "Name": "RideMetricsBackground",
+      "AutoSizeToChildren": true,
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Alpha": 0.23529411852359772,
+        "Blue": 0.14509804546833038,
+        "Green": 0.14509804546833038,
+        "Red": 0.14509804546833038
+      },
+      "HorizontalAnchorParent": "hpMiddle",
+      "HorizontalAnchorSelf": "hpMiddle",
+      "VerticalAnchorParent": "vpTop",
+      "VerticalAnchorSelf": "vpTop",
+      "TranslationPersistent": {
+        "$$ClassName": "TCastleVector2Persistent",
+        "X": 50.0,
+        "Y": -10.0
+      },
+      "$Children": [
+        {
+          "$$ClassName": "TCastleHorizontalGroup",
+          "Name": "HorizontalGroup1",
+          "$Children": [
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group5",
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroup3",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 40.0
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Green": 0.40392157435417175,
+                    "Red": 1.0
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "Label2",
+                  "Text": [
+                    "Power"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 50.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelPower",
+                  "Text": [
+                    "250"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "GroupWorkSp",
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroupWork",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 40.0
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Green": 0.40392157435417175,
+                    "Red": 1.0
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelWorkTitle",
+                  "Text": [
+                    "За сутки, кДж"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 40.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelWork",
+                  "Text": [
+                    "0.0"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop",
+                  "Tooltip": "Work today. Resets at 00:00 local time."
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Name": "LabelWorkTSS",
+                  "Alignment": "hpMiddle",
+                  "FontSize": 18.0,
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Red": 1.0,
+                    "Green": 1.0,
+                    "Blue": 1.0
+                  },
+                  "Text": [
+                    "TSS 0.0"
+                  ],
+                  "Tooltip": "Daily TSS from power and profile FTP. Resets at 00:00."
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group2",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 137.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroup4",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 177.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Green": 0.615686297416687
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "Label4",
+                  "Text": [
+                    "Speed"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 50.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelSpeed",
+                  "Text": [
+                    "32"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group1",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 242.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroup5",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 282.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 0.8039215803146362
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "Label6",
+                  "Text": [
+                    "Cadence"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 50.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelCadence",
+                  "Text": [
+                    "85"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group3",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 369.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroup6",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 409.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Red": 1.0
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "Label8",
+                  "Text": [
+                    "Heart Rate"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 50.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelHeart",
+                  "Text": [
+                    "145"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group4",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 516.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            },
+            {
+              "$$ClassName": "TCastleVerticalGroup",
+              "Alignment": "hpMiddle",
+              "Name": "VerticalGroup7",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 556.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "$Children": [
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "Alignment": "hpMiddle",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Green": 1.0,
+                    "Red": 0.9215686321258545
+                  },
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelSlopeName",
+                  "Text": [
+                    "Gradient"
+                  ],
+                  "VerticalAlignment": "vpTop",
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 50.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelSlope",
+                  "Text": [
+                    "0"
+                  ],
+                  "TranslationPersistent": {
+                    "$$ClassName": "TCastleVector2Persistent",
+                    "Y": -22.0
+                  },
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop"
+                },
+                {
+                  "$$ClassName": "TCastleLabel",
+                  "ColorPersistent": {
+                    "$$ClassName": "TCastleColorPersistent",
+                    "Blue": 1.0,
+                    "Green": 1.0,
+                    "Red": 1.0
+                  },
+                  "FontSize": 18.0,
+                  "HorizontalAnchorParent": "hpMiddle",
+                  "HorizontalAnchorSelf": "hpMiddle",
+                  "Name": "LabelCorr",
+                  "Text": [
+                    "—"
+                  ],
+                  "VerticalAnchorParent": "vpTop",
+                  "VerticalAnchorSelf": "vpTop",
+                  "AutoSize": false,
+                  "Width": 180.0,
+                  "Height": 26.0,
+                  "Alignment": "hpMiddle",
+                  "VerticalAlignment": "vpMiddle",
+                  "Tooltip": "Slope correction"
+                }
+              ]
+            },
+            {
+              "$$ClassName": "TCastleUserInterface",
+              "Name": "Group6",
+              "TranslationPersistent": {
+                "$$ClassName": "TCastleVector2Persistent",
+                "X": 612.5
+              },
+              "VerticalAnchorParent": "vpMiddle",
+              "VerticalAnchorSelf": "vpMiddle",
+              "Width": 40.0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

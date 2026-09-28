@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workout_file>
+  <author>REZVIVO</author>
+  <name>Six repeats · 30 min</name>
+  <description>5 min warm-up, 6 × (2 min at 100% / 1 min at 50%), 2 min easy, 5 min cool-down.</description>
+  <sportType>bike</sportType>
+  <workout>
+    <Warmup Duration="300" PowerLow="0.45" PowerHigh="0.7" />
+    <IntervalsT Repeat="6" OnDuration="120" OffDuration="60" OnPower="1" OffPower="0.5" />
+    <SteadyState Duration="120" Power="0.6" />
+    <Cooldown Duration="300" PowerLow="0.6" PowerHigh="0.4" />
+  </workout>
+</workout_file>

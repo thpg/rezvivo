@@ -1,0 +1,8 @@
+{
+  "name": "OpenAL Soft",
+  "version": "1.25.2",
+  "binary": "bin/Win64/soft_oal.dll renamed OpenAL32.dll (unmodified)",
+  "sha256": "3963b06e319180700be0bcc0d027336664bb3a4975876b4a5442f10746fab5b4",
+  "source": "https://openal-soft.org/openal-releases/openal-soft-1.25.2.tar.bz2",
+  "download": "https://openal-soft.org/openal-binaries/openal-soft-1.25.2-bin.zip"
+}

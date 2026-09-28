@@ -1,0 +1,99 @@
+{
+  "$$ClassName": "TCastleUserInterface",
+  "FullSize": true,
+  "Name": "RootGroup",
+  "$Children": [
+    {
+      "$$ClassName": "TCastleRectangleControl",
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Red": 0.065,
+        "Green": 0.09,
+        "Blue": 0.12,
+        "Alpha": 0.97
+      },
+      "FullSize": true,
+      "Name": "Background",
+      "$Children": [
+        {
+          "$$ClassName": "TMenuButton",
+          "Caption": "Back",
+          "FontScale": 1.2000000476837158,
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "MinWidth": 160.0,
+          "Name": "ButtonBack",
+          "PaddingHorizontal": 16.0,
+          "PaddingVertical": 12.0,
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 20.0,
+            "Y": -20.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "FontScale": 1.7000000476837158,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "LabelTitle",
+          "Text": [
+            "Sign in to VeloSite"
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": -30.0
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        },
+        {
+          "$$ClassName": "TCastleUserInterface",
+          "Width": 700.0,
+          "Height": 540.0,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "FormHost",
+          "VerticalAnchorParent": "vpMiddle",
+          "VerticalAnchorSelf": "vpMiddle"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "Color": [
+            0.95,
+            0.6,
+            0.5,
+            1.0
+          ],
+          "FontScale": 1.0,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "LabelStatus",
+          "Text": [
+            ""
+          ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": 30.0
+          },
+          "VerticalAnchorParent": "vpBottom",
+          "VerticalAnchorSelf": "vpBottom",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.88,
+            "Green": 0.92,
+            "Blue": 0.98
+          }
+        }
+      ]
+    }
+  ]
+}

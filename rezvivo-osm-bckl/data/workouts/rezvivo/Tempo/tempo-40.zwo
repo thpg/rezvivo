@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workout_file>
+  <author>REZVIVO</author>
+  <name>Tempo steps · 40 min</name>
+  <description>8 min warm-up, 3 × (6 min at 82% / 2 min at 55%), 3 min easy, 5 min cool-down.</description>
+  <sportType>bike</sportType>
+  <workout>
+    <Warmup Duration="480" PowerLow="0.45" PowerHigh="0.7" />
+    <IntervalsT Repeat="3" OnDuration="360" OffDuration="120" OnPower="0.82" OffPower="0.55" />
+    <SteadyState Duration="180" Power="0.6" />
+    <Cooldown Duration="300" PowerLow="0.6" PowerHigh="0.4" />
+  </workout>
+</workout_file>

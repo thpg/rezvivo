@@ -1,0 +1,4026 @@
+[
+  {
+    "path": "rezvivo-osm-bckl/data/audio/city.ogg",
+    "bytes": 336388,
+    "sha256": "c200a57c77152cebb4b75a580ecbdaf2d34d3b38a425473a0a86605ca1417fe9",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/click.wav",
+    "bytes": 2924,
+    "sha256": "7e859d2508fcb89af45b028e3d5b9a8084e5cd01b19cee38d223b3fe0d2076d9",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/countdown.wav",
+    "bytes": 7724,
+    "sha256": "56b6cb69b16fe3c961e7578ce2c63a8f2f329017239700e545551df7cbe4999b",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/credits.json",
+    "bytes": 2982,
+    "sha256": "d6b325e5259985a6995fddbb78ce77ca718299994d4d79ee3a6cfdb8c4f11935",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/forest.ogg",
+    "bytes": 394520,
+    "sha256": "1dfd0d0a149571d51ff76082e20946df77921888a13f6c4628fcbe807e0ee59f",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/highway.ogg",
+    "bytes": 414381,
+    "sha256": "a8ad5eff6bf8e7499e60b1bf4f06d8c9f2f7f36c3c8a15394278ac37bc5f41fd",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/interval-start.wav",
+    "bytes": 20524,
+    "sha256": "a08cd9fba726dbf9829318cf77d719e33fe1e8695d72c59c6923c41868ae6d04",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/sea.ogg",
+    "bytes": 116814,
+    "sha256": "7dff90b2cf387fe8f52d3da793730c2348cdf3fce122bcefd5d1e621310f7a75",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/wheel-front.wav",
+    "bytes": 10924,
+    "sha256": "b43a091e6050de862334eff70804789659752a25d1a9b367ecd0a3d333724548",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/wheel-rear.wav",
+    "bytes": 10924,
+    "sha256": "ea9516daa6730f87628de054cf319195b0e5634a8f41b33bafb0c5f17ce3c2c6",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/audio/wind.ogg",
+    "bytes": 400429,
+    "sha256": "c52203bd1162eba03770350ecbf635bef2b616a07a5216406134f8da67cfe84a",
+    "license": "SEE-CREDITS",
+    "source": "rezvivo-osm-bckl/data/audio/credits.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/FEM.glb",
+    "bytes": 6979548,
+    "sha256": "7331192fd3a10e2ebabc2e455de00f137bc4a5bb925e36849f9d569ea83013a1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/FEM.pose.bin",
+    "bytes": 865780,
+    "sha256": "01ebe5e4164ad3ae4eef38aeb6ba5c10c29d9306f5f898fa301c6d6c59770450",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/FEM.pose.json",
+    "bytes": 10783,
+    "sha256": "59480724d4a31ea2cbb00deadbf468687c5adda48dbba4ef85be46b176f284fc",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/helmets/road.glb",
+    "bytes": 197500,
+    "sha256": "4e95761c65a744c364d5da53bfbc2f2c14af95fd78dcb97df1ca243a15182e21",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/logos/REZVIVO.png",
+    "bytes": 98699,
+    "sha256": "e4404304b7b86413c52f9023b4dc97e0a0f30d4c4d30d6b952c04859aafded64",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/MEN.glb",
+    "bytes": 6945060,
+    "sha256": "907a5170300587baeec37763d25b242eb334faee3c82bd2db5c626ea61e6cc17",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/MEN.pose.bin",
+    "bytes": 845452,
+    "sha256": "cfe63ad15cccf476d6014a4958d492f32552272394eee30d51f1118e1f621c75",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/MEN.pose.json",
+    "bytes": 10785,
+    "sha256": "76592cd5c1e838f698ec8f063d4d027a9499bc4a00c8ae06cc26985a628216a2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO; models created in Tripo",
+    "evidence": "project owner confirmed rider and helmet authorship on 2026-09-27"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike/cranks/crank_l.glb",
+    "bytes": 141532,
+    "sha256": "42d45f7344c21220e02c0e4d79cc31f44ab61410a05296f56b809741fe9ba1af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike/cranks/crank_r.glb",
+    "bytes": 332692,
+    "sha256": "0252fc017a90270f7f7bd2e1762a823887dd99e72ef00542e450c8dde492fbc2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike/dropbar.glb",
+    "bytes": 38188,
+    "sha256": "7f368146bd300ff66f9c650741e2993a62cd030d2c6c3bb682a58c34c80f4089",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike/seat.glb",
+    "bytes": 10552,
+    "sha256": "92413e72ee27924f119dc7cb5263a1dc3028f91974dd3113260755c2ddb46dc0",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/3t-cycling-exploro-racemax.json",
+    "bytes": 40224,
+    "sha256": "f10deb48a640446707bb043aa02b976328ff76de5d3107f904394f37ee772abc",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/3t-cycling-strada-italia.json",
+    "bytes": 52704,
+    "sha256": "67839b198999466f284ec02989fcb7ce94bfe5f05297558b994e591cc8cbf1db",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/allied-cycle-works-alfa.json",
+    "bytes": 39598,
+    "sha256": "dc046e8b78fc3c0f00efcb526a3357e5f009ac1c740b6d5b0c1a36a16d6dd82e",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/argon-18-sum.json",
+    "bytes": 39652,
+    "sha256": "a4c92330653510155b50b83ba584d27e0743e8fd0d7273176270a1522f62cc3c",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bianchi-oltre-rc.json",
+    "bytes": 20119,
+    "sha256": "6c2a86c30e5532407fee44c59dfe6c839d5820417a531a5ed6ba1cb7b57c07e0",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bianchi-specialissima.json",
+    "bytes": 13749,
+    "sha256": "da69ec66293bf4344fb868cdb3f9ea6e19b2a38326bbdb1cf32fb01323198c22",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bmc-switzerland-kaius.json",
+    "bytes": 39583,
+    "sha256": "6b7dd270e1adcf669e16e8dd36b053f699c460f872f352712264e1d7ce4f9a0c",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bmc-switzerland-roadmachine-01.json",
+    "bytes": 39778,
+    "sha256": "d41acd53c8be9e7d8077d9177dcda3bb5824d6fe00e80b2f0dfe0c77891ddce2",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bmc-switzerland-teammachine-r.json",
+    "bytes": 78773,
+    "sha256": "ed1b47162fef85946e42457141cd47305d6462689d941b7a4e55fa1027d5671a",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bmc-switzerland-teammachine-slr-01-one.json",
+    "bytes": 39643,
+    "sha256": "0e227d1639ce502275c98cc98946a7706ed8733882f0d13aaf3d0d78b125771f",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/bmc-switzerland-timemachine.json",
+    "bytes": 26765,
+    "sha256": "d3eccea9fd61d5a022ff72913de51d49233caada138476830c3ee6d24709af65",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cannondale-bikes-scalpel.json",
+    "bytes": 27674,
+    "sha256": "b41ccb60e1cff5b3375627eea8d6f4c481beae35baa4368f7b00d6cde81ebca3",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cannondale-bikes-supersix-evo.json",
+    "bytes": 54433,
+    "sha256": "99a8ef4148de227af91b0909be6d6b165dbf23a752497c9af9e306f4406a2386",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cannondale-bikes-synapse-carbon.json",
+    "bytes": 46783,
+    "sha256": "e33a1b6ac9d4ad5ece127c5510eef139c21fe7ccfd66ee3d1edfda8c91773d16",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cannondale-bikes-systemsix.json",
+    "bytes": 46575,
+    "sha256": "99fd0d1bd74e759a628c5a0f86ee668837740cbe42057a9ed7a450d272890ba3",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cannondale-bikes-topstone-carbon.json",
+    "bytes": 40959,
+    "sha256": "c436bec4070c82eb90c1ab4791e54ba508cec17d8eaec4767df28df5598a6b4b",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-aeroad.json",
+    "bytes": 105841,
+    "sha256": "0619264bb0608b1c785989a26b9f925a2137c6e78966f5064c471c939e97224a",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-endurace-cf-slx.json",
+    "bytes": 86273,
+    "sha256": "da08ea57b2fdef8693f51b47730b78e30e6c24d9f798329db24128afca87de8b",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-grail.json",
+    "bytes": 106325,
+    "sha256": "4d1159c09fd99320f4da3db35d6d0f1e53a45f8a112f9d94bb4d3f8bdb181dcd",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-grizl.json",
+    "bytes": 47777,
+    "sha256": "d81f0255880feaa7248af5829005d98544be75da4fff330e4181876b0bf99953",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-spectral.json",
+    "bytes": 15700,
+    "sha256": "10c45e8b88f0ad7b8ff18e97099b0b2897ab65c4a0d3d6e056223248ca12bf4e",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-speedmax.json",
+    "bytes": 63473,
+    "sha256": "285889e7e200464d0ed59e0e57b71e4f3222c75e0b32032a413c295274436caa",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/canyon-bicycles-ultimate.json",
+    "bytes": 46396,
+    "sha256": "a3fd015c9d5c65d99b24edda7300f76939fba762c61c60cbf7e5cbdfe2ea1d20",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-aspero-5.json",
+    "bytes": 36327,
+    "sha256": "cac7a81574ef8784fc3ac81ecf3c617b8679dab3755829587b6ae1cccb4ba3e9",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-caledonia-5.json",
+    "bytes": 87921,
+    "sha256": "588fc806c45fa3981d29f7c802c0d84e4453af44d0ae5b08c4681e10a83a7d05",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-p5.json",
+    "bytes": 36178,
+    "sha256": "f7282828c57af964defe7db59204efd4853aa3159e07bcc3cd49c5625fd8882e",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-r5.json",
+    "bytes": 72038,
+    "sha256": "5b19f8aca1bfa00ced4ef712de32b12ec7abab2d30e0836d2ee63d1e393b515a",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-s5.json",
+    "bytes": 43005,
+    "sha256": "2909d2b30f3219817b6b8764dd7dba71908b91b72058d4f3fc4f07b6d78acc07",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cervelo-cycles-soloist.json",
+    "bytes": 76108,
+    "sha256": "db9da1d6ea0ce09b7a79292ef678803e9c6df68ed4f51aeaaeb0f1d76b6fed8a",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/chapter2-toa.json",
+    "bytes": 39681,
+    "sha256": "a800142f191bc39e3a5151e7e50d11429ac11d37f656366014b1853a310996cf",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/colnago-c68.json",
+    "bytes": 52826,
+    "sha256": "c46d671e215452f6e99c2e02822a6da87bf316c2eed54caaf5ca1ea8d991856c",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/colnago-v4rs.json",
+    "bytes": 46176,
+    "sha256": "355e75b23b4844e7464e47308d559ea9e36837d898e222b00cd5f4da15804335",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/colnago-y1rs.json",
+    "bytes": 59964,
+    "sha256": "9b375da4ffc18dede4c085aa2d09b201263a8ed107008470fcd07911fc96c1cb",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/cube-bikes-litening-air.json",
+    "bytes": 39887,
+    "sha256": "0659a2f39acc0fb43854feabc5de1517d3eacfdb23b9b3e727a4233441bc8509",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/de-rosa-sk-pininfarina.json",
+    "bytes": 52776,
+    "sha256": "d32ff744d69da1f8c115154c66fc934fd5f9de6606b7fc30aee4ebe62c71ad60",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/enve-melee.json",
+    "bytes": 59543,
+    "sha256": "4242dc797c014f60363e6f86556105be26298446a8ee22876a532e918c6900ef",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/enve-mog.json",
+    "bytes": 39767,
+    "sha256": "dd63375690ea228736abe28668bbdbca0a0efaafd531d89d5eba2f1aabad278d",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/factor-bikes-o2-disc.json",
+    "bytes": 33097,
+    "sha256": "cdbc5f381b73a56fbb8206073d3f9ab3afaecf65a8f928741c78f0fe4cb2da3b",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/factor-bikes-ostro-gravel.json",
+    "bytes": 39816,
+    "sha256": "c754c65c05e4b1bfcb02d2c92d081db7fb79a7154f42bcdfc71db1a2f0a40c37",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/factor-bikes-ostro-vam.json",
+    "bytes": 46391,
+    "sha256": "2f0feeee5c0abc07ca25966fd5b9ef5ec472f32c5878f229352bf95784883fbd",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/felt-bicycles-ar.json",
+    "bytes": 39748,
+    "sha256": "c7dd82bc1a39ba616a5d9b26dd5ce4c5e41d71127796864d1712954ea7728ab5",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/focus-bikes-izalco-max.json",
+    "bytes": 46688,
+    "sha256": "ea55a7e51641369fc30fced0b00a157e27470459122d466389ac8fc9e0735071",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/giant-bicycles-defy-advanced-sl-0.json",
+    "bytes": 85241,
+    "sha256": "a24bca2757563b12697bff814e63d7aa5b7b119910eed0f6aef7f54c09bb85b0",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/giant-bicycles-propel-advanced-pro-2023.json",
+    "bytes": 78697,
+    "sha256": "02251f72347062a5d480e2d462ef7d5842abe85657026c1d78f1dd24a75aa933",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/giant-bicycles-revolt-advanced-pro.json",
+    "bytes": 79065,
+    "sha256": "8c89ed526ff1b0fe6db59b761a6a20dc3ba603418768c32517294b16fd5934a7",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/giant-bicycles-tcr-advanced-sl.json",
+    "bytes": 39779,
+    "sha256": "69026d4bbce87f9c93e0ad2239db62d849b6eeca036087039d8d77debc1c12bd",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/giant-bicycles-trinity.json",
+    "bytes": 26715,
+    "sha256": "7c3c5adc7b4c6403c9534498519b2ea50961d1520940a3a5d7378804984492fb",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/lapierre-xelius-drs.json",
+    "bytes": 39599,
+    "sha256": "3ef8f79dc16170b481c6477745c411daa5510f867d5c41234ddf2e9768b35c57",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/liv-cycling-langma-advanced.json",
+    "bytes": 33661,
+    "sha256": "9b57d96a54b23d78a3ddc9b2d527a2af3fa7e0fc36c9c3664606777ae15a5e1e",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/look-cycle-785-huez.json",
+    "bytes": 33626,
+    "sha256": "3323188cc6746015fe632f5b1ab637e35db1b88c04f7eb424617879847462ac1",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/look-cycle-795.json",
+    "bytes": 40288,
+    "sha256": "f1fcd7e41b0952d7d1d874717c24089388d53b39ae2a447cc9ed939a8e28b005",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/merida-bikes-reacto.json",
+    "bytes": 40928,
+    "sha256": "4baeddb7f176cee6f9cb82de5ce1ad432804aa46b6ca9718a7b8355d7dd2ef3f",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/merida-bikes-scultura.json",
+    "bytes": 41856,
+    "sha256": "3bb2704de7453f5aa0300231baaf187a34c73b151cc84e17d1687ea2c3a732db",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/moots-cycles-vamoots-disc-rsl.json",
+    "bytes": 59409,
+    "sha256": "deb4e17c1520f82c9c8f9f5c579c9f75214633323f84baf3901f0a99b4e21b45",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/open-cycle-up.json",
+    "bytes": 33649,
+    "sha256": "6d9a00e5e044bb2bfdb15a0fc0dbce8ddded715ecdc5206d39b0910847576758",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/orbea-oiz.json",
+    "bytes": 14035,
+    "sha256": "1d69d02a74f4f3ec188e40bbb85b9bd1269bd7d112724a74bdeb2a3041ab554e",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/orbea-orca-aero.json",
+    "bytes": 46645,
+    "sha256": "be734cc901e4cf79da035dc029db47df258fab546c66ed9922e50651bc74cf29",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/orbea-orca.json",
+    "bytes": 47851,
+    "sha256": "328e988d9de0d74a9f1444c582de64387cf1dd275b21c5a462bcde760cb84624",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/orbea-terra.json",
+    "bytes": 41352,
+    "sha256": "1cb04c874cdb48e18e748bea8292daf70a363313c936880fe4a34cab97d34e93",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/parlee-cycles-altum-altum-disc.json",
+    "bytes": 39630,
+    "sha256": "b621b56a21f8eb7894728a436dc17fbe0beceb583fafc7e29968b4b816b17cbf",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/pinarello-dogma-x.json",
+    "bytes": 72428,
+    "sha256": "518266dd03f20dded2fefdaac48a8296d7022d02463ec0b4317b5a0a962b14ef",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/pinarello-f.json",
+    "bytes": 59436,
+    "sha256": "c5854501cfb49f405616da6b5f86c9cf798dfab564ee57ee69cbe97112fc11cf",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/pinarello-grevil.json",
+    "bytes": 27307,
+    "sha256": "a6e1a2f6ef284da0a4fa3466452c2388f5607b0771505616884c30790ec8fa14",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/pinarello-prince.json",
+    "bytes": 59363,
+    "sha256": "f3cb2d3380b8206a068b436f27c1ec6c783023f3926d3c46ceddf5f9368a2803",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/polygon-helios-a9.json",
+    "bytes": 39723,
+    "sha256": "d5e47d183688d74ac91b470b22362fb19b1e611272b9b23b867305a9e5f92c16",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/ribble-cycles-ultra-sl-r.json",
+    "bytes": 33132,
+    "sha256": "a6715052485a663dbfcbd4e2abcca568b6ac06f6b03b96a526a673f85cc4fa08",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/ridley-bikes-helium-slx.json",
+    "bytes": 36100,
+    "sha256": "02d72ac9bbb354d59503880ae90c82b5e44863bc40f956d54bd9f089ee5f0e75",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/ridley-bikes-kanzo-fast.json",
+    "bytes": 33177,
+    "sha256": "99ceb332c03c3c4686fd55db003655d2f49ae569ae0cc26d5b3372e506a3a469",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/ridley-bikes-noah-fast-disc.json",
+    "bytes": 33315,
+    "sha256": "c52a8804465d6f119fc4b99c70a59c84d5a2d5d33e07a166b7188f19e87d1200",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/rose-bikes-x-lite.json",
+    "bytes": 39998,
+    "sha256": "7201fb17f406dac3fa8e5792600b5fa966f1eafb7bcf1699b399e6ffd7ab3935",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/salsa-cycles-warbird.json",
+    "bytes": 48074,
+    "sha256": "c75177451519c6a2c6951325470556e23ea8cda45d90868c10cd6a982f3d7364",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/santa-cruz-bicycles-hightower.json",
+    "bytes": 34128,
+    "sha256": "9b608abf819e16f8db83bfd5fd74318aa2eea0aa3c1961d299fcc2c382e91e33",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/santa-cruz-bicycles-stigmata.json",
+    "bytes": 41034,
+    "sha256": "793bea6c67bc36bfb87806d675102b5b2944c46370c836de9cc9aaeb91cb6b02",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/scott-sports-addict-gravel.json",
+    "bytes": 33998,
+    "sha256": "03a0ed1449598f6d5b7221eb9d961248b6bf30f9d8126d05d9874de7e1c672c8",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/scott-sports-addict-rc.json",
+    "bytes": 46973,
+    "sha256": "81704ab9372f9b10ae951fed4d60885b4285d8224b49990131f0a785e72046df",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/scott-sports-foil.json",
+    "bytes": 47046,
+    "sha256": "8636a3e310fc9bad4c3ebd3c0499694a4e069e9e2aed512afa5ac5fb7bc29356",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/scott-sports-spark-rc.json",
+    "bytes": 14175,
+    "sha256": "e1a642ffb6daeeb4cae11d7144b7a505a6979b115cd73fd6d30235617eaf5f40",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-aethos.json",
+    "bytes": 39993,
+    "sha256": "3052df2061075b0c2377a68b2a73aea17625ba111fae2a6b76b48d4b6c0fc366",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-allez-sprint.json",
+    "bytes": 46147,
+    "sha256": "08462b67fb64a7bfa1b9b0a2bb18cbc4c288dcc17c968e7e8d5449ddbc976c98",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-diverge-str.json",
+    "bytes": 91573,
+    "sha256": "fa9747cb399e4940d525d3e34f53c93c4192e9719a2f612c9c8b20af8b2f43d4",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-epic-8.json",
+    "bytes": 26856,
+    "sha256": "c132067175830d18009bdf3142da55c22e377a34149152a9169430877ffdc209",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-roubaix-sl8.json",
+    "bytes": 39663,
+    "sha256": "57c673f8bf46c3c573ffb106906bdfc3067930d3bd3a5650ff669501eac44e07",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-s-works-crux.json",
+    "bytes": 39731,
+    "sha256": "5916279fcd4df160328bea48cb9d6db18b98d8ab39aad6041d9065cf4e1a3762",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-stumpjumper-15.json",
+    "bytes": 39819,
+    "sha256": "2eb51a3261a510a100e8590a7848b8319830ffceab773ba25053289f4a7e5dbc",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/specialized-bicycles-tarmac-sl8.json",
+    "bytes": 98143,
+    "sha256": "1ff804666d31e150b2e7860d1b070b056aea946b21c35165e1c4fdccba2ddf37",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/time-alpe-d-huez.json",
+    "bytes": 33706,
+    "sha256": "91a6931927fc548d5264cf45cc7629ee6d35854c76ecbc233c0d624499978202",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-checkpoint-gen-3.json",
+    "bytes": 46282,
+    "sha256": "d9a3d8bf310ba9c892ef60a6c8234ebe2befb62e76f773fb6c8bf270717935f8",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-domane.json",
+    "bytes": 55508,
+    "sha256": "068d2dc5b6a60616fd30a4a803e660644426b8445ea873e7d26b9e298476d17d",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-emonda.json",
+    "bytes": 54182,
+    "sha256": "c06438e4e96ad0c5f773f624086e5813cc712394b32746fc8e33a03204ec7174",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-fuel-ex.json",
+    "bytes": 54280,
+    "sha256": "60eeb173cf546f3d17546bed46c9ef0cc424c74b1b54d64aeaa220944b1a5e45",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-madone.json",
+    "bytes": 79914,
+    "sha256": "8f910971a7c9b5273e4a9044649955e7836ca0ee2b4fee42ccc6791c0b4dc255",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-speed-concept.json",
+    "bytes": 26762,
+    "sha256": "02592dce02a661b2d751526a47809341bec5aaaf71d07fba143fac62bae59ca3",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/trek-bikes-supercaliber.json",
+    "bytes": 33342,
+    "sha256": "23008dc76d1bde132dbbc7aad3c42959eff2432df3e109fd6eeb25d21bb7bdb6",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/van-rysel-rcr.json",
+    "bytes": 39842,
+    "sha256": "34051c87c8e07ecbde2adc4aa6bf36c5e37ccbab5a70adb792b34a5fc7dbc1c5",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/van-rysel-ultra-rcr.json",
+    "bytes": 20242,
+    "sha256": "151ee78cc1411594e79f4aa46ced9da0265641d401d580ee47cba6c100079bfd",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/wilier-triestina-filante-id2.json",
+    "bytes": 33203,
+    "sha256": "09d966fd742778dd69626f7de38538a3889591c24e93bb4963adaa95cac9744a",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/wilier-triestina-rave-slr-id2.json",
+    "bytes": 36057,
+    "sha256": "89265f74742f328b51ddcf9a51be2ffc7ac78d65b23a2331572a888a7aa6684f",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/winspace-cycle-co-t1600.json",
+    "bytes": 33141,
+    "sha256": "cd2883c6b9e89dcc8916d6e4287fcffb51226c500bf0e1d84017bc3c3d02f8aa",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/yeti-cycles-sb140.json",
+    "bytes": 33149,
+    "sha256": "0ac14be218471aab74868f5f045c11d22622be35190df0150b15e12926349d2c",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_jsons/yoeleo-r12.json",
+    "bytes": 46405,
+    "sha256": "cde2c5f5dae02aada6a964410355addf296c4f6ddd513e3cea81967ff3400361",
+    "license": "REVIEW",
+    "source": "BikeInsights; geometry-only projection",
+    "note": "Confirm database redistribution terms or replace with an original catalog before publication."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_road.json",
+    "bytes": 4744,
+    "sha256": "cff50ac29e2164175f8616f9766a6dfec7168d3abdc10c86e0764ead3364855a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/bike_road2.json",
+    "bytes": 4398,
+    "sha256": "dc091e91ac29ca96cc9ced0a9b65e302de798ed3191c5d32a4b92dac4c388cb1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/branding/rezvivo.ico",
+    "bytes": 99112,
+    "sha256": "3d49d7ebebc7bdc163e10551e608d3093bdac7371c1efad9c26e976fe73199bf",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/branding/rezvivo.png",
+    "bytes": 218426,
+    "sha256": "b694f3b864a7dace6b8d69e49a0d58aa6284955ec7a649ef9d4b7bf0d6a0c0b2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Cassette_Shimano_Dura_Ace.png",
+    "bytes": 104969,
+    "sha256": "f2653b241da7ccfff6e9ce014feed0512244803fc05b362f6134db4b0994bdfe",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/CastleSettings.xml",
+    "bytes": 305,
+    "sha256": "fdc2abaefa5ae3b462401ab047f1b592700e51f634f2bded84d54e560f9c636a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_down.bmp",
+    "bytes": 3145782,
+    "sha256": "0db7d48c7b5322d0042f7d0aaf1992152212e0cd53fa58d5a56792aa95a676a8",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_east.bmp",
+    "bytes": 3145782,
+    "sha256": "0f78f2180fd43dd7f66c980a09472ff9dbbfa3548eacaf1592c91d7528ab0274",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_north.bmp",
+    "bytes": 3145782,
+    "sha256": "77c9d3acc505bc4fc0505bd3fc1a0ecd2aa5a80fb5b9cf25c5f33e02115fbb3a",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_south.bmp",
+    "bytes": 3145782,
+    "sha256": "1cacd19937e6d4ace2ec249e140e344aa773705816957b608f0259e51071a952",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_up.bmp",
+    "bytes": 3145782,
+    "sha256": "306a918eec2e0342b9f7ca0190077ffbeb27fdcf9c5461b978bd218d47625087",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/clouds1/clouds1_west.bmp",
+    "bytes": 3145782,
+    "sha256": "ec52d11324885dee4e644c4a1f3df49242863e2d44799e212f4b0af14a2da17f",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Crank-Shimano-FC-R9200-L.png",
+    "bytes": 44291,
+    "sha256": "f55f0b747ca72db8e103ee1be3fa60dd6892654880b17d4da925e4c86bd6d8dd",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Crank-Shimano-FC-R9200-R.png",
+    "bytes": 78015,
+    "sha256": "95c9a0e410f42951d2a19b2a97b9378bf906c90c2f867b63fd830a2f8986dddc",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/island.x3d",
+    "bytes": 36814452,
+    "sha256": "fef484cfc49ffbc587d0e237942ba97f736451ec0a6ce9176eb0534515aed970",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/models/alpine-chalet.glb",
+    "bytes": 538144,
+    "sha256": "9dfa296b6f5a8d45f5593a15afc4c6a90dfdfe7f5d74633475238081bb4e0a71",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/models/moored-yacht.glb",
+    "bytes": 885744,
+    "sha256": "93bffa8cb49210d87b8f813876b71e6143da5ecb982fd5f01163b6ca99e0fd39",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/models/mooring-bollard.glb",
+    "bytes": 277632,
+    "sha256": "ff19ec41e433301ace4878b2497acce04d1068a5322fc601dc51f9c089cce75c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/models/ruined-watchtower.glb",
+    "bytes": 697512,
+    "sha256": "e9847d0c54ea118e639dc7983bd7e32080cd0dd63dd905252f3a9920a71a7632",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/models/trail-marker.x3d",
+    "bytes": 484,
+    "sha256": "430b78685b88ea10a949ac80a93fdadfc7233957d53bed08445a4ab005f32df8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/preview.png",
+    "bytes": 72373,
+    "sha256": "2ac6117b10cf6fd0bd13294bb16005d1def7b69b709b0837978ff25ccb8b6e23",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/world.json",
+    "bytes": 339312,
+    "sha256": "65f238c6a71dee7d5763f1797a6a8af4f024d9d35e4e0e54c0bbbc457e2afa7e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/alpine-chalet.glb",
+    "bytes": 538144,
+    "sha256": "9dfa296b6f5a8d45f5593a15afc4c6a90dfdfe7f5d74633475238081bb4e0a71",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/desert-arch.glb",
+    "bytes": 446680,
+    "sha256": "930d15cfbee6dd4227b810aa1d1c4fdd01f3b7aef8d89d02807c34e7700511af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/fishing-boat.glb",
+    "bytes": 114744,
+    "sha256": "71e3c8ca48f1ea129680ea13ae2aa8a13ec0c17f350777e402aa9d7b43bcb577",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/lighthouse.glb",
+    "bytes": 3419596,
+    "sha256": "d6ecc1e661bef05bcef14146b18f59f678595d3f5d13e4690b5c6e4527fd1b22",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/moored-yacht.glb",
+    "bytes": 885744,
+    "sha256": "93bffa8cb49210d87b8f813876b71e6143da5ecb982fd5f01163b6ca99e0fd39",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/mooring-bollard.glb",
+    "bytes": 277632,
+    "sha256": "ff19ec41e433301ace4878b2497acce04d1068a5322fc601dc51f9c089cce75c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/neon-pavilion.glb",
+    "bytes": 452872,
+    "sha256": "27f11e428ef8e98984edef2fc8c70ee128be1b86c1305ae08efb20aa4c4aa8e5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/models/ruined-watchtower.glb",
+    "bytes": 697512,
+    "sha256": "e9847d0c54ea118e639dc7983bd7e32080cd0dd63dd905252f3a9920a71a7632",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/preview.png",
+    "bytes": 109397,
+    "sha256": "a4ccdb28a191a0b774e33728f9ca6f15c9577a6be3349c74028e2cf01b83d11c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/world.json",
+    "bytes": 490711,
+    "sha256": "0f9b4564bfcf0cc008f7bccb6579e6a138ac0845f9c3ae9cb732e15d859d15f6",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/world.x3d",
+    "bytes": 47435984,
+    "sha256": "a88c3a6377ec26f7790237e5ded4ae131125c23ecc693a9ae5f79b688f23bb47",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/models/alpine-chalet.glb",
+    "bytes": 538144,
+    "sha256": "9dfa296b6f5a8d45f5593a15afc4c6a90dfdfe7f5d74633475238081bb4e0a71",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/models/ruined-watchtower.glb",
+    "bytes": 697512,
+    "sha256": "e9847d0c54ea118e639dc7983bd7e32080cd0dd63dd905252f3a9920a71a7632",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/models/trail-marker.x3d",
+    "bytes": 484,
+    "sha256": "430b78685b88ea10a949ac80a93fdadfc7233957d53bed08445a4ab005f32df8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/preview.png",
+    "bytes": 77622,
+    "sha256": "2c8ab0a9961e5a12520ad4900d0b34d468c43a54b5c710bf4624cfbccefbe9c4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/world.json",
+    "bytes": 528186,
+    "sha256": "0d6bdcb31bcb8409d6bc20549937ef724d27ffa2c08c7d6a0e48e513f183aac9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/world.x3d",
+    "bytes": 28920477,
+    "sha256": "834190e371d39ef37ba07e831eb477d6af43403eb394b73410565c492a4fe022",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/island.x3d",
+    "bytes": 12809822,
+    "sha256": "f2c9c6689b1c3b921ac9671ae3371343b10bdb55618d5075b1835d58dc99d774",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/models/fishing-boat.glb",
+    "bytes": 114744,
+    "sha256": "71e3c8ca48f1ea129680ea13ae2aa8a13ec0c17f350777e402aa9d7b43bcb577",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/models/lighthouse.glb",
+    "bytes": 3419596,
+    "sha256": "d6ecc1e661bef05bcef14146b18f59f678595d3f5d13e4690b5c6e4527fd1b22",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/preview.png",
+    "bytes": 88479,
+    "sha256": "b24c6807a7964ef6eb6768655110823ce20373a0be9a196075ddd4094e8ab345",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/world.json",
+    "bytes": 340241,
+    "sha256": "831f4b1ed95958b62c7dc289dc84bd01d205c8df054a3ba7b28274e12f7916f8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/models/neon-pavilion.glb",
+    "bytes": 452872,
+    "sha256": "27f11e428ef8e98984edef2fc8c70ee128be1b86c1305ae08efb20aa4c4aa8e5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/models/trail-marker.x3d",
+    "bytes": 484,
+    "sha256": "430b78685b88ea10a949ac80a93fdadfc7233957d53bed08445a4ab005f32df8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/preview.png",
+    "bytes": 42486,
+    "sha256": "70265ea2e675d51d7eb63e78e37517c8ad26737c1ac6fc8f168ad847a6e8f381",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/world.json",
+    "bytes": 340434,
+    "sha256": "8c0c0ad45fde40ed8845be7586f1dbad60a50616745c0094d09a6809e9e10a55",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/world.x3d",
+    "bytes": 47525501,
+    "sha256": "5e73e208139a448e8a6851c14234803f88ec7e11249ea29160f8e7c55923d048",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/models/desert-arch.glb",
+    "bytes": 446680,
+    "sha256": "930d15cfbee6dd4227b810aa1d1c4fdd01f3b7aef8d89d02807c34e7700511af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/models/trail-marker.x3d",
+    "bytes": 484,
+    "sha256": "430b78685b88ea10a949ac80a93fdadfc7233957d53bed08445a4ab005f32df8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/preview.png",
+    "bytes": 28246,
+    "sha256": "23e28675e6fb880bf0a680754a2991f9090306be13b9ed35b11f2fb0115ed3ab",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/world.json",
+    "bytes": 339661,
+    "sha256": "5af5a568a5c0ac994534e787edfa7b51df191c3b4a43c540682f6ab4e29ba06c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/world.x3d",
+    "bytes": 23804934,
+    "sha256": "59d56440a5c4f2fd4b61cfc7c7561585be42dbde6910a72bae2f9710ae830bb8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewbikefit.castle-user-interface",
+    "bytes": 4065,
+    "sha256": "a1ca66ccbd746a16ae797cf289b505fb442cadcf44cdc9a57976ce9d87221e4a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewdevices.castle-user-interface",
+    "bytes": 5921,
+    "sha256": "031113318886d58e77951e0ca1636bff0dc6a0ab422c3e4dc8873670492b7da3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewevents.castle-user-interface",
+    "bytes": 2812,
+    "sha256": "7dd1510e3b60f0c84d1b814264c8580d9789ab14b154b7fcefd952261eefa6d9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewfreeride.castle-user-interface",
+    "bytes": 3461,
+    "sha256": "03c0c39017a5f231c87cdbf29a0f23656d5d7c9bb0270e364cdb69bebb331cf0",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewlogin.castle-user-interface",
+    "bytes": 2888,
+    "sha256": "260327b4d2f16bd66b98fae4f897cb45a0fa2059212e8ac5aa6d3f27b22ee7b4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewmenu.castle-user-interface",
+    "bytes": 6485,
+    "sha256": "f9b64b047fb0c806f362f52f0759c60ba65585877ebc609019f8fd28b1ac5337",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewplay.castle-user-interface",
+    "bytes": 29119,
+    "sha256": "a2f6275075f6df9b8b8616a1f997da204afe63184510182489edb819fa38ccdd",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewprofile.castle-user-interface",
+    "bytes": 2430,
+    "sha256": "1b4c74d2dcace6a77e925dfa0b70d6d32ee978053ae7be02dec94b4ee5d0e99b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/gameviewtraining.castle-user-interface",
+    "bytes": 3147,
+    "sha256": "75f6a1129d10a110caa9394155aba4e25ae77df704059fa0e56a2617f58e7a37",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/license.txt",
+    "bytes": 706,
+    "sha256": "4222ebba5f49d59bc3c8a995bbbed5c62cc6b40a190a14fc1012516aaaafab18",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/openal-soft/COPYING.txt",
+    "bytes": 23330,
+    "sha256": "d808ce217e5b611854da622b57ec29fe545584c48bc5352fae72a4b6e5074a15",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/openal-soft/LICENSE-pffft.txt",
+    "bytes": 1669,
+    "sha256": "64056328b3e7bc104e24ef96accc1a7abead156f0c02d1b87c97e3f3a28030de",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/openal-soft/source.json",
+    "bytes": 377,
+    "sha256": "0683d119532467cface5483fc20372072ca0c007f4ab514fa9ea686253b2e0e8",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/xiph/ogg-COPYING.txt",
+    "bytes": 1466,
+    "sha256": "d2ab5758336489da61c12cc5bb757da5339c4ae9001f9bb0562b4370249af814",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/xiph/vorbis-COPYING.txt",
+    "bytes": 1470,
+    "sha256": "414bfd5d8ee64395a9231d6386188461500052c10915bee08b18bfa9489dd0b3",
+    "license": "LICENSE-TEXT",
+    "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/AUTHORS.txt",
+    "bytes": 210,
+    "sha256": "00580173077306dc8c67e2f7f32692489a082c8b287d894415f6bbb3bcac0d76",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/DejaVuSans-Bold.ttf",
+    "bytes": 691084,
+    "sha256": "810b30f0887114e9359f5bf019fbf7717f4bdaf897ab6741a9ec0ee7e0a8d6ab",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/DejaVuSans.ttf",
+    "bytes": 738752,
+    "sha256": "3ce0ed8ea4552bb721dca9c12d76898670534f0441cec128ab2dbd43c185e1ba",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/FREETYPE-LICENSE.txt",
+    "bytes": 6743,
+    "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/LICENSE.txt",
+    "bytes": 4860,
+    "sha256": "e9448e987983ab87c76ca21e5a358f31980cd6354d6c5ecd36af984fd6cbba72",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/RUNTIME-NOTICE.txt",
+    "bytes": 638,
+    "sha256": "e00471e65b410830a1a78096276df1246fe0b9ddd1c459f2fb84865160de79b6",
+    "license": "SEE-LOCAL-NOTICES",
+    "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/analysis.png",
+    "bytes": 3265,
+    "sha256": "257471463c8856f8977cd74228f5393c9e93cdedbcb6ae4b7075c16205682fc3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/back.png",
+    "bytes": 1839,
+    "sha256": "acb291dbc650628a6ba2fd026eedc9cd51819c94a7325476f95adb9c56432757",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/close.png",
+    "bytes": 2681,
+    "sha256": "17b7fda8753e1f7fcb64b3029d9cb61175fcb0754c4318b7112fc3de1c9d623a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/connect.png",
+    "bytes": 2342,
+    "sha256": "2569045a39a1e089140cc205be2bb4ed8bfe4b39fdeca36120ed3618a3d621de",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/create.png",
+    "bytes": 2060,
+    "sha256": "e863629a4286da45debcaf55775d88d999a696abbc006afdc88337151c470205",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/delete.png",
+    "bytes": 3366,
+    "sha256": "cca76bfd5ca0e3c4ddff7685053afff077130daf222c106bcfcc6dfc888665e4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/details.png",
+    "bytes": 3788,
+    "sha256": "3ae4262747a5ab3911c447bd40907478f0639a106b7ac7d3ec647abce3788dc9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/disconnect.png",
+    "bytes": 3606,
+    "sha256": "6deddc01c747fa9d3640da6242e7465b6dc6fba001c97e2e4db9af9ae5500dc6",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/edit.png",
+    "bytes": 3510,
+    "sha256": "d9307fb5b7f068b7a3009d07877fee140ea6d54d97f247d1f7b77614ecb0e660",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/favorite.png",
+    "bytes": 3460,
+    "sha256": "18b6fa454fd62fa749862cb5e2335f811609385d89fc691928e975f8b1798042",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/folder.png",
+    "bytes": 1946,
+    "sha256": "0248126b1871822ab70ac23aad94eb92819944fff84e908d4275ac042ebff775",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/import.png",
+    "bytes": 2404,
+    "sha256": "f5139e93f4fcf6a0cf483e0622767c103cd7f6015b8ccdb65b84e52d0d05cbbd",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/key.png",
+    "bytes": 3127,
+    "sha256": "4d64035ffb1797a9e1608f0e4df7ecb1985d122e307d3dd2a01f55393764c51f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/library.png",
+    "bytes": 3730,
+    "sha256": "6f9e1b1a558a0aa860330f93b5e1e26f8465d8f1411ca26dc870425b257f9525",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/login.png",
+    "bytes": 2190,
+    "sha256": "bfd0014676f9221ee6d8d0d80046be366bf94a9b0c95267f16cf6be66c565fd2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/logout.png",
+    "bytes": 2156,
+    "sha256": "976718e1c5762bb624eb7efd37a6647033127ee1bf9c661d0da9979d7ee31048",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/refresh.png",
+    "bytes": 2787,
+    "sha256": "d43349101a6d460fb442f4411b9f0557d7cd30b029645be9860ac575a64fbf3e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/ride.png",
+    "bytes": 1585,
+    "sha256": "8b684e3ff2360eee92ac322168fbc4d3122c6ade9276430c9800743a54f26b38",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/save.png",
+    "bytes": 2989,
+    "sha256": "ab5873f2e967943b58f47f55b5ecb4e6e1325868bd0af1fe42a1fb4ca9d1be17",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/search.png",
+    "bytes": 3068,
+    "sha256": "df68a679af891f696566502fa4ee1d2200b5d3f62b9da0dc087ad6ee41c8a259",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/share.png",
+    "bytes": 3524,
+    "sha256": "371cec86388ade8cfb5687d699362d93a3a5ea165cfb877f4fadfa714548ce55",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/statistics.png",
+    "bytes": 3055,
+    "sha256": "2bc458099f3f2eb49141388aa48e6d0e888184139d6739db28a98c4ab5c61457",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/actions/stop.png",
+    "bytes": 1224,
+    "sha256": "1f81f22546aa5d3173370ab1e04ac2fc68914b7e5a79c7e33c5c3f6c9102655c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/bikefit.png",
+    "bytes": 4277,
+    "sha256": "7a0b2067f15d74f5634590da48a25060f7b6deaf812aa01ab72dfe05626451ce",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/devices.png",
+    "bytes": 12873,
+    "sha256": "1e08d18b9b7d5ee26df2e01b1749d4e7ec6819b6a741e581c8cb3c4188b7b2da",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/events.png",
+    "bytes": 4784,
+    "sha256": "d4160e6e1198518c22fbfb7a59e9adf27e7759f9dab8b88a53e91bba2f51c3da",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/freeride.png",
+    "bytes": 5489,
+    "sha256": "9194e1228152ee9ff6eef5ffd231e1e67a32d79b08d05666fa341831ef26ad58",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/profile.png",
+    "bytes": 6565,
+    "sha256": "64544b7d8275095feaf6628a7d79540c8afb7d3e4a813bf3bc0ac76b76beea73",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/analysis.png",
+    "bytes": 3265,
+    "sha256": "257471463c8856f8977cd74228f5393c9e93cdedbcb6ae4b7075c16205682fc3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/close.png",
+    "bytes": 2681,
+    "sha256": "17b7fda8753e1f7fcb64b3029d9cb61175fcb0754c4318b7112fc3de1c9d623a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/create.png",
+    "bytes": 2060,
+    "sha256": "e863629a4286da45debcaf55775d88d999a696abbc006afdc88337151c470205",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/details.png",
+    "bytes": 3788,
+    "sha256": "3ae4262747a5ab3911c447bd40907478f0639a106b7ac7d3ec647abce3788dc9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/import.png",
+    "bytes": 2404,
+    "sha256": "f5139e93f4fcf6a0cf483e0622767c103cd7f6015b8ccdb65b84e52d0d05cbbd",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/library.png",
+    "bytes": 3730,
+    "sha256": "6f9e1b1a558a0aa860330f93b5e1e26f8465d8f1411ca26dc870425b257f9525",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/refresh.png",
+    "bytes": 2787,
+    "sha256": "d43349101a6d460fb442f4411b9f0557d7cd30b029645be9860ac575a64fbf3e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/ride.png",
+    "bytes": 1585,
+    "sha256": "8b684e3ff2360eee92ac322168fbc4d3122c6ade9276430c9800743a54f26b38",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/statistics.png",
+    "bytes": 3055,
+    "sha256": "2bc458099f3f2eb49141388aa48e6d0e888184139d6739db28a98c4ab5c61457",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/routes/stop.png",
+    "bytes": 1224,
+    "sha256": "1f81f22546aa5d3173370ab1e04ac2fc68914b7e5a79c7e33c5c3f6c9102655c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/icons/training.png",
+    "bytes": 3547,
+    "sha256": "6e8c11fbe735efc08fac441cd59caa421fddc53b19204335385a8dac1fa59026",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/diffuse.png",
+    "bytes": 498465,
+    "sha256": "dd78de0c6e69e7b67e02b08e911a332287f5a1696dbfe6470dbe3b6677e84759",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/shrubbery/diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/layers/shrubbery_ownership.png",
+    "bytes": 6337,
+    "sha256": "221852cdffd3e8735c2e74c5454b6c4028a7c89c3b172acc1f78126fbcf8c402",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/normal.png",
+    "bytes": 474318,
+    "sha256": "d20f214018267d37ec41b05daf8c890bc45f76334e59f5964e588ee6dda89a0d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/shrubbery/normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/green.png",
+    "bytes": 1259617,
+    "sha256": "ec0aeca71d6cc9aea7c34ac17eb8e24695c09a25bff1538bad068a2acc6e3774",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/off.png",
+    "bytes": 1256041,
+    "sha256": "7c7a4f58ed4fb06ac06fa377e7ce3c86092c0015e8c08a6d10b9e903cc7f4fe5",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/red.png",
+    "bytes": 1296783,
+    "sha256": "d5b46c1e81e11a635cd1aab176866ba81cbb0f55353e55671ef432e61d208cca",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/undefined.png",
+    "bytes": 1553504,
+    "sha256": "def0fb8f062186d3d288d5e7afdccf4c9ff81fe5ac6826c8b2855d66ee232b3f",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/yellow.png",
+    "bytes": 1187431,
+    "sha256": "620b3031633b2f0e9a5c74e2836548b6309ad7e0b612a7e6e990bebf22fb816c",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/beech_diffuse.png",
+    "bytes": 364959,
+    "sha256": "7f9ec044129cd914a8334b9a9a2b1a88e191830b057579c995bcdc3ad650d824",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/beech_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/beech_normal.png",
+    "bytes": 305387,
+    "sha256": "775a8cc8c123b63a4a14ec6eb450676e4126ab89ad4ba7e50a8dbc4c97fb2526",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/beech_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/fir_diffuse.png",
+    "bytes": 243960,
+    "sha256": "7196025255ea9ef1d488b30621771af90c84d73aac61c7090cd6bc4c56479899",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/fir_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/fir_normal.png",
+    "bytes": 202018,
+    "sha256": "335fa4f84b85a873b737b089728ce5c9bc5366bbdb0fffae5ab9c2da3836de15",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/fir_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/beech_ownership.png",
+    "bytes": 5795,
+    "sha256": "29ffa4b641df9544ff629988b5aeaaf5fd02d257571241aeb6d38160821a32cf",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/fir_ownership.png",
+    "bytes": 5771,
+    "sha256": "0dcb706b612a703909d977ce950fa33efdf9166ef7a90aca9b504b7553d0f646",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/linden0_ownership.png",
+    "bytes": 6721,
+    "sha256": "cb3ac4c254dbe7c10f8c83b547bc478e4516fe6b7ed372c3f88c65057b2854a9",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/linden1_ownership.png",
+    "bytes": 6015,
+    "sha256": "bab2b5891ef979485abe1f3aa85092abd1963e52d2200d195e1932ca96c3542c",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/oak_ownership.png",
+    "bytes": 6750,
+    "sha256": "0f0f9196abe6d24dc4f43f43dc33bea44ff45a3ad5c5f12e63f9e2a1aa2791d4",
+    "license": "MIT",
+    "source": "Streets GL textures; REZVIVO-derived segmentation map",
+    "evidence": "generated ownership maps; preserve upstream MIT notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden0_diffuse.png",
+    "bytes": 419131,
+    "sha256": "db51f74eac7840d17b44c5a0481409b6ea316b143c77d9fdc1d6cba80d11dcf9",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/linden0_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden0_normal.png",
+    "bytes": 379387,
+    "sha256": "35234d5491f455d452f492bf755f7a7e4a5c384daef7103181382c57b0cd01ba",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/linden0_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden1_diffuse.png",
+    "bytes": 329890,
+    "sha256": "d55f9af17fea1e6666f5c11580099820de56816a190fc1cb154e334638eed5a3",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/linden1_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden1_normal.png",
+    "bytes": 298849,
+    "sha256": "49c79c9a755571e369d1bf379a5f6004df0ec92144e8618d2887502d20fcc869",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/linden1_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/oak_diffuse.png",
+    "bytes": 347995,
+    "sha256": "8bbd5d2b058f252c359a8ecc13830a6d537b0fa4f8a428bab67ee7a95fa78c24",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/oak_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/oak_normal.png",
+    "bytes": 331633,
+    "sha256": "d79aa873a2cf4b79aa352c2ef1b35d436044dd2029969467b4d5d4d4920faba3",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/oak_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/tree_volume_normal.png",
+    "bytes": 96226,
+    "sha256": "15270a5d81b9c917c8b2f07e4d53abb1a2ee35337e8da8dada1365e17cbe1659",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/models/tree/tree_volume_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/block_window_diffuse.png",
+    "bytes": 423773,
+    "sha256": "833a78f440e7e2f9f6e4bb35ef75907b35702e29cd43c24330c21e4143953e5d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/block_window_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/block_window_mask.png",
+    "bytes": 230345,
+    "sha256": "014d01bd9ade8af6041cdf8b69cda7e1b2ff8146afd30c1dff4c3a556e6474ff",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/block_window_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/block_window_normal.png",
+    "bytes": 1239473,
+    "sha256": "8ba113311a2b514a2f5e95048f703eff50c3bbe7360bbc153e90fe77791ad2a8",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/block_window_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/brick_window_diffuse.png",
+    "bytes": 739955,
+    "sha256": "f3fd4079a75db8e6d89c5e2fe549e4609202f329532b75bc9983f7dea5f21ba8",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/brick_window_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/brick_window_mask.png",
+    "bytes": 198509,
+    "sha256": "01cca0da9a393e67ea7fc8f91727b7ada540e9ad4ddbef2ed31873dfe5af8572",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/brick_window_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/brick_window_normal.png",
+    "bytes": 1152974,
+    "sha256": "f291cf61a8eab22c057a081f9279609946617020ecedbd815ac512f299f565e4",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/brick_window_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/plaster_window_diffuse.png",
+    "bytes": 201168,
+    "sha256": "8111aaed913d8408061d4c90f5cd30a8038597381120753ea798020a743411b5",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/plaster_window_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/plaster_window_mask.png",
+    "bytes": 161546,
+    "sha256": "fe07bd605f1cea2dab82fd81d4d0cc5400d9720da8cb770f384ec61cad5ada03",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/plaster_window_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/plaster_window_normal.png",
+    "bytes": 188570,
+    "sha256": "0271c5def9fb109fa630bd84381da0a93e1f1638e7533e3ad70b8ec311433985",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/plaster_window_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/window0_glow.png",
+    "bytes": 2337,
+    "sha256": "99cef54097529c75a798c3c2d1b561f3325f365d086f65bb76cf4a7d8a391ac4",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/window0_glow.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/window1_glow.png",
+    "bytes": 2327,
+    "sha256": "305a06dfae8e3a9a17133a9e62ceeb05e5a7c7729106a5388e3c22bc80164e3f",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/window1_glow.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/wood_window_diffuse.png",
+    "bytes": 1100440,
+    "sha256": "3abb54bbb1120951bae13530089db162ae68f42d9511402a59b91ae5f2440f28",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/wood_window_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/wood_window_mask.png",
+    "bytes": 99552,
+    "sha256": "4deb75d7041983c6d1f4b0bd65f2a7fbde3eaed737561685400e2f34b0c809b8",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/wood_window_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/wood_window_normal.png",
+    "bytes": 990887,
+    "sha256": "e1f710399106c57f71224cebf7ae194c502b2d33ecd6dddacbeae47a872f4d16",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/facades/wood_window_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/concrete_diffuse.png",
+    "bytes": 420554,
+    "sha256": "3939bdb21c3224205e349bff65dceaae8f5a96518c6e96e237c95a4ef5e669c4",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/concrete_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/concrete_mask.png",
+    "bytes": 197123,
+    "sha256": "7f5216073276b07e748d86dbbc1a000ac7726ac9fe8ab750d297bba5dc854411",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/concrete_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/concrete_normal.png",
+    "bytes": 1205928,
+    "sha256": "a496ba099521973acb0bf3fbd70cc04f44ec62e93bf6c1f1dadd0540e5da53b1",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/concrete_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/eternit_diffuse.png",
+    "bytes": 432221,
+    "sha256": "891677043a934f116f34dcf8bbda4ef91a3e487cb097806240cd19b848c34bfc",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/eternit_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/eternit_mask.png",
+    "bytes": 226275,
+    "sha256": "0a0380705c9cbbd7f703d634de87b84dc6564bfcca9bfdfb6f43946f1de41c01",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/eternit_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/eternit_normal.png",
+    "bytes": 254308,
+    "sha256": "fedac818fd4c3bf1f1b16d73bfb9a991cc945332ee68398d223c8e72a0a35555",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/eternit_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/metal_diffuse.png",
+    "bytes": 73885,
+    "sha256": "ad069e61aa9fdb268794d3a42c71ff95c1b5e4c84ba2b02f663f7b10367ef2ca",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/metal_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/metal_mask.png",
+    "bytes": 56300,
+    "sha256": "226bc714502806d50e9874b427f2a844c4bdd3912e2f7af471466c7ffc8cbbf9",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/metal_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/metal_normal.png",
+    "bytes": 126498,
+    "sha256": "5ca658b10160e4e4c4cec996042ca9ff14019a3efe9b6d959e9cbcebd6a73105",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/metal_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tar_diffuse.png",
+    "bytes": 826615,
+    "sha256": "aeb61f58e7591fa46aae0d917e6515cba111d1efdbbd0a4c9420ef057ca42a0c",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tar_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tar_mask.png",
+    "bytes": 188543,
+    "sha256": "3cc3fc6b3f09e7c1e91288f0b39017cb8ae61d7dd11970748b4a072c698b48ca",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tar_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tar_normal.png",
+    "bytes": 501770,
+    "sha256": "f94c7e761de1be0acf4b7966b7eefd2482016170cba76d6b1d34e16fe9daa023",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tar_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/thatch_diffuse.png",
+    "bytes": 555685,
+    "sha256": "b53183e83b38f22aa475631286cf20a826ca95a20449b6c6ad22e23f6c31bb23",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/thatch_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/thatch_mask.png",
+    "bytes": 116304,
+    "sha256": "2b026f636b9b7fbf09d24111ba57cee6f193496ba28cdff079955280896df711",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/thatch_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/thatch_normal.png",
+    "bytes": 1371459,
+    "sha256": "dfdf6c2af04332d21f233068bdaa676dfc8a71725a3b21e49a026ea22d8cd41d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/thatch_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tiles_diffuse.png",
+    "bytes": 95767,
+    "sha256": "7085e48bab92597b30c6d512dc65467bb8e26cc7920a8064f45bdb18c406a30d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tiles_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tiles_mask.png",
+    "bytes": 186174,
+    "sha256": "c6e9b772b105eaced3ae6f683b665667b50f2ef021e8263c09ce45e0660c5d6a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tiles_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/roofs/tiles_normal.png",
+    "bytes": 556516,
+    "sha256": "5ab6d78789244bb859b85c2edd8cfd0931539176ca23256ee70e82b05adc02ff",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/buildings/roofs/tiles_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/Manholes/manholes_color.png",
+    "bytes": 1099997,
+    "sha256": "147c6c1fa58ab96ae8c8e9a1ba5d6effc481220fc251391f004738e8e9f49eae",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/Manholes/manholes_normal_height.png",
+    "bytes": 1027302,
+    "sha256": "68811976f64fd45301def0fae98e6c2c3a4b235c815d29e76486f401a6141107",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/Manholes/manholes_orm.png",
+    "bytes": 737537,
+    "sha256": "e553e86d1793bb562c09adcb1a358f61ffa3173892f035425f8ed23c2b03ce60",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/road_signs/road_signs.png",
+    "bytes": 69881,
+    "sha256": "8c6f4833e218737b951acfd7c024381922018faeded7d70b0ba444023cc7ed5c",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/basketball_pitch_diffuse.png",
+    "bytes": 385108,
+    "sha256": "dcc7570158b828aa304b04bdc5950af6733d5742dfb5a7ec035c82268e59790b",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/basketball_pitch_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/basketball_pitch_normal.png",
+    "bytes": 171328,
+    "sha256": "b7f78f5babe3812d5ea03abbabcda7197e607a182c431e1c38a2b8662608bd8a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/basketball_pitch_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/chainlink_fence_diffuse.png",
+    "bytes": 593429,
+    "sha256": "f3d91dbea08937919b50891082e6bf8f2d86db65109ab45cf4d3325c51170625",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/chainlink_fence_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/chainlink_fence_mask.png",
+    "bytes": 2755,
+    "sha256": "b892a20cb8377ba09c67a7a05ebf7e21b05db462d3171314ca268580be76c057",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/chainlink_fence_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/chainlink_fence_normal.png",
+    "bytes": 1104533,
+    "sha256": "a900afaa4225578edb1ce703e6e5e1939fb37c1cf9cd22c2f607d5067fc59ca7",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/chainlink_fence_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/cobblestone_diffuse.png",
+    "bytes": 313072,
+    "sha256": "d45c3284c311fc90676c698cf9a68097dbf0c3a8915b615e81a1ac123ef5b562",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/cobblestone_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/cobblestone_normal.png",
+    "bytes": 282783,
+    "sha256": "c036db411ec1042508c97d14767fd0a28999e1e4424ceb56ea93fbb1fe0feb6a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/cobblestone_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/concrete_fence_diffuse.png",
+    "bytes": 1517015,
+    "sha256": "4013c876569e675060b0b8b52792f4b9214534f15a21ced8c6c253783acbe4be",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/concrete_fence_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/concrete_fence_mask.png",
+    "bytes": 139946,
+    "sha256": "3577a38f69401821cb4ae1958e5f7fa3097b3a07b913bddd07900e81a6fbb2ee",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/concrete_fence_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/concrete_fence_normal.png",
+    "bytes": 426360,
+    "sha256": "a85bfd8f2799a477756909c52bd2b7f4abcc8cf2122cca0f0f64f41dd9b707cf",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/concrete_fence_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/cycleway_diffuse.png",
+    "bytes": 582448,
+    "sha256": "a50c683b9b4bbc473055d53b25a0f3b56573dd6c6760ae28fa695e37cbb27ec0",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/cycleway_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/dirt_road_diffuse.png",
+    "bytes": 654890,
+    "sha256": "d9d39d67963732e7d8074a4471f8d3682553789e7ce331682034bb3aa5b1a99f",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/dirt_road_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/dirt_road_mask.png",
+    "bytes": 12809,
+    "sha256": "4eddd34d7dee6aab89343ec3474c74969819e4198daedbe0ca00d6f32651c023",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/dirt_road_mask.png",
+    "evidence": "identical decoded RGBA pixels; container encoding differs"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/dirt_road_normal.png",
+    "bytes": 432588,
+    "sha256": "ba959f746cdd5862f6438db06d786ff059fa082c0bb432f45b790e8a7ef5c2a5",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/dirt_road_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland0_diffuse.png",
+    "bytes": 593580,
+    "sha256": "bfe7a3621074bfff71668fbe192413d2d8666154d2740e294f5f7141f5be8de0",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland0_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland0_normal.png",
+    "bytes": 680185,
+    "sha256": "1dbf9fa04244ff24dd37b304b11c015b8d018246632b1b3e6f748a81dfd68620",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland0_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland1_diffuse.png",
+    "bytes": 491348,
+    "sha256": "3977c31c30267193137accbdd6460fd0c519be1638049d15453143893d88eb7a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland1_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland1_normal.png",
+    "bytes": 383598,
+    "sha256": "b58dd2688c73943c03ee14359e7202bb20901c39f73f20ca3b0b8302f06fbf96",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland1_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland2_diffuse.png",
+    "bytes": 578979,
+    "sha256": "2e14b66f39aa944f28624f78b53f4c2b6fe503750f5548eeacf548481275e642",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland2_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland2_normal.png",
+    "bytes": 502235,
+    "sha256": "37240062f4e80c25fa111433dc9f0ba1cd16cad1268e5d1b757e0841291e7c2f",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland2_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/farmland_mask.png",
+    "bytes": 12809,
+    "sha256": "4eddd34d7dee6aab89343ec3474c74969819e4198daedbe0ca00d6f32651c023",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/farmland_mask.png",
+    "evidence": "identical decoded RGBA pixels; container encoding differs"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/football_pitch_diffuse.png",
+    "bytes": 394257,
+    "sha256": "1b35c038194eb2eb3a404c74c6f3b687b757c74ef5ec6491f7f60c4f3593b044",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/football_pitch_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/forest_floor_diffuse.png",
+    "bytes": 1387827,
+    "sha256": "5f52c8eb394e6c95012515848c8cde303d34392b8e89ef3fde94effde19133c5",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/forest_floor_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/forest_floor_normal.png",
+    "bytes": 1484093,
+    "sha256": "76f2ea9c4deba6221d42e07ff4de0b83aae90dc1e6cbea2432ae75aadffef629",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/forest_floor_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/garden_diffuse.png",
+    "bytes": 628987,
+    "sha256": "d992a4ac8a0e56248288f3158cabdb5cb0e41a8a452244748a1066d12f7b5b23",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/garden_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/garden_normal.png",
+    "bytes": 440350,
+    "sha256": "6eebd84ed1d43efaeb828fbfc46905ab8bb4fab3e09e43aea8d95d1923eebe18",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/garden_normal.png",
+    "evidence": "identical decoded RGBA pixels; container encoding differs"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/grass_diffuse.png",
+    "bytes": 584169,
+    "sha256": "20ad5945772747a5c5260e494377e4690d062a3d4e91df06d642edf65be525f3",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/grass_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/grass_normal.png",
+    "bytes": 440350,
+    "sha256": "6eebd84ed1d43efaeb828fbfc46905ab8bb4fab3e09e43aea8d95d1923eebe18",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/grass_normal.png",
+    "evidence": "identical decoded RGBA pixels; container encoding differs"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/gravel_diffuse.png",
+    "bytes": 581669,
+    "sha256": "c754e3925f0a0f36f069f10d0dc893f79b77a0032d59a3f3c159910f12b386fc",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/gravel_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/gravel_mask.png",
+    "bytes": 235454,
+    "sha256": "b636d90eed6c08c57d0f77c4f6f951deeb9b158d0a7cb6f1d6ff3eb243c56525",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/gravel_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/gravel_normal.png",
+    "bytes": 603765,
+    "sha256": "b8c3849c5c66629520d2c0550becdab4ef56e6822d2bd7e28b2555379ed00851",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/gravel_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/hedge_diffuse.png",
+    "bytes": 685814,
+    "sha256": "91aa6b3e5969f698e344719dc59124fe14682d4f3a8c234dce019bfed0f2567a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/hedge_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/hedge_mask.png",
+    "bytes": 255287,
+    "sha256": "3b388167443f028fd30ba79878dcd0d7594da96758c45aa96c41b702e186ffd6",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/hedge_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/hedge_normal.png",
+    "bytes": 516194,
+    "sha256": "e6cf0ed69a873144d05920f0183efd2013f76798874ea7dd69b564a0626d406d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/hedge_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/helipad_diffuse.png",
+    "bytes": 55968,
+    "sha256": "b8de8a40faee2152e1f0d043f68be8eb2f810dde6fe67e54e34c427e8189743a",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/helipad_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/manicured_grass_diffuse.png",
+    "bytes": 527912,
+    "sha256": "7791b2a4e0fedea74ff4a3415311dfd18417be319202de83704e2e2fcc2bc034",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/manicured_grass_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/metal_fence_diffuse.png",
+    "bytes": 150590,
+    "sha256": "af9031498f3174f4645e7937b407f4abe52f43094f8f8c5d0a5f99b18758f986",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/metal_fence_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/metal_fence_mask.png",
+    "bytes": 109273,
+    "sha256": "95e117676dd10ceba3b0b1112d59d82c2c2b9d092ae38b0013401ff377ab3487",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/metal_fence_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/metal_fence_normal.png",
+    "bytes": 246269,
+    "sha256": "9f542aaec889fd5e5ab3a2fe068836e92be142820946d499bdce0b6380f17f36",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/metal_fence_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/pavement_diffuse.png",
+    "bytes": 100163,
+    "sha256": "9a553ab132c904d4c80b8152e2027e30dac304eefdc83023d3d68ff907389daf",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/pavement_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/pavement_mask.png",
+    "bytes": 146163,
+    "sha256": "9bf7b6a2be428ed93dd996eae5a5e91fc2014b50859521216d6c292fdc02f308",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/pavement_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/pavement_normal.png",
+    "bytes": 349343,
+    "sha256": "b0f2817a2ef3027c7d8af3accc908759ff566a75d3c26d918047473bf9cb5e33",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/pavement_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/pitch_generic_diffuse.png",
+    "bytes": 570018,
+    "sha256": "965a0e439f48edbf5830828619c0db08061da8758c61863b66bc45dc2b50f919",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/pitch_generic_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/pitch_generic_normal.png",
+    "bytes": 440350,
+    "sha256": "6eebd84ed1d43efaeb828fbfc46905ab8bb4fab3e09e43aea8d95d1923eebe18",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/pitch_generic_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/blue-flowers-top.png",
+    "bytes": 414568,
+    "sha256": "0a24372f670a7b098d6fc355d34e4d62e8a1ce5bf9e893c69755a46a958906ff",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/broadleaf-top.png",
+    "bytes": 369174,
+    "sha256": "6f22837501886ba972822d5294c149f17d1471eaa6ec1860e321e244ac79cd0d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/dry-tall-top.png",
+    "bytes": 429761,
+    "sha256": "fe2fe08e0a30180093c1a223b3f6f6bf6445e67ba3bf92713bfb113152160452",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/dry-top.png",
+    "bytes": 495916,
+    "sha256": "45ea74a812fb3cbf43995306832937daa53cebd985b270ab00d05ff684bbd3e2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/lawn-top.png",
+    "bytes": 363330,
+    "sha256": "52c92678f6b19db1150e5f59757ecc8bb536f142846b06a6b48af0f4fae6db6d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/meadow-top.png",
+    "bytes": 448192,
+    "sha256": "19230663aaf158a510022b0d1abff9543c24c6a8e6e24b105157c033d3426e8f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/pink-flowers-top.png",
+    "bytes": 429026,
+    "sha256": "71445b8572ef02077563f487720fe8d8e2eff7979c7b18eab76043b94278c1cd",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/short-top.png",
+    "bytes": 418529,
+    "sha256": "9c11d13fba03fa2fee3b0550cbfb2a1a7ec6975c9eb8d6d7ff61df6817ad3f38",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/railway_diffuse.png",
+    "bytes": 618585,
+    "sha256": "c4d5e19d6ee97444f9262f15b0db29d209e851d359598fedbe8425b93626825b",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/railway_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/railway_mask.png",
+    "bytes": 232861,
+    "sha256": "a6c3aab8d65594142c7495bfac2c933b23ea683e16effc9c4ff3d014b8e170c7",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/railway_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/railway_normal.png",
+    "bytes": 633559,
+    "sha256": "c8e4063b9ff676ed3f1259129e25c8c587f8cd2dbbf67a8f5eb4ccb9efe5bbc8",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/railway_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/rock_diffuse.png",
+    "bytes": 1580916,
+    "sha256": "9df61721c13649829dc46489affe5e47b66f228792130b6792e6bb182b3151c0",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/rock_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/rock_mask.png",
+    "bytes": 180447,
+    "sha256": "719515166f5a477e719a34808b227357cad25db7163656814efef6cc5297bf06",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/rock_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/rock_normal.png",
+    "bytes": 664665,
+    "sha256": "62efee260d6be61fed5e4f77ce2efff7124c5da67f95bb7b1934feb69ad4dfc9",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/rock_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_diffuse.png",
+    "bytes": 1612200,
+    "sha256": "083bc78f150c9ed947d7ae3706a9cdd9aa7f44dd30e19a1a84a972bb40e932dd",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_mask.png",
+    "bytes": 152506,
+    "sha256": "5ebf5721dd5caf60028973f36f4086cc2cec0c2fab9b15fe22b547cf61d2489e",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_normal.png",
+    "bytes": 492547,
+    "sha256": "d4843fa14d2b8cace384b67dd8514438362725a49618d9132730dd6b03b85fec",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_road_diffuse.png",
+    "bytes": 641699,
+    "sha256": "4ab60e1ae578af965f29f8e3ebf231f0865b7d3e2e1a655d2bf848e0540bbb63",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_road_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_road_mask.png",
+    "bytes": 12809,
+    "sha256": "4eddd34d7dee6aab89343ec3474c74969819e4198daedbe0ca00d6f32651c023",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_road_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sand_road_normal.png",
+    "bytes": 377886,
+    "sha256": "f5c5ef4ee77d691c4ddc9d10c6641c7673d9e9a9a9a8796f14d7d3d7500c56e5",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sand_road_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/sandy_soil_diffuse.png",
+    "bytes": 482088,
+    "sha256": "7daa8c6802001bbf062cd98a2e8ad6975283f21b11b82eda1ff9e87fc68e3cbd",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/sandy_soil_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/soil_diffuse.png",
+    "bytes": 1600872,
+    "sha256": "db41bfec5cd06c92ea80fcc74a1ce32aef79927ad54f7c43dc00f569fe52d1f0",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/soil_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/soil_mask.png",
+    "bytes": 207512,
+    "sha256": "a0fb1780ef67b1cfa453bcfef550e5bea9e3fe6546b7a97124ca6591d78ee87d",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/soil_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/soil_normal.png",
+    "bytes": 654057,
+    "sha256": "a422bd663ded85c52e67e95cc9b2cd75aa341504278b7192b119a0ddad2f7871",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/soil_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/stone_wall_diffuse.png",
+    "bytes": 1463410,
+    "sha256": "d55c5a239a417e7356cf85fe33632a44e94193ecce486f3f745dd5ad5d9ee8e3",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/stone_wall_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/stone_wall_mask.png",
+    "bytes": 148094,
+    "sha256": "dc15992811efda6c1b0c7e220fc9619f5df32dbce5e4d1d24e31d38d9c3dc918",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/stone_wall_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/stone_wall_normal.png",
+    "bytes": 1467547,
+    "sha256": "a9b1d8feba5cba6bfbb861df5e0ec6f40482188731ad4f7023e091c48631e23f",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/stone_wall_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/tennis_pitch_diffuse.png",
+    "bytes": 244975,
+    "sha256": "18e784a574504c9e6c170c7be604e7b48b45b27dc22e6ff1d40b59fd9723e59e",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/tennis_pitch_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/tennis_pitch_normal.png",
+    "bytes": 187812,
+    "sha256": "a6a82f53b7cdd7748ef0e9d370555fe7ef6f7507d58dc80a9775ee7e3ac12036",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/tennis_pitch_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/wood_fence_diffuse.png",
+    "bytes": 498794,
+    "sha256": "41c2f6800f0b661a233322c5450bba2c2d5c71209393bac4dede5e840373436f",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/wood_fence_diffuse.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/wood_fence_mask.png",
+    "bytes": 155975,
+    "sha256": "6e3fd59dbbd5a6decd6312a9b61bd2a0a6374d58a80b801d490ab81b54a349ee",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/wood_fence_mask.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/wood_fence_normal.png",
+    "bytes": 180844,
+    "sha256": "61cfb2721863da2e773173f0e29e4751c843a3b670e2276a7d066291c75b5324",
+    "license": "MIT",
+    "source": "https://github.com/StrandedKitty/streets-gl",
+    "upstream_path": "src/resources/textures/surfaces/wood_fence_normal.png",
+    "evidence": "byte-identical upstream file"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/grass-atlases/grass.rgba",
+    "bytes": 33554452,
+    "sha256": "5a144600ea7e0a236f8cb32ac95a6dfa65a370306e8b06682fb108abe2b13a9c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/grass-atlases/profiles.json",
+    "bytes": 8234,
+    "sha256": "2aac6f199988e7a455462cea99597772f72b1a7de2cea8e26b8a3cb943e0077f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/acacia-foliage.png",
+    "bytes": 302078,
+    "sha256": "f297c8976257e87db42b6a4509c1daeee5265be55d09f0c5bc0cd1d093c9f395",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/acacia-wood.png",
+    "bytes": 193199,
+    "sha256": "a37add22a5b66c992e70a3dbe2d62cb2631149a180627b30c1a01aff8f5247ce",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/acacia.json",
+    "bytes": 12527,
+    "sha256": "51519ab796af2f059f624b2e99983f58e2d39aa515f20068729769164a16a952",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/bamboo-foliage.png",
+    "bytes": 507656,
+    "sha256": "8513bc4cc397a006ba529c75b2a636e9686f9ad2657275d22e3ab13ffcd13a5c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/bamboo-wood.png",
+    "bytes": 472256,
+    "sha256": "68d7dbd0ed285aa48f888ca2d46c4c329d2e4fc0825bca822a966362c0fd8b0f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/bamboo.json",
+    "bytes": 12493,
+    "sha256": "8f64d9b3b28568e995102d3d5391ee8631475253b002794fae7f8d7962eb8d54",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/birch-foliage.png",
+    "bytes": 469381,
+    "sha256": "77035fd528f28a06913c890178b86a660b19934278fc1e47e2bee5891a4f0bac",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/birch-wood.png",
+    "bytes": 356891,
+    "sha256": "44174bfac1564a3bcc60cfa68aa132397a4d1c168b047ecd60d39a8564d9df66",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/birch.json",
+    "bytes": 12548,
+    "sha256": "d7fb422d0d64a4f663f3c59851a2e40389fb59ea7c56674f86791848f01364a8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/broadleaf-foliage.png",
+    "bytes": 399783,
+    "sha256": "c110e2cea4db47337146ae758d4b18c81729ec8f17eea185044c69d357fe869b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/broadleaf-wood.png",
+    "bytes": 284932,
+    "sha256": "9c6a3dc5a9fe9f275c8caa10ce45f9c26c421f0cc64e2cd5ab1bf366931353ae",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/broadleaf.json",
+    "bytes": 12540,
+    "sha256": "def068abb0c9bfcd24112e05f4188285495e29f55d5ced9ea175efeef710af10",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/cactus-foliage.png",
+    "bytes": 2385,
+    "sha256": "c27f7518d6d87f2262ee70f1aca0fd63c0d58d604f3211a02ef5b03d49f108c1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/cactus-wood.png",
+    "bytes": 465580,
+    "sha256": "ab0ef297a12d76f76ac05724dfe3fd2a6b5665be7d20b9d3b7ef879a074f34c9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/cactus.json",
+    "bytes": 12406,
+    "sha256": "35308a06c6446f6436484847672c14061c0e9f8d72b0f1546ad07a266e9d8fed",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/columnar-foliage.png",
+    "bytes": 477469,
+    "sha256": "cedc093d0c84f2acfbbd6a38d421b52e64ae3ed21582a2a2e760f061257b02db",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/columnar-wood.png",
+    "bytes": 307917,
+    "sha256": "db70c5f57d636716ce691e587015634bab77d5b8dcc46170272f3906275f7e65",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/columnar.json",
+    "bytes": 12555,
+    "sha256": "0a065f9922587938517fd7c7342ee7395b4027f4ae70329b6a73e27680a842af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/eucalyptus-foliage.png",
+    "bytes": 318476,
+    "sha256": "890f808d4f4d729c88c914226f425c955e3b1c3b74c25ecc8b7286ff2704837d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/eucalyptus-wood.png",
+    "bytes": 194526,
+    "sha256": "ffecd1b019cae550089a8baa46fffc9bc14e6afed626f03bd302a7b3a18c499d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/eucalyptus.json",
+    "bytes": 12543,
+    "sha256": "ee1a899e92ba9582e8fe7f9d0b2c595ced2ddd61389ff9760dce100f8a0c63f1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fan_palm-foliage.png",
+    "bytes": 298009,
+    "sha256": "8f4c4f8f2123108e1dc5293d4468ee2d858e090b258d595ac4e4cac339e46461",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fan_palm-wood.png",
+    "bytes": 155657,
+    "sha256": "8b998a1f6534ceaf3709878249363577d406c1f30aed8755d8e83876099bdbd9",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fan_palm.json",
+    "bytes": 12467,
+    "sha256": "3bb34e2e8211df59e894c16ad7f4637460ff3f96397f263ec31d3eb0354a3e17",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fruit-foliage.png",
+    "bytes": 422687,
+    "sha256": "4809601a2ebf07d47825a1ec6aba04c33c71e6614dd3d2aa3768183f480eb700",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fruit-fruit.png",
+    "bytes": 18003,
+    "sha256": "4e59ffddc9e46e803494a206cb1fe3735a4a64e719e2a08085537d32f5e62a60",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fruit-wood.png",
+    "bytes": 268697,
+    "sha256": "ada2abd28831b3ef9b9afdd4832642c7d3889faa05b3792b4118ff18c832ecd3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/fruit.json",
+    "bytes": 13005,
+    "sha256": "d760c2001ff7a14cd083aefbb3ada4a322b166e0603addfd3f25754dbb233297",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/juniper-foliage.png",
+    "bytes": 321177,
+    "sha256": "ed8c85b81ae904ac52f8815240f15edca25804533ad4a6dc79a2ae2aa96364c1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/juniper-fruit.png",
+    "bytes": 19433,
+    "sha256": "d4c2f71a8c0848c2e3e3b75daf705afa4056ebc6670f80899f2e0d45325e1169",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/juniper-wood.png",
+    "bytes": 239425,
+    "sha256": "96d6c1587e3cbc7b839d2d023d48347c2bb0dacd3b5dd536c28c9064b0c2b274",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/juniper.json",
+    "bytes": 12968,
+    "sha256": "c36f300e1141fb4eeb1cf3f6daa0adf9bbb83d6c35c61d1af502acd8fe1b7636",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/larch-foliage.png",
+    "bytes": 387291,
+    "sha256": "f96002ee4a19fb377308ae2835662153aafe06a02ef6eecd0d1c227e46b6c3f2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/larch-fruit.png",
+    "bytes": 6833,
+    "sha256": "a7f33c7dcd8240a678c6b8b611f39e1943a8060e2f15b73c8b6bb7b7a3963731",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/larch-wood.png",
+    "bytes": 263931,
+    "sha256": "7b78e8a2b068e52889e563d7e0a65340a55c95c8513a9efb4e785dd96327adab",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/larch.json",
+    "bytes": 13005,
+    "sha256": "f7e0b2204f7c1b414f30a537b95366dee78eba6894dac874c2a69c0132e0f5ba",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/maple-foliage.png",
+    "bytes": 336458,
+    "sha256": "3b63963b8130e8c2726680aa176fa3447a3c36b75b73def9999d59b05e908bde",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/maple-wood.png",
+    "bytes": 234477,
+    "sha256": "5bbae775eb318f99241fc6f3782abd1056a8cbe5bcfed4c684f5edc0b8320265",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/maple.json",
+    "bytes": 12532,
+    "sha256": "46c670c0d2f30381ada913a14b5635ea48d1f004c41ce78ee0c4c14e23acc81e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/mountain_pine-foliage.png",
+    "bytes": 569829,
+    "sha256": "c4e3563b91ce309888d86e20a89d7c60cc501e83ffbc1a38dbfffe168cb84faf",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/mountain_pine-fruit.png",
+    "bytes": 7499,
+    "sha256": "a759ae7a825d3e3d597fee07a40dcd2a74a868822d6d89a8460bb12b02a0f0f5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/mountain_pine-wood.png",
+    "bytes": 450127,
+    "sha256": "e6adf4fa7b94b957a30344c737de4d86c05d28274672a34841debed014b206a4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/mountain_pine.json",
+    "bytes": 13020,
+    "sha256": "a5b3cc99068b18865af1ea8e816d93b32dc6863ec5c26fd68f779ec6b55b0127",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/oak-foliage.png",
+    "bytes": 457284,
+    "sha256": "25c32cdcd6575c8e9c606a2fdc83287ca6fd985c6918e94504311d3530c86cc5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/oak-wood.png",
+    "bytes": 308398,
+    "sha256": "bcb78aed3fdf456fca037e62b96c5a57f9d94521c91454e4097b74a78bd73e3b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/oak.json",
+    "bytes": 12560,
+    "sha256": "75faa1fab9c4563e0b23ea4e4a350d54f9834dc9fe75b5da3c44260ecd26e869",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/palm-foliage.png",
+    "bytes": 199354,
+    "sha256": "87221c43fc6bb5e37cb8889247e5ae6d371aa8078dbbaaeb3641ff5ca35a3e2d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/palm-wood.png",
+    "bytes": 228944,
+    "sha256": "517896f1a39237ad3f5000777d981f923dfa2627a7e517bf9532fc1f3a85009d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/palm.json",
+    "bytes": 12483,
+    "sha256": "238b00d4ecce698c4a2165991aa6d99e0a0b523a8b9ffe602a522258f707628b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/pine-foliage.png",
+    "bytes": 366780,
+    "sha256": "f3e0dc1754b5ae5629e901857e0dfc3739fcb0ace719cce16f2639c180c43280",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/pine-fruit.png",
+    "bytes": 6717,
+    "sha256": "357b968e36e027736e7cbf0120db6463688b98be44feb46417717f0ac0d07998",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/pine-wood.png",
+    "bytes": 293794,
+    "sha256": "7feb83ec6861b721589a517c0a92e27990bcb1da4acc215263677fefe3dae17e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/pine.json",
+    "bytes": 13010,
+    "sha256": "c943d14b0b71aa47f1f779b43f80a3c052a5024152a763619596c14c6542bd27",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/prickly_pear-foliage.png",
+    "bytes": 2385,
+    "sha256": "c27f7518d6d87f2262ee70f1aca0fd63c0d58d604f3211a02ef5b03d49f108c1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/prickly_pear-wood.png",
+    "bytes": 404460,
+    "sha256": "535f1806a26de05ae052400eeb01751c305a4b95418e8f53193c0be2fc683038",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/prickly_pear.json",
+    "bytes": 12426,
+    "sha256": "85563a106e51bec3ca048e1494d644dc370b81c3adb2297857b47fa7d542b4c2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/rowan-foliage.png",
+    "bytes": 384933,
+    "sha256": "c977386bcd7a5df54afc3c0d5371feb06fcfa8cc3e15a251d576affcd599911e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/rowan-fruit.png",
+    "bytes": 57220,
+    "sha256": "3b29c68b7f99223602dca0c17b25afd4757bf2bccdb2c5e4ee666aa0fcda813c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/rowan-wood.png",
+    "bytes": 251254,
+    "sha256": "6c8315a5354bcc0744743aed7d7cfa778fb2bf2852dc04c87043396b95138f90",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/rowan.json",
+    "bytes": 13013,
+    "sha256": "365462d54c7662d75c1f14141ca477c40a426a6d7f46f356b97da6ab792e2188",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/shrub-foliage.png",
+    "bytes": 307717,
+    "sha256": "41bae680f5dac2716daa6903af79b5fefe93d592c2abb3dd82f58f328be32d87",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/shrub-wood.png",
+    "bytes": 181076,
+    "sha256": "08117f4c610c70e94d853b27feb4fb77884cb4abc069669935d8206a54b3b6f2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/shrub.json",
+    "bytes": 12492,
+    "sha256": "82e26a9cb8762405666cf2d37da5e49517788364c1fafc6809782d3dd6f85d32",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/spruce-foliage.png",
+    "bytes": 520622,
+    "sha256": "d72df411cc23c1f4d390e2d5d75d1bd5ef3b28095e553b8bc705491383a5ea84",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/spruce-fruit.png",
+    "bytes": 16501,
+    "sha256": "39873958bc6cb92bc833e698ae4965f4c6f365fd8f98c10dca2a016feb37b069",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/spruce-wood.png",
+    "bytes": 366938,
+    "sha256": "40f75b478cf8679893243f8c59a508891a6afd478a8789ad7477a92138c094a0",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/spruce.json",
+    "bytes": 13062,
+    "sha256": "00015b5256671ef5e859726db9066f51cd8aa10bfa04ba7f4fb88e12ede396a7",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/willow-foliage.png",
+    "bytes": 495173,
+    "sha256": "f0d22a24a8996f0c6b2cb30919d5a86eeea71272d6c210003c1a68cc739af6a0",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/willow-wood.png",
+    "bytes": 237927,
+    "sha256": "025d00e8d1c39b8554605c7863ca1497dafd696f68778b203b6c0a969a1143c8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/lod-atlases/willow.json",
+    "bytes": 12526,
+    "sha256": "93c6acd2e456c067a49651196d64b4d09d867d49b4b113d2b72871342ef47677",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.frag",
+    "bytes": 5303,
+    "sha256": "546fbb2560a2f02f20d92c7daf0a2e180acbbd89436248e9ef564ba066041afe",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.vert",
+    "bytes": 16632,
+    "sha256": "60b3bc507261bd38ae2e31e90a394082b20e6668ab471d8ac33f5c50da47d1bd",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.frag",
+    "bytes": 19889,
+    "sha256": "c8917facd4bfe178d711267475a24e42ec6af4bfab2f98690a44b5423cf4486a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.vert",
+    "bytes": 18649,
+    "sha256": "d8f34635c07472dfa989a4c231781e7e8176a593fc18df1888043152481f9e62",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/rider_lighting.json",
+    "bytes": 173,
+    "sha256": "6d647f2f3d889daf44d090d8017ff0f2059a3d061311c0dc38b38d12b8a82dda",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/back.png",
+    "bytes": 118811,
+    "sha256": "a2ba507bbc39722b12c1b1460cc8242dbf78582055222055b71d7e5016197342",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/bottom.png",
+    "bytes": 5337,
+    "sha256": "fea7bd3ab8fdf724e775e84856afd57955c1d52f814804dbcc29af7f8da5f252",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/front.png",
+    "bytes": 147701,
+    "sha256": "23f346a633476ae73ad1874dbe278230d9bf6d395ed899d6d4d04ba12824dd1e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/left.png",
+    "bytes": 128593,
+    "sha256": "cacbf71e42cb9ae18c8b98731a67c3be0aa6fcdd22f95ab3fe7ad87ae4ed1401",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/right.png",
+    "bytes": 118042,
+    "sha256": "a00d384d452b67371c0d34498ce4c767f6b63975995c54e35753f162a0a7a1b3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/sky/coastal-clear/top.png",
+    "bytes": 200840,
+    "sha256": "1a9cfda22b6c075b0d417a955413bbde3cc3aa092ae1abf0ac55430348ee3571",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-generated model, texture or configuration"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/22Grass01_MR_1K/Grass01_1K_BaseColor.png",
+    "bytes": 3345765,
+    "sha256": "b3046abbc59ee922a2b5ce88a6d8fd48e15fc3bbd5f87a6cb0606d6bb9e26ca4",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/BeachGravel01_MR_1K/BeachGravel01_1K_AO.png",
+    "bytes": 930423,
+    "sha256": "05bb54f6c6136f6524f42dd0b34a20a3839a14bbf1639bff472a4ad1bc969a3f",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/BeachGravel01_MR_1K/BeachGravel01_1K_BaseColor.png",
+    "bytes": 3185384,
+    "sha256": "d213a39390df65fa468ef001d7c432a4786cd209d90eaeca2574d4991f7a8101",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/BeachGravel01_MR_1K/BeachGravel01_1K_Height.png",
+    "bytes": 697167,
+    "sha256": "d69c614ea3ccb0addec2ccbdc7fe2fbb786dfe8e5f84b21ad171de9392752e54",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/BeachGravel01_MR_1K/BeachGravel01_1K_Normal.png",
+    "bytes": 3337962,
+    "sha256": "8fce2a828f4d5976023b656c5d7ce8144305064c3bbc183302cbcde56dc1cdc3",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/BeachGravel01_MR_1K/BeachGravel01_1K_Roughness.png",
+    "bytes": 1080292,
+    "sha256": "919238f86f2340ec899495845fe5d0e62acca85451972442e0ad0ee57def0217",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/Grass01_MR_1K/Grass01_1K_AO.png",
+    "bytes": 721306,
+    "sha256": "52595f6a1ede599fdd5034c9fe55a5b5511bde5055a6677a704ce7ebc8c87b10",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/Grass01_MR_1K/Grass01_1K_BaseColor.png",
+    "bytes": 3345765,
+    "sha256": "b3046abbc59ee922a2b5ce88a6d8fd48e15fc3bbd5f87a6cb0606d6bb9e26ca4",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/Grass01_MR_1K/Grass01_1K_Height.png",
+    "bytes": 816876,
+    "sha256": "fb55a5ea3c1260b28d2e020e3afa04c9cd52f8cd2e71cbea5739c42c3f92c9ca",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/Grass01_MR_1K/Grass01_1K_Normal.png",
+    "bytes": 3481650,
+    "sha256": "5b1eed93721215d0cc52dbd2ccdce82dc3e22e12c353660f3aaab3ca3507d38f",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/Grass01_MR_1K/Grass01_1K_Roughness.png",
+    "bytes": 1365276,
+    "sha256": "da31a7299eecd0dcf3f7983ecfe8ddb827133311ae9ae5ed6eec820c3a85a738",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/MossyDriveway01_MR_1K/MossyDriveway01_1K_AO.png",
+    "bytes": 741465,
+    "sha256": "982189b0ba2a7b4675b6c1bd3db89066070d5dadf5334c9ddae97a3e7ac84d70",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/MossyDriveway01_MR_1K/MossyDriveway01_1K_BaseColor.png",
+    "bytes": 2976203,
+    "sha256": "289f7a6659d660a71254c422e11b4d107419b8f1bcd05794adaa84ff7d23cb67",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/MossyDriveway01_MR_1K/MossyDriveway01_1K_Height.png",
+    "bytes": 714420,
+    "sha256": "09165d4b3ee252a8827fec7856350cfd8a97f96579a03dba27b58a0d9ca53242",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/MossyDriveway01_MR_1K/MossyDriveway01_1K_Normal.png",
+    "bytes": 3368867,
+    "sha256": "b11f2b0261ca863e64d17de209b8b445e286e26c61c91a9fb2dcaa6140d538ba",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/MossyDriveway01_MR_1K/MossyDriveway01_1K_Roughness.png",
+    "bytes": 805914,
+    "sha256": "35a6b23e41c22dc6898e0029184e013c3e2438b8043236f9848ca7ec4e376264",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/SandyGravel02_MR_1K/SandyGravel02_1K_AO.png",
+    "bytes": 870175,
+    "sha256": "d70ca0b9585f6582b9d36f5c99d6cf31f8db0f4a2922507828ff89987649821c",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/SandyGravel02_MR_1K/SandyGravel02_1K_BaseColor.png",
+    "bytes": 3107054,
+    "sha256": "a31955bbcf996e07419773fc6da8e66631901b1c0c9496fdb40067861d95b1a7",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/SandyGravel02_MR_1K/SandyGravel02_1K_Height.png",
+    "bytes": 898916,
+    "sha256": "48f2422511666d8de43331e218ca872406ceebd3bcca449747574f632de6e5c9",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/SandyGravel02_MR_1K/SandyGravel02_1K_Normal.png",
+    "bytes": 3521889,
+    "sha256": "17293da25dc12a978fdac549f4f4b24d5e964e76548f4e1ac45c8e04fa40debb",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain/SandyGravel02_MR_1K/SandyGravel02_1K_Roughness.png",
+    "bytes": 1147802,
+    "sha256": "5aae6809f244d334cac7d8392b4de57d6228fc5de8764592e0f24036799ed43c",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/terrain_road.ini",
+    "bytes": 96901,
+    "sha256": "e94f228b21fdb05162beea16e46b637253c411c4764053ac9f90d12e4db519c5",
+    "license": "REVIEW",
+    "source": "not established by files alone"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/ar.json",
+    "bytes": 24867,
+    "sha256": "c5abcf8dfa348da1d927dd9a25cf4eca0c5b26c0103447f79d3edf4508a8fb1a",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/de.json",
+    "bytes": 20659,
+    "sha256": "888873c25d9694d24ea7fcd08582ad90477b0ead310fb4391bf117aee2bbc232",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/en.json",
+    "bytes": 77847,
+    "sha256": "2de855adbd6489e612f14c43eabf48134c39407ac16e23076df0b20167e4fded",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/es.json",
+    "bytes": 20635,
+    "sha256": "b51a21a9340b071b2291635cb30a4a6d2f9fff87ef7fba2d7e4f861d61f711af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/fr.json",
+    "bytes": 21262,
+    "sha256": "eef727c548fa078e3c251b99fee4f3dc3f019e4ee505c0d58887c412e4a0b0b7",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/it.json",
+    "bytes": 20377,
+    "sha256": "0da254eaa465f3e3c8dea67b71ecdf79326b0ab6e321f5545a8be1d84d504441",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/ja.json",
+    "bytes": 23614,
+    "sha256": "4843465ed77e62b1a487efe900652d110f1001aecd2521535fade9048c1ef064",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/ko.json",
+    "bytes": 21542,
+    "sha256": "73bdc61649ff6ecf4f3dbe36ca65865948032d0e187c7b6c4bbcfce9c21b3a96",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/pt.json",
+    "bytes": 20246,
+    "sha256": "55263263cff962d254f0c91949ff4bfecb2ec26633a0d1ddfd7d8fc315127fb7",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/ru.json",
+    "bytes": 109665,
+    "sha256": "e1d540b0b9fa1d52759c9bed9a8248cd034190ee2de67717fa2b220026991e5e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
+    "bytes": 19148,
+    "sha256": "ae9b6bade62bd9b00d11a365458a0d3dd1cc9a7aed024767e8e464b1a54efc72",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
+    "bytes": 18941,
+    "sha256": "54aa023bc12fc3622fa45558d31a846e16f56f6f87b086c08b777854ad2535f3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Cadence/cadence-35.zwo",
+    "bytes": 575,
+    "sha256": "bd3a5a2af4c03fc7635d7368bba769401c8a85111550381cf5c5bae9b377ee77",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Endurance/endurance-45.zwo",
+    "bytes": 449,
+    "sha256": "20f4e22ae1a1be82a53f39ed5ccda9e2b62db12480ece63406445e7fe499b5f6",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Endurance/endurance-60.zwo",
+    "bytes": 454,
+    "sha256": "17ba6b8c578496ae27fbdac026415b7302a5c0a99a7cf645e6a2091788d279f2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Intervals/intervals-30.zwo",
+    "bytes": 573,
+    "sha256": "2f9ebf9866d5a9e3d0da11d0309398551fe6b335da7fe889678a55df3f64e6a2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Intervals/intervals-38.zwo",
+    "bytes": 522,
+    "sha256": "208b4c9a7fd5da92d5fa23c2cc641de16493e7e1a6703b6c62cbd97e69696265",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Recovery/recovery-25.zwo",
+    "bytes": 459,
+    "sha256": "81ecd3591371e1da116966260a6b5ece1421360d19fbfea2e68622a56ef27b29",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/workouts/rezvivo/Tempo/tempo-40.zwo",
+    "bytes": 577,
+    "sha256": "3f3f34b6823beeb217d1896f245082203cb8c15eb195f1b96dd23686f37ae716",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created assets / procedural output"
+  }
+]

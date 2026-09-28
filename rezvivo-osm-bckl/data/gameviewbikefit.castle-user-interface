@@ -1,0 +1,116 @@
+{
+  "$$ClassName": "TCastleUserInterface",
+  "FullSize": true,
+  "Name": "RootGroup",
+  "$Children": [
+    {
+      "$$ClassName": "TCastleRectangleControl",
+      "ColorPersistent": {
+        "$$ClassName": "TCastleColorPersistent",
+        "Red": 0.065,
+        "Green": 0.09,
+        "Blue": 0.12,
+        "Alpha": 0.97
+      },
+      "FullSize": true,
+      "Name": "Background",
+      "$Children": [
+        {
+          "$$ClassName": "TMenuButton",
+          "Caption": "← Back",
+          "CustomBackgroundDisabled": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundFocused": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundNormal": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundPressed": { "$$ClassName": "TCastleImagePersistent" },
+          "FontScale": 1.1,
+          "HorizontalAnchorParent": "hpLeft",
+          "HorizontalAnchorSelf": "hpLeft",
+          "Image": { "$$ClassName": "TCastleImagePersistent" },
+          "MinWidth": 130,
+          "Name": "ButtonBack",
+          "PaddingHorizontal": 12,
+          "PaddingVertical": 8,
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "X": 12,
+            "Y": -12
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Green": 0.95,
+            "Blue": 0.85
+          },
+          "FontScale": 1.5,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "LabelTitle",
+          "Text": [ "Байкфит" ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": -16
+          },
+          "VerticalAnchorParent": "vpTop",
+          "VerticalAnchorSelf": "vpTop"
+        },
+        {
+          "$$ClassName": "TCastleUserInterface",
+          "Border": {
+            "$$ClassName": "TBorder",
+            "AllSides": 12,
+            "Bottom": 72,
+            "Top": 56
+          },
+          "FullSize": true,
+          "Name": "MainHost"
+        },
+        {
+          "$$ClassName": "TCastleLabel",
+          "ColorPersistent": {
+            "$$ClassName": "TCastleColorPersistent",
+            "Red": 0.75,
+            "Green": 0.88,
+            "Blue": 0.78
+          },
+          "FontScale": 0.9,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Name": "LabelStatus",
+          "Text": [ "Выберите модели, проверьте педалирование и позы." ],
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": 48
+          },
+          "VerticalAnchorParent": "vpBottom",
+          "VerticalAnchorSelf": "vpBottom"
+        },
+        {
+          "$$ClassName": "TMenuButton",
+          "Caption": "Apply to ride",
+          "CustomBackgroundDisabled": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundFocused": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundNormal": { "$$ClassName": "TCastleImagePersistent" },
+          "CustomBackgroundPressed": { "$$ClassName": "TCastleImagePersistent" },
+          "FontScale": 1.15,
+          "HorizontalAnchorParent": "hpMiddle",
+          "HorizontalAnchorSelf": "hpMiddle",
+          "Image": { "$$ClassName": "TCastleImagePersistent" },
+          "MinWidth": 220,
+          "Name": "ButtonApply",
+          "PaddingHorizontal": 18,
+          "PaddingVertical": 10,
+          "TranslationPersistent": {
+            "$$ClassName": "TCastleVector2Persistent",
+            "Y": 12
+          },
+          "VerticalAnchorParent": "vpBottom",
+          "VerticalAnchorSelf": "vpBottom"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+[
+  {
+    "file": "forest.ogg",
+    "author": "isaiah658",
+    "source": "https://opengameart.org/content/ambient-bird-sounds",
+    "downloads": [
+      "https://opengameart.org/sites/default/files/birds-isaiah658_0.ogg"
+    ],
+    "license": "CC0-1.0",
+    "changes": "Trimmed, resampled, filtered, level adjusted and crossfaded for seamless looping."
+  },
+  {
+    "file": "sea.ogg",
+    "author": "jasinski / qubodup",
+    "source": "https://opengameart.org/content/beach-ocean-waves",
+    "downloads": [
+      "https://opengameart.org/sites/default/files/wave_01_cc0-18363__jasinski__alkaibeach.flac",
+      "https://opengameart.org/sites/default/files/wave_02_cc0-18363__jasinski__alkaibeach.flac",
+      "https://opengameart.org/sites/default/files/wave_03_cc0-18363__jasinski__alkaibeach.flac",
+      "https://opengameart.org/sites/default/files/wave_04_cc0-18363__jasinski__alkaibeach.flac"
+    ],
+    "license": "CC0-1.0",
+    "changes": "Trimmed, resampled, filtered, level adjusted and crossfaded for seamless looping."
+  },
+  {
+    "file": "highway.ogg",
+    "author": "IgnasD",
+    "source": "https://opengameart.org/content/high-traffic-road-sounds",
+    "downloads": [
+      "https://opengameart.org/sites/default/files/gatve%20Varniu_2.ogg"
+    ],
+    "license": "CC0-1.0",
+    "changes": "Trimmed, resampled, filtered, level adjusted and crossfaded for seamless looping."
+  },
+  {
+    "file": "wind.ogg",
+    "author": "Luke.RUSTLTD",
+    "source": "https://opengameart.org/content/wind1",
+    "downloads": [
+      "https://opengameart.org/sites/default/files/wind1.wav"
+    ],
+    "license": "CC0-1.0",
+    "changes": "Trimmed, resampled, filtered, level adjusted and crossfaded for seamless looping."
+  },
+  {
+    "file": "city.ogg",
+    "author": "qubodup / jmbphilmes",
+    "source": "https://freesound.org/people/qubodup/sounds/223093/",
+    "downloads": [
+      "https://cdn.freesound.org/previews/223/223093_71257-hq.mp3"
+    ],
+    "license": "CC0-1.0",
+    "changes": "Trimmed, resampled, filtered, level adjusted and crossfaded for seamless looping."
+  },
+  {
+    "file": "click.wav",
+    "author": "REZVIVO",
+    "source": "tools/build_audio.py",
+    "license": "Original project asset; no external samples"
+  },
+  {
+    "file": "countdown.wav",
+    "author": "REZVIVO",
+    "source": "tools/build_audio.py",
+    "license": "Original project asset; no external samples"
+  },
+  {
+    "file": "interval-start.wav",
+    "author": "REZVIVO",
+    "source": "tools/build_audio.py",
+    "license": "Original project asset; no external samples"
+  },
+  {
+    "file": "wheel-front.wav",
+    "author": "REZVIVO",
+    "source": "tools/build_audio.py",
+    "license": "Original project asset; no external samples"
+  },
+  {
+    "file": "wheel-rear.wav",
+    "author": "REZVIVO",
+    "source": "tools/build_audio.py",
+    "license": "Original project asset; no external samples"
+  }
+]
