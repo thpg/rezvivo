@@ -11,8 +11,7 @@ $Compiler = (Resolve-Path -LiteralPath $Compiler).Path
 if ([IO.Path]::GetFileName($OutputName) -ne $OutputName) { throw 'OutputName must be a filename.' }
 $projectRoot = $PSScriptRoot
 $repoRoot = Split-Path -Parent $projectRoot
-& python (Join-Path $projectRoot 'tools\generate-release.py') (Join-Path (Split-Path -Parent $Compiler) 'windres.exe')
-if ($LASTEXITCODE -ne 0) { throw 'Version resource generation failed.' }
+& (Join-Path $projectRoot 'tools\generate-release.ps1') -ResourceCompiler (Join-Path (Split-Path -Parent $Compiler) 'windres.exe')
 # Runtime shaders are versioned in data/procedural-trees/shaders.
 $buildRoot = Join-Path $projectRoot 'castle-engine-output\performance-release'
 $unitRoot = Join-Path $buildRoot 'units'

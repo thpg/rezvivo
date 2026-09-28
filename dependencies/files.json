@@ -848,7 +848,7 @@
   "rezvivo-osm-bckl/tools/build-installer.py",
   "rezvivo-osm-bckl/tools/build_audio.py",
   "rezvivo-osm-bckl/tools/generate-builtin-workouts.py",
-  "rezvivo-osm-bckl/tools/generate-release.py",
+  "rezvivo-osm-bckl/tools/generate-release.ps1",
   "rezvivo-osm-bckl/tools/installer_assets.py",
   "rezvivo-osm-bckl/tools/installer_update.py",
   "tools/check-publication.py",
