@@ -122,7 +122,7 @@ def main():
     script=a.out/('client-update.nsi' if a.baseline else 'client-installer.nsi');script.write_text('\n'.join(lines)+'\n',encoding='utf-8-sig')
     subprocess.run([str(Path(a.nsis).resolve()),'/V3',str(script)],check=True)
     metadata=dict(build=release['build'],version=version,filename=installer.name,sha256=digest(installer),size_bytes=installer.stat().st_size,allowed=True,published=False,
-      notes='Alpha 0.1.0: Dream World and Real World rides, original REZVIVO workouts, client updates and crash reports.')
+      notes=release.get('notes', 'REZVIVO '+version+'.'))
     package=dict(metadata,kind='delta' if a.baseline else 'full',installer_protocol=1,**components(selected))
     if a.baseline:package['from_manifest_sha256']=baseline_sha
     sidecar=a.out/(full_name+'.packages.json')

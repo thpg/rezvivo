@@ -103,6 +103,10 @@ type
   end;
   TFitRawPointArray = array of TFitRawPoint;
 
+  { Optional telemetry consumer, including indoor records without GPS.
+    Called during parsing; discard its output if LoadFromFile fails. }
+  TFitSensorRecordEvent = procedure(const ARecord: TSensorSessionRecord) of object;
+
   TFitFile = class(TRouteWorkoutFile)
   protected   { protected, а не private: TGpxFile (GpxFile.pas) заполняет
                 те же сырые точки и зовёт общий ConvertGpsToRoutePoints }
@@ -115,6 +119,7 @@ type
     FLastTimestamp: LongWord;
     FHasLastTimestamp: Boolean;
     FParseFailed: Boolean;
+    FOnSensorRecord: TFitSensorRecordEvent;
 
     { Координаты первой валидной GPS-точки трека. Используются для
       обратной конвертации локальных X/Z (метры) в WGS-84 lat/lng,
@@ -163,6 +168,7 @@ type
     procedure ResolveRelativeTimes;
   public
     function LoadFromFile(const Filename: String): Boolean; override;
+    property OnSensorRecord: TFitSensorRecordEvent read FOnSensorRecord write FOnSensorRecord;
 
     property OriginLatDeg:      Double   read FOriginLatDeg;
     property OriginLonDeg:      Double   read FOriginLonDeg;
@@ -615,6 +621,8 @@ var
   CadenceRaw, HrRaw: Byte;
   TempRaw: ShortInt;
   HasEnhAlt: Boolean;
+  GradeRaw: SmallInt;
+  SensorRecord: TSensorSessionRecord;
 begin
   LatSemi := 0;
   LonSemi := 0;
@@ -629,6 +637,7 @@ begin
   HrRaw := $FF;
   TempRaw := 127;
   HasEnhAlt := False;
+  GradeRaw := 0;
 
   for I := 0 to High(Def.Fields) do
   begin
@@ -682,6 +691,12 @@ begin
           if RawU16 <> INVALID_U16 then
             PowerRaw := RawU16;
         end;
+      9:   { grade — sint16, scale 100 }
+        if (Field.Size = 2) and (Field.BaseType = BT_SINT16) then
+        begin
+          RawU16 := ReadU16At(DataStart + Field.Offset, Def.BigEndian);
+          if RawU16 <> $7FFF then GradeRaw := SmallInt(RawU16);
+        end;
       13:  { temperature — sint8, °C, sentinel 127 }
         if (Field.Size = 1) and (Field.BaseType = BT_SINT8) then
           TempRaw := ShortInt(FBuf[DataStart + Field.Offset]);
@@ -708,6 +723,20 @@ begin
   if HasLat and HasLon then
     AddRawPoint(LatSemi, LonSemi, AltRaw, DistanceM, TimestampVal,
       SpeedRaw, PowerRaw, CadenceRaw, HrRaw, TempRaw, HasEnhAlt);
+
+  if Assigned(FOnSensorRecord) and (TimestampVal <> 0) and
+     (TimestampVal <> INVALID_U32) then
+  begin
+    SensorRecord := Default(TSensorSessionRecord);
+    SensorRecord.TimestampUtcUnix := Int64(TimestampVal) + 631065600;
+    SensorRecord.DistanceM := Trunc(DistanceM);
+    if SpeedRaw <> INVALID_U32 then SensorRecord.SpeedKmh := SpeedRaw * 0.0036;
+    if PowerRaw <> INVALID_U16 then SensorRecord.Power := PowerRaw;
+    if CadenceRaw <> INVALID_U8 then SensorRecord.Cadence := CadenceRaw;
+    if HrRaw <> INVALID_U8 then SensorRecord.HeartRate := HrRaw;
+    SensorRecord.SlopePct := GradeRaw / 100.0;
+    FOnSensorRecord(SensorRecord);
+  end;
 end;
 
 { ── Обработчик workout_step (msg 27) ──────────────────────────────── }

@@ -116,10 +116,10 @@ type
       True if bytes were parsed. Fires OnTileProgress once (1/1). }
     function FetchTileInto(const ATile: TTileXY; Dataset: TOSMDataset): Boolean;
 
-    { Fresh dataset for a region, deep-merged from the shared per-tile parsed fragments covering
-      ABox at FTileZoom. Caller owns and frees it. Missing/failed tiles are skipped — the result is
-      PARTIAL by design (a corner with no OSM is acceptable). Always full-scene per tile (query
-      ignores feature flags) so the cache key is z/x/y and fragments are reused by any block. }
+    { Complete dataset for a region, deep-merged from shared parsed fragments.
+      Caller owns it. A failed source tile raises EOSMError: generating/caching
+      partial geometry would permanently turn missing city data into terrain.
+      A successfully fetched, genuinely empty source tile is still valid. }
     function GetRegion(const ABox: TLatLonBox): TOSMDataset;
 
     property Fetcher:        THTTPFetcherWithCache read FFetcher;
@@ -944,6 +944,11 @@ begin
       [ATile.Zoom,ATile.X,ATile.Y,GetTickCount64-Started,Elapsed,ParseMs,GotBytes,BoolToStr(Result,True),BoolToStr(Used='cache',True)]));
   if Assigned(FOnTile) then
     FOnTile(Self, ATile, 1, 1, Result, GotBytes, Elapsed, Used, Err, Cancel);
+  if Cancel or FFetcher.Aborted then
+    raise EAbort.Create('OSM preparation cancelled');
+  if not Result then
+    raise EOSMError.CreateFmt('OSM tile %d/%d/%d could not be loaded: %s',
+      [ATile.Zoom, ATile.X, ATile.Y, Err]);
 end;
 
 destructor TOverpassFragEntry.Destroy;
@@ -1081,7 +1086,16 @@ begin
   try
     Ok := FetchTileInto(ATile, Frag);
   except
-    Ok := False;
+    { Do not turn cancellation or source errors into a successful empty region.
+      Always release the loader slot so another request can retry this tile. }
+    Frag.Free;
+    FCacheLock.Enter;
+    try
+      FLoading.Remove(Key);
+    finally
+      FCacheLock.Leave;
+    end;
+    raise;
   end;
   if not Ok then
     FreeAndNil(Frag);
@@ -1126,7 +1140,7 @@ var
   Frag:  TOSMDataset;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1598);{$ENDIF}
-  Result := TOSMDataset.Create;          { caller-owned; may end up partial/empty }
+  Result := TOSMDataset.Create;          { published only after every source tile succeeds }
   try
     Tiles := TTileMath.TilesCoveringBox(ABox, FTileZoom);
     GenerationProgress('OSM tiles', 0, Length(Tiles));
@@ -1134,14 +1148,15 @@ begin
     begin
       CheckGenerationCancelled;
       Frag := AcquireFrag(Tiles[I]);      { pinned cache-owned, or nil on failure }
-      if Frag <> nil then
-        try
-          DeepMergeInto(Result, Frag);    { clone elements into the fresh result }
-        finally
-          ReleaseFrag(Tiles[I]);
-        end;
+      if Frag = nil then
+        raise EOSMError.CreateFmt('OSM tile %d/%d/%d is unavailable; region is incomplete',
+          [Tiles[I].Zoom, Tiles[I].X, Tiles[I].Y]);
+      try
+        DeepMergeInto(Result, Frag);    { clone elements into the fresh result }
+      finally
+        ReleaseFrag(Tiles[I]);
+      end;
       GenerationProgress('OSM tiles', I + 1, Length(Tiles));
-      { failed tile: skipped — region is partial by design (Q2) }
     end;
   except
     FreeAndNil(Result);

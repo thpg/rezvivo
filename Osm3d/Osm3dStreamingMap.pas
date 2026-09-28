@@ -992,6 +992,9 @@ type
     function NearestCurbPoint(WorldX,WorldZ:Single; out P:TVector3):Boolean;
     function GroundShadowAt(WorldX, WorldZ: Single): Single;
     function GroundYAt(WorldX, WorldZ: Single; out AY: Single): Boolean;
+    { CPU assembly and scene mounting must finish before a missing GPU
+      surface sample can be treated as a placement failure. }
+    function GroundSceneReadyAt(WorldX, WorldZ: Single): Boolean;
 
     { Та же высота земли, но с поправкой физического FIT-слоя
       (CorrectHeightGeo поверх сырого треугольника). Для уклона физики
@@ -3825,6 +3828,14 @@ begin
   CpuHit:=CT.SampleGround(X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CpuY);
   if FGpuGround<>nil then GpuHit:=FGpuGround.Sample(CT.GpuGround,
     X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CurbContactsEnabled,GpuY);
+end;
+
+function TOsm3dStreamingMap.GroundSceneReadyAt(WorldX, WorldZ: Single): Boolean;
+begin
+  Result := (FProj <> nil) and (FCache <> nil) and (FCache.Grid <> nil) and
+    (FTileIndex <> nil);
+  if Result then
+    Result := TileSceneReady(FCache.Grid.TileAt(FProj.Unproject(WorldX, WorldZ)));
 end;
 
 function TOsm3dStreamingMap.GroundYAt(WorldX, WorldZ: Single;

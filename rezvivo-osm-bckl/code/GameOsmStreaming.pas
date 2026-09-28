@@ -182,8 +182,10 @@ type
     { Готовность земли под СТАРТОВОЙ точкой маршрута: True и AY = реальная
       высота рельефа, если тайл старта уже смонтирован (GroundYAt по
       проекции первой точки FIT); False — тайл ещё стримится. Игра держит
-      холд старта, пока здесь не станет True (или не сработает таймаут). }
+      холд старта, пока здесь не станет True. }
     function RouteStartGroundY(out AY: Single): Boolean;
+    { The start scene is still being generated, assembled or mounted. }
+    function RouteStartGroundLoading: Boolean;
 
     { Подтвердить постановку райдера на старт: этап «Постановка на старт»
       на оверлее прогрева → done и оверлей гасится. AError <> '' — этап
@@ -424,6 +426,17 @@ end;
 function TGameOsmStreaming.RoutePrepDone: Boolean;
 begin
   Result := FActive and (FSession <> nil) and FSession.Map.RoutePrepDone;
+end;
+
+function TGameOsmStreaming.RouteStartGroundLoading: Boolean;
+var P: TVector3;
+begin
+  Result := False;
+  if (not FActive) or (FSession = nil) or (Length(FRoute) = 0) then Exit;
+  if SnapReady then P := FSession.GeoToLocal(FSession.Map.RideRoute[0])
+  else P := FSession.GeoToLocal(FRoute[0]);
+  Result := not FSession.Map.GroundSceneReadyAt(P.X, P.Z) and
+    (FSession.Map.PendingTileWork > 0);
 end;
 
 function TGameOsmStreaming.RouteStartGroundY(out AY: Single): Boolean;

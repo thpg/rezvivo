@@ -1472,5 +1472,6 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "Не удалось сохранить последний заезд. Перезапустите приложение и восстановите заезд перед сменой аккаунта.",
   "Could not finish saved ride": "Не удалось завершить сохранённый заезд",
   "Account change in progress. Please wait.": "Смена аккаунта выполняется. Подождите.",
-  "Always on top": "Поверх других окон"
+  "Always on top": "Поверх других окон",
+  "Simulation unavailable. Choose a valid FIT in Devices.": "Симуляция недоступна. Выберите корректный FIT в «Устройствах»."
 }

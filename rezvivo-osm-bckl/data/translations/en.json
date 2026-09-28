@@ -1406,5 +1406,6 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "The last ride could not be saved. Restart the app to recover it before switching accounts.",
   "Could not finish saved ride": "Could not finish saved ride",
   "Account change in progress. Please wait.": "Account change in progress. Please wait.",
-  "Always on top": "Always on top"
+  "Always on top": "Always on top",
+  "Simulation unavailable. Choose a valid FIT in Devices.": "Simulation unavailable. Choose a valid FIT in Devices."
 }

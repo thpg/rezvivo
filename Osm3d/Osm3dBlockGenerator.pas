@@ -483,8 +483,9 @@ begin
       if GenTrees and (not GenLanduse) then
         GenLanduse := True;
 
-      { 2. OSM region — shared TOverpassClient caches per-tile fragments and returns a
-        fresh caller-owned dataset (partial if some tiles failed). Skip if nothing requested. }
+      { 2. Require a complete OSM region before generating persistent geometry.
+        Source errors propagate to the streamer's retry path. Skip only when
+        no OSM features were requested. }
       Log('fetching OSM data (Overpass)...');
       Reporter.Phase := bpOverpass;
       GenerationProgress('OSM tiles', 0, 0);

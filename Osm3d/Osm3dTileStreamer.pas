@@ -1403,6 +1403,15 @@ begin
   else if APriority < BSlot.DesiredPriority then
     BSlot.DesiredPriority := APriority;
 
+  { Keep the tile retryable until a job actually exists. Marking it as
+    waiting during cooldown strands it forever: WantTile does not revisit
+    tssWaitingBlock and no worker will produce a result for it. }
+  if (BSlot.State = bgsFailed) and (FFrame < BSlot.RetryFrame) then
+  begin
+    ASlot.State := tssFailed;
+    ASlot.RetryFrame := BSlot.RetryFrame;
+    Exit;
+  end;
   ASlot.State := tssWaitingBlock;
 
   case BSlot.State of

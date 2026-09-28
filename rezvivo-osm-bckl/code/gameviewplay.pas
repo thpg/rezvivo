@@ -186,8 +186,7 @@ type
       кадр гасим AutoMove (иначе BLE/симуляция/клавиша P тронут райдера
       раньше, чем тайлы впереди смонтируются, и он поедет по пустоте).
       Снимается, когда FOsmStreaming.RoutePrepDone И смонтирована земля
-      под стартовой точкой (RouteStartGroundY; таймаут ~20 с — старт
-      без точной высоты); на снятии райдер финально пере-ставится на
+      под стартовой точкой (RouteStartGroundY); на снятии райдер встаёт на
       смонтированную землю (InitializeAtStart), оверлей получает
       NotifyRiderPlaced. Экран ожидания — WarmupOverlay карты, он уже
       во вьюпорте. }
@@ -197,11 +196,9 @@ type
     FOsmPrepHoldLogTick: QWord;
     FBuildingPushLogTick: QWord; { BUILDING_OBSTACLE rider push log throttle }
     FOsmPrepResumeAutoMove: Boolean;
-    { Финальная фаза холда: RoutePrepDone уже True, ждём монтаж тайла
-      стартовой точки (RouteStartGroundY = True). 0 — фаза не начата;
-      иначе тик входа в фазу — таймаут ~20 с, дальше старт без точной
-      высоты (этап «Постановка на старт» на оверлее → ошибка, но холд
-      снимается — вечного ожидания нет). }
+    { Timer for missing ground AFTER start scene loading. Assembly/mounting
+      does not consume this budget. High(QWord) = error already reported;
+      placement remains held until a valid ground sample arrives. }
     FOsmPrepGroundSince: QWord;
     { Одноразовый подъём оверлея прогрева на верх UI на первом кадре
       холда: FX-панель тогглов создаётся в Start ПОЗЖЕ пересадки
@@ -300,7 +297,7 @@ type
     FSimBtnPause, FSimBtnReset, FSimBtnFwd, FSimBtnSlow,
       FSimBtnBack, FSimBtnStep: TCastleButton;
     FSimSeek: TCastleFloatSlider;
-    FSimTime, FSimRate: TCastleLabel;
+    FSimTime, FSimRate, FSimStatus: TCastleLabel;
     FSimSeekUpdating: Boolean;
     FSimHistory: TSimReplayHistory;
     FSimCameraReplaying: Boolean;
@@ -4345,7 +4342,7 @@ begin
     уже на реальной земле. Map.RoutePrepDone (снап-воркер) наступает РАНЬШЕ —
     одного его мало: иначе sim.play / камера стартуют при avatarY=0, а потом
     земля монтируется → скачок ~сотни метров. FOsmPrepHold держится до
-    RouteStartGroundY (или таймаута) + InitializeAtStart + NotifyRiderPlaced. }
+    RouteStartGroundY + InitializeAtStart + NotifyRiderPlaced. }
   if (not Assigned(FOsmStreaming)) or (not FOsmStreaming.Active) then
     Exit(True);
   Result := not FOsmPrepHold;
@@ -4515,20 +4512,28 @@ begin
           2) земля под СТАРТОВОЙ точкой смонтирована (RouteStartGroundY):
              только тогда ставим райдера (раньше промежуточный
              InitializeAtStart сажал на Y=0 → скачок камеры).
-        Через 20 с показываем ошибку загрузки. До появления земли
+        Через 20 с после загрузки сцены показываем ошибку поверхности. До появления земли
         движение остаётся на удержании; ESC/меню доступны. }
       WuRelease  := False;
       WuPlaceErr := '';
       if FOsmStreaming.RoutePrepDone and FOsmStreaming.SnapReady then
       begin
-        if FOsmPrepGroundSince = 0 then
-          FOsmPrepGroundSince := GetTickCount64;
         { Ставим райдера только на готовую землю. Таймаут сообщает об
           ошибке, но не разрешает старт в пустоте. }
         if FOsmStreaming.RouteStartGroundY(WuGroundY) then
           WuRelease := True
         else if FOsmPrepGroundSince <> High(QWord) then
-          if GetTickCount64 - FOsmPrepGroundSince >= 20000 then
+        begin
+          { A cached route may snap immediately while a large city scene
+            still takes tens of seconds to assemble. This is normal loading,
+            not a failed surface query. Watch only the start tile, so loading
+            unrelated neighbours cannot hide an actual missing surface. }
+          if FOsmStreaming.RouteStartGroundLoading then
+            FOsmPrepGroundSince := 0
+          else if FOsmPrepGroundSince = 0 then
+            FOsmPrepGroundSince := GetTickCount64;
+          if (FOsmPrepGroundSince <> 0) and
+             (GetTickCount64 - FOsmPrepGroundSince >= 20000) then
           begin
             FOsmPrepGroundSince := High(QWord); { report once, still allow recovery }
             WuPlaceErr := UiText('Could not load the ground at the start. ')
@@ -4538,6 +4543,7 @@ begin
               FOsmStreaming.Session.Map.WarmupFail(5,WuPlaceErr);
             Logger.Info('[ViewPlay] StreamingMap: старт ожидает землю после таймаута');
           end;
+        end;
       end;
       if WuRelease then
       begin
@@ -4599,7 +4605,7 @@ begin
         if GetTickCount64 >= FOsmPrepHoldLogTick then
         begin
           FOsmPrepHoldLogTick := GetTickCount64 + 5000;
-          if FOsmPrepGroundSince <> 0 then
+          if FOsmStreaming.RoutePrepDone and FOsmStreaming.SnapReady then
             Logger.Info('[ViewPlay] StreamingMap: плоская карта — '
               + 'ждём землю под стартом (GroundYAt)…')
           else
@@ -5960,6 +5966,12 @@ begin
   FSimSeek.Anchor(hpLeft,10); FSimSeek.Anchor(vpBottom,6);
   FSimSeek.OnChange:=@ChangeSimSeek;
   FSimPanel.InsertFront(FSimSeek);
+  FSimStatus:=TCastleLabel.Create(FreeAtStop); FSimStatus.Name:='SimStatus';
+  FSimStatus.FontSize:=14; FSimStatus.Color:=Vector4(0.95,0.8,0.5,1);
+  FSimStatus.Anchor(hpLeft,10); FSimStatus.Anchor(vpBottom,10);
+  BindUiText(FSimStatus,'Simulation unavailable. Choose a valid FIT in Devices.');
+  FSimStatus.Exists:=False;
+  FSimPanel.InsertFront(FSimStatus);
 end;
 
 procedure TViewPlay.RefreshSimPlayer;
@@ -5973,11 +5985,22 @@ var SimActive,Paused: Boolean; CurSec,TotalSec: Integer; Rate: Single;
 begin
   if FSimPanel=nil then Exit;
   SimActive:=Assigned(DeviceService) and DeviceService.SimPlayerInfo(Paused,CurSec,TotalSec);
-  FSimPanel.Exists:=SimActive and not FFocusMode;
+  FSimPanel.Exists:=Settings.GetSimulationEnabled and not FFocusMode;
   if not FSimPanel.Exists then Exit;
   if Assigned(FWorkoutHud) and FWorkoutHud.Exists then
     FSimPanel.Anchor(vpBottom,FWorkoutHud.EffectiveHeight+12)
   else FSimPanel.Anchor(vpBottom,12);
+  FSimStatus.Exists:=not SimActive;
+  FSimTime.Exists:=SimActive; FSimRate.Exists:=SimActive;
+  FSimBtnReset.Enabled:=SimActive and not FOsmPrepHold;
+  FSimBtnPause.Enabled:=SimActive and not FOsmPrepHold;
+  if not SimActive then
+  begin
+    FSimBtnBack.Enabled:=False; FSimBtnStep.Enabled:=False;
+    FSimBtnSlow.Enabled:=False; FSimBtnFwd.Enabled:=False;
+    FSimSeek.Exists:=False;
+    Exit;
+  end;
   if Paused then FSimBtnPause.Caption:='>' else FSimBtnPause.Caption:='II';
   Rate:=DeviceService.SimGetSpeed;
   if Rate<=SimFrameSeconds+0.000001 then FSimRate.Caption:=UiText('1 frame/s')

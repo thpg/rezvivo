@@ -58,9 +58,11 @@ type
   private
     FFitPath: string;
     FRecords: TSensorSessionRecordArray;
+    FLoadedCount: Integer;
     FClock: TSimPlaybackClock;
     FCurrentIdx: Integer;
     FLastEmitTick: QWord;
+    procedure ReadFitRecord(const ARecord: TSensorSessionRecord);
     procedure LoadFit;
   public
     constructor Create(const AAddress: string; const AFriendlyName: string = ''); override;
@@ -119,7 +121,7 @@ type
 implementation
 
 uses
-  AppSettings, DebugLog, Math;
+  AppSettings, DebugLog, Math, FitFile;
 
 { ─── TSimTransportProvider ─── }
 
@@ -243,229 +245,35 @@ begin
   NotifyDataReceived;
 end;
 
+procedure TSimTransportSession.ReadFitRecord(const ARecord: TSensorSessionRecord);
+begin
+  if FLoadedCount = Length(FRecords) then
+    SetLength(FRecords, Max(1024, FLoadedCount * 2));
+  FRecords[FLoadedCount] := ARecord;
+  if FLoadedCount > 0 then
+    FRecords[FLoadedCount].ElapsedSec := Max(FRecords[FLoadedCount - 1].ElapsedSec,
+      ARecord.TimestampUtcUnix - FRecords[0].TimestampUtcUnix);
+  Inc(FLoadedCount);
+end;
+
 procedure TSimTransportSession.LoadFit;
-const
-  HDR_DEF_MASK       = $40;
-  HDR_LMT_MASK       = $0F;
-  HDR_DEV_MASK       = $20;
-  FIT_TS_EPOCH_OFFSET = 631065600; { 1989-12-31 UTC → Unix }
-  GMSG_RECORD        = 20;
-
-  { Field nums в record-message. Подмножество того что пишет наш
-    TFitFileWriter и что обычно пишут внешние FIT-источники. }
-  REC_F_HR        = 3;
-  REC_F_CADENCE   = 4;
-  REC_F_DISTANCE  = 5;
-  REC_F_SPEED     = 6;
-  REC_F_POWER     = 7;
-  REC_F_GRADE     = 9;
-  REC_F_TIMESTAMP = 253;
-
-type
-  TFieldInfo = record
-    FieldNum: Byte;     { local field number, как в FIT spec }
-    Size:     Byte;     { размер в байтах }
-    Offset:   Word;     { смещение от начала data-payload }
-  end;
-  TLocalDef = record
-    Valid:      Boolean;
-    GlobalMsg:  Word;
-    DataSize:   Word;
-    Fields:     array of TFieldInfo;
-  end;
-
-var
-  Stream: TFileStream;
-  Buf: array of Byte;
-  Pos, StopPos: Integer;
-  Defs: array[0..15] of TLocalDef;
-  Hdr, LocalType, FieldsCount, FieldNum, FieldSize: Byte;
-  HasDev: Boolean;
-  GlobalMsg, DataSize: Word;
-  I: Integer;
-  RecBase: Integer;
-  FldNum: Byte;
-  FldSize: Byte;
-  FldOff: Word;
-  N, Cap: Integer;
-  J: Integer;
-  Ts, Dist: LongWord;
-  Speed: Word;
-  Power: Word;
-  Grade: SmallInt;
-  HR, Cadence: Byte;
-  HasTs: Boolean;
+var Fit: TFitFile;
 begin
   FRecords := nil;
-  if not FileExists(FFitPath) then
-  begin
-    Logger.Info('[Sim] LoadFit: file missing: ' + FFitPath);
-    Exit;
-  end;
-
-  Stream := TFileStream.Create(FFitPath, fmOpenRead or fmShareDenyNone);
+  FLoadedCount := 0;
+  Fit := TFitFile.Create;
   try
-    SetLength(Buf, Stream.Size);
-    if Length(Buf) = 0 then Exit;
-    Stream.ReadBuffer(Buf[0], Length(Buf));
+    Fit.OnSensorRecord := @ReadFitRecord;
+    { One FIT decoder for routes and playback: endianness, compressed
+      timestamps, developer fields, enhanced speed and CRC validation.
+      Telemetry is delivered even when a record has no GPS coordinates. }
+    if not Fit.LoadFromFile(FFitPath) then FLoadedCount := 0;
   finally
-    Stream.Free;
+    Fit.Free;
+    SetLength(FRecords, FLoadedCount);
   end;
-
-  if Length(Buf) < 14 then
-  begin
-    Logger.Info('[Sim] LoadFit: too short for FIT header');
-    Exit;
-  end;
-
-  { FIT-заголовок: byte 0 = header_size (12 или 14), bytes 4..7 =
-    data_size LE. После заголовка — messages, потом 2-байтовый CRC. }
-  Pos := Buf[0];
-  StopPos := Pos + Integer(PLongWord(@Buf[4])^);
-  if StopPos > Length(Buf) - 2 then StopPos := Length(Buf) - 2;
-
-  for I := 0 to 15 do Defs[I].Valid := False;
-
-  N := 0;
-  Cap := 1024;
-  SetLength(FRecords, Cap);
-
-  while Pos < StopPos do
-  begin
-    Hdr := Buf[Pos]; Inc(Pos);
-
-    if (Hdr and HDR_DEF_MASK) <> 0 then
-    begin
-      { Definition message:
-          reserved(1) + arch(1) + global_msg(2) + fields(1) +
-          3*fields (field_def: num/size/base_type) +
-          [optional dev_fields(1) + 3*dev_fields] если HDR_DEV_MASK в hdr. }
-      LocalType := Hdr and HDR_LMT_MASK;
-      HasDev    := (Hdr and HDR_DEV_MASK) <> 0;
-      if Pos + 5 > StopPos then Break;
-      Inc(Pos);                                  { reserved }
-      Inc(Pos);                                  { arch (LE assumed) }
-      GlobalMsg := PWord(@Buf[Pos])^; Inc(Pos, 2);
-      FieldsCount := Buf[Pos]; Inc(Pos);
-      if Pos + FieldsCount * 3 > StopPos then Break;
-
-      Defs[LocalType].Valid := True;
-      Defs[LocalType].GlobalMsg := GlobalMsg;
-      DataSize := 0;
-      SetLength(Defs[LocalType].Fields, FieldsCount);
-      for I := 0 to FieldsCount - 1 do
-      begin
-        FieldNum  := Buf[Pos];     Inc(Pos);
-        FieldSize := Buf[Pos];     Inc(Pos);
-        Inc(Pos);                                { base_type — нам не нужен }
-        Defs[LocalType].Fields[I].FieldNum := FieldNum;
-        Defs[LocalType].Fields[I].Size     := FieldSize;
-        Defs[LocalType].Fields[I].Offset   := DataSize;
-        DataSize := DataSize + FieldSize;
-      end;
-
-      if HasDev then
-      begin
-        if Pos >= StopPos then Break;
-        FieldsCount := Buf[Pos]; Inc(Pos);
-        for I := 0 to FieldsCount - 1 do
-        begin
-          if Pos + 2 >= StopPos then Break;
-          FieldSize := Buf[Pos + 1];
-          Inc(Pos, 3);
-          DataSize := DataSize + FieldSize;
-        end;
-      end;
-      Defs[LocalType].DataSize := DataSize;
-    end
-    else
-    begin
-      { Data message: используем сохранённую definition'у. }
-      LocalType := Hdr and HDR_LMT_MASK;
-      if not Defs[LocalType].Valid then
-      begin
-        Logger.Info(Format('[Sim] LoadFit: data msg local=%d without prior definition at %d',
-          [LocalType, Pos - 1]));
-        Break;
-      end;
-      DataSize := Defs[LocalType].DataSize;
-      if Pos + DataSize > StopPos then Break;
-      RecBase := Pos;
-      Inc(Pos, DataSize);
-
-      if Defs[LocalType].GlobalMsg = GMSG_RECORD then
-      begin
-        Ts := 0; Dist := 0; Speed := $FFFF; Power := $FFFF;
-        Grade := 0; HR := 0; Cadence := 0;
-        HasTs := False;
-
-        for J := 0 to High(Defs[LocalType].Fields) do
-        begin
-          FldNum  := Defs[LocalType].Fields[J].FieldNum;
-          FldSize := Defs[LocalType].Fields[J].Size;
-          FldOff  := Defs[LocalType].Fields[J].Offset;
-          case FldNum of
-            REC_F_TIMESTAMP:
-              if FldSize = 4 then
-              begin
-                Ts := PLongWord(@Buf[RecBase + FldOff])^;
-                HasTs := True;
-              end;
-            REC_F_DISTANCE:
-              if FldSize = 4 then
-                Dist := PLongWord(@Buf[RecBase + FldOff])^;
-            REC_F_SPEED:
-              if FldSize = 2 then
-                Speed := PWord(@Buf[RecBase + FldOff])^;
-            REC_F_POWER:
-              if FldSize = 2 then
-                Power := PWord(@Buf[RecBase + FldOff])^;
-            REC_F_GRADE:
-              if FldSize = 2 then
-                Grade := PSmallInt(@Buf[RecBase + FldOff])^;
-            REC_F_HR:
-              if FldSize = 1 then
-                HR := Buf[RecBase + FldOff];
-            REC_F_CADENCE:
-              if FldSize = 1 then
-                Cadence := Buf[RecBase + FldOff];
-          end;
-        end;
-
-        { Игнорируем «пустые» записи без timestamp — это обычно
-          start/stop event'ы в виде record-msg без данных. }
-        if not HasTs then Continue;
-
-        if N >= Cap then
-        begin
-          Cap := Cap * 2;
-          SetLength(FRecords, Cap);
-        end;
-
-        FRecords[N].TimestampUtcUnix := Int64(Ts) + FIT_TS_EPOCH_OFFSET;
-        FRecords[N].ElapsedSec       := N;
-        FRecords[N].DistanceM        := Dist div 100;
-        if Speed = $FFFF then
-          FRecords[N].SpeedKmh := 0
-        else
-          FRecords[N].SpeedKmh := (Speed / 1000.0) * 3.6;
-        if Power = $FFFF then
-          FRecords[N].Power := 0
-        else
-          FRecords[N].Power := Power;
-        FRecords[N].HeartRate := HR;
-        FRecords[N].Cadence   := Cadence;
-        FRecords[N].SlopePct  := Grade / 100.0;
-        Inc(N);
-      end;
-      { другие global msg — file_id, lap, session, event и т.д. — skip:
-        DataSize мы уже добавили к Pos выше. }
-    end;
-  end;
-
-  SetLength(FRecords, N);
   Logger.Info(Format('[Sim] LoadFit: parsed %d records from %s',
-    [N, FFitPath]));
+    [Length(FRecords), FFitPath]));
 end;
 
 function TSimTransportSession.Connect: Boolean;

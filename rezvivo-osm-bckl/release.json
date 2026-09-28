@@ -1,6 +1,7 @@
 {
-  "version": "0.1.0-alpha.1",
-  "build": 1,
-  "file_version": "0.1.0.1",
-  "channel": "alpha"
+  "version": "0.2.0-alpha.1",
+  "build": 2,
+  "file_version": "0.2.0.2",
+  "channel": "alpha",
+  "notes": "Fix incomplete OSM tile caching and retry scheduling, wait for the start scene before reporting missing ground, and read FIT simulation through the shared decoder. Keep the simulation panel visible with a clear message when its FIT source is unavailable."
 }
