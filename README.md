@@ -38,21 +38,21 @@ Click any preview to view the full-size screenshot.
 <table>
   <tr>
     <td align="center">
-      <a href="docs/screenshots/forest-ride.png?raw=true"><img src="docs/screenshots/forest-ride.png" alt="A forest road ride with live cycling metrics" height="220"></a><br>
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/forest-ride.png"><img src="docs/screenshots/forest-ride.png" alt="A forest road ride with live cycling metrics" height="220"></a><br>
       Forest ride
     </td>
     <td align="center">
-      <a href="docs/screenshots/city-ride.png?raw=true"><img src="docs/screenshots/city-ride.png" alt="Riding through a city with live cycling metrics" height="220"></a><br>
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/city-ride.png"><img src="docs/screenshots/city-ride.png" alt="Riding through a city with live cycling metrics" height="220"></a><br>
       City ride
     </td>
   </tr>
   <tr>
     <td align="center">
-      <a href="docs/screenshots/workout-library.png?raw=true"><img src="docs/screenshots/workout-library.png" alt="The interval workout library with workout profiles" height="220"></a><br>
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/workout-library.png"><img src="docs/screenshots/workout-library.png" alt="The interval workout library with workout profiles" height="220"></a><br>
       Workout library
     </td>
     <td align="center">
-      <a href="docs/screenshots/workout-only.png?raw=true"><img src="docs/screenshots/workout-only.png" alt="The compact workout-only window with interval controls" height="220"></a><br>
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/workout-only.png"><img src="docs/screenshots/workout-only.png" alt="The compact workout-only window with interval controls" height="220"></a><br>
       Compact workout mode
     </td>
   </tr>
