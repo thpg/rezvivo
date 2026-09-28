@@ -9,7 +9,8 @@ Engine. It combines real-world routes generated from OpenStreetMap and elevation
 data with handcrafted Dream Worlds, smart-trainer integration and interval training.
 
 [Website](https://rezvivo.com) · [Download for Windows](https://rezvivo.com/download) ·
-[Report an issue](https://github.com/thpg/rezvivo/issues) · [License](LICENSE)
+[Report an issue on the website](https://rezvivo.com/feedback) or
+[GitHub Issues](https://github.com/thpg/rezvivo/issues) · [License](LICENSE)
 
 ## Features
 
@@ -94,7 +95,9 @@ The seven included workouts are original REZVIVO workouts.
 
 ## Contributing
 
-Use [GitHub Issues](https://github.com/thpg/rezvivo/issues) for bugs and suggestions.
+Report bugs and suggest improvements through the
+[website feedback form](https://rezvivo.com/feedback) or
+[GitHub Issues](https://github.com/thpg/rezvivo/issues).
 For rendering issues, include the game version, GPU, graphics settings and the
 route or Dream World involved. Review attached logs for personal information.
 
