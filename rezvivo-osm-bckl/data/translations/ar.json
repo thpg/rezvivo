@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "تصفيفة الشعر",
+  "No hair": "بدون شعر",
+  "Short crop": "شعر قصير",
+  "Swept back": "شعر ممشط للخلف",
+  "Curly hair": "شعر مجعد",
+  "Ponytail": "ذيل حصان",
   "%.1f kg": "%.1f كجم",
   "(no file selected)": "(لم يتم تحديد ملف)",
   "(no profile data)": "(لا توجد بيانات للملف الشخصي)",
@@ -302,5 +308,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "تعذّر حفظ الرحلة الأخيرة. أعد تشغيل التطبيق واستعد الرحلة قبل تبديل الحساب.",
   "Could not finish saved ride": "تعذّر إنهاء الرحلة المحفوظة",
   "Account change in progress. Please wait.": "جارٍ تبديل الحساب. يُرجى الانتظار.",
-  "Always on top": "دائماً في المقدمة"
+  "Always on top": "دائماً في المقدمة",
+  "Buzz cut": "شعر قصير جدًا",
+  "Side part": "فرق جانبي",
+  "Tight curls": "تجعيدات ضيقة",
+  "Medium length": "طول متوسط",
+  "Braid": "ضفيرة",
+  "Hair quality": "جودة الشعر",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "تتحكم في تفاصيل الشعر وإضاءته ومعدل تحديث حركته. تُطبق فورًا."
 }

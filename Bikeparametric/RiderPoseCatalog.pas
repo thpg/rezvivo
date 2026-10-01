@@ -7,16 +7,17 @@ interface
 
 uses RiderTripo;
 
-const BuiltinRiderPoseCount = 16;
+const BuiltinRiderPoseCount = 17;
 
 function BuiltinRiderPose(Index: Integer): TRiderPose;
 procedure LoadBuiltinRiderPoses(List: TRiderPoseList);
 
 implementation
 
-uses SysUtils, CastleVectors;
+uses SysUtils, Math, CastleVectors, RiderHandGrip;
 
 function BuiltinRiderPose(Index: Integer): TRiderPose;
+var CurveTransfer: Single;
 begin
   Result := DefaultRiderPose;
   Result.SpineManual := True;
@@ -41,21 +42,21 @@ begin
       Result.OffsetX := 0.06;
       Result.OffsetY := 0.025;
       Result.AnkleFlex := 10;
-      Result.ArmPronationR := -40;
-      Result.ArmPronationL := 40;
+      { Neutral grip orientation is derived from the handlebar contact. }
       Result.HandPosR := 3;
       Result.HandPosL := 3;
       Result.SelPriority := 30;
       Result.SelSpeedMin := 5;
-      Result.SelIntensityMin := 1.5;
-      Result.SpineAngles[0] := -61;
+      Result.SelIntensityMin := 1.8;
+      Result.SpineAngles[0] := -70;
       Result.SpineAngles[1] := -6;
       Result.SpineAngles[2] := -5;
       Result.SpineAngles[3] := -3;
       Result.SpineAngles[4] := 18;
       Result.Motion.Standing := 1;
-      Result.PedalSway := 0.024;
-      Result.TorsoBobAmp := 0.007;
+      Result.Motion.Sprint := 1;
+      Result.PedalSway := 0.020;
+      Result.TorsoBobAmp := 0.005;
       Result.Motion.AnkleDeg := 9;
     end;
     2: begin { Asymmetric reach (event) }
@@ -88,21 +89,22 @@ begin
       Result.SpineAngles[3] := 0;
       Result.SpineAngles[4] := 8;
     end;
-    4: begin { Seated aero / extensions }
+    4: begin { Seated aero on the hoods; this bar has no aero extensions }
       Result.Name := 'Pose 4';
       Result.OffsetX := -0.1;
       Result.TorsoLeanDeg := 0;
-      Result.HandPosR := 6;
-      Result.HandPosL := 6;
+      Result.HandPosR := 1;
+      Result.HandPosL := 1;
       Result.SelPriority := 12;
       Result.SelSpeedMin := 30;
       Result.SelIntensityMax := 1.5;
-      Result.SpineAngles[0] := -60;
+      Result.SpineAngles[0] := -72;
       Result.SpineAngles[1] := -5;
       Result.SpineAngles[2] := -5;
       Result.SpineAngles[3] := -3;
       Result.SpineAngles[4] := 25;
-      Result.PedalSway := 0.002;
+      Result.Motion.SeatedPower := 1;
+      Result.PedalSway := 0.003;
       Result.TorsoBobAmp := 0.0008;
     end;
     5: begin { Stretch legs (event) }
@@ -309,17 +311,42 @@ begin
     15: begin { Standing climb on the hoods }
       Result := BuiltinRiderPose(1);
       Result.Name := 'Standing climb';
+      Result.Motion.Sprint := 0;
+      Result.OffsetY := 0.035;
       Result.HandPosR := 1; Result.HandPosL := 1;
       Result.ArmPronationR := 0; Result.ArmPronationL := 0;
-      Result.SpineAngles[0] := -43;
-      Result.SelIntensityMin := 0.9; Result.SelIntensityMax := 1.5;
+      { Pose 1 already distributes eight degrees into Spine01/Spine02. }
+      Result.SpineAngles[0] := -35;
+      Result.SelIntensityMin := 0.9; Result.SelIntensityMax := 1.8;
       Result.SelGradeMin := 5; Result.SelGradeMax := 99;
       Result.SelSpeedMin := 2; Result.SelSpeedMax := 40;
       Result.PedalSway := 0.018;
       Result.TorsoBobAmp := 0.004;
     end;
+    16: begin { Loaded seated riding also at climbing / headwind speeds }
+      Result := BuiltinRiderPose(4);
+      Result.Name := 'Seated power';
+      Result.SelPriority := 21;
+      Result.SelSpeedMin := 2;
+      Result.SelIntensityMin := 1.05;
+      Result.SelIntensityMax := 1.8;
+      { No absolute watt threshold: the reference's 500 W rider stays seated.
+        The standing climb and sprint retain their higher priorities. }
+    end;
     else raise ERangeError.CreateFmt('Unknown rider pose %d', [Index]);
   end;
+  { Spread forward flexion over lumbar and thoracic regions. The total trunk
+    angle stays the same, while the back no longer hinges almost entirely at
+    Waist. Slot 1 is absent on MEN/FEM, so use the two actual spine joints.
+    Derived climbing / power poses inherit this adjustment above. }
+  if not (Index in [15,16]) then begin
+    CurveTransfer:=EnsureRange((-Result.SpineAngles[0]-24)*0.267,0.0,8.0);
+    Result.SpineAngles[0]:=Result.SpineAngles[0]+CurveTransfer;
+    Result.SpineAngles[2]:=Result.SpineAngles[2]-CurveTransfer*0.375;
+    Result.SpineAngles[3]:=Result.SpineAngles[3]-CurveTransfer*0.625;
+  end;
+  Result.HandFrameR:=RiderGripFrame(Result.HandPosR,0);
+  Result.HandFrameL:=RiderGripFrame(Result.HandPosL,1);
 end;
 
 procedure LoadBuiltinRiderPoses(List: TRiderPoseList);

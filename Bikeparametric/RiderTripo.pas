@@ -37,11 +37,16 @@ unit RiderTripo;
 
 interface
 
-uses RiderClothShader,
+uses RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics,
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
   BikeLog, GltfCore, X3DLoad, CastleURIUtils, RiderPoseCorrectives, RiderEquipment, RiderMotion;
+
+const
+  RiderSpineChainCount = 7;
+  RiderSpineChainNames: array[0..RiderSpineChainCount-1] of string =
+    ('Waist', 'Spine', 'Spine01', 'Spine02', 'NeckTwist01', 'NeckTwist02', 'Head');
 
 type
   { ── A named body-pose preset: the posture fields plus the saddle-relative
@@ -57,9 +62,11 @@ type
     Motion: TRiderMotionProfile;
     KneeFlare, ElbowFlare: Single;
     AnkleFlex: Single;
-    ArmPronationR, ArmPronationL: Single;
+    ArmPronationR, ArmPronationL: Single; { positive = pronation for either hand }
+    HandFrameR, HandFrameL: TRiderGripFrame; { transient contact orientation }
     ShoulderRoundDeg: Single;
-    HandLevel: Single;                   { wrist leveling 0..1: 1 = hand fully parallel to the ground }
+    ScapulaProtraction, ScapulaElevation: TShoulderAngles; { transient motion }
+    HandLevel: Single;                   { wrist leveling 0..1: 1 = align with the grip direction, within 25 degrees }
     PedalSway: Single;                   { lateral body sway amplitude (in time with pedals) }
     TorsoBobAmp: Single;                 { vertical torso bob amplitude }
     HandPosR, HandPosL: Integer;         { bar grip each hand uses (1-based); 0 = free hand }
@@ -93,6 +100,16 @@ function StationaryRiderPose: TRiderPose;
 { Linear blend a..b at t in [0,1]; booleans/name snap to b past the half-way mark. }
 function LerpRiderPose(const A, B: TRiderPose; T: Single): TRiderPose;
 function RiderSpineDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TTripoVec4;
+{ Articulation in the anatomical bind frame. Compose with the parent's delta,
+  unlike RiderSpineDelta, which orients the whole rider in the bike frame. }
+function RiderSpineJointDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TTripoVec4;
+{ The authored neck angle is a total gaze rotation. Share it over the two
+  cervical joints and the skull, identically in CPU posing and GPU skinning. }
+function RiderSpineChainDelta(const LeanAxis: TVector3;
+  const Pitch, Yaw, Roll: TSpineAngles; const Joints: array of Integer;
+  Index: Integer; ArticulatedNeck: Boolean): TTripoVec4;
+function RiderScapulaDelta(const LeanAxis: TVector3; Round, Twist, Elevation: Single;
+  Side: Integer): TTripoVec4;
 
 { Right-foot yaw in rig space, about bike up. Positive degrees = toes out;
   conjugate for the left foot. Shared by CPU posing and GPU uniform upload. }
@@ -186,6 +203,11 @@ type
     PoseDur: Single;
     PoseAnimating: Boolean;
     HasPose: Boolean;
+    Hair: THairMotionState;
+    FaceTime: Double;
+    Face:TRiderFaceReplay;
+    AppearancePhase,AppearanceEffort,BreathLoad:Single;
+    BreathPhase:Double;
   end;
 
   TTripoRiderScene = class
@@ -215,6 +237,7 @@ type
     FSpineYaw, FSpineRoll: TSpineAngles;
     FSpineManual: Boolean;                 { use FSpineAngles instead of auto lean }
     FSpineAngles: array[0..4] of Single;   { per-joint manual spine pitch (deg) }
+    FSpineJoints: array[0..RiderSpineChainCount-1] of Integer; { resolved once per model }
     FKneeFlare: Single;                    { knees out(+)/in(-), lateral }
     FElbowFlare: Single;                   { elbows out(+)/in(-), lateral }
     FFootPitchR: Single;                   { right foot roll, radians (set by bike) }
@@ -223,6 +246,7 @@ type
     FLastError: string;                    { why the last LoadGlb failed }
     FArmPronationDegR, FArmPronationDegL: Single;  { hand roll about the forearm axis, per side }
     FShoulderRoundDeg: Single;             { clavicles swing fwd/together (round shoulders) }
+    FScapulaProtraction, FScapulaElevation: TShoulderAngles;
     FHandLevel: Single;                    { wrist leveling 0..1: rotate the hand toward horizontal }
     FShoulderTwistDeg: Single;             { transient torso/shoulder yaw (set by bike during asymmetric hand moves) }
     { ── live, possibly-animating body pose (owned here; the bike reads it back
@@ -260,19 +284,15 @@ type
       contact — including the foot-roll, which is applied as part of the solve. }
     FContactLocal: array[0..3] of TTripoVec3;  { 0=R_Foot 1=L_Foot 2=R_Hand 3=L_Hand }
     FContactValid: array[0..3] of Boolean;     { marker resolved at load? }
-    { ── frozen hand orientation on a still grip: recomputed only when the grip
-      target moves (a position-change animation) or the wrist intent changes, so
-      a planted hand does not rotate with the per-frame torso bob. 0=R 1=L. ── }
-    FHandFreezeQ:     array[0..1] of TTripoVec4;
-    FHandFreezePt:    array[0..1] of TTripoVec3;
-    FHandFreezeRoll:  array[0..1] of Single;
-    FHandFreezeLevel: array[0..1] of Single;
-    FHandFreezeOk:    array[0..1] of Boolean;
     { OPT (pose-7ms): кэш индексов суставов 4 конечностей — SolveLimb раньше
       искал по имени каждый вызов (десятки линейных сканов JointName за кадр).
       Индексы 0=Upper 1=Mid 2=End, по LimbIdx (нога R/L, рука R/L). }
     FLimbJ:     array[0..3, 0..2] of Integer;
     FLimbValid: array[0..3] of Boolean;
+    FStandingPedalReach: Single;
+    FStandingHipFromSeat: TVector3;
+    FHandForward, FHandPalm: array[0..1] of TTripoVec3;
+    FFrameGrip: array[0..1] of TRiderGripFrame;
     { ── blended GPU skinning of the marker so the debug point sticks to the
       RENDERED boot/glove surface. That surface is skinned by a BLEND of bones
       (e.g. R_Foot + R_Calf near the ankle), so a single-bone reconstruction
@@ -285,6 +305,8 @@ type
     FCSkinValid: array[0..3] of Boolean;
     { ── body-shape (vertex deformation of the rest mesh) ── }
     FShapeCached: Boolean;
+    FBodyMorph: TRiderBodyMorph;
+    FBodyParameters: TRiderBodyParameters;
     FShapeCoords: array of TCoordinateNode;        { every rest-mesh Coordinate }
     FOrigPts: array of array of TVector3;          { pristine vertices per node }
     FBulkW: array of array of Single;              { T-pose bulk mask 0..1 (0 = arms) }
@@ -297,6 +319,18 @@ type
     FBoneOrigLocalT: array[0..34] of TVector3;     { original BindLocal translation }
     FBoneOrigNodeT: array[0..34] of TVector3;      { original CGE node translation }
     { ── optional 'Helmet' accessory node, animated to follow the head ── }
+    FHair: TRiderHair;
+    FHairStyle: TRiderHairStyle;
+    FHairStyleOverride: Boolean;
+    FHairMaskPath: String;
+    FAuthorHeight: Single;
+    FBaldHead: Boolean;
+    FFabric: TRiderFabric;
+    FSurfaceSkin: TRiderSkin;
+    FFace:TRiderFace;
+    FAppearancePhase,FAppearanceEffort,FAppearanceBreathLoad:Single;
+    FAppearanceBreathPhase:Double;
+    FHairRestInv: TTripoMat4;
     FHelmetNode: TTransformNode;    { the glb's 'Helmet' TTransformNode (nil = none) }
     FHelmetHeadJ: Integer;          { rig joint the helmet follows (Head, with fallbacks) }
     FHelmetBindT: TVector3;         { authored node transform — the skin matrix is applied on top }
@@ -304,7 +338,7 @@ type
     FHelmetApplies: Integer;        { follow invocations — diagnostics }
     FHelmetScan: TTransformNode;    { EnumerateNodes result — heuristic helmet search }
     FHelmetParented: Boolean;       { True = Helmet is a child of Head; follow via graph }
-    FHelmetPitchXDeg: Single;       { extra nod about helmet local X; + = visor down }
+    FHelmetPitchXDeg: Single;       { extra local-X pitch; positive raises the visor }
     FBodyHeightF: Single;           { last ApplyBodyShape HeightF (height itself is skeleton) }
     FBodyMorphed: Boolean;          { rest verts currently carry bulk/belly disp }
     FCorrectives: TRiderPoseCorrectives;
@@ -315,7 +349,7 @@ type
     FHelmetMats: array of TX3DNode;        { TPhysicalMaterialNode / TUnlitMaterialNode }
     FHelmetOrigColor: array of TVector3;   { authored base/emissive color factors }
 
-    { ── IBL-ambient (pure-IBL лук) ── }
+    { Sky irradiance and the rider's scoped key/fill lights. }
     FEnvLight: TEnvironmentLightNode;      { 'RiderEnv' — живёт в сцене райдера }
     FRiderKeyLight: TDirectionalLightNode; { 'RiderKey' — для runtime-интенсивности }
     FRiderFillLight: TDirectionalLightNode; { 'RiderFill' — для runtime-интенсивности }
@@ -329,6 +363,7 @@ type
     FMatTexNode: array of TX3DNode;                { the material's MR texture node (stays attached) }
     FMatOrigImg: array of TCastleImage;            { pristine decoded copy of the MR texture (owned; lazy) }
     FMatAppliedRough, FMatAppliedMetal: Single;    { last applied coefficients (skip redundant rebakes) }
+    FOrigArmReach: Single;
     FOrigLegReach: Single;                         { leg reach before any scaling }
     FOrigThighLen: Single;                         { |Thigh→Calf| at bind, metres }
     FOrigShinLen: Single;                          { |Calf→Foot| at bind, metres }
@@ -385,7 +420,6 @@ type
     FGroundShadeEffect: TEffectNode;
     FGroundShadeUniform: TSFFloat;
     FGroundShade: Single;
-    procedure AttachGroundShade(Node: TX3DNode);
     procedure ResetGroundShadeEffect;
     procedure SetGroundShade(const Value: Single);
     function  RiderContentRoot: TX3DNode;  { glb/rider subtree only — never BikeFrame }
@@ -397,6 +431,9 @@ type
     procedure CacheBones;                  { cache original limb bone offsets + reach }
     procedure FreezeBootSkin;              { boot verts follow Foot/Toe only — constant Y }
     procedure BindShinToBoot;              { local ankle blend; calf stays on its own bones }
+    procedure CreateHair;
+    procedure SetHairStyle(Value: TRiderHairStyle);
+    procedure ApplyHairFollow(const Delta: TTripoMat4; GPU: Boolean);
     procedure CacheHelmet;                 { find optional 'Helmet' node, capture head-relative bind }
     procedure GrabHelmetCandidate(Node: TX3DNode);  { EnumerateNodes callback for the heuristic }
     function HelmetSubtreeHasAccessoryMesh(Node: TX3DNode): Boolean;
@@ -436,6 +473,7 @@ type
     function  LimbStretchDisp(const v: TVector3; const P: array of TVector3;
                        PCount: Integer; Factor, Radius, TipR: Single): TVector3;
     procedure PoseSpine;                   { lean/curl the torso (auto or manual) }
+    procedure PoseShoulders;
     function  GetSpineAngle(Index: Integer): Single;
     procedure SetSpineAngle(Index: Integer; const V: Single);
     procedure PushDelta(const AName: string);   { rig delta -> CGE joint node }
@@ -448,6 +486,10 @@ type
   public
     function CaptureReplay: TRiderPoseReplay;
     procedure RestoreReplay(const Saved: TRiderPoseReplay);
+    procedure UpdateAppearance(const Dt, Speed: Single;const Effort:Single=0.7;const PedalPhase:Single=0;
+      const BreathPhase:Double=0;const BreathLoad:Single=0);
+    procedure SetFaceTime(const Value:Double);
+    procedure HairDebugJson(Result: TJSONObject);
   public
     constructor Create;
     destructor Destroy; override;
@@ -470,6 +512,7 @@ type
     procedure MountInto(AScene: TCastleScene; AParent: TAbstractGroupingNode);
     property Rig: TTripoRig read FRig;
     property Correctives: TRiderPoseCorrectives read FCorrectives;
+    property Face:TRiderFace read FFace;
     property Loaded: Boolean read FLoaded;
     { TEMP-DIAG: posed-позиции спины/плеч в кадре байка (Transform сцены × WorldPose) }
     function DbgSpineShoulders: string;
@@ -483,6 +526,8 @@ type
       сустава (0=R_Foot 1=L_Foot 2=R_Hand 3=L_Hand). Ноль, если маркера нет. }
     function GpuContactLocal(Idx: Integer): TVector3;
     { Сустав, за которым следует шлем (-1 = шлема нет). GPU-аним, этап 3. }
+    property HairStyle: TRiderHairStyle read FHairStyle write SetHairStyle;
+    function HairTriangles:Integer;
     property HelmetHeadJoint: Integer read FHelmetHeadJ;
     { Поставить шлем по готовой skin-матрице головы (GPU-аним, этап 3):
       аналог ApplyHelmetFollow, но матрицу считает BikeGpuSkin аналитически,
@@ -542,6 +587,11 @@ type
       Cheap enough to call live; re-derives from a pristine cached copy each
       time, so changes are not cumulative. }
     procedure ApplyBodyShape(Bulk, Belly, HeightF: Single);
+    procedure ApplyBodyParameters(const Value: TRiderBodyParameters);
+    function HasParametricBody: Boolean;
+    function BodyShapeRevision: Cardinal;
+    function BodyMeasurements:TJSONObject;
+    property BodyParameters: TRiderBodyParameters read FBodyParameters;
 
     { Change limb LENGTH on the SKELETON: scale the thigh+shin bones (legs),
       upperarm+forearm bones (arms), clavicle bones (shoulder width), the
@@ -636,6 +686,8 @@ type
     function GetRiderFillIntensity: Single;
     procedure SetRiderFillIntensity(const V: Single);
     property RiderFillIntensity: Single read GetRiderFillIntensity write SetRiderFillIntensity;
+    { Punctual sunlight in world space, independent of heading and shadow mode. }
+    procedure SetWorldSunDirection(const RayDirection: TVector3);
     { ДИАГ: все света поддерева райдера одной строкой (имя:класс=интензивность). }
     { Smoothed building/tree coverage sampled under the front wheel. }
     property GroundShade: Single read FGroundShade write SetGroundShade;
@@ -690,6 +742,10 @@ type
       live offset/stance/ankle values it needs for placement and pedals. }
     procedure AdaptPoseReach(var P: TRiderPose; const GripR, GripL: TVector3);
     procedure ApplyFramePose(const P: TRiderPose);
+    { Split the authored forward hinge between the pelvis and the lumbar
+      joint. Returns a scene-level pitch around the saddle contact. }
+    function SplitHipHinge(var P: TRiderPose): Single;
+    function MotionPose(const Base:TRiderPose;const Motion:TRiderMotionFrame):TRiderPose;
     procedure ApplyPose(const P: TRiderPose; Duration: Single = 1.0);
     procedure AdvancePose(Dt: Single);
     function  CurrentPose: TRiderPose;
@@ -707,6 +763,8 @@ type
       and seat the pelvis on the saddle. }
     function PelvisBindLocal: TVector3;
     function LegReach: Single;
+    function PedallingSupport(const SeatedSupport, BottomBracket, Offset: TVector3;
+      CrankRadius, ParentBikeLean, Standing: Single): TVector3;
 
     { ── Rig-based orientation (position the model BY THE RIG, not by the mesh) ──
       LoadGlb detects FILE space (Mixamo +Z-forward vs already bike-aligned) and
@@ -835,11 +893,21 @@ implementation
 function ResolveGlbFilesystemPath(const APath: string): string;
 var
   DataRoot, Rel: string;
+  procedure ResolveSharedSibling;
+  var N,C:string;
+  begin
+    N:=ExtractFileName(Result);
+    if SameText(N,'MEN.glb') or SameText(N,'FEM.glb') then begin
+      C:=ExtractFilePath(Result)+'RIDER.glb';
+      if FileExists(C) then Result:=C;
+    end;
+  end;
+var
   P: Integer;
 begin
   Result := Trim(APath);
   if Result = '' then Exit;
-  if Pos('castle-data:', LowerCase(Result)) <> 1 then Exit;
+  if Pos('castle-data:', LowerCase(Result)) <> 1 then begin ResolveSharedSibling;Exit;end;
   DataRoot := URIToFilenameSafe('castle-data:/');
   if DataRoot = '' then Exit;
   DataRoot := IncludeTrailingPathDelimiter(DataRoot);
@@ -860,6 +928,7 @@ begin
       '..' + PathDelim + 'rezvivo-osm-bckl' + PathDelim + 'data' + PathDelim + Rel);
     if FileExists(DataRoot) then Result := DataRoot;
   end;
+  ResolveSharedSibling;
 end;
 
 { ═════════════════════════ TRiderPose / TRiderPoseList ═════════════════════════ }
@@ -921,9 +990,10 @@ begin
   Result.AnkleFlex := 0;
   Result.ArmPronationR := 0; Result.ArmPronationL := 0;
   Result.ShoulderRoundDeg := 0;
-  Result.HandLevel := 1.0;             { hand parallel to the ground by default }
+  Result.HandLevel := 1.0;             { follow the grip within the wrist bend limit }
   Result.PedalSway := 0; Result.TorsoBobAmp := 0;
   Result.HandPosR := 1; Result.HandPosL := 1;
+  Result.HandFrameR := RiderGripFrame(1,0); Result.HandFrameL := RiderGripFrame(1,1);
   Result.HandFreeRPos := TVector3.Zero; Result.HandFreeLPos := TVector3.Zero;
   Result.HandFreeRWave := 0; Result.HandFreeLWave := 0;
   Result.LegFreeR := 0; Result.LegFreeL := 0;
@@ -945,7 +1015,8 @@ begin
   Result.Grounded := True;
   Result.TorsoLeanDeg := -12;          { fairly upright — rider is stopped, not racing }
   Result.HandLevel := 1.0;
-  Result.HandPosR := 1; Result.HandPosL := 1;   { hands on the hoods }
+  Result.HandPosR := 1; Result.HandPosL := 1;
+  Result.HandFrameR := RiderGripFrame(1,0); Result.HandFrameL := RiderGripFrame(1,1);   { hands on the hoods }
   Result.LegFreeR := 0; Result.LegFreeL := 0;   { feet rest on the (non-turning) pedals }
   Result.PedalSway := 0; Result.TorsoBobAmp := 0;
   { auto-selectable, but only when essentially stopped and not putting out power; the
@@ -1015,7 +1086,13 @@ begin
   Result.ArmPronationR := L(A.ArmPronationR, B.ArmPronationR);
   Result.ArmPronationL := L(A.ArmPronationL, B.ArmPronationL);
   Result.ShoulderRoundDeg := L(A.ShoulderRoundDeg, B.ShoulderRoundDeg);
+  for i := 0 to 1 do begin
+    Result.ScapulaProtraction[i] := L(A.ScapulaProtraction[i], B.ScapulaProtraction[i]);
+    Result.ScapulaElevation[i] := L(A.ScapulaElevation[i], B.ScapulaElevation[i]);
+  end;
   Result.HandLevel := L(A.HandLevel, B.HandLevel);
+  Result.HandFrameR:=BlendGripFrame(A.HandFrameR,B.HandFrameR,T);
+  Result.HandFrameL:=BlendGripFrame(A.HandFrameL,B.HandFrameL,T);
   Result.PedalSway := L(A.PedalSway, B.PedalSway);
   Result.TorsoBobAmp := L(A.TorsoBobAmp, B.TorsoBobAmp);
   { hand grip indices are discrete; the bike animates the actual hand move
@@ -1108,6 +1185,12 @@ begin
   Result.PoseDur:=FPoseDur;
   Result.PoseAnimating:=FPoseAnimating;
   Result.HasPose:=FHasPose;
+  Result.Hair:=Default(THairMotionState);
+  if FHair<>nil then Result.Hair:=FHair.CaptureReplay;
+  Result.FaceTime:=0;if FSurfaceSkin<>nil then Result.FaceTime:=FSurfaceSkin.Time;
+  Result.Face:=Default(TRiderFaceReplay);if FFace<>nil then Result.Face:=FFace.CaptureReplay;
+  Result.AppearancePhase:=FAppearancePhase;Result.AppearanceEffort:=FAppearanceEffort;
+  Result.BreathPhase:=FAppearanceBreathPhase;Result.BreathLoad:=FAppearanceBreathLoad;
 end;
 
 procedure TTripoRiderScene.RestoreReplay(const Saved: TRiderPoseReplay);
@@ -1120,6 +1203,70 @@ begin
   FPoseAnimating:=Saved.PoseAnimating;
   FHasPose:=Saved.HasPose;
   WritePoseToFields;
+  if FHair<>nil then FHair.RestoreReplay(Saved.Hair);
+  SetFaceTime(Saved.FaceTime);
+  if FFace<>nil then FFace.RestoreReplay(Saved.Face);
+  UpdateAppearance(0,0,Saved.AppearanceEffort,Saved.AppearancePhase,Saved.BreathPhase,Saved.BreathLoad);
+end;
+
+function RiderSpineJointDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TTripoVec4;
+var ForwardAxis: TVector3;
+begin
+  ForwardAxis := TVector3.CrossProduct(Vector3(0, 1, 0), LeanAxis);
+  Result := QuatMul(QuatFromAxisAngle(LeanAxis.X, LeanAxis.Y, LeanAxis.Z, DegToRad(Pitch)),
+    QuatMul(QuatFromAxisAngle(ForwardAxis.X, ForwardAxis.Y, ForwardAxis.Z, DegToRad(Roll)),
+      QuatFromAxisAngle(0, 1, 0, DegToRad(Yaw))));
+end;
+
+function RiderScapulaDelta(const LeanAxis: TVector3; Round, Twist, Elevation: Single;
+  Side: Integer): TTripoVec4;
+var ForwardAxis: TVector3; Sign: Single;
+begin
+  Sign := 1 - 2 * Side;
+  ForwardAxis := TVector3.CrossProduct(Vector3(0, 1, 0), LeanAxis);
+  Result := QuatMul(QuatFromAxisAngle(0, 1, 0, DegToRad(Sign * Round + Twist)),
+    QuatFromAxisAngle(ForwardAxis.X, ForwardAxis.Y, ForwardAxis.Z, DegToRad(-Sign * Elevation)));
+end;
+
+procedure TTripoRiderScene.UpdateAppearance(const Dt, Speed, Effort, PedalPhase: Single;
+  const BreathPhase:Double;const BreathLoad:Single);
+var FaceDetail,FaceStrain: Single;FaceTime:Double;
+begin
+  FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
+  FAppearanceBreathPhase:=BreathPhase;FAppearanceBreathLoad:=BreathLoad;
+  if (FCorrectives<>nil)and(FCorrectives.Body<>nil)then FCorrectives.Body.Update(Effort,PedalPhase);
+  if FFabric<>nil then FFabric.Update(BreathPhase,BreathLoad,
+    FShoulderRoundDeg+FScapulaProtraction[0],FShoulderRoundDeg+FScapulaProtraction[1]);
+  FaceDetail:=1;FaceStrain:=RiderFaceStrain(Effort);
+  FaceTime:=0;if FSurfaceSkin<>nil then FaceTime:=FSurfaceSkin.Time+EnsureRange(Dt,0.0,0.25);
+  if FFace<>nil then begin
+    FFace.Update(Dt,Effort,BreathPhase,BreathLoad,FaceTime);
+    if FFace.Valid then begin FaceDetail:=FFace.Visibility;FaceStrain:=FFace.Controls.Z end;
+  end;
+  if FSurfaceSkin<>nil then FSurfaceSkin.Update(Dt,FaceStrain,BreathPhase,BreathLoad,FaceDetail);
+  if FHair<>nil then FHair.Update(FScene,Dt,Speed);
+end;
+
+procedure TTripoRiderScene.SetFaceTime(const Value:Double);
+begin if FSurfaceSkin<>nil then FSurfaceSkin.Time:=Value end;
+
+procedure TTripoRiderScene.HairDebugJson(Result: TJSONObject);
+var A:TJSONArray;C,R:Integer;
+begin
+  if FHair<>nil then FHair.DebugJson(Result)
+  else begin Result.Add('style',RiderHairStyleId(FHairStyle));Result.Add('triangles',0) end;
+  Result.Add('mask_path',FHairMaskPath);
+  Result.Add('helmet_pitch_x',FHelmetPitchXDeg);
+  if FHair<>nil then begin
+    A:=TJSONArray.Create;
+    for C:=0 to 3 do for R:=0 to 3 do A.Add(FHair.Root.Matrix.Data[C,R]);
+    Result.Add('hair_matrix',A);
+  end;
+  if(FRig<>nil)and(FHelmetHeadJ>=0)and(FHelmetHeadJ<Length(FRig.SkinMatrix))then begin
+    A:=TJSONArray.Create;
+    for C:=0 to 15 do A.Add(FRig.SkinMatrix[FHelmetHeadJ][C]);
+    Result.Add('head_skin_matrix',A);
+  end;
 end;
 
 constructor TTripoRiderScene.Create;
@@ -1132,6 +1279,7 @@ begin
   FScene.InternalNodeSharing := True;
   FSceneOwned := True;
   FRig := TTripoRig.Create;
+  FillChar(FSpineJoints,SizeOf(FSpineJoints),255);
   FLoaded := False;
   FResolved := 0;
   FSkin := nil;
@@ -1141,6 +1289,7 @@ begin
   ApplyBikeAlignedSpace;
   FTorsoLeanDeg := -30;   { forward lean; flip sign if it leans backward }
   FFileClipBlendDur := 0.30;
+  FHairStyle := rhsShort;
   FHelmetPitchXDeg := 0;
   FHelmetParented := False;
   FBodyHeightF := 0;
@@ -1166,7 +1315,13 @@ end;
 destructor TTripoRiderScene.Destroy;
 var i: Integer;
 begin
+  { Filters are chained hair -> face. Remove them in reverse order. }
+  FreeAndNil(FFace);
+  FreeAndNil(FHair);
+  FreeAndNil(FFabric);
+  FreeAndNil(FSurfaceSkin);
   FreeAndNil(FCorrectives);
+  FreeAndNil(FBodyMorph);
   ResetGroundShadeEffect;
   { Free our pristine pixel copies of the MR textures. The texture NODES were
     never detached or replaced (only their image contents rewritten), so the
@@ -1286,28 +1441,14 @@ begin
   FGroundShadeEffect := nil;
 end;
 
-procedure TTripoRiderScene.AttachGroundShade(Node: TX3DNode);
-var Sh: TShapeNode; App: TAppearanceNode;
-begin
-  Sh := Node as TShapeNode;
-  if Sh.Appearance=nil then Sh.Appearance := TAppearanceNode.Create;
-  if not (Sh.Appearance is TAppearanceNode) then Exit;
-  App := Sh.Appearance as TAppearanceNode;
-  if App.FdEffects.IndexOf(FGroundShadeEffect)>=0 then Exit;
-  { Append preserves existing dye effects. SetEffects would clear/free them
-    before reusing the same node pointers when scene events are disabled. }
-  App.FdEffects.Add(FGroundShadeEffect);
-end;
-
 procedure TTripoRiderScene.SetGroundShade(const Value: Single);
-var Part: TEffectPartNode; Scope: TX3DNode; V: Single;
+var Part: TEffectPartNode; V: Single;
 begin
   V := EnsureRange(Value,0.0,1.0);
   FGroundShade := V;
   if FGroundShadeEffect=nil then
   begin
-    Scope := RiderContentRoot;
-    if Scope=nil then Exit;
+    if FRiderKeyLight=nil then Exit;
     FGroundShadeEffect := TEffectNode.Create('RiderGroundShade');
     FGroundShadeEffect.KeepExistingBegin;
     FGroundShadeEffect.Language := slGLSL;
@@ -1316,13 +1457,15 @@ begin
     FGroundShadeEffect.AddCustomField(FGroundShadeUniform);
     Part := TEffectPartNode.Create; Part.FdType.Value := 'FRAGMENT';
     Part.Contents := 'uniform float riderGroundShade;' + #10 +
-      'void PLUG_fragment_modify(inout vec4 fragment_color) {' + #10 +
-      '  fragment_color.rgb *= 1.0 - 0.30 * clamp(riderGroundShade, 0.0, 1.0);' + #10 +
+      'void PLUG_light_scale(inout float scale, const vec3 N, const vec3 L) {' + #10 +
+      '  scale *= 1.0 - 0.92 * clamp(riderGroundShade, 0.0, 1.0);' + #10 +
       '}';
     FGroundShadeEffect.SetParts([Part]);
     FScene.BeginChangesSchedule;
     try
-      Scope.EnumerateNodes(TShapeNode,@AttachGroundShade,False);
+      { Occluders remove direct sunlight; sky fill and the chosen material
+        colour remain intact. One light effect replaces one per appearance. }
+      FRiderKeyLight.FdEffects.Add(FGroundShadeEffect);
       FGroundShadeEffect.Scene := FScene;
       FScene.ChangedAll;
     finally FScene.EndChangesSchedule end;
@@ -1600,6 +1743,73 @@ begin
   Result := Dtotal * mTip + segDisp * (mBone * (1.0 - mTip));
 end;
 
+function TTripoRiderScene.HasParametricBody: Boolean;
+begin Result := FBodyMorph <> nil end;
+
+function TTripoRiderScene.BodyShapeRevision: Cardinal;
+begin
+  Result := 0;
+  if FBodyMorph <> nil then Result := FBodyMorph.Revision;
+end;
+
+function TTripoRiderScene.BodyMeasurements:TJSONObject;
+var H,I,A:Single;
+begin
+  Result:=TJSONObject.Create;
+  if FBodyMorph=nil then Exit;
+  FBodyMorph.Measure(FRig,H,I);
+  A:=V3Len(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Forearm')),
+    FRig.JointBindPos(FRig.JointIndexByName('R_Upperarm'))))+
+    V3Len(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Hand')),
+    FRig.JointBindPos(FRig.JointIndexByName('R_Forearm'))));
+  Result.Add('heightCm',Double(H*100));Result.Add('inseamCm',Double(I*100));
+  Result.Add('armLengthCm',Double(A*100));
+end;
+
+procedure TTripoRiderScene.ApplyBodyParameters(const Value: TRiderBodyParameters);
+var P:TRiderBodyParameters; H,I,RestH,LegK,TorsoK,ArmK,WidthK,ShoulderK:Single;
+  H0,I0,HL,IL,HT,IT,A,B,C,D,Det:Single;
+begin
+  if not FLoaded or (FBodyMorph=nil) then Exit;
+  P:=NormalizeRiderBody(Value);
+  if (FBodyMorph.Revision>0) and SameRiderBody(P,FBodyParameters) then Exit;
+  CacheBones;
+  FBodyMorph.Apply(P,FRig);
+  FBodyParameters:=P;
+  if FCorrectives<>nil then FCorrectives.SetBodyParameters(P);
+  RestH:=RestHeight;
+  H:=P.HeightCm*0.01; I:=RiderBodyInseamCm(P)*0.01;
+  ArmK:=RiderBodyArmCm(P)*0.01/Max(FOrigArmReach,0.2);
+  WidthK:=H/Max(RestH,1.0);
+  { The shared surface already contains sex-dependent pelvic shape. Do not
+    narrow the femoral-head spacing a second time. The modest shoulder
+    difference is independent of muscle/fat volume and varies continuously. }
+  ShoulderK:=WidthK*(1+0.07*(1-P.Sex));
+  { Measure the skinned standing mesh: source-local bone lengths contain an
+    armature scale, and authoringHeight is not an anatomical measurement.
+    The two affine translation coefficients fit crown/sole and crotch/sole
+    independently. Static profile edits only, never called by animation. }
+  FBodyMorphed:=False;
+  ApplyLimbLengths(1,ArmK,ShoulderK,1,1,1);
+  FBodyMorph.Measure(FRig,H0,I0);
+  ApplyLimbLengths(1.01,ArmK,ShoulderK,1,1,1);
+  FBodyMorph.Measure(FRig,HL,IL);
+  ApplyLimbLengths(1,ArmK,ShoulderK,1,1.01,1);
+  FBodyMorph.Measure(FRig,HT,IT);
+  A:=(HL-H0)*100; B:=(HT-H0)*100; C:=(IL-I0)*100; D:=(IT-I0)*100;
+  Det:=A*D-B*C;
+  if Abs(Det)<0.001 then raise Exception.Create('Degenerate avatar proportions');
+  LegK:=1+((H-H0)*D-(I-I0)*B)/Det;
+  TorsoK:=1+((I-I0)*A-(H-H0)*C)/Det;
+  FBodyMorphed:=True;
+  ApplyLimbLengths(LegK,ArmK,ShoulderK,1,TorsoK,1);
+  FBodyHeightF:=H/Max(RestH,1)-1;
+  FBodyMorphed:=False;
+  FRig.ComputePose;
+  if (FCorrectives<>nil)and(FCorrectives.Body<>nil)then FCorrectives.Body.RefreshBind;
+  ApplyHelmetFollow;
+end;
+
 procedure TTripoRiderScene.ApplyBodyShape(Bulk, Belly, HeightF: Single);
 var
   ci, vi: Integer;
@@ -1660,7 +1870,7 @@ begin
     FBodyMorphed := NeedMorph;
   end;
   FBodyHeightF := HeightF;
-  if FHelmetNode <> nil then
+  if (FHelmetNode <> nil) or (FHair <> nil) then
     ApplyHelmetFollow;
 end;
 
@@ -1707,6 +1917,10 @@ begin
       FBoneOrigNodeT[k]  := Vector3(0, 0, 0);
     end;
   end;
+  FOrigArmReach := V3Len(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Forearm')),
+    FRig.JointBindPos(FRig.JointIndexByName('R_Upperarm'))))+
+    V3Len(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Hand')),
+    FRig.JointBindPos(FRig.JointIndexByName('R_Forearm'))));
   FOrigLegReach := LegReach;     { capture reach BEFORE any scaling }
   FOrigThighLen := V3Len(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Calf')),
     FRig.JointBindPos(FRig.JointIndexByName('R_Thigh'))));
@@ -2034,6 +2248,8 @@ begin
 end;
 
 procedure TTripoRiderScene.CacheContactOffsets;
+var Side, Ti, Ci, Fi: Integer; Prefix: string;
+  Hip, Calf, Cleat, HipSum: TTripoVec3; Seat: TVector3; Reach: Single;
 
   procedure One(Idx: Integer; const EndJoint, MarkerName: string);
   var
@@ -2069,6 +2285,34 @@ begin
   One(1, 'L_Foot', 'BoatClipseL');
   One(2, 'R_Hand', 'ArmContactR');
   One(3, 'L_Hand', 'ArmContactL');
+  { Body fitting only, not per frame. This is the same effective knee-to-cleat
+    reach used by AimLegContact and the shader. Standing support is independent
+    of saddle height and uses the shorter leg if the rig is asymmetric. }
+  FStandingPedalReach := 0;
+  FStandingHipFromSeat := TVector3.Zero;
+  HipSum := V3(0,0,0);
+  if FRig <> nil then
+    for Side := 0 to 1 do
+    begin
+      if Side = 0 then Prefix := 'R_' else Prefix := 'L_';
+      Ti := FRig.JointIndexByName(Prefix+'Thigh');
+      Ci := FRig.JointIndexByName(Prefix+'Calf');
+      Fi := FRig.JointIndexByName(Prefix+'Foot');
+      if (Ti<0) or (Ci<0) or (Fi<0) or not FContactValid[Side] then
+      begin FStandingPedalReach:=0; Break end;
+      Hip := FRig.JointBindPos(Ti); Calf := FRig.JointBindPos(Ci);
+      Cleat := V3Add(FRig.JointBindPos(Fi),
+        QuatRotateV3(Mat4ToQuat(FRig.BindWorld[Fi]),FContactLocal[Side]));
+      Reach := V3Len(V3Sub(Calf,Hip)) + V3Len(V3Sub(Cleat,Calf));
+      if Side=0 then FStandingPedalReach:=Reach
+      else FStandingPedalReach:=Min(FStandingPedalReach,Reach);
+      HipSum := V3Add(HipSum,Hip);
+      if Side=1 then
+      begin
+        if not ContactBindLocal('BottomContact',Seat) then Seat:=PelvisBindLocal;
+        FStandingHipFromSeat:=Vector3(HipSum.X*0.5,HipSum.Y*0.5,HipSum.Z*0.5)-Seat;
+      end;
+    end;
   CacheContactSkin;          { binds resolved: bake nearest-vertex surface blend }
 end;
 
@@ -2176,6 +2420,12 @@ begin
     else if k <= 24 then factor := LegK * HeightK         { thigh/calf twists: with inseam }
     else if k <= 32 then factor := ArmK                   { arm twist chain, including wrist parent }
     else factor := TorsoK * HeightK;                      { complete neck / head chain }
+    { Stature differences are mostly in the trunk. Preserve head size and
+      avoid making long-necked riders when torso length is increased. The
+      parametric fitter measures the resulting height, so this changes the
+      anatomical distribution without losing the requested centimetres. }
+    if (FBodyMorph<>nil) and ((k=16) or (k>=33)) then
+      factor:=1+(TorsoK*HeightK-1)*0.15;
     { scale the bone offset in BindLocal — IK bone lengths follow it }
     FRig.BindLocal[j][12] := FBoneOrigLocalT[k].X * factor;
     FRig.BindLocal[j][13] := FBoneOrigLocalT[k].Y * factor;
@@ -4680,6 +4930,7 @@ end;
 
 procedure TTripoRiderScene.SetClothColor(Slot: TClothSlot; const C: TVector3);
 begin
+  if (Slot=csHair) and (FHair<>nil) then FHair.Color:=C;
   FDyeColor[Slot] := C;
   FDyeActive[Slot] := True;
   { Live-запечка запрещена (глушит рендер живой GL-сцены) — только при
@@ -4701,6 +4952,7 @@ end;
 procedure TTripoRiderScene.ClearClothColor(Slot: TClothSlot);
 begin
   if not FDyeActive[Slot] then Exit;
+  if (Slot=csHair) and (FHair<>nil) then FHair.Color:=Vector3(0.26,0.17,0.105);
   FDyeActive[Slot] := False;
   if FDyeInLoad then
     BakeClothDye
@@ -4710,12 +4962,14 @@ end;
 
 procedure TTripoRiderScene.StageClothColor(Slot: TClothSlot; const C: TVector3);
 begin
+  if (Slot=csHair) and (FHair<>nil) then FHair.Color:=C;
   FDyeColor[Slot] := C;
   FDyeActive[Slot] := True;   { запечётся при следующей загрузке }
 end;
 
 procedure TTripoRiderScene.StageClearClothColor(Slot: TClothSlot);
 begin
+  if (Slot=csHair) and (FHair<>nil) then FHair.Color:=Vector3(0.26,0.17,0.105);
   FDyeActive[Slot] := False;
 end;
 
@@ -4770,6 +5024,7 @@ var
 begin
   Result := '';
   if Sh = nil then Exit;
+  if Pos('RiderHair',Sh.X3DName)=1 then Exit; { procedural hair owns its tint and mask }
   if (FCorrectives <> nil) and (Sh.Appearance <> nil) then
   begin
     if Sh.Appearance.X3DName <> '' then Exit(Sh.Appearance.X3DName);
@@ -4825,6 +5080,9 @@ var
   I: Integer;
   Amt: Single;
 begin
+  if (Slot=csHair) and (FHair<>nil) then
+    if FDyeActive[csHair] then FHair.Color:=FDyeColor[csHair]
+    else FHair.Color:=Vector3(0.26,0.17,0.105);
   if FDyeActive[Slot] then Amt := 1.0 else Amt := 0.0;
   for I := 0 to High(FDyeShColor[Slot]) do
     if FDyeShColor[Slot][I] <> nil then
@@ -5097,8 +5355,8 @@ begin
         if (DyeShaderDiagStep >= 3) and
            ((FCorrectives = nil) or (Pos('mixedportrait', Lb) > 0)) then
         begin
-          if ((Pos('head', Lb) > 0) and (Pos('face', Lb) = 0)) or
-             (Pos('face', Lb) > 0) then
+          if not FBaldHead and (((Pos('head', Lb) > 0) and (Pos('face', Lb) = 0)) or
+             (Pos('face', Lb) > 0)) then
             AttachEff(App, csHair, 'ClothDyeHair');
           if Slot <> csSkin then
             AttachEff(App, csSkin, 'ClothDyeSkin');
@@ -5570,7 +5828,12 @@ var
   RigTh: TRigParseThread;
   Path: string;
 begin
+  FreeAndNil(FFace);
+  FreeAndNil(FHair);
+  FreeAndNil(FFabric);
+  FreeAndNil(FSurfaceSkin);
   FreeAndNil(FCorrectives);
+  FreeAndNil(FBodyMorph);
   Result := False;
   FLoaded := False; FResolved := 0; FSkin := nil; SetLength(FSkinList, 0);
   StopFileClip;
@@ -5636,6 +5899,7 @@ var
   TD0: QWord;
 begin
   FreeAndNil(FCorrectives);
+  FreeAndNil(FBodyMorph);
   FHelmetNode := nil;
   FHelmetMatsCached := False;
   SetLength(FHelmetMats, 0);
@@ -5664,6 +5928,10 @@ begin
   end;
   try
     TD0 := GetTickCount64;
+    FreeAndNil(FFace);
+    FreeAndNil(FHair);
+    FreeAndNil(FFabric);
+    FreeAndNil(FSurfaceSkin);
     ResetGroundShadeEffect;
     FScene.Load(APrep.Root, True);
     StartupLog(Format('[dye] LoadPrepared: Scene.Load %d ms', [GetTickCount64 - TD0]));
@@ -5684,43 +5952,34 @@ begin
   Result := FinishLoadAfterGraph(APrep.Path, Log);
 end;
 
-{ ── IBL-подобный ambient для PBR-райдера ──
-
-  PBR в CGE игнорирует AmbientIntensity, а environment-карты у сцены нет —
-  поэтому раньше купол directional-филлов имитировал ambient. Но у каждого
-  направленного источника свой жёсткий терминатор: любая складка геометрии
-  ловит 2–3 границы свет/тень, вогнутости теряют сразу несколько источников —
-  «лишние тени и складки» на модели, которая во вьюверах (там IBL) чиста.
-
-  TEnvironmentLightNode для PhysicalMaterial работает иначе: light_dir :=
-  normal_eye, NdotL = 1, diffuse-вклад умножается на diffuseTexture(N) —
-  мягкий ambient по нормали, как IBL. Кубмап — нейтральная студия (небо/земля),
-  6 граней генерируются в память (TPixelTextureNode, без файлов на диске).
-
-  RiderUseIbl = False возвращает старый купол (A/B-сравнение). }
+{ Diffuse sky irradiance with a world-up hemisphere, plus a punctual key.
+  EnvironmentLight avoids the multiple terminators of a directional fill
+  dome. Its scoped effect supplies the hemisphere in world coordinates;
+  turning the camera cannot rotate the sky fill around the rider. }
 const
   RiderUseIbl: Boolean = True;
-  { Pure-IBL (как в Babylon Sandbox): окружение — главный источник, ключи
-    почти нулевые. Калибровка свипом через MCP avatar.lighting (один запуск):
-    grad 1.91 vs 2.40 у старого лука; env 16+ растёт только выбой.
-    Дефолт 3 (выбор пользователя): мягкий ambient без выбоя.
-    ВАЖНО: имя НЕ должно совпадать со свойством RiderEnvIntensity — иначе
-    внутри методов класса свойство затеняет константу и геттер читает
-    ещё-не-созданный FEnvLight (даёт 0). }
-  RiderEnvDefault: Single = 3.0;
+  { Distinct from the RiderEnvIntensity property, whose getter needs FEnvLight. }
+  RiderEnvDefault: Single = 1.2;
 
 { ── Общий файл освещения райдера (пишет редактор, читают редактор и игра) ──
 
   rider_lighting.json в data-каталоге игры:
-    {"env": 3.0, "key": 0.6, "fill": 0.4, "rkey": 0.5, "rfill": 0.3}
+    {"env": 1.2, "key": 0.4, "fill": 0.1, "rkey": 2.0, "rfill": 0.08}
     env        — IBL-ambient райдера (свет 'RiderEnv')
     key/fill   — направленная пара вьюпорта (ключ/заполнение)
     rkey/rfill — направленная пара сцены райдера (RiderKey/RiderFill)
   Редактор сохраняет при каждом ApplyLighting (UI и MCP), игра и редактор
   применяют при старте/загрузке райдера. }
-function RiderLightingFile: string;
+function RiderLightingFile: String;
+var EditorShared: String;
 begin
-  Result := URIToFilenameSafe('castle-data:/rider_lighting.json');
+  Result := ExpandFileName(ExtractFilePath(ParamStr(0)) + 'data' +
+    PathDelim + 'rider_lighting.json');
+  if FileExists(Result) then Exit;
+  EditorShared := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
+    PathDelim + 'rezvivo-osm-bckl' + PathDelim + 'data' + PathDelim +
+    'rider_lighting.json');
+  if FileExists(EditorShared) then Result := EditorShared;
 end;
 
 procedure SaveRiderLighting(const Env, Key, Fill, RKey, RFill: Single);
@@ -5754,12 +6013,12 @@ var
   O: TJSONObject;
   SL: TStringList;
 begin
-  { дефолты = откалиброванный pure-IBL лук }
+  { Sunlight describes the large forms; hemisphere lighting fills the shade. }
   Env := RiderEnvDefault;
-  Key := 0.6;
-  Fill := 0.4;
-  RKey := 0.5;
-  RFill := 0.3;
+  Key := 0.4;
+  Fill := 0.1;
+  RKey := 2.0;
+  RFill := 0.08;
   if not FileExists(RiderLightingFile) then Exit;
   SL := TStringList.Create;
   try
@@ -5788,57 +6047,85 @@ begin
 end;
 
 function TTripoRiderScene.BuildRiderEnvLight: TEnvironmentLightNode;
-
-  function FaceImage(const CSky, CGround: TVector3Byte): TPixelTextureNode;
-  const
-    S = 64;
+  function FaceImage(const C: TVector3Byte): TPixelTextureNode;
   var
     Img: TRGBImage;
-    X, Y, K: Integer;
-    P: PVector3Byte;
   begin
-    Img := TRGBImage.Create(S, S);
-    for Y := 0 to S - 1 do
-      for X := 0 to S - 1 do
-      begin
-        K := (Y * 255) div (S - 1);   { 0 = низ грани, 255 = верх }
-        P := Img.PixelPtr(X, Y);
-        P^.X := (CGround.X * (255 - K) + CSky.X * K) div 255;
-        P^.Y := (CGround.Y * (255 - K) + CSky.Y * K) div 255;
-        P^.Z := (CGround.Z * (255 - K) + CSky.Z * K) div 255;
-      end;
+    Img := TRGBImage.Create(1, 1);
+    PVector3Byte(Img.PixelPtr(0, 0))^ := C;
     Result := TPixelTextureNode.Create;
     Result.FdImage.Value := Img;
   end;
 
-  function BuildCube: TComposedCubeMapTextureNode;
-  const
-    { Мягкая студия-«лайтбокс» (как environmentSpecular.env в Babylon):
-      почти равномерное окружение с лёгким затемнением к полу. }
-    CSkyTop: TVector3Byte    = (X: 228; Y: 231; Z: 238);
-    CSkySide: TVector3Byte   = (X: 228; Y: 231; Z: 238);
-    CGroundSide: TVector3Byte = (X: 165; Y: 167; Z: 162);
-    CGroundBot: TVector3Byte = (X: 155; Y: 157; Z: 153);
+  function BuildCube(const C: TVector3Byte): TComposedCubeMapTextureNode;
   begin
     Result := TComposedCubeMapTextureNode.Create;
-    Result.FdRight.Value  := FaceImage(CSkySide, CGroundSide);
-    Result.FdLeft.Value   := FaceImage(CSkySide, CGroundSide);
-    Result.FdTop.Value    := FaceImage(CSkyTop, CSkyTop);
-    Result.FdBottom.Value := FaceImage(CGroundBot, CGroundBot);
-    Result.FdFront.Value  := FaceImage(CSkySide, CGroundSide);
-    Result.FdBack.Value   := FaceImage(CSkySide, CGroundSide);
+    Result.FdRight.Value  := FaceImage(C);
+    Result.FdLeft.Value   := FaceImage(C);
+    Result.FdTop.Value    := FaceImage(C);
+    Result.FdBottom.Value := FaceImage(C);
+    Result.FdFront.Value  := FaceImage(C);
+    Result.FdBack.Value   := FaceImage(C);
   end;
-
+const
+  White: TVector3Byte = (X: 255; Y: 255; Z: 255);
+  Black: TVector3Byte = (X: 0; Y: 0; Z: 0);
+var Effect: TEffectNode; Part: TEffectPartNode;
 begin
   Result := TEnvironmentLightNode.Create;
   Result.X3DName := 'RiderEnv';
   Result.Global := False;   { локальный: только поддерево райдера }
   Result.Color := Vector3(1.0, 1.0, 1.0);
   Result.Intensity := RiderEnvDefault;
-  Result.FdDiffuseTexture.Value := BuildCube;
-  { Specular-сэмплер обязан быть задан (uniform в шейдере безусловный);
-    при roughness 0.9 его вклад почти нулевой, кубмап та же. }
-  Result.FdSpecularTexture.Value := BuildCube;
+  Result.FdDiffuseTexture.Value := BuildCube(White);
+  { The custom hemisphere below supplies diffuse AND specular irradiance.
+    Black preserves a safe legacy fallback; never enable punctual GGX at L=N. }
+  Result.FdSpecularTexture.Value := BuildCube(Black);
+  Effect := TEffectNode.Create('RiderSkyIrradiance');
+  Effect.Language := slGLSL;
+  Effect.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
+  Part := TEffectPartNode.Create;
+  Part.ShaderType := stFragment;
+  Part.Contents :=
+    'vec3 direction_eye_to_world_space(vec3 direction_eye);' + #10 +
+    'void PLUG_physical_environment(inout vec3 light,const vec3 N,const vec3 V,const vec3 diffuseColor,const vec3 f0,const float roughness) {' + #10 +
+    '  vec3 worldN=normalize(direction_eye_to_world_space(N));' + #10 +
+    '  vec3 R=normalize(direction_eye_to_world_space(reflect(-V,N)));' + #10 +
+    // First-order sky/ground irradiance, analytic prefilter for the broad
+    // horizon. Both are fixed in world space and shared by every rider.
+    '  float up=clamp(0.5+0.5*worldN.y,0.0,1.0);' + #10 +
+    '  vec3 irradiance=mix(vec3(0.20,0.185,0.165),vec3(0.76,0.86,1.0),up);' + #10 +
+    '  float width=0.06+0.90*roughness*roughness;' + #10 +
+    '  float sky=smoothstep(-width,width,R.y);' + #10 +
+    '  vec3 radiance=mix(vec3(0.10,0.09,0.075),vec3(0.31,0.40,0.55),sky);' + #10 +
+    '  radiance=mix(radiance,vec3(0.235,0.275,0.335),roughness*roughness*0.40);' + #10 +
+    // Split-sum GGX environment BRDF approximation (Karis/Lazarov).
+    '  float nv=clamp(dot(N,V),0.0,1.0);' + #10 +
+    '  vec4 r=roughness*vec4(-1.0,-0.0275,-0.572,0.022)+vec4(1.0,0.0425,1.04,-0.04);' + #10 +
+    '  float a004=min(r.x*r.x,exp2(-9.28*nv))*r.x+r.y;' + #10 +
+    '  vec2 ab=vec2(-1.04,1.04)*a004+r.zw;' + #10 +
+    '  vec3 spec=max(f0*ab.x+ab.y,vec3(0.0))*radiance;' + #10 +
+    '  light=diffuseColor*irradiance/3.14159265+spec;' + #10 +
+    '}';
+  Effect.SetParts([Part]);
+  Result.FdEffects.Add(Effect);
+end;
+
+procedure TTripoRiderScene.SetWorldSunDirection(const RayDirection: TVector3);
+var LocalRay: TVector3;
+begin
+  if (FScene=nil) or (FRiderKeyLight=nil) then Exit;
+  { Select the world-light variant even before viewport attachment, so
+    render preparation does not compile the redundant global-fill variant. }
+  FScene.RenderOptions.ReceiveGlobalLights := False;
+  if not FScene.HasWorldTransform then Exit;
+  LocalRay := FScene.WorldInverseTransform.MultDirection(RayDirection);
+  if LocalRay.LengthSqr < 1e-12 then Exit;
+  LocalRay := LocalRay.Normalize;
+  if (LocalRay-FRiderKeyLight.Direction).LengthSqr > 1e-8 then
+    FRiderKeyLight.Direction := LocalRay;
+  { World scenes may have several facade fills. Receiving them on top of
+    the rider's sky/key flattens the body and varies with loaded tiles. }
 end;
 
 function TTripoRiderScene.GetRiderEnvIntensity: Single;
@@ -5941,6 +6228,8 @@ end;
 
 function TTripoRiderScene.FinishLoadAfterGraph(const AFileName: string; Log: TStrings): Boolean;
 var
+  BodyMeta:TJSONObject;
+  LightingSpace: TEffectNode;
   RigErr: TStringList;
   I, NJ, NameMismatch: Integer;
   N: TX3DNode;
@@ -5975,11 +6264,8 @@ begin
     thighs. Applies to MEN/FEM and every local/remote rider at load time. }
   FScene.SceneOcclusionCulling := False;
 
-  { Pure-IBL лук (как в Babylon-вьюверах): яркий environment + ACES
-    тонмаппинг, который сжимает света и не даёт выбоя на светлых тканях.
-    Без ACES яркий IBL клиппит (пиксель-тест: env12 = 8% кадра в белом).
-    ToneMapping — глобальная настройка движка (CastleRenderOptions);
-    мир OSM рисуется своим шейдером и её не получает. }
+  { Preserve highlight headroom on white kit. OSM composites have their
+    own tone mapping; changing this does not alter their shaders. }
   CastleRenderOptions.ToneMapping := tmACES;
 
   { 1b. The bike's lights are scoped to the bike scenes; this separate rider
@@ -5996,28 +6282,29 @@ begin
     L.X3DName := 'RiderKey';
     L.Direction := Vector3(-0.35, -0.75, -0.45);
     L.Color := Vector3(1.0, 0.98, 0.94);
-    { Pure-IBL: окружение даёт основной свет; ключ — лишь лёгкий намёк
-      на направленность (как слабое «окно» в студии). }
-    L.Intensity := 0.5; L.AmbientIntensity := 0.55; L.Global := False;
+    L.Intensity := 2.0; L.AmbientIntensity := 0; L.Global := False;
     FScene.RootNode.AddChildren(L);
     FRiderKeyLight := L;
     L := TDirectionalLightNode.Create;
     L.X3DName := 'RiderFill';
     L.Direction := Vector3(0.55, -0.15, 0.65);
     L.Color := Vector3(0.88, 0.93, 1.0);
-    L.Intensity := 0.3; L.AmbientIntensity := 0.4; L.Global := False;
+    L.Intensity := 0.08; L.AmbientIntensity := 0; L.Global := False;
     FScene.RootNode.AddChildren(L);
     FRiderFillLight := L;
 
-    { IBL-замена купола филлов (RiderUseIbl): EnvironmentLight даёт PBR
-      diffuse-ambient по нормали (glTF-Sample-Viewer style: light_dir = normal,
-      NdotL = 1, вклад умножается на diffuseTexture(N)) — мягкое затекание
-      света в вогнутости, как HDR-окружение во вьюверах. Направленный купол
-      из 6 филлов (ветка else) давал каждой складке по несколько жёстких
-      терминаторов — «лишние тени и складки» на модели. Локальный (Global :=
-      False): светит только поддерево райдера, не байк и не catcher. }
+    { One smooth sky hemisphere instead of multiple directional fills.
+      It provides diffuse irradiance, not occlusion or self-shadowing.
+      After mounting it remains scoped to rider visuals, not the catcher. }
     if RiderUseIbl then
     begin
+      { CGE enables shader libraries on group/appearance effects, not on
+        light effects. The sky hook needs camera rotation in every shape,
+        including the separately loaded helmet. }
+      LightingSpace := TEffectNode.Create('RiderLightingSpace');
+      LightingSpace.Language := slGLSL;
+      LightingSpace.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
+      FScene.RootNode.AddChildren(LightingSpace);
       FEnvLight := BuildRiderEnvLight;
       FScene.RootNode.AddChildren(FEnvLight);
     end else
@@ -6056,7 +6343,7 @@ begin
     FScene.RootNode.AddChildren(L);
     end;
 
-    { Свет из rider_lighting.json (пишет редактор; дефолт — pure-IBL лук).
+    { Свет из rider_lighting.json (пишет редактор).
       Перекрывает константные интенсивности env/key/fill. }
     LoadRiderLighting(LSavedEnv, LSavedKey, LSavedFill, LSavedRKey, LSavedRFill);
     if FEnvLight <> nil then
@@ -6102,6 +6389,7 @@ begin
   FCorrectives := TRiderPoseCorrectives.Create;
   if not FCorrectives.Load(AFileName, FScene, FSkin, FRig) then
     FreeAndNil(FCorrectives);
+  FreeAndNil(FBodyMorph);
   ApplyJerseyHemDepthBias;
 
   { 4. Bind each palette joint to its CGE TTransformNode and capture its rest
@@ -6199,6 +6487,8 @@ begin
   { Attach accessories before material effects so helmet and logos receive
     the same lighting/ground shading as the rider. }
   ReadHelmetPitchExtra(AFileName);
+  CacheHelmet;
+  CreateHair;
   { Anatomical assets provide authored ankle weights and pose correctives.
     The legacy boot/cuff repair must not overwrite that skinning. }
   if FCorrectives = nil then
@@ -6220,20 +6510,30 @@ begin
   end;
   { Shader dye on the rider-only graph, before the bike is mounted into
     this scene. After mount FdEffects.Add would ChangedAll the whole bike. }
+  { Face details must precede tinting, so closed eyelids receive the same skin
+    colour as the surrounding face. }
+  FFace:=TRiderFace.Create(FScene,FRig,FAuthorHeight,FJointNode);
+  FSurfaceSkin:=TRiderSkin.Create(RiderContentRoot,FAuthorHeight,
+    StringReplace(FHairMaskPath,'-scalp.png','-face.json',[rfIgnoreCase]),FFace.Valid,FFace.GeometricEyes);
   if FDyeMode = cdmShader then
   begin
     TD1 := GetTickCount64;
     RefreshShaderClothDye;
     StartupLog(Format('[dye] RefreshShaderClothDye (load) %d ms', [GetTickCount64 - TD1]));
   end;
+  FFabric:=TRiderFabric.Create(RiderContentRoot,FAuthorHeight);
   { Freeze visual standing height from the bind mesh × GPU rest stretch
     BEFORE limb-length edits rewrite BindWorld. }
-  { Attach before GPU skin / bike mounting: no shader rebuild during riding. }
+  { Accessories are attached before GPU skin / bike mounting. }
   SetGroundShade(FGroundShade);
   FNativeRestH := 0;
   RestHeight;
-  FHandFreezeOk[0] := False;   { drop any stale frozen-hand orientation from a previous rig }
-  FHandFreezeOk[1] := False;
+  FBodyMorph:=TRiderBodyMorph.Create;
+  if not FBodyMorph.Load(AFileName,FSkin,FRig) then FreeAndNil(FBodyMorph);
+  BodyMeta:=ReadRiderExtra(AFileName,'bodyParameters');
+  try FBodyParameters:=ReadRiderBody(BodyMeta,DefaultRiderBody(1));
+  finally BodyMeta.Free end;
+
   { Contact markers are NOT baked here on purpose: RiderArmLength / RiderLegLength /
     shoulder width move the end joints (and stretch the mesh), and the marker offsets
     + surface-skin weights must be measured against the FINAL geometry. The caller
@@ -6493,6 +6793,7 @@ end;
 procedure TTripoRiderScene.SetSkinnedAnimationShaders(AOn: Boolean);
 var I: Integer;
 begin
+  if FCorrectives <> nil then FCorrectives.SetNativeSkinActive(AOn);
   if FScene.RenderOptions.SkinnedAnimationShaders = AOn then Exit;
   { Joint property writes queue parent transformations in CGE. Flush them
     before baking; TimePlayingSpeed=0 would otherwise leave the mesh in the
@@ -6506,6 +6807,54 @@ end;
 procedure TTripoRiderScene.RefreshHelmetBind;
 begin
   CacheHelmet;
+end;
+
+procedure TTripoRiderScene.CreateHair;
+var Head:TVector3; Scale:Single;
+begin
+  if (FHair<>nil)or(FScene=nil)or(FScene.RootNode=nil)or
+     (FHelmetHeadJ<0)or not FBaldHead or not FileExists(FHairMaskPath)then Exit;
+  FHairRestInv:=Mat4Inverse(Mat4Mul(FRig.BindWorld[FHelmetHeadJ],FRig.NativeInvBind[FHelmetHeadJ]));
+  Head:=Vector3(FRig.BindWorld[FHelmetHeadJ][12],FRig.BindWorld[FHelmetHeadJ][13],
+    FRig.BindWorld[FHelmetHeadJ][14]);
+  Scale:=FAuthorHeight/1.8;
+  FHair:=TRiderHair.Create(FScene.RootNode,Head,Scale,
+    (FHelmetNode<>nil)and(FHelmetNode.FdChildren.Count>0));
+  FHair.InstallScalp(RiderContentRoot,FHairMaskPath);
+  FHair.BindScene(FScene);
+  FHair.Style:=FHairStyle;
+  if FDyeActive[csHair] then FHair.Color:=FDyeColor[csHair];
+end;
+
+procedure TTripoRiderScene.SetHairStyle(Value:TRiderHairStyle);
+begin
+  FHairStyleOverride:=True;
+  FHairStyle:=Value;
+  if FHair<>nil then FHair.Style:=Value;
+end;
+
+function TTripoRiderScene.HairTriangles:Integer;
+begin
+  Result:=0;if FHair<>nil then Result:=FHair.TriangleCount;
+end;
+
+procedure TTripoRiderScene.ApplyHairFollow(const Delta:TTripoMat4;GPU:Boolean);
+var M,RestNow:TTripoMat4; OutM:TMatrix4; C,R:Integer;
+begin
+  if ((FHair=nil)and(FFace=nil))or(FHelmetHeadJ<0)then Exit;
+  if FFace<>nil then begin
+    if GPU then M:=Mat4Mul(Delta,Mat4Mul(FRig.BindWorld[FHelmetHeadJ],FRig.NativeInvBind[FHelmetHeadJ]))
+    else M:=Delta;
+    for C:=0 to 3 do for R:=0 to 3 do OutM.Data[C,R]:=M[C*4+R];
+    FFace.Follow(OutM);
+  end;
+  if FHair=nil then Exit;
+  if GPU then begin
+    RestNow:=Mat4Mul(FRig.BindWorld[FHelmetHeadJ],FRig.NativeInvBind[FHelmetHeadJ]);
+    M:=Mat4Mul(Mat4Mul(Delta,RestNow),FHairRestInv);
+  end else M:=Mat4Mul(Delta,FHairRestInv);
+  for C:=0 to 3 do for R:=0 to 3 do OutM.Data[C,R]:=M[C*4+R];
+  FHair.Follow(OutM);
 end;
 
 procedure TTripoRiderScene.CacheHelmet;
@@ -6550,6 +6899,7 @@ begin
   FHelmetParented := False;
   if (FScene = nil) or (FScene.RootNode = nil) or (FRig = nil) then Exit;
 
+  FHelmetHeadJ := PickHeadJoint;
   { Optional accessory: a separate rigid helmet mesh that is NOT skinned and
     NOT parented to the head — it just hangs in model space and stays behind
     when the head animates.
@@ -6617,7 +6967,8 @@ function TTripoRiderScene.HelmetBindWithPitch: TQuaternion;
 begin
   Result := CastleQuaternions.QuatFromAxisAngle(FHelmetBindR);
   if Abs(FHelmetPitchXDeg) < 1e-4 then Exit;
-  { Local +X, Y-up: nod-forward (visor down) is a negative X rotation. }
+  { Preserve the authored convention: Y-up, +Z forward, negative local X
+    raises the front edge and lowers the rear cradle. }
   Result := Result * CastleQuaternions.QuatFromAxisAngle(
     Vector3(1, 0, 0), DegToRad(-FHelmetPitchXDeg), True);
 end;
@@ -6703,6 +7054,7 @@ var
   Root, Ex: TJSONObject;
   D: TJSONData;
 begin
+  FHairMaskPath:='';FBaldHead:=False;FAuthorHeight:=RestHeight;
   if (AFileName = '') or (Pos('://', AFileName) > 0) then Exit;
   if not FileExists(AFileName) then Exit;
   try
@@ -6723,6 +7075,15 @@ begin
     D := Root.Find('extras');
     if not (D is TJSONObject) then Exit;
     Ex := TJSONObject(D);
+    FAuthorHeight:=EnsureRange(Ex.Get('appearanceAuthoringHeight',Ex.Get('avatarHeight',FAuthorHeight)),0.5,3.0);
+    FBaldHead:=Ex.Get('baldHead',False);
+    { Shared avatars keep appearance dependencies as data URIs so a saved
+      profile can live outside data/avatars. The groom and facial sidecars
+      use filesystem IO, just like the separately loaded helmet. }
+    FHairMaskPath:=ResolveGlbFilesystemPath(
+      EquipmentAbsolutePath(Ex.Get('hairMask',''),AFileName));
+    if not FHairStyleOverride then
+      FHairStyle:=ParseRiderHairStyle(Ex.Get('hairStyle','short'));
     D := Ex.Find('helmetPitchX');
     if D = nil then D := Ex.Find('avatarHelmetPitchX');
     if (D <> nil) and (D.JSONType = jtNumber) then
@@ -6739,6 +7100,11 @@ var
   SQ, BindQ: TQuaternion;
   BindT: TVector3;
 begin
+  if (FHair<>nil) and (FHelmetHeadJ>=0) then begin
+    if Length(FRig.SkinMatrix)<=FHelmetHeadJ then FRig.ComputePose;
+    if Length(FRig.SkinMatrix)>FHelmetHeadJ then
+      ApplyHairFollow(FRig.SkinMatrix[FHelmetHeadJ],False);
+  end;
   if FHelmetNode = nil then Exit;
   BindQ := HelmetBindWithPitch;
   BindT := HelmetBindTAdj;
@@ -6773,6 +7139,8 @@ begin
   { S is the rigid pose delta D = W_posed * inv(W_bind_new). CPU follow uses
     SkinMatrix = D * gskRest. GPU must apply only the HeightK increment of
     gskRest so Mixamo armature scale already in BindT is not multiplied twice. }
+  for c:=0 to 3 do for r:=0 to 3 do M[c*4+r]:=S.Data[c,r];
+  ApplyHairFollow(M,True);
   if (FHelmetNode = nil) or (FHelmetHeadJ < 0) then Exit;
   BindT := FHelmetBindT;
   if (not FHelmetParented) and FHelmetRest0Ok and (FRig <> nil)
@@ -6797,6 +7165,11 @@ end;
 procedure TTripoRiderScene.ResetPose;
 var I: Integer;
 begin
+  FTorsoLeanDeg:=0;
+  for I:=0 to 4 do FSpineAngles[I]:=0;
+  if (FHair<>nil) and (FHelmetHeadJ>=0) then
+    ApplyHairFollow(Mat4Mul(FRig.BindWorld[FHelmetHeadJ],
+      FRig.NativeInvBind[FHelmetHeadJ]),False);
   for I := 0 to High(FJointNode) do
     if FJointNode[I] <> nil then
       FJointNode[I].FdRotation.Send(FRestRot[I]);
@@ -6807,8 +7180,9 @@ begin
       ApplyHelmetFollow
     else
     begin
-      FHelmetNode.FdTranslation.Send(HelmetBindTAdj);
-      FHelmetNode.FdRotation.Send(HelmetBindWithPitch.ToAxisAngle);
+      { Identity pose still contains the current body proportions. The saved
+        helmet bind alone is only correct for the native authoring stature. }
+      ApplyHelmetSkinMatrix(TMatrix4.Identity);
     end;
   end;
 end;
@@ -6906,33 +7280,19 @@ var
     With no baked marker, the joint itself is driven to the target (then rolled). }
   procedure SolveLimb(const Upper, Mid, EndJoint: string; LimbIdx: Integer;
     const TargetParent: TVector3; const Hint: TTripoVec3; EndPitch: Single;
-    ToeExtend: Boolean = False; RollDeg: Single = 0);
+    IsLeg: Boolean = False; RollDeg: Single = 0);
   const
-    cEaseFrom = 0.90;   { below this fraction of leg length the foot keeps its natural
-                          orientation and the cleat binds exactly; above it the foot
-                          progressively plantar-flexes (toe down) to hold the cleat on
-                          the pedal as the leg runs short }
-    cEaseTo   = 0.99;   { the eased knee extension asymptotes here, so the toe points
-                          ever further down while the knee nears but never locks straight }
-    cMaxExt   = 0.999;  { a leg straighter than this that STILL cannot reach detaches }
-    cPronVertDead = 0.65; { forearm-verticality (|dir.Y|) past which pronation starts
-                            fading toward the natural wrist; 1 = fully vertical plane }
     cMaxWristBendRad = 0.698132; { hard cap on the wrist-leveling bend = 40 degrees }
-    cGripStillEps = 1e-5;        { grip counts as stationary if it moved less than this (rig units) }
   var
-    bikePt, jt, jp, mk, dLoc, hip, ankleAim, vOff, dirP, mkB, resid: TTripoVec3;
-    bestJt: TTripoVec3;
-    aimBase: TTripoVec3;
-    dirH, axL: TTripoVec3;
-    poseQ, pitchQ, finalQ, qfix, footQ, qroll, qLevel: TTripoVec4;
+    bikePt, mk, dLoc, ankleAim, dirP, mkB, resid: TTripoVec3;
+    poseQ, pitchQ, qfix, footQ: TTripoVec4;
     ei, ui, mi, pass, cs: Integer;
-    L1, L2, legReach, ang, sw: Single;
-    bestMiss, missLen, reachLen: Single;
-    hs, hc, hang: Single;
-    effRoll, vert, ptv: Single;
+    ang, sw: Single;
+    missLen, reachLen: Single;
     armSt: Boolean;
-    reachTgt, rFrac, sgn, aCur, aLo, aHi, aMid, rr, rp, rm: Single;
-    aCross, closestR, aClosest, aUse: Single;
+    GripFrame: TRiderGripFrame;
+    GripTarget:TTripoVec4;
+    RequestedAim, NewAim: TTripoVec3;
 
     { Absolute orientation, independent of an old end-joint delta left by IK.
       ApplyWorldPitchByIndex replaces the delta; feeding it a relative correction
@@ -7041,6 +7401,7 @@ var
       FLimbJ[LimbIdx][0] := FRig.JointIndexByName(Upper);
       FLimbJ[LimbIdx][1] := FRig.JointIndexByName(Mid);
       FLimbJ[LimbIdx][2] := FRig.JointIndexByName(EndJoint);
+      if LimbIdx>=2 then RiderHandAxes(FRig,LimbIdx-2,FHandForward[LimbIdx-2],FHandPalm[LimbIdx-2]);
       FLimbValid[LimbIdx] := True;
     end;
     ui := FLimbJ[LimbIdx][0];
@@ -7084,129 +7445,19 @@ var
       switch instead toggles every frame as the shoulder bobs across the reach limit (two
       slightly different orientations -> clap in time with pedalling). Clamping the target
       is C0-continuous across the limit: the arm just extends to its max toward the bar and
-      holds. Arms only; legs keep the real target and let the ToeExtend cascade handle a
-      short leg. }
+      holds. Arms only; legs use their effective knee-to-cleat reach. }
     reachLen := 0;
     if (ui >= 0) and (mi >= 0) then
       reachLen := V3Len(V3Sub(FRig.JointBindPos(mi), FRig.JointBindPos(ui)))
                 + V3Len(V3Sub(FRig.JointBindPos(ei), FRig.JointBindPos(mi)));
-    aimBase := bikePt;
-    if armSt and (ui >= 0) and (reachLen > 1e-6) then
+    if IsLeg then
     begin
-      jp      := FRig.JointWorldPos(ui);                 { shoulder }
-      mk      := V3Sub(bikePt, jp);                      { shoulder -> grip }
-      missLen := V3Len(mk);
-      if missLen > reachLen * 0.999 then                 { clamp onto the reach sphere }
-        aimBase := V3Add(jp, V3Scale(mk, (reachLen * 0.999) / missLen));
-    end;
-
-    if ToeExtend then
-      FRig.AimLegContact(ui, mi, ei, bikePt, Hint, dLoc, pitchQ, footQ, ankleAim)
-    else
-    begin
-      jt := aimBase;                                  { first guess: aim the joint at the (clamped) target }
-      bestJt := jt; bestMiss := 1e30;
-      for pass := 0 to 3 do
-      begin
-        FRig.SolveTwoBone(ui, mi, ei, jt, Hint, armSt);
-        poseQ  := FRig.JointWorldRot(ei);
-        finalQ := QuatMul(pitchQ, poseQ);             { fold in the not-yet-applied roll }
-        jp := FRig.JointWorldPos(ei);
-        mk := V3Add(jp, QuatRotateV3(finalQ, dLoc));  { where the marker would land }
-        missLen := V3Len(V3Sub(mk, aimBase));
-        if missLen < bestMiss then begin bestMiss := missLen; bestJt := jt; end;
-        if missLen < 1e-5 then Break;
-        jt := V3Sub(jt, V3Sub(mk, aimBase));          { shift the aim to cancel the miss }
-      end;
-      { use the BEST aim, not the last (reachable targets converge to miss~0, unchanged there). }
-      FRig.SolveTwoBone(ui, mi, ei, bestJt, Hint, armSt);
-    end;
-
-    if ToeExtend then
-    begin
-      { -- FOOT-LEADING bind + toe-down reach cascade (legs only) -------------------
-        The foot is the master bone. While the leg reaches comfortably the natural
-        orientation is kept and the cleat binds EXACTLY (ankle = pedal - footQ*offset).
-
-        As the leg runs short the cleat STAYS on the pedal: the whole foot is rolled
-        toe-down about the PEDAL axle (world Z), which first removes the ankling flex
-        (heel up to the pedal, never below) and then plantar-flexes (toe down), each
-        step pulling the ankle toward the hip. The roll grows smoothly from cEaseFrom
-        and targets an eased extension that asymptotes to cEaseTo, so the toe points
-        progressively down while the knee approaches but never slams straight. If even
-        max toe-down cannot reach that eased target, a still-straightening leg takes
-        the max toe-down (cleat still on the pedal). Only when even a leg straighter
-        than cMaxExt cannot reach do we DETACH the foot from the pedal. }
-      { AimLegContact supplied a continuous foot orientation from the effective
-        knee->cleat segment, rather than selecting among ankle-aim iterations. }
-      vOff  := QuatRotateV3(footQ, dLoc);                 { world ankle->cleat (natural) }
-      ankleAim := V3Sub(bikePt, vOff);                    { natural ankle: cleat on pedal }
-
-      if (ui >= 0) and (mi >= 0) then
-      begin
-        L1 := V3Len(V3Sub(FRig.JointBindPos(mi), FRig.JointBindPos(ui)));
-        L2 := V3Len(V3Sub(FRig.JointBindPos(ei), FRig.JointBindPos(mi)));
-        legReach := L1 + L2;
-        hip := FRig.JointWorldPos(ui);                    { thigh root, fixed during the IK }
-        if legReach > 1e-6 then rFrac := V3Len(V3Sub(ankleAim, hip)) / legReach else rFrac := 0.0;
-
-        if rFrac > cEaseFrom then
-        begin
-          { eased target extension (asymptotes to cEaseTo as the pedal moves away) }
-          reachTgt := (cEaseFrom + (cEaseTo - cEaseFrom) *
-                       (1.0 - Exp(-(rFrac - cEaseFrom) / (cEaseTo - cEaseFrom)))) * legReach;
-
-          { toe-down sign = whichever small roll of the offset reduces |ankle - hip| }
-          rp := V3Len(V3Sub(V3Sub(bikePt, QuatRotateV3(QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z, 0.02), vOff)), hip));
-          rm := V3Len(V3Sub(V3Sub(bikePt, QuatRotateV3(QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z,-0.02), vOff)), hip));
-          if rm < rp then sgn := -1.0 else sgn := 1.0;
-
-          { sweep the toe-down roll: track the closest approach and the first angle
-            that brings the ankle to the eased target distance }
-          aCross := -1.0; closestR := 1e30; aClosest := 0.0; aCur := 0.0;
-          while aCur <= Pi + 1e-4 do
-          begin
-            rr := V3Len(V3Sub(V3Sub(bikePt, QuatRotateV3(QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z, sgn*aCur), vOff)), hip));
-            if rr < closestR then begin closestR := rr; aClosest := aCur; end;
-            if (aCross < 0.0) and (rr <= reachTgt) then aCross := aCur;
-            aCur := aCur + (Pi/180.0);                    { 1 deg steps }
-          end;
-
-          if aCross >= 0.0 then
-          begin
-            { eased target reachable by plantar-flex: refine the crossing }
-            aLo := aCross - (Pi/180.0); if aLo < 0.0 then aLo := 0.0;
-            aHi := aCross;
-            for pass := 0 to 24 do
-            begin
-              aMid := 0.5 * (aLo + aHi);
-              rr := V3Len(V3Sub(V3Sub(bikePt, QuatRotateV3(QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z, sgn*aMid), vOff)), hip));
-              if rr > reachTgt then aLo := aMid else aHi := aMid;
-            end;
-            aUse := 0.5 * (aLo + aHi);
-            qroll := QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z, sgn * aUse);
-            footQ := QuatMul(qroll, footQ);                       { plantar-flexed foot }
-            ankleAim := V3Sub(bikePt, QuatRotateV3(qroll, vOff)); { cleat still on the pedal }
-          end
-          else if closestR <= legReach * cMaxExt then
-          begin
-            { eased target out of reach, but a near-straight leg still reaches the max
-              toe-down ankle -> take max plantar-flex, cleat stays on the pedal }
-            qroll := QuatFromAxisAngle(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z, sgn * aClosest);
-            footQ := QuatMul(qroll, footQ);
-            ankleAim := V3Sub(bikePt, QuatRotateV3(qroll, vOff));
-          end
-          else
-          begin
-            { DETACH: even a straight leg at max toe-down cannot reach. Point the leg
-              at the pedal and aim the foot at it so the cleat gets as close as it can. }
-            dirP := V3Sub(bikePt, hip);
-            if V3Len(dirP) > 1e-6 then dirP := V3Norm(dirP);
-            if V3Len(vOff) > 1e-6 then footQ := QuatMul(QuatFromTo(V3Norm(vOff), dirP), footQ);
-            ankleAim := bikePt;                            { leg clamps straight toward pedal }
-          end;
-        end;
-      end;
+      { One continuous knee-to-cleat solve, shared with the GPU. The old
+        second toe-down search changed an already solved foot from 90% leg
+        extension onward (up to centimetres of knee displacement). It also
+        ran a 180-step angle sweep; the effective-contact solver already
+        handles reach continuously. Never apply a second reach model. }
+      FRig.AimLegContact(ui,mi,ei,bikePt,Hint,dLoc,pitchQ,footQ,ankleAim);
 
       { thigh+calf reach the ankle (dependent two-bone IK; foot delta stays identity),
         then restore the chosen foot orientation footQ (rotates about the ankle, so the
@@ -7225,142 +7476,31 @@ var
       Exit;
     end;
 
-    { arm: exact bind — place the hand bone so the palm contact lands ON the grip,
-      exactly as the legs do, with no dependence on the iteration converging. footQ
-      is the natural hand orientation the iteration just measured; pronation (RollDeg,
-      a roll about the forearm axis) is folded INTO footQ BEFORE landing, so the palm
-      stays on the grip AFTER the roll — mirroring how the foot folds its ankle-flex
-      into the aim. (Applying pronation after the solve, as the old Pronate did, swung
-      the palm marker off the grip because the marker sits off the forearm axis.) The
-      hand bone then goes to grip - footQ*offset, the arm re-solves (dependent), and
-      footQ is restored so the palm sits on the grip. Too-short arm => the solve clamps
-      and the palm lands as close to the grip as the arm can reach. }
-    footQ := QuatMul(pitchQ, FRig.JointWorldRot(ei));   { natural hand orientation }
-    if Abs(RollDeg) > 0.01 then
-    begin
-      if mi >= 0 then
-      begin
-        dirP := V3Sub(FRig.JointWorldPos(ei), FRig.JointWorldPos(mi));  { forearm axis }
-        if V3Len(dirP) > 1e-6 then
-        begin
-          dirP  := V3Norm(dirP);
-          { pronation guard: the nearer the forearm/hand axis is to vertical — i.e. the
-            hand lies in a vertical plane — the more the pronation roll is faded back to
-            the natural wrist. Rolling a vertically-planed hand about a near-vertical axis
-            twists the wrist past its natural range, so limit the angle there. }
-          vert := Abs(dirP.Y);                            { 0 = horizontal, 1 = vertical plane }
-          ptv  := (vert - cPronVertDead) / (1.0 - cPronVertDead);
-          if ptv < 0 then ptv := 0;
-          if ptv > 1 then ptv := 1;
-          effRoll := RollDeg * (1.0 - ptv);               { -> natural (0) as the plane goes vertical }
-          if Abs(effRoll) > 0.01 then
-          begin
-            qroll := QuatFromAxisAngle(dirP.X, dirP.Y, dirP.Z, effRoll * Pi / 180.0);
-            footQ := QuatMul(qroll, footQ);               { pronation folded in (world frame) }
-          end;
-        end;
-      end;
+    { Orient the palm against the actual grip surface. An arbitrary roll of
+      the bind hand can turn both palms upwards; a horizontal wrist is not a
+      grip frame. Solve position and orientation together, as in the shader. }
+    cs:=LimbIdx-2;
+    GripFrame:=FFrameGrip[cs];
+    GripFrame:=TransformGripFrame(GripFrame,FScene.InverseTransform);
+    GripTarget:=RiderGripTarget(FHandForward[cs],FHandPalm[cs],GripFrame);
+    ankleAim:=bikePt;
+    for pass:=0 to 7 do begin
+      RequestedAim:=ankleAim;
+      mk:=V3Sub(ankleAim,FRig.JointWorldPos(ui));missLen:=V3Len(mk);
+      if missLen>reachLen*0.999 then
+        ankleAim:=V3Add(FRig.JointWorldPos(ui),V3Scale(mk,reachLen*0.999/missLen));
+      FRig.SolveTwoBone(ui,mi,ei,ankleAim,Hint,armSt);
+      dirP:=V3Norm(V3Sub(FRig.JointWorldPos(ei),FRig.JointWorldPos(mi)));
+      poseQ:=QuatMul(FRig.JointWorldRot(mi),QuatMul(
+        QuatConj(Mat4ToQuat(FRig.BindWorld[mi])),Mat4ToQuat(FRig.BindWorld[ei])));
+      footQ:=RiderGripPoseOrientation(poseQ,GripTarget,dirP,FHandForward[cs],
+        GripFrame.Weight,RollDeg,FHandLevel,cs);
+      NewAim:=V3Sub(bikePt,QuatRotateV3(footQ,dLoc));
+      if V3Len(V3Sub(NewAim,RequestedAim))<1e-5 then Break;
+      if pass=0 then ankleAim:=NewAim
+      else ankleAim:=V3Add(ankleAim,V3Scale(V3Sub(NewAim,ankleAim),0.35));
     end;
-    { ── wrist leveling: pitch the hand so the continuation of the forearm lies
-      horizontal — the hand ends up parallel to the ground. It's folded into footQ
-      BEFORE the bind, so the hand pivots about the palm contact and stays on the grip.
-      FHandLevel scales 0 (keep the natural wrist) .. 1 (fully level). }
-    if FHandLevel > 1e-3 then
-    begin
-      if mi >= 0 then
-      begin
-        dirP := V3Sub(FRig.JointWorldPos(ei), FRig.JointWorldPos(mi));  { forearm axis (world) }
-        if V3Len(dirP) > 1e-6 then
-        begin
-          dirP := V3Norm(dirP);
-          dirH := V3(dirP.X, 0, dirP.Z);                { horizontal projection of the forearm axis }
-          if V3Len(dirH) > 1e-3 then
-          begin
-            dirH := V3Norm(dirH);
-            axL  := V3Cross(dirP, dirH);                { pitch axis (horizontal, ⟂ forearm) }
-            hs   := V3Len(axL);
-            if hs > 1e-6 then
-            begin
-              axL    := V3Scale(axL, 1.0 / hs);
-              hc     := V3Dot(dirP, dirH);
-              hang   := ArcTan2(hs, hc) * FHandLevel;   { angle forearm→horizontal, scaled }
-              if hang > cMaxWristBendRad then           { never bend the wrist past 40° }
-                hang := cMaxWristBendRad;
-              qLevel := QuatFromAxisAngle(axL.X, axL.Y, axL.Z, hang);
-              footQ  := QuatMul(qLevel, footQ);         { fold the level pitch into the hand orientation }
-            end;
-          end;
-        end;
-      end;
-    end;
-    { keep a hand planted on a still grip: recompute its orientation only when the
-      grip target moves (a position-change animation) or the wrist intent changes;
-      otherwise reuse the frozen orientation so the torso bob can't rotate the hand.
-      A free (waving) hand has a moving target, so it never freezes. }
-    cs := LimbIdx - 2;                                   { 0 = R_Hand, 1 = L_Hand }
-    if (cs = 0) or (cs = 1) then
-    begin
-      if FHandFreezeOk[cs]
-         and (V3Len(V3Sub(bikePt, FHandFreezePt[cs]))  < cGripStillEps)
-         and (Abs(RollDeg    - FHandFreezeRoll[cs])     < 0.01)
-         and (Abs(FHandLevel - FHandFreezeLevel[cs])    < 0.001) then
-        footQ := FHandFreezeQ[cs]                        { settled -> hold the frozen orientation }
-      else
-      begin                                              { grip/intent changed -> adopt + cache }
-        FHandFreezeQ[cs]     := footQ;
-        FHandFreezePt[cs]    := bikePt;
-        FHandFreezeRoll[cs]  := RollDeg;
-        FHandFreezeLevel[cs] := FHandLevel;
-        FHandFreezeOk[cs]    := True;
-      end;
-    end;
-    { Solve the wrist position and its allowed orientation together. Using a
-      frozen palm orientation for a single solve can push the wrist beyond arm
-      reach, lock the elbow straight and put the whole correction into the wrist.
-      Re-aim from the real grip after every orientation adjustment so available
-      reach is taken up by the elbow. Never clamp the grip itself here. }
-    finalQ := footQ;  { requested/frozen grip orientation }
-    for pass := 0 to 31 do
-    begin
-      ankleAim := V3Sub(bikePt, QuatRotateV3(footQ, dLoc));
-      if (ui >= 0) and (reachLen > 1e-6) then
-      begin
-        mk := V3Sub(ankleAim, FRig.JointWorldPos(ui));
-        missLen := V3Len(mk);
-        if missLen > reachLen * 0.999 then
-          ankleAim := V3Add(FRig.JointWorldPos(ui), V3Scale(mk, reachLen * 0.999 / missLen));
-      end;
-      FRig.SolveTwoBone(ui, mi, ei, ankleAim, Hint, armSt);
-      poseQ := LimitedHandOrientation(finalQ);
-      missLen := V3Len(V3Sub(QuatRotateV3(poseQ, dLoc), QuatRotateV3(footQ, dLoc)));
-      if missLen < 1e-5 then
-      begin
-        footQ := poseQ;
-        Break;
-      end;
-      { Near full arm extension a complete wrist correction overshoots: the
-        next IK pass alternates between a straight and a bent elbow. Relax the
-        orientation within THIS solve (no previous-frame smoothing or lag).
-        Shortest-arc normalized interpolation also handles q / -q equally. }
-      if footQ.X * poseQ.X + footQ.Y * poseQ.Y +
-         footQ.Z * poseQ.Z + footQ.W * poseQ.W < 0 then
-      begin
-        poseQ.X := -poseQ.X; poseQ.Y := -poseQ.Y;
-        poseQ.Z := -poseQ.Z; poseQ.W := -poseQ.W;
-      end;
-      footQ.X := 3 * footQ.X + poseQ.X;
-      footQ.Y := 3 * footQ.Y + poseQ.Y;
-      footQ.Z := 3 * footQ.Z + poseQ.Z;
-      footQ.W := 3 * footQ.W + poseQ.W;
-      footQ := QuatNormalize(footQ);
-    end;
-    { Preserve the anatomical cap even if the iteration budget is exhausted. }
-    footQ := LimitedHandOrientation(footQ);
     SetEndOrientation(footQ);
-    { land the RENDERED (skin-blended) palm on the grip, not just the rigid bone. Its damped
-      steps are clamped to the reach sphere inside (see PinBlendedContact), so out of reach
-      it slides the marker along the sphere toward the grip instead of swinging the maxed
-      arm around — stable and continuous across the reach limit. }
     PinBlendedContact(footQ);
   end;
 
@@ -7394,24 +7534,12 @@ begin
   SolveLimb('R_Thigh', 'R_Calf', 'R_Foot', 0, FootTargetR, legR, FFootPitchR, True);
   SolveLimb('L_Thigh', 'L_Calf', 'L_Foot', 1, FootTargetL, legL, FFootPitchL, True);
 
-  { round + twist the shoulders by swinging each clavicle about the vertical axis.
-    Round mirrors L/R (protraction); twist is the SAME sign on both, so it yaws the
-    whole shoulder line (one shoulder leads) — used during an asymmetric hand move.
-    Both are about the same axis, so the angles just add. Done BEFORE the arm IK so
-    the arms re-solve to the bars from the new shoulder positions. }
-  if (Abs(FShoulderRoundDeg) > 0.01) or (Abs(FShoulderTwistDeg) > 0.01) then
-  begin
-    FRig.ApplyWorldPitch('R_Clavicle', 0, 1, 0, ( FShoulderRoundDeg + FShoulderTwistDeg) * Pi / 180.0);
-    FRig.ApplyWorldPitch('L_Clavicle', 0, 1, 0, (-FShoulderRoundDeg + FShoulderTwistDeg) * Pi / 180.0);
-  end;
+  { Clavicles glide around the posed rib cage before the arm contacts solve. }
+  PoseShoulders;
 
-  { Pronation is a roll about EACH forearm's own axis. Pose files store opposite
-    numbers (R=-40, L=+40) expecting a shared world axis. The two forearm axes
-    already point opposite (out along each arm), so applying stored L as-is
-    cancelled the mirror: both wrists rolled the SAME world way (right looked
-    fine, left crooked). Apply -L so world rolls stay opposite. Right unchanged. }
-  SolveLimb('R_Upperarm', 'R_Forearm', 'R_Hand', 2, HandTargetR, armR, 0, False, FArmPronationDegR);
-  SolveLimb('L_Upperarm', 'L_Forearm', 'L_Hand', 3, HandTargetL, armL, 0, False, -FArmPronationDegL);
+  { The grip solver applies anatomical pronation symmetrically by side. }
+  SolveLimb('R_Upperarm','R_Forearm','R_Hand',2,HandTargetR,armR,0,False,FArmPronationDegR);
+  SolveLimb('L_Upperarm','L_Forearm','L_Hand',3,HandTargetL,armL,0,False,FArmPronationDegL);
   FRig.DistributeForearmTwist('R_');
   FRig.DistributeForearmTwist('L_');
   if FRig.JointIndexByName('L_IndexMetacarpal') >= 0 then
@@ -7427,6 +7555,7 @@ begin
   { push every joint we touched; untouched ones carry an identity delta (= bind) }
   PushDelta('Waist');      PushDelta('Spine');     PushDelta('Spine01');
   PushDelta('Spine02');    PushDelta('NeckTwist01');
+  PushDelta('NeckTwist02'); PushDelta('Head');
   PushDelta('R_Thigh');    PushDelta('R_Calf');    PushDelta('R_Foot');
   PushDelta('L_Thigh');    PushDelta('L_Calf');    PushDelta('L_Foot');
   PushDelta('R_Clavicle'); PushDelta('L_Clavicle');
@@ -7439,6 +7568,29 @@ begin
   { carry the optional rigid Helmet node with the posed head — it is not
     skinned, so without this it would hang in bind pose while the head moves }
   ApplyHelmetFollow;
+end;
+
+function RiderSpineChainDelta(const LeanAxis: TVector3;
+  const Pitch, Yaw, Roll: TSpineAngles; const Joints: array of Integer;
+  Index: Integer; ArticulatedNeck: Boolean): TTripoVec4;
+const Share: array[0..2] of Single = (0.55, 0.30, 0.15);
+var Q: TTripoVec4; LengthV, Angle, K: Single;
+begin
+  if Index<4 then Exit(RiderSpineJointDelta(LeanAxis,Pitch[Index],Yaw[Index],Roll[Index]));
+  ArticulatedNeck:=ArticulatedNeck and (Length(Joints)>=RiderSpineChainCount);
+  if ArticulatedNeck then
+    ArticulatedNeck:=(Joints[4]>=0) and (Joints[5]>=0) and (Joints[6]>=0);
+  if not ArticulatedNeck then begin
+    if Index=4 then Exit(RiderSpineJointDelta(LeanAxis,Pitch[4],Yaw[4],Roll[4]));
+    Exit(QuatFromAxisAngle(0,1,0,0));
+  end;
+  Q:=RiderSpineJointDelta(LeanAxis,Pitch[4],Yaw[4],Roll[4]);
+  { Quaternion powers preserve the composed gaze even with yaw/roll. The
+    shares are a rig fit, not a measurement of individual human vertebrae. }
+  LengthV:=Sqrt(Sqr(Q.X)+Sqr(Q.Y)+Sqr(Q.Z));
+  if LengthV<1e-7 then Exit(QuatFromAxisAngle(0,1,0,0));
+  Angle:=ArcTan2(LengthV,Q.W)*Share[Index-4]; K:=Sin(Angle)/LengthV;
+  Result.X:=Q.X*K;Result.Y:=Q.Y*K;Result.Z:=Q.Z*K;Result.W:=Cos(Angle);
 end;
 
 function TTripoRiderScene.GetSpineAngle(Index: Integer): Single;
@@ -7476,20 +7628,43 @@ begin
   if (Index >= 0) and (Index <= 4) then FSpineAngles[Index] := V;
 end;
 
-procedure TTripoRiderScene.PoseSpine;
-const
-  SP: array[0..4] of string = ('Waist', 'Spine', 'Spine01', 'Spine02', 'NeckTwist01');
-var I: Integer; Idx: array[0..4] of Integer; Ang: TSpineAngles;
+procedure TTripoRiderScene.PoseShoulders;
+const Names: array[0..1] of string = ('R_Clavicle','L_Clavicle');
+var Side,J,Parent: Integer; Chest,Delta: TTripoVec4;
 begin
-  for I := 0 to 4 do Idx[I] := FRig.JointIndexByName(SP[I]);
+  for Side:=0 to 1 do begin
+    J:=FRig.JointIndexByName(Names[Side]);
+    if J<0 then Continue;
+    Parent:=FRig.JointParent[J];
+    Chest:=QuatFromAxisAngle(0,1,0,0);
+    if Parent>=0 then Chest:=QuatMul(FRig.JointWorldRot(Parent),
+      QuatConj(Mat4ToQuat(FRig.BindWorld[Parent])));
+    Delta:=RiderScapulaDelta(FLeanAxis,FShoulderRoundDeg+FScapulaProtraction[Side],
+      FShoulderTwistDeg,FScapulaElevation[Side],Side);
+    FRig.ApplyWorldRotationByIndex(J,QuatMul(Chest,QuatMul(Delta,QuatConj(Chest))));
+  end;
+end;
+
+procedure TTripoRiderScene.PoseSpine;
+var I, Parent: Integer; Ang: TSpineAngles;
+  ParentDelta, Delta: TTripoVec4;
+begin
   if FSpineManual then
     for I := 0 to 4 do Ang[I] := FSpineAngles[I]
   else
-    SpineAutoLeanDeg(FTorsoLeanDeg, FSpineCurve, Idx, Ang);
-  for I := 0 to 4 do
-    if Idx[I] >= 0 then
-      FRig.ApplyWorldRotationByIndex(Idx[I],
-        RiderSpineDelta(FLeanAxis, Ang[I], FSpineYaw[I], FSpineRoll[I]));
+    SpineAutoLeanDeg(FTorsoLeanDeg, FSpineCurve, FSpineJoints, Ang);
+  for I := 0 to RiderSpineChainCount-1 do
+    if FSpineJoints[I] >= 0 then
+    begin
+      Parent := FRig.JointParent[FSpineJoints[I]];
+      ParentDelta := QuatFromAxisAngle(0,1,0,0);
+      if Parent >= 0 then ParentDelta := QuatMul(FRig.JointWorldRot(Parent),
+        QuatConj(Mat4ToQuat(FRig.BindWorld[Parent])));
+      Delta := RiderSpineChainDelta(FLeanAxis, Ang, FSpineYaw, FSpineRoll,
+        FSpineJoints,I,HasParametricBody);
+      FRig.ApplyWorldRotationByIndex(FSpineJoints[I],
+        QuatMul(ParentDelta,QuatMul(Delta,QuatConj(ParentDelta))));
+    end;
 end;
 
 function TTripoRiderScene.PelvisBindLocal: TVector3;
@@ -7543,10 +7718,13 @@ end;
 
 procedure TTripoRiderScene.ConfigureFileSpace;
 var
-  Lat: TVector3;
+  Lat: TVector3;I:Integer;
 begin
   ApplyBikeAlignedSpace;
   if (not FLoaded) or (FRig = nil) then Exit;
+  FillChar(FLimbValid,SizeOf(FLimbValid),0);
+  for I:=0 to RiderSpineChainCount-1 do
+    FSpineJoints[I]:=FRig.JointIndexByName(RiderSpineChainNames[I]);
   Lat := BindLateral;
   { Mixamo T/A-pose: arms along ±X so |L-R|.X > |L-R|.Z.
     Armature-baked +90° Y: that axis lands on ±Z → already bike-aligned. }
@@ -7651,7 +7829,6 @@ end;
 
 procedure TTripoRiderScene.AdaptPoseReach(var P: TRiderPose; const GripR, GripL: TVector3);
 const
-  SP: array[0..3] of string = ('Waist', 'Spine', 'Spine01', 'Spine02');
   ARM: array[0..1,0..2] of string = (('R_Upperarm','R_Forearm','R_Hand'),
                                     ('L_Upperarm','L_Forearm','L_Hand'));
 var
@@ -7660,14 +7837,14 @@ var
   Pivot: array[0..3] of TTripoVec3;
   Shoulder: array[0..1] of TTripoVec3;
   Axis, V, W, Mid, Tip, Target, Hinge: TTripoVec3;
-  Q: TTripoVec4;
+  Q, ParentDelta, LocalDelta: TTripoVec4;
   InRig: TVector3;
   Reach, A, B, C, Radius, ParallelV, ParallelW, Extra, Need: Single;
 begin
   if (FRig = nil) or not P.SpineManual then Exit;
   for J := 0 to 3 do
   begin
-    Idx := FRig.JointIndexByName(SP[J]);
+    Idx := FSpineJoints[J];
     Exists[J] := Idx >= 0;
     Pivot[J] := FRig.JointBindPos(Idx);
   end;
@@ -7678,20 +7855,25 @@ begin
   { Only five rigid points, not posing/skinning the rig. Arm/leg IK remains
     in GLSL. This small reach envelope prevents locked elbows on short arms
     or a long/low cockpit, without stretching limbs or moving the saddle. }
+  ParentDelta := QuatFromAxisAngle(0,1,0,0);
   for J := 0 to 3 do
     if Exists[J] then
     begin
-      Q := RiderSpineDelta(FLeanAxis, P.SpineAngles[J], P.SpineYaw[J], P.SpineRoll[J]);
+      LocalDelta := RiderSpineJointDelta(FLeanAxis, P.SpineAngles[J], P.SpineYaw[J], P.SpineRoll[J]);
+      Q := QuatMul(ParentDelta,QuatMul(LocalDelta,QuatConj(ParentDelta)));
       for K := J + 1 to 3 do
         if Exists[K] then Pivot[K] := V3Add(Pivot[J], QuatRotateV3(Q, V3Sub(Pivot[K], Pivot[J])));
       for Side := 0 to 1 do
         Shoulder[Side] := V3Add(Pivot[J], QuatRotateV3(Q, V3Sub(Shoulder[Side], Pivot[J])));
+      ParentDelta := QuatMul(ParentDelta,LocalDelta);
     end;
   Axis := V3(FLeanAxis.X, FLeanAxis.Y, FLeanAxis.Z);
   Extra := 0;
   for Side := 0 to 1 do
   begin
-    if ((Side = 0) and (P.HandPosR = 0)) or ((Side = 1) and (P.HandPosL = 0)) then Continue;
+    { Reach depends on the current endpoint, including a hand in flight.
+      Switching a destination to "free" must not instantly remove a hip
+      correction while the wrist is still at the same physical point. }
     UIdx := FRig.JointIndexByName(ARM[Side,0]);
     MIdx := FRig.JointIndexByName(ARM[Side,1]);
     EIdx := FRig.JointIndexByName(ARM[Side,2]);
@@ -7721,6 +7903,46 @@ begin
   ApplyFramePose(FPose);
 end;
 
+function TTripoRiderScene.SplitHipHinge(var P: TRiderPose): Single;
+begin
+  Result := 0;
+  if not HasParametricBody or not P.SpineManual or (FSpineJoints[0] < 0) then Exit;
+  { Pelvic anterior tilt accompanies lumbar flexion during cycling; the
+    entire lean must not crush the mesh at one waist joint. The bounded
+    artistic split is relative to this rig's upright rest pose, not a clinical
+    measurement: https://www.jssm.org/volume10/iss2/cap/jssm-10-355.pdf
+    Smooth endpoints also cover stop/start and interrupted pose transitions. }
+  Result := -18 * SmoothUnit((-P.SpineAngles[0] - 10) / 50);
+  P.SpineAngles[0] := P.SpineAngles[0] - Result;
+end;
+
+function TTripoRiderScene.MotionPose(const Base:TRiderPose;const Motion:TRiderMotionFrame):TRiderPose;
+var I,J:Integer;
+begin
+  Result:=Base;
+  if not Result.SpineManual then begin
+    SpineAutoLeanDeg(Result.TorsoLeanDeg,Result.SpineCurve,FSpineJoints,Result.SpineAngles);
+    Result.SpineManual:=True;
+  end;
+  for I:=0 to 4 do begin
+    { MEN/FEM omit the optional Spine slot. Transfer its small motion to the
+      next existing vertebral joint, preserving counter-rotation of the neck. }
+    J:=I;
+    while (J<4) and (FSpineJoints[J]<0) do Inc(J);
+    while (J>0) and (FSpineJoints[J]<0) do Dec(J);
+    if FSpineJoints[J]<0 then Continue;
+    Result.SpineAngles[J]:=Result.SpineAngles[J]+Motion.SpinePitch[I];
+    Result.SpineYaw[J]:=Result.SpineYaw[J]+Motion.SpineYaw[I];
+    Result.SpineRoll[J]:=Result.SpineRoll[J]+Motion.SpineRoll[I];
+  end;
+  Result.ShoulderRoundDeg:=Result.ShoulderRoundDeg+Motion.ShoulderRound;
+  for I:=0 to 1 do begin
+    Result.ScapulaProtraction[I]:=Result.ScapulaProtraction[I]+Motion.ScapulaProtraction[I];
+    Result.ScapulaElevation[I]:=Result.ScapulaElevation[I]+Motion.ScapulaElevation[I];
+  end;
+  if Result.AnkleFlex<=0.001 then Result.AnkleFlex:=Motion.AnkleDeg;
+end;
+
 procedure TTripoRiderScene.ApplyFramePose(const P: TRiderPose);
 var i: Integer;
 begin
@@ -7734,7 +7956,10 @@ begin
   FArmPronationDegR := P.ArmPronationR;
   FArmPronationDegL := P.ArmPronationL;
   FShoulderRoundDeg := P.ShoulderRoundDeg;
+  FScapulaProtraction := P.ScapulaProtraction;
+  FScapulaElevation := P.ScapulaElevation;
   FHandLevel        := P.HandLevel;
+  FFrameGrip[0] := P.HandFrameR; FFrameGrip[1] := P.HandFrameL;
   { OffsetX/Y/Z and AnkleFlex are consumed by the bike via CurrentPose. StanceHalf is a
     main calibration param now (TripoStanceHalf), not part of the pose. }
 end;
@@ -8205,6 +8430,21 @@ end;
 function TTripoRiderScene.FileClipDuration: Single;
 begin
   Result := FFileClipDur;
+end;
+
+function TTripoRiderScene.PedallingSupport(const SeatedSupport, BottomBracket, Offset: TVector3;
+  CrankRadius, ParentBikeLean, Standing: Single): TVector3;
+begin
+  Result := SeatedSupport;
+  if (Standing<=0) or (FStandingPedalReach<=0) then Exit;
+  { Catalogue standing offsets are relative to its historic +6 cm/+2.5 cm
+    stance. The nominal hip is now over the BB, at 94% effective leg reach
+    above the lowest pedal. Leave room for ankling and soft knees. }
+  Result := BottomBracket + Offset - Vector3(0.06,0.025,0);
+  Result.Y := Result.Y + 0.94 * FStandingPedalReach * Abs(FScene.Scale.Y) - CrankRadius;
+  RiderSupportInBikeFrame(Result.Y,Result.Z,1,ParentBikeLean);
+  Result := Result - FScene.Transform.MultDirection(FStandingHipFromSeat);
+  Result := SeatedSupport + (Result-SeatedSupport)*EnsureRange(Standing,0.0,1.0);
 end;
 
 function TTripoRiderScene.LegReach: Single;

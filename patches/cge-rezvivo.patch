@@ -56,7 +56,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
    end;
  
    TGLSLProgramList = {$ifdef FPC}specialize{$endif} TObjectList<TGLSLProgram>;
-@@ -659,10 +672,252 @@
+@@ -659,10 +672,257 @@
      @exclude }
    InternalUpgradeGlslVersion: Boolean = true;
  
@@ -155,14 +155,17 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
 +  end;
 +
 +function ProgramBinaryFile(const Key: String): String;
-+var Driver: String;
++var Driver, Directory: String;
 +begin
 +  Driver := String(PAnsiChar(glGetString(GL_VENDOR))) + #0 +
 +    String(PAnsiChar(glGetString(GL_RENDERER))) + #0 +
 +    String(PAnsiChar(glGetString(GL_VERSION))) + #0 +
 +    String(PAnsiChar(glGetString(GL_SHADING_LANGUAGE_VERSION)));
-+  Result := IncludeTrailingPathDelimiter(GetAppConfigDir(False)) + 'shader-cache' +
-+    PathDelim + MD5Print(MD5String(Driver + #0 + Key)) + '.gpb';
++  Directory := GetEnvironmentVariable('REZVIVO_TEST_SHADER_CACHE_DIR');
++  if Directory = '' then
++    Directory := IncludeTrailingPathDelimiter(GetAppConfigDir(False)) + 'shader-cache';
++  Result := IncludeTrailingPathDelimiter(Directory) +
++    MD5Print(MD5String(Driver + #0 + Key)) + '.gpb';
 +end;
 +
 +function ProgramBinarySupported: Boolean;
@@ -283,6 +286,8 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
 +  TempName := '';
 +  try
 +    glGetProgramiv(ProgramId, GL_PROGRAM_BINARY_LENGTH, @Size);
++    if GetEnvironmentVariable('REZVIVO_SHADER_DIAGNOSTICS') = '1' then
++      WritelnLog('ShaderBinaryProbe', 'bytes=%d name="%s"', [Size, Name]);
 +    if (Size <= 0) or (Size > 32 * 1024 * 1024) then Exit;
 +    SetLength(Data, Size);
 +    glGetProgramBinary(ProgramId, Size, @Actual, @H.BinaryFormat, @Data[0]);
@@ -310,7 +315,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
  { Wrapper around glGetShaderInfoLog. }
  function GetShaderInfoLog(const ShaderId: TGLShader): String;
-@@ -1355,6 +1610,7 @@
+@@ -1355,6 +1615,7 @@
    FreeAndNil(FUniformLocations);
    FreeAndNil(FAttributeLocations);
    FreeAndNil(FUniformReportedMissing);
@@ -318,7 +323,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
    inherited;
  end;
-@@ -1633,6 +1889,10 @@
+@@ -1633,6 +1894,10 @@
      CompiledInt: TGLint;
      {$endif not CASTLE_WEBGL}
      Compiled: Boolean;
@@ -329,7 +334,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
    begin
      Result := glCreateShader(AType);
  
-@@ -1654,6 +1914,12 @@
+@@ -1654,6 +1919,12 @@
      glShaderSource(Result, 1, @SrcPtr, @SrcLength);
      {$endif}
  
@@ -342,7 +347,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      try
        glCompileShader(Result);
      except
-@@ -1665,6 +1931,14 @@
+@@ -1665,6 +1936,14 @@
      {$else}
      glGetShaderiv(Result, GL_COMPILE_STATUS, @CompiledInt);
      Compiled := CompiledInt = Ord(GL_TRUE);
@@ -357,7 +362,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      {$endif}
  
      { Although we generally avoid creating multiline exception messages,
-@@ -1675,81 +1949,6 @@
+@@ -1675,81 +1954,6 @@
        ReportCompileError(GetShaderInfoLog(Result));
    end;
  
@@ -439,7 +444,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
    { Does shader code Text has a line starting with LinePrefix. }
    function HasLine(const LinePrefix: String; const Text: String): Boolean;
-@@ -2019,9 +2218,22 @@
+@@ -2019,9 +2223,22 @@
    LinkedInt: TGLuint;
    {$endif}
    Linked: Boolean;
@@ -465,7 +470,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      { Produce clear error messages, without waiting for OpenGL errors,
        if required shaders are not attached. }
      if not HasStage[stVertex] then
-@@ -2029,6 +2241,15 @@
+@@ -2029,6 +2246,15 @@
      if FragmentShaderRequired and (not HasStage[stFragment]) then
        raise EGLSLProgramLinkError.Create('Fragment shader not attached');
  
@@ -481,7 +486,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      glLinkProgram(ProgramId);
  
      {$ifdef CASTLE_WEBGL}
-@@ -2036,6 +2257,14 @@
+@@ -2036,6 +2262,14 @@
      {$else}
      glGetProgramiv(ProgramId, GL_LINK_STATUS, @LinkedInt);
      Linked := LinkedInt = Ord(GL_TRUE);
@@ -496,7 +501,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      {$endif}
  
      if not Linked then
-@@ -2340,6 +2569,19 @@
+@@ -2340,6 +2574,19 @@
    SetUniform(AName, Value, UniformMissing);
  end;
  
@@ -516,6 +521,52 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  function TGLSLProgram.AttributeOptional(const AName: string): TGLSLAttribute;
  begin
    Result.Owner := Self;
+diff --git a/src/base_rendering/castlerendercontext.pas b/src/base_rendering/castlerendercontext.pas
+--- a/src/base_rendering/castlerendercontext.pas
++++ b/src/base_rendering/castlerendercontext.pas
+@@ -115,6 +115,7 @@
+       FDepthRange: TDepthRange;
+       FCullFace, FFrontFaceCcw: boolean;
+       FDepthTest: Boolean;
++      FSampleAlphaToCoverage: Boolean;
+       FDepthFunc: TDepthFunction;
+       FColorChannels: TColorChannels;
+       FDepthBufferUpdate: Boolean;
+@@ -142,6 +143,7 @@
+     procedure SetCullFace(const Value: boolean);
+     procedure SetFrontFaceCcw(const Value: boolean);
+     procedure SetDepthTest(const Value: Boolean);
++    procedure SetSampleAlphaToCoverage(const Value: Boolean);
+     procedure SetDepthFunc(const Value: TDepthFunction);
+     function GetColorMask: boolean;
+     procedure SetColorMask(const Value: boolean);
+@@ -231,6 +233,10 @@
+ 
+     { Depth testing means we reject things that don't pass @link(DepthFunc). }
+     property DepthTest: Boolean read FDepthTest write SetDepthTest default false;
++    { Use this state cache instead of querying GL per alpha-masked shape.
++      A glIsEnabled query can drain the driver's threaded command queue. }
++    property SampleAlphaToCoverage: Boolean read FSampleAlphaToCoverage
++      write SetSampleAlphaToCoverage default false;
+ 
+     { Function to use when comparing depth, only if @link(DepthTest). }
+     property DepthFunc: TDepthFunction read FDepthFunc write SetDepthFunc default dfLess;
+@@ -612,6 +618,15 @@
+   end;
+ end;
+ 
++procedure TRenderContext.SetSampleAlphaToCoverage(const Value: Boolean);
++begin
++  if FSampleAlphaToCoverage <> Value then
++  begin
++    FSampleAlphaToCoverage := Value;
++    GLSetEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE, Value);
++  end;
++end;
++
+ procedure TRenderContext.SetDepthFunc(const Value: TDepthFunction);
+ begin
+   if Self <> RenderContext then
 diff --git a/src/files/castledownload.pas b/src/files/castledownload.pas
 --- a/src/files/castledownload.pas
 +++ b/src/files/castledownload.pas
@@ -1241,7 +1292,37 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
  end;
  
  function TRenderer.BumpMapping(const RenderOptions: TCastleRenderOptions): TBumpMapping;
-@@ -1553,6 +1560,22 @@
+@@ -687,6 +694,7 @@
+ 
+ var
+   Shader: TShader;
++  UseCoverage, RestoreCoverage: Boolean;
+ begin
+   InitializeFromRenderOptions;
+ 
+@@ -695,7 +703,20 @@
+   Shader := InitializeShader;
+   FixedFunctionBegin(Shader.SceneModelView);
+ 
+-  RenderShapeLineProperties(Shape, RenderOptions, Shader);
++  UseCoverage := (Shape.State.Appearance <> nil) and
++    Shape.State.Appearance.AlphaToCoverage;
++  RestoreCoverage := false;
++  if UseCoverage then
++  begin
++    RestoreCoverage := RenderContext.SampleAlphaToCoverage;
++    RenderContext.SampleAlphaToCoverage := true;
++  end;
++  try
++    RenderShapeLineProperties(Shape, RenderOptions, Shader);
++  finally
++    if UseCoverage then
++      RenderContext.SampleAlphaToCoverage := RestoreCoverage;
++  end;
+ 
+   FixedFunctionEnd;
+ end;
+@@ -1553,6 +1574,22 @@
    const GeneratorClass: TArraysGeneratorClass;
    const ExposedMeshRenderer: TObject);
  
@@ -1264,7 +1345,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
    procedure SetupShadowMapsGenerationShaders(const MeshRenderer: TMeshRenderer);
    begin
      case RenderingCamera.Target of
-@@ -1571,21 +1594,18 @@
+@@ -1571,21 +1608,18 @@
          end;
        rtShadowMap:
          begin
@@ -1297,7 +1378,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
            ) then
            begin
              if ShadowMapsShaders = nil then
-@@ -1605,6 +1625,8 @@
+@@ -1605,6 +1639,8 @@
  var
    Generator: TArraysGenerator;
    CoordinateRenderer: TBaseCoordinateRenderer;
@@ -1306,7 +1387,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
  begin
    { No point preparing VBO for clones, clones will need own VBOs anyway. }
    if RenderMode = rmPrepareRenderClones then
-@@ -1621,11 +1643,16 @@
+@@ -1621,11 +1657,16 @@
        Shape.Cache := RendererCache.Shape_IncReference(Shape, RenderOptions);
  
      { calculate Shape.Cache.Arrays }
@@ -1325,7 +1406,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
          FreeAndNil(Shape.Cache.Arrays); // we just need to create new Arrays
          Generator := GeneratorClass.Create(Shape);
          try
-@@ -1637,10 +1664,25 @@
+@@ -1637,10 +1678,25 @@
            Generator.ShapeBumpMappingTextureCoordinatesId := Shape.BumpMappingTextureCoordinatesId;
            Shape.Cache.Arrays := Generator.GenerateArrays;
          finally FreeAndNil(Generator) end;
@@ -1351,7 +1432,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
        end;
      end;
  
-@@ -1733,14 +1775,17 @@
+@@ -1733,14 +1789,17 @@
      for I := 0 to Length(Digits) - 1 do
      begin
        Result := Result + Digits[I] * Multiplier;
@@ -1999,20 +2080,21 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
        if Contents <> '' then
        begin
          Plug(Part.ShaderType, Contents, Code, ForwardDeclareInFinalShader);
-@@ -2119,6 +2145,12 @@
+@@ -2119,6 +2145,13 @@
  
  var
    ShaderType: TShaderType;
-+  CacheKey: String;
++  CacheKey, ProbePath: String;
 +  LoadedBinary: Boolean;
 +  PrepareTick, PrepareMs: QWord;
++  SurfacePart: Integer;
 +  {$if defined(FPC) and not defined(OpenGLES)}
 +  CachePart: Integer;
 +  {$endif}
  begin
    EnableLightingModel; // do this early, as later EnableLights may assume it's done
    ShadowMapShaders.GenerateCode(Self);
-@@ -2175,21 +2207,80 @@
+@@ -2175,21 +2208,103 @@
        end;
    end;
  
@@ -2023,6 +2105,18 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
 +      Define('CASTLE_CACHE_DEFORMATION_TANGENTS', stVertex, true);
 +    AProgram.CachedDeformation := True;
 +  end;
++
++  { Rider surface morphs also participate in the procedural depth skin.
++    Effects use separate GLSL compilation units. Publish their capability to
++    all vertex parts only for materials that actually supply the attribute. }
++  for SurfacePart := 0 to Source[stVertex].Count - 1 do
++    if Pos('#define RIDER_SURFACE_MOTION', Source[stVertex][SurfacePart]) <> 0 then
++    begin
++      Define('RIDER_SURFACE_MOTION', stVertex, true);
++      if FSkinShader.Enabled then
++        Define('RIDER_SURFACE_NATIVE_SKIN', stVertex, true);
++      Break;
++    end;
 +
 +  if FDepthOnly then
 +  begin
@@ -2070,6 +2164,17 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
 +    end;
 +    {$endif}
 +    LoadedBinary := AProgram.TryLoadBinaryCache(CacheKey);
++    {$if defined(FPC) and not defined(OpenGLES)}
++    ProbePath := GetEnvironmentVariable('REZVIVO_SHADER_DUMP');
++    if (ProbePath <> '') and ForceDirectories(ProbePath) then
++    begin
++      ProbePath := IncludeTrailingPathDelimiter(ProbePath) + MD5Print(MD5String(CacheKey));
++      for ShaderType := Low(ShaderType) to High(ShaderType) do
++        Source[ShaderType].SaveToFile(ProbePath + '.' + IntToStr(Ord(ShaderType)) + '.glsl');
++      WritelnLog('ShaderKeyProbe', 'key=%s binary=%s name="%s"',
++        [ExtractFileName(ProbePath), BoolToStr(LoadedBinary, True), AProgram.Name]);
++    end;
++    {$endif}
 +    if not LoadedBinary then
 +    begin
 +      for ShaderType := Low(ShaderType) to High(ShaderType) do
@@ -2099,7 +2204,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  
      {$ifdef CASTLE_CANNOT_CATCH_EXCEPTIONS}
      if AProgram.ErrorOnCompileLink then Exit;
-@@ -2216,7 +2307,12 @@
+@@ -2216,7 +2331,12 @@
    AProgram.UniformMissing := umIgnore;
  
    { set uniforms that will not need to be updated at each SetupUniforms call }
@@ -2112,7 +2217,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  end;
  
  procedure TShader.LinkFallbackProgram(AProgram: TX3DShaderProgram);
-@@ -2239,6 +2335,12 @@
+@@ -2239,6 +2359,12 @@
      lifetime. }
    procedure CodeHashFinalize;
    begin
@@ -2125,7 +2230,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
      FCodeHash.AddInteger(Ord(ShadowSampling) * 1009);
      FCodeHash.AddInteger(Ord(LightingModel) * 503);
      FCodeHash.AddInteger(Ord(ColorSpaceLinear) * 347);
-@@ -2872,7 +2974,7 @@
+@@ -2872,7 +2998,7 @@
  function TShader.NeedsNormals: Boolean;
  begin
    // optimize lmUnlit: no need for normals data
@@ -2137,15 +2242,29 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
 diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
 --- a/src/scene/castlescene.pas
 +++ b/src/scene/castlescene.pas
-@@ -147,6 +147,7 @@
+@@ -54,6 +54,11 @@
+ 
+   TBeforeShapeRenderProc = procedure (Shape: TShape) of object;
+ 
++  { Optional render-only selection, evaluated with the actual view/shadow pass.
++    It must not mutate the scene graph or advance animation. }
++  TRenderShapeFilter = function (const Shape: TAbstractShapeNode;
++    const Params: TRenderParams): Boolean of object;
++
+   TRenderingAttributesEvent = TCastleRenderOptionsEvent deprecated 'use TCastleRenderOptionsEvent';
+   TSceneRenderingAttributes = TCastleRenderOptions deprecated 'use TCastleRenderOptions';
+ 
+@@ -147,7 +152,9 @@
        FDistanceCulling: Single;
  
        FReceiveShadowVolumes: Boolean;
 +      FShadowCatcher: Boolean;
        FTempPrepareParams: TPrepareParams;
++      FOnRenderShapeFilter: TRenderShapeFilter;
  
        { Camera position, in local scene coordinates, known during
-@@ -167,6 +168,7 @@
+         the LocalRender or LocalRenderShadowVolume calls. }
+@@ -167,6 +174,7 @@
        FrustumForShapeCulling: PFrustum;
  
        FShapeFrustumCulling, FSceneFrustumCulling: Boolean;
@@ -2153,7 +2272,17 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
        FRenderOptions: TCastleRenderOptions;
        FTransformOptimization: TTransformOptimization;
  
-@@ -572,9 +574,25 @@
+@@ -548,6 +556,9 @@
+       See https://castle-engine.io/shaders for documentation
+       how shader effects work in Castle Game Engine. }
+     procedure SetEffects(const Value: array of TEffectNode);
++
++    property OnRenderShapeFilter: TRenderShapeFilter
++      read FOnRenderShapeFilter write FOnRenderShapeFilter;
+   published
+     { Improve performance of rendering by checking for each shape whether
+       it is inside frustum (camera pyramid of view) before rendering.
+@@ -572,9 +583,25 @@
      property SceneFrustumCulling: Boolean
        read FSceneFrustumCulling write FSceneFrustumCulling default true;
  
@@ -2179,7 +2308,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
  
      { Cull shapes farther than this distance. Ignored if <= 0. }
      property DistanceCulling: Single
-@@ -767,8 +785,10 @@
+@@ -767,8 +794,10 @@
  
    FSceneFrustumCulling := true;
    FShapeFrustumCulling := true;
@@ -2190,7 +2319,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
  
    FilteredShapes := TShapeList.Create;
    FTempPrepareParams := TPrepareParams.Create;
-@@ -929,7 +949,7 @@
+@@ -929,12 +958,14 @@
  
    Render_Collector.Add(Shape, EffectiveRenderOptions,
      Render_Params.Transformation^.Transform, SceneTransformDynamic,
@@ -2199,7 +2328,14 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
    IsVisibleNow := true;
  end;
  
-@@ -1023,10 +1043,19 @@
+ procedure TCastleScene.CollectShape_SomeTests(const Shape: TGLShape);
+ begin
++  if Assigned(FOnRenderShapeFilter) and
++     not FOnRenderShapeFilter(Shape.Node, Render_Params) then Exit;
+   if (Shape <> AvoidShapeRendering) and
+      ( (not AvoidNonShadowCasterRendering) or Shape.ShadowCaster) and
+      ( { implement TAbstractShapeNode.Visible here, by a trivial check }
+@@ -1023,10 +1054,19 @@
    var
      ShapeList: TShapeList;
      Shape: TShape;
@@ -2219,7 +2355,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
    end;
  
    procedure PrepareRenderShapes;
-@@ -1036,6 +1065,7 @@
+@@ -1036,6 +1076,7 @@
      ReceivedGlobalLights: TLightInstancesList;
      DummyCamera: TRenderingCamera;
      DummyStatistics: TRenderStatistics;
@@ -2227,7 +2363,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
    begin
      if LogRenderer then
        WritelnLog('Renderer', 'Preparing rendering of all shapes');
-@@ -1076,6 +1106,7 @@
+@@ -1076,6 +1117,7 @@
  
        for Shape in ShapeList do
        begin
@@ -2235,7 +2371,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
          TGLShape(Shape).Fog := ShapeFog(Shape, Params.GlobalFog as TFogNode);
          Renderer.RenderShape(TGLShape(Shape), RenderOptions,
            { Pass sensible SceneTransform parameter below,
-@@ -1085,6 +1116,10 @@
+@@ -1085,6 +1127,10 @@
              (so identity is OK, zero is not OK). }
            TMatrix4.Identity,
            false, drFull);
@@ -2246,7 +2382,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
        end;
  
        Renderer.RenderEnd;
-@@ -1097,6 +1132,7 @@
+@@ -1097,6 +1143,7 @@
    I: Integer;
    PossiblyTimeConsuming: Boolean;
    TimeStart: TCastleProfilerTime;
@@ -2254,7 +2390,17 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
  begin
    inherited;
  
-@@ -1140,7 +1176,12 @@
+@@ -1126,7 +1173,8 @@
+ 
+   Inc(InternalDirty);
+   try
+-    PossiblyTimeConsuming := (not PreparedShapesResources) or (not PreparedRender);
++    PossiblyTimeConsuming := (not PreparedShapesResources) or
++      (([prRenderSelf, prRenderClones] * Options <> []) and not PreparedRender);
+ 
+     if PossiblyTimeConsuming then
+       TimeStart := Profiler.Start('Prepare Scene Resources ' + URL);
+@@ -1140,7 +1188,12 @@
        { Use PreparedShapesResources to avoid expensive (for large scenes)
          iteration over all shapes in every TCastleScene.PrepareResources call. }
        PreparedShapesResources := true;
@@ -2267,7 +2413,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
      end;
  
      if ([prRenderSelf, prRenderClones] * Options <> []) and not PreparedRender then
-@@ -1148,7 +1189,12 @@
+@@ -1148,7 +1201,12 @@
        { We use PreparedRender to avoid potentially expensive iteration
          over shapes and expensive Renderer.RenderBegin/End. }
        PreparedRender := true;
@@ -2280,7 +2426,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
      end;
  
      if prBackground in Options then
-@@ -1179,6 +1225,7 @@
+@@ -1179,6 +1237,7 @@
    procedure RenderWithShadowMaps;
    var
      SavedMode: TRenderingMode;
@@ -2288,7 +2434,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
    begin
      { For shadow maps, speed up rendering by using only features that affect
        depth output.  }
-@@ -1190,9 +1237,16 @@
+@@ -1190,9 +1249,16 @@
        SavedMode := RenderOptions.Mode;
        RenderOptions.Mode := rmDepth;
  
@@ -2308,7 +2454,41 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
      end else
      begin
        RenderNormal;
-@@ -1582,6 +1636,9 @@
+@@ -1206,26 +1272,18 @@
+   if CheckVisible and
+      (InternalDirty = 0) then
+   begin
+-    { I used to make here more complex "prepare" mechanism, that was trying
+-      to prepare for particular shapes only right before they are rendered
+-      (so instead of calling PrepareResources below, I was calling PrepareShape
+-      at the beginning of each RenderShape and such).
+-
+-      After a while, it turns out this was a useless complication of code
+-      logic. There are many things that *have* to be prepared before whole
+-      rendering, for example
+-      - Occlusion query id must be generated (as we may start occlusion query
+-        before actually rendering the shape).
+-
+-      It's much simpler to just call PrepareResources at the beginning.
+-      The PrepareResources is already optimized to do nothing,
+-      if everything is ready. }
++    { Prepare textures before collecting shapes. Let the actual render pass
++      create VBOs and programs with its real camera, lights and depth mode.
++      Automatic prRenderSelf used a dummy camera and compiled every hidden
++      Switch/LOD choice, then linked additional variants in the real pass.
++      Explicit PrepareResources([prRenderSelf]) remains available for callers
++      that deliberately request full preloading. }
+     FTempPrepareParams.GlobalLights := Params.GlobalLights;
+     FTempPrepareParams.GlobalFog := Params.GlobalFog;
+     Assert(Params.RendererToPrepareShapes <> nil);
+     FTempPrepareParams.RendererToPrepareShapes := Params.RendererToPrepareShapes;
+     {$warnings off} // calling deprecated, but for internal purpose -- do not warn
+-    PrepareResources([prRenderSelf], FTempPrepareParams);
++    PrepareResources([], FTempPrepareParams);
+     {$warnings on}
+ 
+     RenderWithShadowMaps;
+@@ -1582,6 +1640,9 @@
      procedure UpdateGeneratedShadowMap(TexNode: TGeneratedShadowMapNode);
      var
        TextureRes: TGeneratedShadowMapResource;
@@ -2318,7 +2498,7 @@ diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
      begin
        if TexNode.GenTexFunctionality.NeedsUpdate then
        begin
-@@ -1590,8 +1647,16 @@
+@@ -1590,8 +1651,16 @@
            TextureRes := TGeneratedShadowMapResource(TTextureResources.Get(TexNode));
            if TextureRes <> nil then
            begin
@@ -2784,6 +2964,18 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  
    { calculate FRenderParams.GlobalFog }
    if Fog <> nil then
+@@ -3711,7 +3779,10 @@
+       So display it by default. }
+     TimeStart := Profiler.Start(Format('TCastleViewport(%s).PrepareResources', [Name]));
+     try
+-      PrepareResources;
++      { Prepare the resources needed before collecting shapes, but compile
++        programs in the actual pass. Full dummy-camera preparation links
++        unused light variants and all hidden Switch/LOD alternatives. }
++      PrepareResources(DefaultPrepareOptions - [prRenderSelf, prRenderClones]);
+     finally Profiler.Stop(TimeStart, true, true) end;
+     PrepareResourcesDone := true;
+   end;
 diff --git a/src/scene/backup/castleinternalrenderer_texture_20260727_130654.inc b/src/scene/backup/castleinternalrenderer_texture_20260727_130654.inc
 new file mode 100644
 --- /dev/null
@@ -7751,6 +7943,51 @@ new file mode 100644
 +  RegisterSerializableComponent(TCastleEnvironmentLight, ['Light', 'Environment']);
 +  {$endif}
 +end.
+diff --git a/src/scene/glsl/generated-pascal/lighting_model_physical_add_light.glsl.inc b/src/scene/glsl/generated-pascal/lighting_model_physical_add_light.glsl.inc
+--- a/src/scene/glsl/generated-pascal/lighting_model_physical_add_light.glsl.inc
++++ b/src/scene/glsl/generated-pascal/lighting_model_physical_add_light.glsl.inc
+@@ -145,6 +145,7 @@
+ '     IOW, "normalize(- vertex_eye)" because camera position is zero in eye-space.' + LineEnding +
+ '  */' + LineEnding +
+ '  AngularInfo angularInfo = getAngularInfo(light_dir, normal_eye, view);' + LineEnding +
++'  vec3 light_contribution = vec3(0.0);' + LineEnding +
+ '' + LineEnding +
+ '  if (angularInfo.NdotL > 0.0 || angularInfo.NdotV > 0.0)' + LineEnding +
+ '  {' + LineEnding +
+@@ -157,17 +158,31 @@
+ '    vec3 diffuseContrib = (1.0 - F) * diffuse(material_info);' + LineEnding +
+ '    vec3 specContrib = F * Vis * D;' + LineEnding +
+ '' + LineEnding +
++'#ifdef LIGHT<Light>_TYPE_PUNCTUAL' + LineEnding +
++'    /* PLUG: physical_light_surface (diffuseContrib, specContrib, light_dir, normal_eye, view) */' + LineEnding +
++'#endif' + LineEnding +
++'' + LineEnding +
+ '#ifdef LIGHT<Light>_TYPE_ENVIRONMENT' + LineEnding +
+ '  diffuseContrib *= textureCube(diffuseTexture, light_dir).rgb;' + LineEnding +
+ '  specContrib *= textureCube(specularTexture, light_dir).rgb;' + LineEnding +
+ '#endif' + LineEnding +
+ '' + LineEnding +
+ '    // Obtain final intensity as reflectance (BRDF) scaled by the energy of the light (cosine law)' + LineEnding +
+-'    vec3 light_contribution = angularInfo.NdotL * (diffuseContrib + specContrib);' + LineEnding +
++'    light_contribution = angularInfo.NdotL * (diffuseContrib + specContrib);' + LineEnding +
++'  }' + LineEnding +
++'' + LineEnding +
++'#ifdef LIGHT<Light>_TYPE_PUNCTUAL' + LineEnding +
++'  /* PLUG: physical_light_contribution (light_contribution, light_dir, normal_eye, view) */' + LineEnding +
++'#endif' + LineEnding +
++'' + LineEnding +
++'#ifdef LIGHT<Light>_TYPE_ENVIRONMENT' + LineEnding +
++'  /* Environment shaders integrate the hemisphere, rather than treating N as' + LineEnding +
++'     a punctual source. Keep this optional for existing CGE materials. */' + LineEnding +
++'  /* PLUG: physical_environment (light_contribution, normal_eye, view, material_info.diffuseColor, material_info.reflectance0, material_info.perceptualRoughness) */' + LineEnding +
++'#endif' + LineEnding +
+ '' + LineEnding +
+ '    color.rgb += castle_LightSource<Light>Color *' + LineEnding +
+ '      light_contribution *' + LineEnding +
+ '      scale;' + LineEnding +
+-'  }' + LineEnding +
+ '}' + LineEnding +
+ ''
 diff --git a/src/scene/glsl/generated-pascal/main_shading_gouraud.vs.inc b/src/scene/glsl/generated-pascal/main_shading_gouraud.vs.inc
 --- a/src/scene/glsl/generated-pascal/main_shading_gouraud.vs.inc
 +++ b/src/scene/glsl/generated-pascal/main_shading_gouraud.vs.inc
@@ -7973,6 +8210,50 @@ diff --git a/src/scene/glsl/source/main_shading_phong.vs b/src/scene/glsl/source
  
    castle_vertex_eye = castle_ModelViewMatrix * vertex_object;
  
+diff --git a/src/scene/glsl/source/lighting_model_physical/add_light.glsl b/src/scene/glsl/source/lighting_model_physical/add_light.glsl
+--- a/src/scene/glsl/source/lighting_model_physical/add_light.glsl
++++ b/src/scene/glsl/source/lighting_model_physical/add_light.glsl
+@@ -143,6 +143,7 @@
+      IOW, "normalize(- vertex_eye)" because camera position is zero in eye-space.
+   */
+   AngularInfo angularInfo = getAngularInfo(light_dir, normal_eye, view);
++  vec3 light_contribution = vec3(0.0);
+ 
+   if (angularInfo.NdotL > 0.0 || angularInfo.NdotV > 0.0)
+   {
+@@ -155,16 +156,30 @@
+     vec3 diffuseContrib = (1.0 - F) * diffuse(material_info);
+     vec3 specContrib = F * Vis * D;
+ 
++#ifdef LIGHT<Light>_TYPE_PUNCTUAL
++    /* PLUG: physical_light_surface (diffuseContrib, specContrib, light_dir, normal_eye, view) */
++#endif
++
+ #ifdef LIGHT<Light>_TYPE_ENVIRONMENT
+   diffuseContrib *= textureCube(diffuseTexture, light_dir).rgb;
+   specContrib *= textureCube(specularTexture, light_dir).rgb;
+ #endif
+ 
+     // Obtain final intensity as reflectance (BRDF) scaled by the energy of the light (cosine law)
+-    vec3 light_contribution = angularInfo.NdotL * (diffuseContrib + specContrib);
++    light_contribution = angularInfo.NdotL * (diffuseContrib + specContrib);
++  }
++
++#ifdef LIGHT<Light>_TYPE_PUNCTUAL
++  /* PLUG: physical_light_contribution (light_contribution, light_dir, normal_eye, view) */
++#endif
++
++#ifdef LIGHT<Light>_TYPE_ENVIRONMENT
++  /* Environment shaders integrate the hemisphere, rather than treating N as
++     a punctual source. Keep this optional for existing CGE materials. */
++  /* PLUG: physical_environment (light_contribution, normal_eye, view, material_info.diffuseColor, material_info.reflectance0, material_info.perceptualRoughness) */
++#endif
+ 
+     color.rgb += castle_LightSource<Light>Color *
+       light_contribution *
+       scale;
+-  }
+ }
 diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.inc
 --- a/src/scene/x3d/x3dnodes_castle.inc
 +++ b/src/scene/x3d/x3dnodes_castle.inc
@@ -8052,6 +8333,26 @@ diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.i
        Result := @ShapeTransform.TransformState.Transformation;
      end;
  
+diff --git a/src/scene/x3d/x3dnodes_standard_shape.inc b/src/scene/x3d/x3dnodes_standard_shape.inc
+--- a/src/scene/x3d/x3dnodes_standard_shape.inc
++++ b/src/scene/x3d/x3dnodes_standard_shape.inc
+@@ -170,10 +170,16 @@
+       end;
+     var
+       FMaterialInfo: TAppearanceFallbacktMaterialInfo;
++      FAlphaToCoverage: Boolean;
+   protected
+     function DirectEnumerateActive(Func: TEnumerateChildrenFunction): Pointer; override;
+   public
+     destructor Destroy; override;
++
++    { Runtime-only sample coverage for masked thin surfaces. The renderer scopes
++      GL_SAMPLE_ALPHA_TO_COVERAGE to this appearance; single-sample targets keep
++      their normal alpha-test fallback. Does not imply alpha blending. }
++    property AlphaToCoverage: Boolean read FAlphaToCoverage write FAlphaToCoverage;
+ 
+     { Find a suitable CommonSurfaceShader to be used when rendering this shape,
+       or @nil. This is only maintaned for backward compatibility,
 diff --git a/src/scene/x3d/x3dnodes_standard_texturing.inc b/src/scene/x3d/x3dnodes_standard_texturing.inc
 --- a/src/scene/x3d/x3dnodes_standard_texturing.inc
 +++ b/src/scene/x3d/x3dnodes_standard_texturing.inc
@@ -8360,10 +8661,50 @@ diff --git a/src/transform/castleinternalglshadowvolumes.pas b/src/transform/cas
  end;
  
  procedure TGLShadowVolumeRenderer.SetDebugRender(const Value: Boolean);
+diff --git a/src/transform/castletransform_camera.inc b/src/transform/castletransform_camera.inc
+--- a/src/transform/castletransform_camera.inc
++++ b/src/transform/castletransform_camera.inc
+@@ -254,6 +254,7 @@
+   strict private
+     FGravityUp: TVector3;
+     FProjectionMatrix: TMatrix4;
++    FEffectiveViewportHeight: Single;
+     FProjectionNear, FProjectionFar: Single;
+     FEffectiveProjectionNear, FEffectiveProjectionFar: Single;
+     FProjectionType: TProjectionType;
+@@ -357,6 +358,9 @@
+       this is automatically correctly set for you. }
+     property ProjectionMatrix: TMatrix4
+       read FProjectionMatrix write SetProjectionMatrix;
++    { Last viewport height used to calculate projection, in render pixels.
++      Useful for stable projected-size LOD independent of the current GL pass. }
++    property EffectiveViewportHeight: Single read FEffectiveViewportHeight;
+ 
+     { Calculate a ray picked by WindowPosition position on the viewport,
+       assuming current viewport dimensions are as given.
+@@ -1365,6 +1369,7 @@
+ 
+ begin
+   Result.ProjectionType := ProjectionType;
++  FEffectiveViewportHeight := ViewportHeight;
+ 
+   Result.PerspectiveAnglesRad := TViewpointNode.InternalFieldOfView(
+     Perspective.FieldOfView,
 diff --git a/src/transform/castletransform_renderparams.inc b/src/transform/castletransform_renderparams.inc
 --- a/src/transform/castletransform_renderparams.inc
 +++ b/src/transform/castletransform_renderparams.inc
-@@ -204,13 +204,20 @@
+@@ -132,6 +132,10 @@
+       fields. }
+     Matrix: TMatrix4;
+ 
++    { Projection of this render pass, including shadow map sub-views.
++      Kept independently of Camera, which is nil for generated cameras. }
++    Projection: TMatrix4;
++
+     { Inverse of @link(Matrix).
+ 
+       Always call InverseMatrixNeeded before using it,
+@@ -204,13 +208,20 @@
        Matches shape that are opaque (TGLShape.UseBlending = @false)
        or transparent (TGLShape.UseBlending = @true).
  
@@ -8388,7 +8729,7 @@ diff --git a/src/transform/castletransform_renderparams.inc b/src/transform/cast
      UsingBlending: Boolean;
  
      { Render only shapes that may receive shadow volumes, or ones that don't,
-@@ -236,6 +243,32 @@
+@@ -236,6 +247,32 @@
      DisableShadowVolumeCastingLights: Boolean;
  
      InsideStencilTest: Boolean;
@@ -8421,6 +8762,30 @@ diff --git a/src/transform/castletransform_renderparams.inc b/src/transform/cast
  
      procedure Init;
    end;
+@@ -465,6 +502,7 @@
+   Camera := ACamera;
+   View := ACamera.WorldView;
+   Matrix := ACamera.Matrix;
++  Projection := ACamera.ProjectionMatrix;
+   InverseMatrixDone := false;
+   RotationMatrix := ACamera.RotationMatrix;
+   RotationInverseMatrixDone := false;
+@@ -490,6 +528,7 @@
+   Camera := nil;
+   View := AViewVectors;
+   Matrix := View.Matrix;
++  Projection := ProjectionMatrix;
+   InverseMatrixDone := false;
+   RotationMatrix := View.RotationMatrix;
+   RotationInverseMatrixDone := false;
+@@ -500,6 +539,7 @@
+ begin
+   FTarget                   := Source.FTarget                  ;
+   Matrix                    := Source.Matrix                   ;
++  Projection                := Source.Projection               ;
+   InverseMatrix             := Source.InverseMatrix            ;
+   InverseMatrixDone         := Source.InverseMatrixDone        ;
+   RotationMatrix            := Source.RotationMatrix           ;
 diff --git a/src/transform/backup/castleinternalglshadowvolumes_20260706_212733.pas b/src/transform/backup/castleinternalglshadowvolumes_20260706_212733.pas
 new file mode 100644
 --- /dev/null

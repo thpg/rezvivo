@@ -212,6 +212,7 @@ type
     property GraphicsVegetationCache: Integer index Ord(goVegetationCache) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsVegetationAdaptive: Integer index Ord(goVegetationAdaptive) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsTextures: Integer index Ord(goTextures) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsHair: Integer index Ord(goHair) read GetGraphicsOption write SetGraphicsOption;
     { Доступ через RTTI (MCP property_get/property_set). Запись идёт через
       существующие сеттеры — они же сохраняют settings.json на диск, так
       что RTTI-set не обходит персистентность. }
@@ -258,12 +259,12 @@ implementation
 
 uses
   fpjson, jsonparser, CastleFilesUtils, CastleURIUtils,
-  DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality;
+  DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair, GameUserData;
 
 const
   SETTINGS_FILE = 'settings.json';
-  RiderUrlMale   = 'castle-data:/avatars/MEN.glb';
-  RiderUrlFemale = 'castle-data:/avatars/FEM.glb';
+  RiderUrlMale   = 'castle-data:/avatars/RIDER.glb';
+  RiderUrlFemale = 'castle-data:/avatars/RIDER.glb';
 
 {$IFDEF MSWINDOWS}
 function SettingsMoveFile(OldName, NewName: PWideChar; Flags: LongWord): LongBool;
@@ -282,7 +283,7 @@ function ResolveRiderGlbPath(const AUrlOrPath: string): string;
 var
   DataRoot, Name, SlashPath, Candidate: string;
 begin
-  { Мен/FEM лежат в data/avatars/. URIToFilenameSafe('castle-data:/avatars/X.glb')
+  { Встроенная общая модель лежит в data/avatars/. URIToFilenameSafe('castle-data:/avatars/X.glb')
     на Windows иногда даёт путь, которого FileExists не видит; рабочий способ
     тот же, что был у ScanRiders: корень castle-data:/ + 'avatars\' + файл. }
   Result := Trim(AUrlOrPath);
@@ -292,15 +293,8 @@ begin
 
   SlashPath := StringReplace(Result, '/', PathDelim, [rfReplaceAll]);
   Name := ExtractFileName(SlashPath);
-  if not (SameText(Name, 'MEN.glb') or SameText(Name, 'FEM.glb')) then
-  begin
-    if Result = '' then
-      Name := 'MEN.glb'
-    else if Pos('FEM', UpperCase(Name)) > 0 then
-      Name := 'FEM.glb'
-    else
-      Name := 'MEN.glb';
-  end;
+  if (Name='') or SameText(Name,'MEN.glb') or SameText(Name,'FEM.glb') then
+    Name := 'RIDER.glb';
 
   if DataRoot <> '' then
   begin
@@ -852,6 +846,7 @@ end;
 
 procedure TAppSettings.ApplyGraphicsGlobals;
 begin
+  RiderHairQuality:=FGraphics[goHair];
   GlobalTextureQuality := TTextureQuality(FGraphics[goTextures]);
   RenderGrassActive := FGraphics[goGrass] <> 0;
   FProceduralTrees := FGraphics[goTrees] <> 0;
@@ -953,6 +948,7 @@ begin
   try
     FGraphics[Option] := Value;
     case Option of
+      goHair:RiderHairQuality:=Value;
       goTextures: GlobalTextureQuality := TTextureQuality(Value);
       goGrass: RenderGrassActive := Value <> 0;
       goTrees, goVegetationCache, goVegetationAdaptive: begin
@@ -1081,6 +1077,7 @@ begin
   FLock.Enter;
   try
     Changed := (FGender <> G) or (FSelectedRiderGlb <> Rider);
+    if FGender<>G then SelectAvatarBodySex(Ord(G='female'));
     FGender := G;
     FSelectedRiderGlb := Rider;
     if Changed then

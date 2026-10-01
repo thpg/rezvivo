@@ -1424,7 +1424,11 @@ begin
     '    float tbnDet=0.0;' + #10 +
     '    if (!flatGrass) {' + #10 +
     '        tbnDet=duv1.x*duv2.y-duv1.y*duv2.x;' + #10 +
-    '        if (abs(tbnDet) > 1e-6 || ((proceduralRoad || matId==28) && abs(tbnDet)>1e-12)) {' + #10 +
+    '        // Test UV rank relative to the gradients, not their pixel size.' + #10 +
+    '        // An absolute determinant cutoff rotated normal maps near the' + #10 +
+    '        // rear camera and drew a moving line across the ground.' + #10 +
+    '        float uvLengthProduct=dot(duv1,duv1)*dot(duv2,duv2);' + #10 +
+    '        if (uvLengthProduct>0.0 && tbnDet*tbnDet>1e-12*uvLengthProduct) {' + #10 +
     '            float invDet = 1.0/tbnDet;' + #10 +
     '            Tgeo = (dp1*duv2.y - dp2*duv1.y)*invDet;' + #10 +
     '            Bgeo = (dp2*duv1.x - dp1*duv2.x)*invDet;' + #10 +

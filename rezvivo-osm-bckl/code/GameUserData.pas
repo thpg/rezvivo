@@ -1,7 +1,7 @@
 unit GameUserData;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses Classes, SysUtils, fpjson, VeloSiteAPI;
+uses Classes, SysUtils, fpjson, VeloSiteAPI, RiderBodyParameters;
 
 const
   DefaultDreamWorldId = 'castle-island';
@@ -16,6 +16,9 @@ function UserPreference(const Key: String; const Default: String = ''): String;
 procedure SetUserPreference(const Key, Value: String);
 procedure RememberRideMap(Kind: TRideMapKind; const MapId: String);
 procedure LastRideMap(out Kind: TRideMapKind; out MapId: String);
+function AvatarBodyParameters: TRiderBodyParameters;
+procedure SaveAvatarBody(const Value: TRiderBodyParameters);
+procedure SelectAvatarBodySex(const Sex: Single);
 function EffectiveRiderProfile: TVeloSiteProfile;
 procedure SaveLocalRider(const Nickname: String; Weight: Single; Ftp: Integer;
   const Zones: String);
@@ -25,7 +28,7 @@ function WorkoutFavorite(const Url: String): Boolean;
 procedure ToggleWorkoutFavorite(const Url: String);
 
 implementation
-uses GameRouteLibraryData, DebugLog;
+uses GameRouteLibraryData, DebugLog, AppSettings;
 var Preferences: TJSONObject; BoundDir: String;
 
 function UserDataDir: String;
@@ -92,6 +95,36 @@ begin
     if MapId='' then begin Kind:=rmkReal;MapId:=UserPreference('last_route');end;
   end;
   if MapId='' then begin Kind:=rmkDream;MapId:=FirstRideWorldId;end;
+end;
+
+function AvatarBodyParameters:TRiderBodyParameters;
+var O:TJSONData; P:TVeloSiteProfile;
+begin
+  Result:=DefaultRiderBody(Ord(Settings.GetGender='female'));
+  if Settings.FitHeightCm>=130 then Result.HeightCm:=Settings.FitHeightCm;
+  if Settings.FitInseamCm>=50 then Result.InseamCm:=Settings.FitInseamCm;
+  O:=UserPreferences.Find('avatar_body');
+  if O is TJSONObject then Result:=ReadRiderBody(TJSONObject(O),Result);
+  P:=EffectiveRiderProfile;
+  if P.WeightKg>=35 then Result.WeightKg:=P.WeightKg;
+  Result:=NormalizeRiderBody(Result);
+end;
+
+procedure SaveAvatarBody(const Value:TRiderBodyParameters);
+var P:TRiderBodyParameters; R:TVeloSiteProfile;
+begin
+  P:=NormalizeRiderBody(Value); R:=EffectiveRiderProfile;
+  UserPreferences.Delete('avatar_body');
+  UserPreferences.Add('avatar_body',WriteRiderBody(P));
+  { Same weight as ride physics and the profile page, including local users. }
+  SaveLocalRider(R.Nickname,P.WeightKg,R.FtpW,R.TrainingZonesJSON);
+end;
+
+procedure SelectAvatarBodySex(const Sex:Single);
+var P:TRiderBodyParameters;
+begin
+  P:=AvatarBodyParameters; P.Sex:=Sex; P.HeadShape:=Sex;
+  SaveAvatarBody(P);
 end;
 
 function EffectiveRiderProfile:TVeloSiteProfile;

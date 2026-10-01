@@ -705,7 +705,8 @@ begin
   Scope:=Self;
   if FLaunchPane<>nil then Scope:=FLaunchPane
   else if(FTrainingPage<>nil)and FTrainingPage.Exists and(FTrainingPage.KeyboardRoot<>nil)then Scope:=FTrainingPage.KeyboardRoot
-  else if(FProfilePage<>nil)and FProfilePage.Exists and(FProfilePage.KeyboardRoot<>nil)then Scope:=FProfilePage.KeyboardRoot;
+  else if(FProfilePage<>nil)and FProfilePage.Exists and(FProfilePage.KeyboardRoot<>nil)then Scope:=FProfilePage.KeyboardRoot
+  else if(FBikeFitPage<>nil)and FBikeFitPage.Exists and(FBikeFitPage.KeyboardRoot<>nil)then Scope:=FBikeFitPage.KeyboardRoot;
   if(FKeyboard<>nil)and FKeyboard.Handle(Event,Scope)then Exit(True);
   Result:=inherited;
 end;

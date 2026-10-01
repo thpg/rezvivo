@@ -16,6 +16,9 @@ def redundant_assets(root):
         if path.is_file():
             excluded[path.relative_to(root).as_posix()] = reason
 
+    for name in ('MEN.glb', 'FEM.glb', 'MEN.pose.bin', 'MEN.pose.json', 'FEM.pose.bin', 'FEM.pose.json'):
+        omit(root/'data/avatars'/name, 'Retired separate body; shared RIDER.glb contains shape fields and pose atlas')
+
     for path in (root/'data/road').rglob('*'):
         omit(path, 'Legacy photographic asphalt; roads use procedural materials')
     surfaces = root/SURFACES

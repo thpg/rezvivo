@@ -9,18 +9,18 @@ uses SysUtils;
 type
   TGraphicsOption = (goFrameLimit, goAntialiasing, goShadowSize,
     goShadowFilter, goShadowDistance, goGrass, goTrees, goTextures,
-    goVegetationCache, goVegetationAdaptive);
+    goVegetationCache, goVegetationAdaptive,goHair);
   TGraphicsValues = array[TGraphicsOption] of Integer;
   TGraphicsChangeEvent = procedure(Sender: TObject; Option: TGraphicsOption) of object;
 
 const
   GraphicsKeys: array[TGraphicsOption] of String =
     ('fps_limit', 'msaa', 'shadow_size', 'shadow_filter', 'shadow_distance',
-     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive');
+     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality');
   GraphicsTitles: array[TGraphicsOption] of String =
     ('Frame rate limit', 'Anti-aliasing', 'Shadow map', 'Shadow filtering',
      'Shadow distance', '3D grass', 'Vegetation quality', 'Texture quality:',
-     'Vegetation preparation', 'Adapt vegetation to frame rate');
+     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality');
   GraphicsHints: array[TGraphicsOption] of String =
     ('VSync follows your monitor. A lower limit reduces GPU load.',
      'MSAA smooths edges. Takes effect after restarting the game.',
@@ -31,8 +31,9 @@ const
      'Controls detail distance, transition width, grass density and cache size together. Ultra prioritizes smooth transitions.',
      'Texture changes apply to newly loaded scenes.',
      'Gentle reduces loading spikes. Fast prepares vegetation sooner but uses more frame time.',
-     'Reduce background work and distant detail when below the frame limit. Ultra keeps the procedural tree range.');
-  GraphicsDefaults: TGraphicsValues = (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1);
+     'Reduce background work and distant detail when below the frame limit. Ultra keeps the procedural tree range.',
+     'Controls hair detail, lighting and motion update rate. Applies immediately.');
+  GraphicsDefaults: TGraphicsValues = (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2);
 
 function GraphicsChoiceCount(Option: TGraphicsOption): Integer;
 function GraphicsChoiceValue(Option: TGraphicsOption; Index: Integer): Integer;
@@ -45,7 +46,7 @@ function GraphicsChoiceCount(Option: TGraphicsOption): Integer;
 begin
   case Option of
     goFrameLimit: Result := 7;
-    goAntialiasing, goShadowSize, goTextures: Result := 4;
+    goAntialiasing, goShadowSize, goTextures,goHair: Result := 4;
     goShadowFilter, goShadowDistance, goVegetationCache: Result := 3;
     goTrees: Result := 5;
     goGrass, goVegetationAdaptive: Result := 2;
@@ -68,7 +69,7 @@ begin
     goShadowSize: Result := Sizes[Index];
     goShadowFilter: Result := Filters[Index];
     goShadowDistance: Result := Distances[Index];
-    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive: Result := Index;
+    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair: Result := Index;
   end;
 end;
 
@@ -94,7 +95,7 @@ begin
       case V of 0:Result:='Gentle';1:Result:='Balanced';else Result:='Fast';end;
     goGrass, goVegetationAdaptive:
       if V = 0 then Result := 'Off' else Result := 'On';
-    goTextures: Result := Textures[V];
+    goTextures,goHair: Result := Textures[V];
   end;
 end;
 

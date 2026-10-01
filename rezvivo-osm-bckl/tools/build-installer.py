@@ -19,20 +19,14 @@ def digest(path):
     with path.open('rb') as f:
         for chunk in iter(lambda:f.read(1024*1024),b''):sha.update(chunk)
     return sha.hexdigest()
-def payload(out,runtime_dir=None):
+def payload(out):
     stage=Path(tempfile.mkdtemp(prefix='payload-',dir=out))
     excluded=redundant_assets(ROOT)
     audit=[dict(path=p,bytes=(ROOT/p).stat().st_size,reason=reason) for p,reason in sorted(excluded.items())]
     (out/'excluded-assets.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print('Excluded unused assets:',len(audit),'MiB:',round(sum(x['bytes'] for x in audit)/2**20,1),flush=True)
     files=[(ROOT/'third_person_navigation.exe',Path('REZVIVO.exe'))]
-    files += [((runtime_dir or ROOT)/x,Path(x)) for x in DLLS]
-    # A binary distribution must carry our GPL notice and the preserved third-
-    # party notices. These are explicit build inputs, never arbitrary repo files.
-    files += [(ROOT.parent/'LICENSE',Path('data/licenses/rezvivo/GPL-3.0-or-later.txt')),
-              (ROOT.parent/'THIRD_PARTY_NOTICES.md',Path('data/licenses/rezvivo/THIRD_PARTY_NOTICES.md'))]
-    files += [(p,Path('data/licenses/source-distribution')/p.name)
-              for p in sorted((ROOT.parent/'LICENSES').iterdir()) if p.is_file()]
+    files += [(ROOT/x,Path(x)) for x in DLLS]
     for p in sorted((ROOT/'data').rglob('*')):
         if not p.is_file():continue
         rel=p.relative_to(ROOT)
@@ -56,9 +50,9 @@ def payload(out,runtime_dir=None):
     return stage
 def q(value):return str(value).replace('$','$$').replace('"','$\\"')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--nsis');ap.add_argument('--out',type=Path,default=ROOT.parent.parent/'REZVIVO-release');ap.add_argument('--stage',type=Path);ap.add_argument('--stage-only',action='store_true');ap.add_argument('--baseline',type=Path,help='installed-files.json from the exact previous package');ap.add_argument('--runtime-dir',type=Path,help='Directory containing the reviewed runtime DLLs; defaults to the executable directory');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--nsis');ap.add_argument('--out',type=Path,default=ROOT.parent.parent/'REZVIVO-release');ap.add_argument('--stage',type=Path);ap.add_argument('--stage-only',action='store_true');ap.add_argument('--baseline',type=Path,help='installed-files.json from the exact previous package');a=ap.parse_args()
     a.out.mkdir(parents=True,exist_ok=True)
-    stage=a.stage.resolve() if a.stage else payload(a.out,a.runtime_dir.resolve() if a.runtime_dir else None)
+    stage=a.stage.resolve() if a.stage else payload(a.out)
     release=json.loads((stage/'release.json').read_text(encoding='utf-8'))
     manifest=json.loads((stage/'installed-files.json').read_text(encoding='utf-8'))
     validate_manifest(manifest)

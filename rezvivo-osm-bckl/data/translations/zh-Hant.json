@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "髮型",
+  "No hair": "無頭髮",
+  "Short crop": "短髮",
+  "Swept back": "後梳髮型",
+  "Curly hair": "捲髮",
+  "Ponytail": "馬尾",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(未選擇檔案)",
   "(no profile data)": "(無個人檔案資料)",
@@ -301,5 +307,12 @@
   "Finish your ride before switching accounts.": "請先結束騎乘，再切換帳號。",
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "上次騎乘未能儲存。請重新啟動應用程式並還原騎乘後，再切換帳號。",
   "Could not finish saved ride": "無法結束已儲存的騎乘",
-  "Account change in progress. Please wait.": "正在切換帳號，請稍候。"
+  "Account change in progress. Please wait.": "正在切換帳號，請稍候。",
+  "Buzz cut": "寸頭",
+  "Side part": "側分",
+  "Tight curls": "小捲髮",
+  "Medium length": "中長髮",
+  "Braid": "辮子",
+  "Hair quality": "頭髮品質",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "控制頭髮細節、光照和動作更新頻率。立即生效。"
 }

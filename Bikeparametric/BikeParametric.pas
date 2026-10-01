@@ -29,8 +29,8 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion,
-  RiderTripo,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
+  RiderMotion, RiderHandGrip,
+  RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
 
@@ -374,14 +374,19 @@ type
     RiderEffort, RiderEffortTarget, MotionCadence: Single;
     PedalRate: Single;
     BreathPhase: Double;
+    BreathLoad: Single;
     CrankIntervalCur: Single;
     WheelIntervalCur: Single;
+    ForwardSpeedMps: Single;
     HandFromR: Integer;
     HandFromL: Integer;
     HandFromFreeRPos: TVector3;
     HandFromFreeLPos: TVector3;
     HandFromFreeRWave: Single;
     HandFromFreeLWave: Single;
+    HandAnchorR, HandAnchorL: TVector3;
+    HandAnchorFrameR,HandAnchorFrameL,FrameHandR,FrameHandL:TRiderGripFrame;
+    HandAnchorRValid, HandAnchorLValid: Boolean;
     HandAnimElapsed: Single;
     HandAnimDur: Single;
     HandAnimating: Boolean;
@@ -447,14 +452,19 @@ type
     FAccumTime: Double;
     FBaseRiderPose: TRiderPose;
     FFrameContacts: array[0..3] of TVector3;
+    FFrameContactsValid: Boolean;
+    FFrameHandR,FFrameHandL,FHandAnchorFrameR,FHandAnchorFrameL:TRiderGripFrame;
     FRiderEffort, FRiderEffortTarget, FMotionCadence: Single;
+    FRiderCrankPhase: Single; { physical right crank angle; derived, not replay state }
     FPedalRate: Single; { actual crank revolutions/s, gated by foot contact }
     FBreathPhase: Double;
+    FBreathLoad: Single;
     FPhasePrevElapsed: Double;    { last ElapsedSec для dt накопителя фазы }
     FPhaseStarted: Boolean;       { первый AnimateFrame только берёт отметку времени }
     FPhaseSynced: Boolean;        { одноразовая синхронизация FPhase с CrankTimer }
     FCrankIntervalCur: Single;    { период оборота шатунов, с (SetAnimationSpeed) }
     FWheelIntervalCur: Single;    { период оборота колеса, с (SetWheelSpeedMps) }
+    FForwardSpeedMps: Single;
     FGpuAnim: Boolean;            { True = анимация на GPU (этапы 2-5); False = старый CPU-путь }
     FAnimationEnabled, FResumeGpuAnim: Boolean;
     FResumeSkinShaders: Boolean;
@@ -518,6 +528,8 @@ type
     FHandFromR, FHandFromL: Integer;   { grip the hand is moving FROM during a transition }
     FHandFromFreeRPos, FHandFromFreeLPos: TVector3;  { free point the hand is moving FROM (idx 0) }
     FHandFromFreeRWave, FHandFromFreeLWave: Single;
+    FHandAnchorR, FHandAnchorL: TVector3; { current contact when a transfer is interrupted }
+    FHandAnchorRValid, FHandAnchorLValid: Boolean;
     FHandAnimElapsed, FHandAnimDur: Single;
     FHandAnimating: Boolean;
     FHandSlotR0, FHandSlotR1: Single;  { right-hand move time-window (fraction of dur) }
@@ -525,6 +537,8 @@ type
     FTripoPedalSway: Single;      { lateral body sway amplitude (bike units) }
     FTripoTorsoBobAmp: Single;    { vertical body bob amplitude (bike units) }
     FTripoShowRider: Boolean;     { rider visibility }
+    FBodyParameters: TRiderBodyParameters;
+    FBodyParametersSet:Boolean;
     FTripoBulk: Single;           { body-shape: overall girth }
     FTripoBelly: Single;          { body-shape: belly bulge }
     FTripoBodyHeight: Single;     { body-shape: overall height scale }
@@ -761,6 +775,7 @@ type
     function GroundShadowMap: TGeneratedShadowMapNode;
     procedure SetGroundShadowReceiver(const Enabled: Boolean);
     procedure SetRiderEffort(Intensity: Single);
+    property RiderEffortTarget: Single read FRiderEffortTarget;
     function RiderCadenceRpm: Single;
     function RiderMotionDebugJson: TJSONObject;
     function  BuildRiderPose(const AName: string): TRiderPose;
@@ -891,7 +906,10 @@ type
     property TripoRiderOffset: TVector3 read FTripoRiderOffset write FTripoRiderOffset;
     property TripoSpineAngle[Index: Integer]: Single read GetTripoSpineAngle write SetTripoSpineAngle;
     property TripoAnkleOffset: TVector3 read FTripoAnkleOffset write FTripoAnkleOffset;
-    procedure ApplyTripoBodyShape;   { push the shape params into the rider mesh + bones }
+    procedure ApplyTripoBodyShape;
+    procedure SetBodyParameters(const Value: TRiderBodyParameters);
+    procedure StageBodyParameters(Section:TJSONObject;const Path:string);
+    property BodyParameters: TRiderBodyParameters read FBodyParameters write SetBodyParameters;   { push the shape params into the rider mesh + bones }
     procedure ApplyHelmetTint; { parse HelmetColor hex and tint the helmet }
     procedure SetHelmetPitchX(const V: Single);
 
@@ -2473,17 +2491,23 @@ begin
   Result.MotionCadence:=FMotionCadence;
   Result.PedalRate:=FPedalRate;
   Result.BreathPhase:=FBreathPhase;
+  Result.BreathLoad:=FBreathLoad;
   Result.PhasePrevElapsed:=FPhasePrevElapsed;
   Result.PhaseStarted:=FPhaseStarted;
   Result.PhaseSynced:=FPhaseSynced;
   Result.CrankIntervalCur:=FCrankIntervalCur;
   Result.WheelIntervalCur:=FWheelIntervalCur;
+  Result.ForwardSpeedMps:=FForwardSpeedMps;
   Result.HandFromR:=FHandFromR;
   Result.HandFromL:=FHandFromL;
   Result.HandFromFreeRPos:=FHandFromFreeRPos;
   Result.HandFromFreeLPos:=FHandFromFreeLPos;
   Result.HandFromFreeRWave:=FHandFromFreeRWave;
   Result.HandFromFreeLWave:=FHandFromFreeLWave;
+  Result.HandAnchorR:=FHandAnchorR;Result.HandAnchorL:=FHandAnchorL;
+  Result.HandAnchorFrameR:=FHandAnchorFrameR;Result.HandAnchorFrameL:=FHandAnchorFrameL;
+  Result.FrameHandR:=FFrameHandR;Result.FrameHandL:=FFrameHandL;
+  Result.HandAnchorRValid:=FHandAnchorRValid;Result.HandAnchorLValid:=FHandAnchorLValid;
   Result.HandAnimElapsed:=FHandAnimElapsed;
   Result.HandAnimDur:=FHandAnimDur;
   Result.HandAnimating:=FHandAnimating;
@@ -2514,17 +2538,23 @@ begin
   FMotionCadence:=Saved.MotionCadence;
   FPedalRate:=Saved.PedalRate;
   FBreathPhase:=Saved.BreathPhase;
+  FBreathLoad:=Saved.BreathLoad;
   FPhasePrevElapsed:=Saved.PhasePrevElapsed;
   FPhaseStarted:=Saved.PhaseStarted;
   FPhaseSynced:=Saved.PhaseSynced;
   FCrankIntervalCur:=Saved.CrankIntervalCur;
   FWheelIntervalCur:=Saved.WheelIntervalCur;
+  FForwardSpeedMps:=Saved.ForwardSpeedMps;
   FHandFromR:=Saved.HandFromR;
   FHandFromL:=Saved.HandFromL;
   FHandFromFreeRPos:=Saved.HandFromFreeRPos;
   FHandFromFreeLPos:=Saved.HandFromFreeLPos;
   FHandFromFreeRWave:=Saved.HandFromFreeRWave;
   FHandFromFreeLWave:=Saved.HandFromFreeLWave;
+  FHandAnchorR:=Saved.HandAnchorR;FHandAnchorL:=Saved.HandAnchorL;
+  FHandAnchorFrameR:=Saved.HandAnchorFrameR;FHandAnchorFrameL:=Saved.HandAnchorFrameL;
+  FFrameHandR:=Saved.FrameHandR;FFrameHandL:=Saved.FrameHandL;
+  FHandAnchorRValid:=Saved.HandAnchorRValid;FHandAnchorLValid:=Saved.HandAnchorLValid;
   FHandAnimElapsed:=Saved.HandAnimElapsed;
   FHandAnimDur:=Saved.HandAnimDur;
   FHandAnimating:=Saved.HandAnimating;
@@ -2539,6 +2569,7 @@ end;
 constructor TBikeInstance.Create(AOwner: TComponent);
 var I: Integer;
 begin
+  FBodyParameters:=DefaultRiderBody;
   inherited Create;
   FOwner := AOwner;
   FGroup := TCastleTransform.Create(AOwner);
@@ -2706,7 +2737,7 @@ begin
   { posture / motion / seat offset / hands / legs now come from poses; seed the live
     fields from the Default pose (the compiled catalog) }
   FRiderEffort := 0.75; FRiderEffortTarget := 0.75;
-  FBreathPhase := Random;
+  FBreathPhase := Random; FBreathLoad:=0.25;
   ApplyRiderPose(BuiltinRiderPose(0), 0);
 
   SceneLifecycleLog(Format(
@@ -2781,6 +2812,7 @@ end;
 procedure TBikeInstance.NotifyBuildBegin(SubIdx: Integer; PreserveAnim: Boolean);
 var I: Integer;
 begin
+  FFrameContactsValid := False;
   FSteerNodesValid := False;
   if FSteerRots <> nil then FSteerRots.Clear;
   FSteerAxisCached := False;  { stem/spacers move the steer axis }
@@ -2885,8 +2917,8 @@ begin
     animate nodes from that temporary graph: they may be freed by the next
     build step. Invalidate-on-entry alone cannot protect such cached nodes. }
   if FBuildDepth > 0 then Exit;
-  if not FAnimationEnabled then Exit;
   ApplyWorldSunToShadow;   { the agent may have turned since the last frame }
+  if not FAnimationEnabled then Exit;
   { ── GPU-анимация, этап 1: фаза крутки на CPU (несколько float-операций
     на кадр). Пока GpuAnim=False потребителей у FPhase/FWheelPhase нет —
     райдер читает FPhase (синхронизированную с CrankTimer один раз),
@@ -2936,7 +2968,10 @@ begin
   FDiagComps := FDiagComps * 0.95 + TimerSeconds(T1c, T0c) * 1000 * 0.05;
   T0c := Timer;
   if FTripoRider <> nil then
+  begin
     UpdateTripoRider(ElapsedSec);
+    FTripoRider.UpdateAppearance(Dt,FForwardSpeedMps,FRiderEffort,FRiderCrankPhase,FBreathPhase,FBreathLoad);
+  end;
   T1c := Timer;
   FDiagUtrd := FDiagUtrd * 0.95 + TimerSeconds(T1c, T0c) * 1000 * 0.05;
 end;
@@ -2951,8 +2986,8 @@ end;
 
 procedure TBikeInstance.AnimateFrame(DeltaSec: Single);
 begin
-  if not FAnimationEnabled then Exit;
-  FAnimElapsed := FAnimElapsed + DeltaSec;
+  if FAnimationEnabled then FAnimElapsed := FAnimElapsed + DeltaSec;
+  { The absolute-time overload updates world light before its pose gate. }
   AnimateFrame(FAnimElapsed);
 end;
 
@@ -3423,6 +3458,7 @@ var
   W: TWheelComponent;
   radiusM, circumM: Single;
 begin
+  FForwardSpeedMps:=Max(SpeedMps,0);
   { То же для колёс: период одного оборота = длина окружности / скорость.
     ВСЕМ экземплярам WheelTimer (по одному на LOD-уровень). }
 
@@ -3820,6 +3856,8 @@ begin
     FMainRoot  := nil;
   end;
   FTripoRider := NewRider;
+  if (not FBodyParametersSet) and NewRider.HasParametricBody then
+    FBodyParameters:=NewRider.BodyParameters;
   FTripoFitScale := 0.0;             { new rig → re-fit size once on next placement }
   FTripoRiderPath := AGlbPath;        { remember for JSON save/load }
   if not FHelmetPitchFromJson then
@@ -4025,6 +4063,7 @@ begin
   Path := '';
   D := O.Find('path');
   if (D <> nil) and (D.JSONType = jtString) then Path := D.AsString;
+  StageBodyParameters(O,Path);
   if Trim(Path) = '' then Exit;   { no rider configured — leave bike riderless }
 
   Result := LoadTripoRider(Path);  { mounts under FGroup; LoadTripoRider also calls ApplyTripoBodyShape }
@@ -4113,6 +4152,33 @@ begin
   FGpuSkinPrimed := False;
 end;
 
+procedure TBikeInstance.StageBodyParameters(Section:TJSONObject;const Path:string);
+var O,Embedded:TJSONObject; Resolved:string;
+begin
+  O:=ObjOf(Section,'body'); Embedded:=nil;
+  try
+    Resolved:=ResolveGlbFilesystemPath(Path);
+    if (O=nil) and FileExists(Resolved) and
+      not SameText(ExtractFileName(Path),'MEN.glb') and
+      not SameText(ExtractFileName(Path),'FEM.glb') then begin
+      Embedded:=ReadRiderExtra(Resolved,'bodyParameters');O:=Embedded;
+    end;
+    FBodyParameters:=ReadRiderBody(O,DefaultRiderBody(Ord(Pos('FEM',UpperCase(Path))>0)));
+    FBodyParametersSet:=True;
+  finally Embedded.Free end;
+end;
+
+procedure TBikeInstance.SetBodyParameters(const Value: TRiderBodyParameters);
+var P:TRiderBodyParameters;
+begin
+  P:=NormalizeRiderBody(Value);
+  FBodyParametersSet:=True;
+  if SameRiderBody(P,FBodyParameters) then Exit;
+  FBodyParameters:=P;
+  FTripoFitScale:=0;
+  ApplyTripoBodyShape;
+end;
+
 procedure TBikeInstance.ApplyTripoBodyShape;
 begin
   if FTripoRider = nil then Exit;
@@ -4120,10 +4186,14 @@ begin
     effect — destroying TEffectNode on a live scene races the renderer (UI
     freeze on the fit-page height click) and the following Build recompiled
     a giant gskRest if-chain. RefreshBind uploads new uGskRest / uBindT. }
+  if FTripoRider.HasParametricBody then
+    FTripoRider.ApplyBodyParameters(FBodyParameters)
+  else begin
   FTripoRider.ApplyBodyShape(FTripoBulk, FTripoBelly, FTripoBodyHeight);  { mesh: girth/belly; height is skeleton }
   FTripoRider.ApplyLimbLengths(FTripoLegLen, FTripoArmLen, FTripoShoulderWidth,
     FTripoPelvisWidth, FTripoTorsoLen * FTripoInseamUpper,
-    1.0 + FTripoBodyHeight); { skeleton: limbs + height; inseam keeps stature }
+    1.0 + FTripoBodyHeight);
+  end; { skeleton: limbs + height; inseam keeps stature }
   FTripoRider.ApplyGlossCorrection(FTripoRoughness, FTripoMetallic); { PBR: roughness/metallic multipliers, 1 = as authored }
   ApplyHelmetTint; { tint the optional helmet ('' / 0 / white / black = off) }
   FTripoRider.HelmetPitchXDeg := FHelmetPitchX;
@@ -4215,15 +4285,18 @@ begin
 end;
 
 function TBikeInstance.RiderMotionDebugJson: TJSONObject;
-const Names: array[0..16] of string = ('Pelvis', 'Waist', 'Spine', 'Spine01',
+const Names: array[0..20] of string = ('Pelvis', 'Waist', 'Spine', 'Spine01',
   'Spine02', 'NeckTwist01', 'Head', 'R_Thigh', 'R_Calf', 'R_Foot',
-  'L_Thigh', 'L_Calf', 'L_Foot', 'R_Upperarm', 'R_Forearm', 'R_Hand', 'L_Hand');
-var I: Integer; V: TVector3; Ok: Boolean; Bones: TJSONObject; Errors: TJSONArray;
-  P: TRiderPose;
+  'L_Thigh', 'L_Calf', 'L_Foot', 'R_Upperarm', 'R_Forearm', 'R_Hand', 'L_Hand',
+  'L_Upperarm','L_Forearm','R_Clavicle','L_Clavicle');
+var I: Integer; V: TVector3; Ok: Boolean; Bones: TJSONObject; Errors,Targets: TJSONArray;
+  P: TRiderPose; HF: TJSONArray; H: TJSONObject; J:Integer;
+  F,N:TVector3; LF,LN,W:TTripoVec3; Q:TTripoVec4; Prefix:string; Twist:Single;
 begin
   Result := TJSONObject.Create;
   Result.Add('phase', FPhase); Result.Add('breath_phase', FBreathPhase);
-  Result.Add('effort', FRiderEffort); Result.Add('cadence', FMotionCadence);
+  Result.Add('crank_phase', FRiderCrankPhase);
+  Result.Add('breaths_per_minute',RiderBreathsPerMinute(FBreathLoad)); Result.Add('effort', FRiderEffort); Result.Add('cadence', FMotionCadence);
   Result.Add('gpu', FGpuAnim); Result.Add('last_error', FUtrLastError);
   Result.Add('pose', FBaseRiderPose.Name);
   Result.Add('pedal_rpm', FPedalRate * 60);
@@ -4233,13 +4306,52 @@ begin
   P := BuildRiderPose('');
   if (FTripoRider <> nil) and FTripoRider.PoseAnimating then P := FTripoRider.CurrentPose;
   Result.Add('free_feet', TJSONArray.Create([P.LegFreeR, P.LegFreeL]));
+  Result.Add('hand_animating',FHandAnimating);
+  Result.Add('hand_elapsed',FHandAnimElapsed);
+  Result.Add('hand_duration',FHandAnimDur);
+  Targets:=TJSONArray.Create;Result.Add('contact_targets',Targets);
+  for I:=0 to 3 do Targets.Add(TJSONArray.Create([
+    FFrameContacts[I].X,FFrameContacts[I].Y,FFrameContacts[I].Z]));
   if FTripoRider = nil then Exit;
+  Result.Add('bike_lean_deg', FPedalLeanApplied);
+  HF := TJSONArray.Create;
+  Result.Add('authored_spine_deg', HF);
+  for I := 0 to 4 do HF.Add(P.SpineAngles[I]);
+  HF := TJSONArray.Create;
+  Result.Add('applied_spine_deg', HF);
+  for I := 0 to 4 do HF.Add(FTripoRider.SpineAngle[I]);
   Bones := TJSONObject.Create; Result.Add('joints', Bones);
   for I := 0 to High(Names) do
   begin
     if FGpuAnim and (FGpuSkin <> nil) then Ok := FGpuSkin.ShadowJoint(Names[I], V)
     else Ok := FTripoRider.PosedJointParent(Names[I], V);
     if Ok then Bones.Add(Names[I], TJSONArray.Create([V.X, V.Y, V.Z]));
+  end;
+  HF:=TJSONArray.Create;Result.Add('hands',HF);
+  for I:=0 to 1 do begin
+    if FGpuAnim and (FGpuSkin<>nil) then Ok:=FGpuSkin.ShadowHandFrame(I,F,N,Twist)
+    else begin
+      if I=0 then Prefix:='R_' else Prefix:='L_';
+      Twist:=0;J:=FTripoRider.Rig.JointIndexByName(Prefix+'Hand');Ok:=J>=0;
+      if Ok then begin
+        RiderHandAxes(FTripoRider.Rig,I,LF,LN);Q:=FTripoRider.Rig.JointWorldRot(J);
+        W:=QuatRotateV3(Q,LF);F:=FTripoRider.Scene.Transform.MultDirection(Vector3(W.X,W.Y,W.Z)).Normalize;
+        W:=QuatRotateV3(Q,LN);N:=FTripoRider.Scene.Transform.MultDirection(Vector3(W.X,W.Y,W.Z)).Normalize;
+      end;
+    end;
+    H:=TJSONObject.Create;HF.Add(H);
+    if Ok then begin
+      if FGpuAnim then H.Add('forearm_twist_deg',Twist);
+      H.Add('forward',TJSONArray.Create([F.X,F.Y,F.Z]));
+      H.Add('palm',TJSONArray.Create([N.X,N.Y,N.Z]));
+    end;
+    if I=0 then begin
+      F:=FFrameHandR.Forward;N:=FFrameHandR.Palm;H.Add('weight',FFrameHandR.Weight);
+    end else begin
+      F:=FFrameHandL.Forward;N:=FFrameHandL.Palm;H.Add('weight',FFrameHandL.Weight);
+    end;
+    H.Add('target_forward',TJSONArray.Create([F.X,F.Y,F.Z]));
+    H.Add('target_palm',TJSONArray.Create([N.X,N.Y,N.Z]));
   end;
   Errors := TJSONArray.Create; Result.Add('contact_error_m', Errors);
   for I := 0 to 3 do
@@ -4260,9 +4372,22 @@ begin
 end;
 
 procedure TBikeInstance.ApplyRiderPose(const P: TRiderPose; Duration: Single);
-var oldR, oldL, newR, newL: Integer; cR, cL: Boolean;
+var oldR, oldL, newR, newL: Integer; cR, cL, PendingR,PendingL,LeftMoving: Boolean;
     PFields: TRiderPose;
 begin
+  PendingR:=FHandAnimating and (FHandAnimElapsed<FHandSlotR1*FHandAnimDur) and
+    ((FHandFromR<>FTripoHandPosR) or FHandAnchorRValid or
+     ((FTripoHandPosR=0) and (((FHandFromFreeRPos-FTripoHandFreeRPos).LengthSqr>1e-10) or
+       (Abs(FHandFromFreeRWave-FTripoHandFreeRWave)>1e-6))));
+  PendingL:=FHandAnimating and (FHandAnimElapsed<FHandSlotL1*FHandAnimDur) and
+    ((FHandFromL<>FTripoHandPosL) or FHandAnchorLValid or
+     ((FTripoHandPosL=0) and (((FHandFromFreeLPos-FTripoHandFreeLPos).LengthSqr>1e-10) or
+       (Abs(FHandFromFreeLWave-FTripoHandFreeLWave)>1e-6))));
+  LeftMoving:=PendingL and (FHandAnimElapsed>FHandSlotL0*FHandAnimDur);
+  FHandAnchorRValid:=PendingR and FFrameContactsValid;
+  FHandAnchorLValid:=PendingL and FFrameContactsValid;
+  if FHandAnchorRValid then begin FHandAnchorR:=FFrameContacts[2];FHandAnchorFrameR:=FFrameHandR;end;
+  if FHandAnchorLValid then begin FHandAnchorL:=FFrameContacts[3];FHandAnchorFrameL:=FFrameHandL;end;
   { remember the free point the hand is leaving (for a free->grip / free->free
     move) BEFORE the sync below overwrites the live fields; the transition lerps
     between these fixed endpoints so it starts at the actual handlebar/hand
@@ -4283,21 +4408,30 @@ begin
   PFields := P;   { SyncRiderPose needs a var }
   SyncRiderPose(PFields, False);
 
-  { hand grips: change positions one hand after the other (not together). If both
-    hands move, the right takes the first half of the duration and the left the
-    second; if only one moves, it uses the whole duration. }
+  { Transfer one hand at a time. On interruption finish the airborne hand
+    first, starting at its actual endpoint rather than the previous target. }
   oldR := FTripoHandPosR; oldL := FTripoHandPosL;
   newR := P.HandPosR; if newR < 0 then newR := 0;    { 0 = free hand }
   newL := P.HandPosL; if newL < 0 then newL := 0;
-  cR := newR <> oldR; cL := newL <> oldL;
+  cR := (newR <> oldR) or PendingR or ((newR=0) and
+    (((P.HandFreeRPos-FHandFromFreeRPos).LengthSqr>1e-10) or
+     (Abs(P.HandFreeRWave-FHandFromFreeRWave)>1e-6)));
+  cL := (newL <> oldL) or PendingL or ((newL=0) and
+    (((P.HandFreeLPos-FHandFromFreeLPos).LengthSqr>1e-10) or
+     (Abs(P.HandFreeLWave-FHandFromFreeLWave)>1e-6)));
   if (Duration > 0) and (cR or cL) then
   begin
     FHandFromR := oldR; FHandFromL := oldL;
     FHandAnimElapsed := 0; FHandAnimDur := Duration; FHandAnimating := True;
     if cR and cL then
     begin
-      FHandSlotR0 := 0.0; FHandSlotR1 := 0.5;    { right moves first }
-      FHandSlotL0 := 0.5; FHandSlotL1 := 1.0;    { then left }
+      if LeftMoving then begin
+        FHandSlotL0:=0;FHandSlotL1:=0.5;
+        FHandSlotR0:=0.5;FHandSlotR1:=1;
+      end else begin
+        FHandSlotR0 := 0.0; FHandSlotR1 := 0.5;
+        FHandSlotL0 := 0.5; FHandSlotL1 := 1.0;
+      end;
     end
     else
     begin
@@ -4308,6 +4442,7 @@ begin
   else
   begin
     FHandFromR := newR; FHandFromL := newL; FHandAnimating := False;
+    FHandAnchorRValid:=False;FHandAnchorLValid:=False;
   end;
   FTripoHandPosR := newR; FTripoHandPosL := newL;
 
@@ -4320,21 +4455,32 @@ var
   CrankTS: TTimeSensorNode;   { было Timer — конфликтовало с CastleTimeUtils.Timer }
   T0u, T1u: TTimerResult;     { TEMP-DIAG }
   Phase, Ang, S, CenterX: Single;
-  YawRad, Psx, Psy, Psz: Single;
+  YawRad, Psx, Psy, Psz, PelvicPitch: Single;
   Sway, Bob, QFH, QZ, Alpha: Single;
   Motion: TRiderMotionFrame;
   RootQ, BodyQ: TTripoVec4;
   SeatV: TTripoVec3;
-  SpineIdx: array[0..4] of Integer;
-  SpineAng: TSpineAngles;
   FootPitchR, FootPitchL: Single;
   i: Integer;
   BB, CrankR, CrankL, PedalR, PedalL, GripR, GripL, Saddle: TVector3;
-  AnkleR, AnkleL, Pelvis, PelvisRot, LiveOffset: TVector3;
+  AnkleR, AnkleL, Pelvis, PelvisRot, LiveOffset, Support: TVector3;
   BoneA, BoneB: TVector3;   { scratch для TryGetBone-резолвов }
   Rot4: TVector4;                          { rider orientation (axis+angle), for P^-1 }
   LivePose: TRiderPose;
   Dt, progHR, progHL, twistDeg, freeR, freeL: Single;
+  FromFrameR,FromFrameL:TRiderGripFrame;
+
+  function GripFrame(Idx,Side:Integer):TRiderGripFrame;
+  var Origin:TVector3;
+  begin
+    if (Idx>0) and (BarType=btFlat) then Result:=RiderGripFrame(5,Side)
+    else Result:=RiderGripFrame(Idx,Side);
+    if Idx>0 then begin
+      Origin:=SteerPoint(TVector3.Zero);
+      Result.Forward:=(SteerPoint(Result.Forward)-Origin).Normalize;
+      Result.Palm:=(SteerPoint(Result.Palm)-Origin).Normalize;
+    end;
+  end;
 
   function O(const P: TVector3): TVector3;   { same X-centering the geometry uses }
   begin Result := Vector3(P.X - CenterX, P.Y, P.Z); end;
@@ -4473,32 +4619,20 @@ begin
   Alpha := 1 - Exp(-Dt / 0.65);
   FRiderEffort := FRiderEffort + (FRiderEffortTarget - FRiderEffort) * Alpha;
   FMotionCadence := FMotionCadence + (FPedalRate * 60 - FMotionCadence) * (1 - Exp(-Dt / 0.25));
-  FBreathPhase := Frac(FBreathPhase + Dt * (0.22 + 0.18 * Min(FRiderEffort, 2.0)));
-  Motion := EvaluateRiderMotion(LivePose.Motion, Phase, FBreathPhase,
+  AdvanceRiderBreathing(FBreathLoad,FBreathPhase,Dt,FRiderEffort);
+  Ang := FTripoPedalDir * Phase * 2 * Pi;
+  FRiderCrankPhase := (ArcTan2(CrankR.Y, CrankR.X) + Ang) / (2 * Pi);
+  Motion := EvaluateRiderMotion(LivePose.Motion, FRiderCrankPhase, FBreathPhase,
     FMotionCadence, FRiderEffort, LivePose.PedalSway, LivePose.TorsoBobAmp);
+  if BikeDebugDisableSteer then
+  begin
+    Motion.Roll := Motion.Roll + Motion.BikeLean;
+    Motion.BikeLean := 0; Motion.BikeSteer := 0;
+  end;
   Sway := Motion.Z; Bob := Motion.Y;
   LiveOffset.X := LiveOffset.X + Motion.X;
-  if not LivePose.SpineManual then
-  begin
-    SpineIdx[0] := FTripoRider.Rig.JointIndexByName('Waist');
-    SpineIdx[1] := FTripoRider.Rig.JointIndexByName('Spine');
-    SpineIdx[2] := FTripoRider.Rig.JointIndexByName('Spine01');
-    SpineIdx[3] := FTripoRider.Rig.JointIndexByName('Spine02');
-    SpineIdx[4] := FTripoRider.Rig.JointIndexByName('NeckTwist01');
-    SpineAutoLeanDeg(LivePose.TorsoLeanDeg, LivePose.SpineCurve, SpineIdx, SpineAng);
-    LivePose.SpineAngles := SpineAng;
-    LivePose.SpineManual := True;
-  end;
-  for i := 0 to 4 do
-  begin
-    LivePose.SpineAngles[i] := LivePose.SpineAngles[i] + Motion.SpinePitch[i];
-    LivePose.SpineYaw[i] := LivePose.SpineYaw[i] + Motion.SpineYaw[i];
-    LivePose.SpineRoll[i] := LivePose.SpineRoll[i] + Motion.SpineRoll[i];
-  end;
-  LivePose.ShoulderRoundDeg := LivePose.ShoulderRoundDeg + Motion.ShoulderRound;
-  { Keep fit ankling as the user's maximum when set. Zero means the profile's
-    natural ankle motion. Pedal and cleat use the SAME effective angle. }
-  if LivePose.AnkleFlex <= 0.001 then LivePose.AnkleFlex := Motion.AnkleDeg;
+  LivePose:=FTripoRider.MotionPose(LivePose,Motion);
+  PelvicPitch:=FTripoRider.SplitHipHinge(LivePose);
   FPedalLeanDeg := Motion.BikeLean;
   FPedalSteerDeg := Motion.BikeSteer;
   if BikeDebugDisableSteer then
@@ -4513,7 +4647,7 @@ begin
     же сцене) компенсирует P контейнером с матрицей P^-1. }
   { Rotate about the saddle contact, not the model origin. Leg IK receives
     the inverse of this exact transform, so pelvic rotation cannot move cleats. }
-  RootQ := RiderSpineDelta(Vector3(0, 0, 1), Motion.Pitch, Motion.Yaw, Motion.Roll);
+  RootQ := RiderSpineDelta(Vector3(0, 0, 1), Motion.Pitch+PelvicPitch, Motion.Yaw, Motion.Roll);
   PelvisRot := FTripoRider.OrientedSeatOffset(YawRad, S);
   SeatV := QuatRotateV3(RootQ, V3(PelvisRot.X, PelvisRot.Y, PelvisRot.Z));
   PelvisRot := Vector3(SeatV.X, SeatV.Y, SeatV.Z);
@@ -4523,8 +4657,10 @@ begin
   if Abs(Rot4.W) < 1e-6 then Rot4 := Vector4(0, 1, 0, 0);
   FTripoRider.Scene.Scale := Vector3(S, S, S);
   FTripoRider.Scene.Rotation := Rot4;
-  FTripoRider.Scene.Translation := O(Saddle) + LiveOffset - PelvisRot
-                                   + Vector3(0, Bob, Sway);
+  Support := O(Saddle) + LiveOffset + Vector3(0, Bob, Sway);
+  Support:=FTripoRider.PedallingSupport(Support,O(BB),LiveOffset+Vector3(0,Bob,Sway),
+    Sqrt(Sqr(CrankR.X)+Sqr(CrankR.Y)),FPedalLeanApplied,LivePose.Motion.Standing);
+  FTripoRider.Scene.Translation := Support - PelvisRot;
   if FBikeContainer <> nil then
   begin
     { P = T · R · S  =>  P^-1 = S^-1 · R^-1 · T^-1 }
@@ -4587,6 +4723,7 @@ begin
     begin
       FHandAnimating := False;
       FHandFromR := FTripoHandPosR; FHandFromL := FTripoHandPosL;
+      FHandAnchorRValid:=False;FHandAnchorLValid:=False;
       progHR := 1; progHL := 1;
     end
     else
@@ -4598,20 +4735,32 @@ begin
   else begin progHR := 1; progHL := 1; end;
 
   { FROM-точка вычисляется один раз на руку (было — дважды в записи From+(To-From)*prog) }
-  BoneA := GripPlace('r', FHandFromR, FHandFromFreeRPos, FHandFromFreeRWave);
-  if FHandFromR > 0 then BoneA := SteerPoint(BoneA);
+  if FHandAnchorRValid then BoneA:=FHandAnchorR else begin
+    BoneA := GripPlace('r', FHandFromR, FHandFromFreeRPos, FHandFromFreeRWave);
+    if FHandFromR > 0 then BoneA := SteerPoint(BoneA);
+  end;
   GripR := GripPlace('r', FTripoHandPosR, FTripoHandFreeRPos, FTripoHandFreeRWave);
   if FTripoHandPosR > 0 then GripR := SteerPoint(GripR);
+  Alpha:=Min(0.025,(GripR-BoneA).Length*0.15);
   GripR := BoneA + (GripR - BoneA) * progHR;
-  if FHandFromR <> FTripoHandPosR then
-    GripR.Y := GripR.Y + 0.025 * Sqr(Sin(Pi * progHR));
-  BoneB := GripPlace('l', FHandFromL, FHandFromFreeLPos, FHandFromFreeLWave);
-  if FHandFromL > 0 then BoneB := SteerPoint(BoneB);
+  GripR.Y := GripR.Y + Alpha * Sqr(Sin(Pi * progHR));
+  if FHandAnchorLValid then BoneB:=FHandAnchorL else begin
+    BoneB := GripPlace('l', FHandFromL, FHandFromFreeLPos, FHandFromFreeLWave);
+    if FHandFromL > 0 then BoneB := SteerPoint(BoneB);
+  end;
   GripL := GripPlace('l', FTripoHandPosL, FTripoHandFreeLPos, FTripoHandFreeLWave);
   if FTripoHandPosL > 0 then GripL := SteerPoint(GripL);
+  Alpha:=Min(0.025,(GripL-BoneB).Length*0.15);
   GripL := BoneB + (GripL - BoneB) * progHL;
-  if FHandFromL <> FTripoHandPosL then
-    GripL.Y := GripL.Y + 0.025 * Sqr(Sin(Pi * progHL));
+  GripL.Y := GripL.Y + Alpha * Sqr(Sin(Pi * progHL));
+
+  if FHandAnchorRValid then FromFrameR:=FHandAnchorFrameR
+  else FromFrameR:=GripFrame(FHandFromR,0);
+  if FHandAnchorLValid then FromFrameL:=FHandAnchorFrameL
+  else FromFrameL:=GripFrame(FHandFromL,1);
+  LivePose.HandFrameR:=BlendGripFrame(FromFrameR,GripFrame(FTripoHandPosR,0),progHR);
+  LivePose.HandFrameL:=BlendGripFrame(FromFrameL,GripFrame(FTripoHandPosL,1),progHL);
+  FFrameHandR:=LivePose.HandFrameR;FFrameHandL:=LivePose.HandFrameL;
 
   { shoulder twist: when the hands are at different fore-aft positions (e.g. mid-way
     through a staggered hand change — one hand already moved, the other not yet), yaw
@@ -4626,6 +4775,7 @@ begin
   FTripoRider.ShoulderTwistDeg := twistDeg;
   FFrameContacts[0] := AnkleR; FFrameContacts[1] := AnkleL;
   FFrameContacts[2] := GripR; FFrameContacts[3] := GripL;
+  FFrameContactsValid:=True;
 
   { ── GPU-аним (этап 2): вся процедурная поза (ноги/спина/руки, LBS) считается
     в вершинном шейдере из uPhase. CPU шлёт только uniform'ы; UpdatePose и всё,
@@ -5168,6 +5318,9 @@ var
   L: TVector3;
 begin
   if not FShadowSunUseWorld then Exit;
+  { Lighting must follow heading even with rider shadows or animation off.
+    The rider scene has its own mounting transform, distinct from FGroup. }
+  if FTripoRider <> nil then FTripoRider.SetWorldSunDirection(FShadowSunWorld);
   if (FShadowScene = nil) and (FShadowMapLight = nil) then Exit;
   if not FGroup.HasWorldTransform then Exit;   { not attached to a viewport yet }
 

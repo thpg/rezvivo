@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "髪型",
+  "No hair": "髪なし",
+  "Short crop": "ショート",
+  "Swept back": "オールバック",
+  "Curly hair": "カール",
+  "Ponytail": "ポニーテール",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(ファイル未選択)",
   "(no profile data)": "(プロフィールデータなし)",
@@ -313,5 +319,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "前回のライドを保存できませんでした。アカウントを切り替える前に、アプリを再起動してライドを復元してください。",
   "Could not finish saved ride": "保存済みライドを終了できませんでした",
   "Account change in progress. Please wait.": "アカウントを切り替えています。お待ちください。",
-  "Always on top": "常に手前に表示"
+  "Always on top": "常に手前に表示",
+  "Buzz cut": "丸刈り",
+  "Side part": "横分け",
+  "Tight curls": "細かいカール",
+  "Medium length": "ミディアム",
+  "Braid": "三つ編み",
+  "Hair quality": "髪の品質",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "髪の詳細、照明、動きの更新頻度を調整します。すぐに適用されます。"
 }

@@ -19,7 +19,7 @@ unit BikeGfxUtil;
 interface
 
 uses
-  CastleVectors, X3DNodes;
+  CastleVectors, X3DNodes, RiderMotion;
 
 { Unpack a 0xRRGGBB integer into a 0..1 linear RGB vector. }
 function PackRGB(C: LongInt): TVector3;
@@ -43,10 +43,10 @@ const
     harmonics and the positive/negative half-wave peaks normalizing the
     sum to ±1. Single source for the CPU curve below AND its GLSL ports
     in BikeGpuSkin / BikeGpuSpin (emitted via GNum). }
-  ANKLE_CURVE_PHASE1   = 310.0;
-  ANKLE_CURVE_PHASE2   = 250.0;
-  ANKLE_CURVE_POS_PEAK = 0.992690685;
-  ANKLE_CURVE_NEG_PEAK = 1.182432177;
+  ANKLE_CURVE_PHASE1   = RiderMotion.ANKLE_CURVE_PHASE1;
+  ANKLE_CURVE_PHASE2   = RiderMotion.ANKLE_CURVE_PHASE2;
+  ANKLE_CURVE_POS_PEAK = RiderMotion.ANKLE_CURVE_POS_PEAK;
+  ANKLE_CURVE_NEG_PEAK = RiderMotion.ANKLE_CURVE_NEG_PEAK;
 
 { Anatomically plausible ankling: dorsi/plantarflexion varying with crank
   angle. }
@@ -109,14 +109,8 @@ begin
 end;
 
 function BicycleAnkleFlexCurve(const CrankDeg, MaxFlexDeg: Double): Double;
-var
-  A, S: Double;
 begin
-  A := CrankDeg - 360.0 * Floor(CrankDeg / 360.0);
-  if A < 0.0 then A := A + 360.0;
-  S := Cos(DegToRad(A - ANKLE_CURVE_PHASE1)) + 0.25 * Cos(DegToRad(2.0 * (A - ANKLE_CURVE_PHASE2)));
-  if S >= 0.0 then Result := MaxFlexDeg * (S / ANKLE_CURVE_POS_PEAK)
-  else Result := MaxFlexDeg * (S / ANKLE_CURVE_NEG_PEAK);
+  Result:=RiderMotion.BicycleAnkleFlexCurve(CrankDeg,MaxFlexDeg);
 end;
 
 function RotateXYZ(const V: TVector3; RxDeg, RyDeg, RzDeg: Single): TVector3;

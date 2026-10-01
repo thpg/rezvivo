@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "Coiffure",
+  "No hair": "Sans cheveux",
+  "Short crop": "Coupe courte",
+  "Swept back": "Coiffés en arrière",
+  "Curly hair": "Boucles",
+  "Ponytail": "Queue de cheval",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(aucun fichier sélectionné)",
   "(no profile data)": "(aucune donnée de profil)",
@@ -302,5 +308,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "La dernière sortie n’a pas pu être enregistrée. Redémarrez l’application et récupérez-la avant de changer de compte.",
   "Could not finish saved ride": "Impossible de terminer la sortie enregistrée",
   "Account change in progress. Please wait.": "Changement de compte en cours. Veuillez patienter.",
-  "Always on top": "Toujours au premier plan"
+  "Always on top": "Toujours au premier plan",
+  "Buzz cut": "Coupe rasée",
+  "Side part": "Raie de côté",
+  "Tight curls": "Boucles serrées",
+  "Medium length": "Mi-longs",
+  "Braid": "Tresse",
+  "Hair quality": "Qualité des cheveux",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "Règle les détails, l’éclairage et la fréquence d’animation des cheveux. Effet immédiat."
 }

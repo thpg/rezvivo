@@ -14,14 +14,14 @@ unit BikeGpuSkin;
       PinBlendedContact (см. ограничения ниже);
     - движение таза — scene-level трансформом вокруг контакта с седлом;
       спина — порт PoseSpine, кватернионы наклона/поворота/крена
-      приходят как uSpineQ0..4;
+      приходят как uSpineQ0..6;
     - руки — two-bone IK к resolved-хватам + пронация с фейдом у вертикали
       + wrist-leveling (uHandLevel) + shoulder-twist из асимметрии хватов
       (этап 3-хвост);
     - free-ноги: uLegFreeR/L блендят цель ноги педаль↔uLegFreePosR/L и
       гасят анклинг (этап 3-хвост); free-руки работают с этапа 2 — хваты
       резолвятся на CPU и приходят в uGripR/uGripL;
-    - суставы вне процедурного набора (пальцы, twist-кости, голова)
+    - суставы вне процедурного набора (пальцы, дополнительные twist-кости)
       жёстко следуют ближайшему процедурному предку: их дельта-матрица
       равна дельте предка (D_j = D_anc — следует из rigid-follow).
 
@@ -47,7 +47,7 @@ unit BikeGpuSkin;
 
   { Этап 5: капсульная тень райдера под GpuAnim. SendFrame попутно считает
     позиции 21 сустава ТОЙ ЖЕ математикой, что шейдер (closed-form IK ног/рук,
-    FK спины из uSpineQ*, голова — rigid-follow предка), и отдаёт их в кадре
+    FK спины и шеи из uSpineQ*), и отдаёт их в кадре
     байка через ShadowJoint — UpdateShadowDynamic строит капсулы без posed-рига. }
 
 interface
@@ -55,7 +55,7 @@ interface
 uses
   Classes, SysUtils, Math,
   CastleUtils, CastleVectors, CastleScene, X3DNodes, X3DFields,
-  TripoRig, RiderTripo;
+  TripoRig, RiderTripo, RiderHandGrip, RiderMotion;
 
 type
   { ── этап 5: захваченные bind-константы для аналитической тени ── }
@@ -68,7 +68,7 @@ type
   TGpuShArm = record
     Ok, ClavInSpine: Boolean;
     ParentSpine: Integer;
-    CP, CO, AO, AXM, AXE, CT: TTripoVec3;
+    CP, CO, AO, AXM, AXE, CT, HandForward, HandPalm: TTripoVec3;
     CR, PR, UR, MR, ER: TTripoVec4;
     L1, L2: Single;
   end;
@@ -97,23 +97,24 @@ type
     FURest: TMFMatrix4f;   { NJ: gskRest = BindWorld × NativeIBM; live after HeightK }
     FUBindT: TMFVec3f;     { NJ: BindWorld translations; live after HeightK }
     FUHandRest: TMFMatrix4f;
+    FHandJointIndices: array of Integer;
     FScalarsList: TSingleList;
     FVecsList: TVector3List;
     FRestList: TMatrix4List;
     FBindTList: TVector3List;
     FRestCount: Integer;
     { какие суставы позвоночника реально есть в риге (для весов PoseSpine) }
-    FSpineEx: array[0..4] of Boolean;
-    FSpineIdx: array[0..4] of Integer;
+    FSpineEx: array[0..RiderSpineChainCount-1] of Boolean;
+    FSpineIdx: array[0..RiderSpineChainCount-1] of Integer;
     FDiagDumps: Integer;   { TEMP-DIAG: счётчик одноразовых дампов SendFrame }
     { ── этап 5: аналитические суставы капсульной тени ── }
     FShLegs: array[0..1] of TGpuShLeg;
     FShArms: array[0..1] of TGpuShArm;
-    FShSpine: array[0..4] of TGpuShSpine;
+    FShSpine: array[0..RiderSpineChainCount-1] of TGpuShSpine;
     FShLegHint, FShArmHint, FShLean, FShFlare: TTripoVec3;
     FShBind: array[0..GPU_SHJ_COUNT-1] of TTripoVec3;  { bind-позиции (rig frame) }
     FShEx: array[0..GPU_SHJ_COUNT-1] of Boolean;       { сустав есть в риге }
-    FShHeadAnc: Integer;                               { spine-индекс предка головы, -1 }
+    FShHeadAnc: Integer;                               { spine-индекс головы или её ближайшего предка, -1 }
     FShPts: array[0..GPU_SHJ_COUNT-1] of TVector3;     { кадр байка, за SendFrame }
     FShValid: Boolean;
     FShNameIdx: TStringList;                           { кэш имя→индекс для ShadowJoint (SHJ_NAMES фиксирована) }
@@ -122,10 +123,13 @@ type
       Спина/голова считаются каждый SendFrame — от них зависит шлем
       (ApplyHelmetSkinMatrix), который обязан следовать за головой всегда. }
     FShRigPts: array[0..GPU_SHJ_COUNT-1] of TTripoVec3; { rig frame: спина — каждый SendFrame, конечности — по запросу }
-    FShRS: array[0..4] of TTripoVec4;                  { FK спины текущего кадра (ротации) }
-    FShPS: array[0..4] of TTripoVec3;                  { FK спины текущего кадра (позиции) }
-    FShDelta: array[0..4] of TTripoVec4;               { локальные дельты; uScalars получает готовые FShRS }
+    FShRS: array[0..RiderSpineChainCount-1] of TTripoVec4;                  { FK спины текущего кадра (ротации) }
+    FShPS: array[0..RiderSpineChainCount-1] of TTripoVec3;                  { FK спины текущего кадра (позиции) }
+    FShDelta: array[0..RiderSpineChainCount-1] of TTripoVec4;               { локальные дельты; uScalars получает готовые FShRS }
+    FShClavicleDelta: array[0..1] of TTripoVec4;
     FShContacts: array[0..3] of TVector3;
+    FShHandQ,FShGripTarget:array[0..1] of TTripoVec4;
+    FShHandTwist:array[0..1] of Single;
     FShDirty: Boolean;                                 { конечности/перенос устарели — пересчитать в ShadowJoint }
     FShInPhase, FShInStanceZ, FShInPedalDir: Single;   { входы SendFrame для ленивого пересчёта }
     FShInInvP: TMatrix4;
@@ -135,7 +139,7 @@ type
     FShInFootYaw: TTripoVec4;                          { right-foot yaw; conjugate for left }
     { кэш последних отправленных uniform'ов — Send только при изменении;
       первый кадр после Build/включения эффекта шлёт всё }
-    FLastScalars: array[0..34] of Single;
+    FLastScalars: array[0..52] of Single;
     FLastVecs: array[0..7] of TVector3;
     FLastInvP: TMatrix4;
     FLastValid: Boolean;
@@ -176,6 +180,7 @@ type
       сустава нет в риге или SendFrame ещё не считал позиции. }
     function ShadowContact(Index: Integer; out P: TVector3): Boolean;
     function ShadowJoint(const AName: string; out P: TVector3): Boolean;
+    function ShadowHandFrame(Side:Integer;out Forward,Palm:TVector3;out Twist:Single):Boolean;
   end;
 
 implementation
@@ -269,6 +274,8 @@ end;
 
 destructor TGpuRiderSkin.Destroy;
 begin
+  if(FRider<>nil)and(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then FRider.Correctives.Body.DetachGpu;
+  if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
   { FEffect is parented to appearances — it dies with the rider scene.
     Do not Free it here: LoadTripoRider / a live slider can destroy the
     wrapper while CGE still holds the node in the current frame. }
@@ -296,6 +303,8 @@ begin
   { Disable only. Extract/Free of TEffectNode while the scene is mounted
     races the renderer and raises EObjectCheck (often on rider-list click). }
   FReady := False;
+  if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
+  if(FRider<>nil)and(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then FRider.Correctives.Body.DetachGpu;
   if FEffect = nil then Exit;
   try
     FEffect.Enabled := False;
@@ -313,8 +322,6 @@ begin
 end;
 
 procedure TGpuRiderSkin.UploadBindUniforms;
-const
-  SPINE_NAMES: array[0..4] of string = ('Waist', 'Spine', 'Spine01', 'Spine02', 'NeckTwist01');
 var
   Rig: TTripoRig;
   HandMatrices: array of TTripoMat4;
@@ -323,7 +330,7 @@ var
   RestM: TTripoMat4;
   Contact: TVector3;
   HintV: TVector3;
-  SpineIdx: array[0..4] of Integer;
+  SpineIdx: array[0..RiderSpineChainCount-1] of Integer;
   LegIdx: array[0..1, 0..2] of Integer;
   ArmIdx: array[0..1, 0..3] of Integer;
   LegOk, ArmOk: array[0..1] of Boolean;
@@ -349,7 +356,9 @@ begin
     Rig.ClosedHandMatrices(HandMatrices);
     HandList := TMatrix4List.Create;
     try
-      for I := 0 to Rig.JointCount - 1 do HandList.Add(RestToCastle(HandMatrices[I]));
+      HandList.Add(TMatrix4.Identity);
+      for I := 1 to High(FHandJointIndices) do
+        HandList.Add(RestToCastle(HandMatrices[FHandJointIndices[I]]));
       FUHandRest.Send(HandList);
     finally HandList.Free end;
   end;
@@ -376,7 +385,7 @@ begin
     FURest.Items.Assign(FRestList);
 
   { ── FSh* bind capture (helmet / capsule shadow) from live BindWorld ── }
-  for I := 0 to 4 do SpineIdx[I] := Rig.JointIndexByName(SPINE_NAMES[I]);
+  for I := 0 to RiderSpineChainCount-1 do SpineIdx[I] := Rig.JointIndexByName(RiderSpineChainNames[I]);
   LegIdx[0,0] := Rig.JointIndexByName('R_Thigh');
   LegIdx[0,1] := Rig.JointIndexByName('R_Calf');
   LegIdx[0,2] := Rig.JointIndexByName('R_Foot');
@@ -399,7 +408,7 @@ begin
     if ArmIdx[Side,0] >= 0 then
     begin
       P := Rig.JointParent[ArmIdx[Side,0]];
-      for I := 0 to 4 do
+      for I := 0 to RiderSpineChainCount-1 do
         if SpineIdx[I] = P then ClavParentSpine[Side] := I;
     end;
   end;
@@ -426,7 +435,7 @@ begin
   FShLean := V3(HintV.X, HintV.Y, HintV.Z);
   HintV := FRider.FlareAxis;
   FShFlare := V3(HintV.X, HintV.Y, HintV.Z);
-  for I := 0 to 4 do
+  for I := 0 to RiderSpineChainCount-1 do
     if SpineIdx[I] >= 0 then
       with FShSpine[I] do
       begin
@@ -436,7 +445,7 @@ begin
         ParentInChain := False;
         ParentSpine := -1;
         P := Rig.JointParent[SpineIdx[I]];
-        for J := 0 to 4 do
+        for J := 0 to RiderSpineChainCount-1 do
           if SpineIdx[J] = P then
           begin
             ParentInChain := True;
@@ -461,6 +470,7 @@ begin
         MR := BindRot(ArmIdx[Side,2]);
         AXE := V3Norm(LocalOff(ArmIdx[Side,2], ArmIdx[Side,3]));
         ER := BindRot(ArmIdx[Side,3]);
+        RiderHandAxes(Rig,Side,FShArms[Side].HandForward,FShArms[Side].HandPalm);
         Contact := FRider.GpuContactLocal(2 + Side);
         CT := V3(Contact.X, Contact.Y, Contact.Z);
         L1 := BoneLen(ArmIdx[Side,1], ArmIdx[Side,2]);
@@ -488,7 +498,6 @@ function TGpuRiderSkin.Build(ALog: TStrings): Boolean;
 const
   { процедурные роли суставов }
   PK_NONE = 0; PK_LEGR = 1; PK_LEGL = 2; PK_SPINE = 3; PK_ARMR = 4; PK_ARML = 5;
-  SPINE_NAMES: array[0..4] of string = ('Waist', 'Spine', 'Spine01', 'Spine02', 'NeckTwist01');
 var
   Rig: TTripoRig;
   SL: TStringList;
@@ -496,7 +505,7 @@ var
   I, J, P, NJ, Side: Integer;
   Anc: array of Integer;
   Kind, PPart: array of Integer;
-  SpineIdx: array[0..4] of Integer;
+  SpineIdx: array[0..RiderSpineChainCount-1] of Integer;
   LegIdx: array[0..1, 0..2] of Integer;   { [side][0=thigh,1=calf,2=foot] }
   ArmIdx: array[0..1, 0..3] of Integer;   { [side][0=clav,1=upper,2=fore,3=hand] }
   TwistIdx: array[0..1, 0..1] of Integer;
@@ -550,6 +559,11 @@ var
     Result := -1;
   end;
 
+  function SpineMatrixSlot(Index: Integer): Integer;
+  begin
+    if Index<5 then Result:=7+Index else Result:=15+Index;
+  end;
+
   function PsdRotation(J: Integer): string;
   var A, Slot: Integer;
   begin
@@ -562,7 +576,7 @@ var
     case Kind[A] of
       PK_LEGR: Slot := 1;
       PK_LEGL: Slot := 4;
-      PK_SPINE: Slot := 7;
+      PK_SPINE: if PPart[A]<5 then Slot := 7 else Slot := 15;
       PK_ARMR: Slot := 12;
       PK_ARML: Slot := 16;
       else Exit;
@@ -663,7 +677,9 @@ var
 
   { GLSL-решатель руки: part 0 = ключица (из базы), 1..3 = two-bone IK + пронация }
   procedure EmitArmSolve(const Fn, Pfx, BaseFn, GripU, PronU: string; SideSign: Integer);
+  var Side:Integer;
   begin
+    Side:=(1-SideSign) div 2;
     SL.Add('void ' + Fn + '(bool limb, out mat4 dCl, out mat4 dU, out mat4 dM, out mat4 dE, out vec4 foreRoll, out vec3 forePivot) {');
     SL.Add('  vec4 qU0; vec3 pSh;');
     SL.Add('  ' + BaseFn + '(qU0, pSh, dCl);');
@@ -692,24 +708,9 @@ var
     SL.Add('    vec3 mDir = normalize(aim - pM);');
     SL.Add('    qM = qmul(gskQFromTo(gskQRot(qMpre, ' + Pfx + 'AXE), mDir), qMpre);');
     SL.Add('    vec4 qEnat = qmul(qM, qmul(gskQConj(' + Pfx + 'MR), ' + Pfx + 'ER));');
-    { этап 3-хвост: пронация с фейдом у вертикали + wrist-leveling — порт
-      SolveLimb (RiderTripo): vert=|axis.y|, фейд с cPronVertDead=0.65,
-      затем питч кисти к горизонтали, cap 40° — всё в world/rig frame }
     SL.Add('    pE = pM + mDir * ' + Pfx + 'L2;');
-    SL.Add('    vec3 foAxis = mDir;');
-    SL.Add('    float ptv = clamp((abs(foAxis.y) - 0.65) / 0.35, 0.0, 1.0);');
-    SL.Add('    qE = qmul(gskQAA(foAxis, radians(' + PronU + ' * (1.0 - ptv))), qEnat);');
-    SL.Add('    vec3 dirH = vec3(foAxis.x, 0.0, foAxis.z);');
-    SL.Add('    if (length(dirH) > 1e-3) {');
-    SL.Add('      dirH = normalize(dirH);');
-    SL.Add('      vec3 axL = cross(foAxis, dirH);');
-    SL.Add('      float hs = length(axL);');
-    SL.Add('      if (hs > 1e-6) {');
-    SL.Add('        axL /= hs;');
-    SL.Add('        float hang = min(atan(hs, dot(foAxis, dirH)) * clamp(uHandLevel, 0.0, 1.0), 0.698132);');
-    SL.Add('        qE = qmul(gskQAA(axL, hang), qE);');
-    SL.Add('      }');
-    SL.Add('    }');
+    SL.Add('    qE = gskGripOrientation(qEnat,uGripQ'+IntToStr(Side)+',mDir,'+GV3(FShArms[Side].HandForward)+',');
+    SL.Add('      uScalars['+IntToStr(43+Side)+'],'+PronU+','+IntToStr(-SideSign)+'.0,uHandLevel);');
     SL.Add('    vec3 newAim = tgt - gskQRot(qE, ' + Pfx + 'CT);');
     SL.Add('    if (length(newAim - requestedAim) < 1e-5) break;');
     { Wrist orientation feeds back into the target. Full corrections can
@@ -758,9 +759,9 @@ begin
   SetLength(Kind, NJ); SetLength(PPart, NJ); SetLength(Anc, NJ);
   for I := 0 to NJ - 1 do begin Kind[I] := PK_NONE; PPart[I] := 0; Anc[I] := -1; end;
 
-  for I := 0 to 4 do
+  for I := 0 to RiderSpineChainCount-1 do
   begin
-    SpineIdx[I] := Rig.JointIndexByName(SPINE_NAMES[I]);
+    SpineIdx[I] := Rig.JointIndexByName(RiderSpineChainNames[I]);
     FSpineIdx[I] := SpineIdx[I];
     FSpineEx[I] := SpineIdx[I] >= 0;
   end;
@@ -784,7 +785,7 @@ begin
     if ArmIdx[Side,0] >= 0 then
     begin
       P := Rig.JointParent[ArmIdx[Side,0]];
-      for I := 0 to 4 do
+      for I := 0 to RiderSpineChainCount-1 do
         if SpineIdx[I] = P then ClavParentSpine[Side] := I;
     end;
   end;
@@ -805,7 +806,7 @@ begin
         PPart[ArmIdx[Side,I]] := I;
       end;
   end;
-  for I := 0 to 4 do
+  for I := 0 to RiderSpineChainCount-1 do
     if FSpineEx[I] then
     begin
       Kind[SpineIdx[I]] := PK_SPINE;
@@ -831,15 +832,24 @@ begin
   FEffect.Language := slGLSL;
   FEffect.X3DName := 'TripoGpuSkin';
   FEffect.InternalCacheVertexAnimation := True;
+  if FRider.Face<>nil then FRider.Face.AttachGpu(FEffect);
   { Static skeleton routing is data, not a separate IK call site for every
     joint. The driver otherwise inlines the full limb solver in dozens of
     branches, making first-use shader linking take seconds per shape. }
   JointCode := TMFInt32.Create(FEffect, True, 'uGskJointCode', []);
+  { Only hands/fingers use the closed-grip palette. Keeping NJ matrices here
+    exhausted the 1024 vertex constant registers when facial joints grew.
+    The low six bits retain limb routing; high bits select this compact bank. }
+  SetLength(FHandJointIndices,1);FHandJointIndices[0]:=-1;
   for I := 0 to NJ - 1 do
   begin
     J := Anc[I];
     if J < 0 then JointCode.Items.Add(0)
-    else JointCode.Items.Add(Kind[J] * 8 + PPart[J]);
+    else if (Kind[J] in [PK_ARMR,PK_ARML]) and(PPart[J]=3) then begin
+      SetLength(FHandJointIndices,Length(FHandJointIndices)+1);
+      FHandJointIndices[High(FHandJointIndices)]:=I;
+      JointCode.Items.Add(Kind[J]*8+PPart[J]+High(FHandJointIndices)*64);
+    end else JointCode.Items.Add(Kind[J] * 8 + PPart[J]);
   end;
   FEffect.AddCustomField(JointCode);
   { Uniform bounds preserve the solver iterations without driver unrolling. }
@@ -850,10 +860,14 @@ begin
   { скаляры одним MF-массивом (порядок = #define-алиасы в GLSL):
     0 phase, 1 stanceZ, 2 pedalDir, 3 kneeFlare, 4 elbowFlare, 5 ankleFlex,
     6 pronR, 7 pronL, 8 shoulderRound, 9 handLevel, 10 legFreeR, 11 legFreeL,
-    12..31 spine world quaternions, 32 foot yaw W, 33/34 grip closed }
+    12..31 spine world quaternions, 32 foot yaw W, 33/34 grip closed,
+    35..42 clavicle deltas, 43/44 hand alignment, 45..52 grip rotations,
+    53..60 upper neck and skull world rotations }
   FUScalars := TMFFloat.Create(FEffect, true, 'uScalars',
     [0, 0.07, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0,
-     0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1]);
+     0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1,
+     1,1,1, 0,0,0,1, 0,0,0,1, 1,1, 0,0,0,1, 0,0,0,1,
+     0,0,0,1, 0,0,0,1]);
   FEffect.AddCustomField(FUScalars);
   FUVecs := TMFVec3f.Create(FEffect, true, 'uVecs',
     [Vector3(0, 0, 0), Vector3(0, -0.17, 0), Vector3(0, 0.17, 0),
@@ -878,13 +892,14 @@ begin
   FUBindT.Items.Assign(FBindTList);
   FEffect.AddCustomField(FUBindT);
   FUHandRest := TMFMatrix4f.Create(FEffect, True, 'uGskHandRest', []);
-  FUHandRest.Items.Assign(FRestList);
+  for I:=0 to High(FHandJointIndices)do FUHandRest.Items.Add(TMatrix4.Identity);
   FEffect.AddCustomField(FUHandRest);
   if FRider.Correctives <> nil then
   begin
     FRider.Correctives.SetGpuActive(True);
     FRider.Correctives.AddUniforms(FEffect);
   end;
+  if FRider.Face<>nil then FRider.Face.Gpu:=True;
 
   { ── GLSL ── }
   SL := TStringList.Create;
@@ -895,8 +910,10 @@ begin
       атрибуты объявляем сами — совпадающее объявление в чанке
       skin_animation легально (так работает и сам движок: линк мержит
       глобальный скоуп). }
-    SL.Add('#ifdef CASTLE_SHADOW_DEPTH');
     SL.Add('attribute vec4 castle_Vertex;');
+    SL.Add('attribute vec3 castle_Normal;');
+    SL.Add('#ifdef RIDER_SURFACE_MOTION');
+    SL.Add('vec3 riderSurfaceOffset();');
     SL.Add('#endif');
     SL.Add('attribute vec4 castle_SkinJoints0;');
     SL.Add('attribute vec4 castle_SkinWeights0;');
@@ -910,13 +927,15 @@ begin
       что тождественно Σw·D·bind при любом состоянии суставов. }
     SL.Add('mat4 skinMatrix;');
     SL.Add('uniform mat4 uInvP;');
-    SL.Add('uniform float uScalars[35];');
-    SL.Add('uniform mat4 uGskHandRest[' + IntToStr(NJ) + '];');
+    SL.Add('uniform float uScalars[61];');
+    SL.Add('uniform mat4 uGskHandRest[' + IntToStr(Length(FHandJointIndices)) + '];');
     SL.Add('uniform int uGskIterations[3];');
     SL.Add('uniform vec3 uVecs[8];');
     SL.Add('uniform mat4 uGskRest[' + IntToStr(NJ) + '];');
     SL.Add('uniform int uGskJointCode[' + IntToStr(NJ) + '];');
     SL.Add('uniform vec3 uBindT[' + IntToStr(NJ) + '];');
+    SL.Add('#define uGripQ0 vec4(uScalars[45],uScalars[46],uScalars[47],uScalars[48])');
+    SL.Add('#define uGripQ1 vec4(uScalars[49],uScalars[50],uScalars[51],uScalars[52])');
     SL.Add('#define uPhase uScalars[0]');
     SL.Add('#define uStanceZ uScalars[1]');
     SL.Add('#define uPedalDir uScalars[2]');
@@ -933,10 +952,15 @@ begin
       Positions and all limb IK/skinning remain in GLSL. Apart from redundant
       vertex ALU, composing nested full quaternions here causes expensive
       driver optimization on every material / shadow program. }
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do begin
+      if I<5 then J:=12+I*4 else J:=53+(I-5)*4;
       SL.Add(Format('#define uSpineQ%d vec4(uScalars[%d],uScalars[%d],uScalars[%d],uScalars[%d])',
-        [I, 12 + I * 4, 13 + I * 4, 14 + I * 4, 15 + I * 4]));
+        [I,J,J+1,J+2,J+3]));
+    end;
     SL.Add('#define uFootYawW uScalars[32]');
+    for Side:=0 to 1 do
+      SL.Add(Format('#define uClavicleQ%d vec4(uScalars[%d],uScalars[%d],uScalars[%d],uScalars[%d])',
+        [Side,35+Side*4,36+Side*4,37+Side*4,38+Side*4]));
     SL.Add('#define uFootYawXYZ uVecs[7]');
     SL.Add('#define uBB uVecs[0]');
     SL.Add('#define uCrankR uVecs[1]');
@@ -1038,14 +1062,14 @@ begin
     SL.Add('}');
 
     { позвоночник: ротации const; позиции/оффсеты с uBindT }
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
       begin
         SL.Add('#define gskSPP' + IntToStr(I) + ' uBindT[' + IntToStr(SpineIdx[I]) + ']');
         EmitConstQ('gskSPR' + IntToStr(I), BindRot(SpineIdx[I]));
         P := Rig.JointParent[SpineIdx[I]];
         SpIdx := -1;
-        for J := 0 to 4 do if SpineIdx[J] = P then SpIdx := J;
+        for J := 0 to RiderSpineChainCount-1 do if SpineIdx[J] = P then SpIdx := J;
         if SpIdx >= 0 then
           SL.Add('#define gskSPO' + IntToStr(I) + ' gskQRot(gskQConj(gskSPR' + IntToStr(SpIdx) +
             '), uBindT[' + IntToStr(SpineIdx[I]) + ']-uBindT[' + IntToStr(P) + '])')
@@ -1077,6 +1101,7 @@ begin
           EmitConst(S + 'CO', BindLocalTrans(ArmIdx[Side,0]));
         SL.Add('#define ' + S + 'AO gskQRot(gskQConj(' + S + 'CR), uBindT[' +
           IntToStr(ArmIdx[Side,1]) + ']-uBindT[' + IntToStr(ArmIdx[Side,0]) + '])');
+        RiderHandAxes(Rig,Side,FShArms[Side].HandForward,FShArms[Side].HandPalm);
         Contact := FRider.GpuContactLocal(2 + Side);
         EmitLimbConsts(S + 'A_', ArmIdx[Side,1], ArmIdx[Side,2], ArmIdx[Side,3], Contact);
       end;
@@ -1106,7 +1131,7 @@ begin
     FShLean := V3(HintV.X, HintV.Y, HintV.Z);
     HintV := FRider.FlareAxis;
     FShFlare := V3(HintV.X, HintV.Y, HintV.Z);
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
         with FShSpine[I] do
         begin
@@ -1116,7 +1141,7 @@ begin
           ParentInChain := False;
           ParentSpine := -1;
           P := Rig.JointParent[SpineIdx[I]];
-          for J := 0 to 4 do
+          for J := 0 to RiderSpineChainCount-1 do
             if SpineIdx[J] = P then
             begin
               ParentInChain := True;
@@ -1158,25 +1183,26 @@ begin
     J := Rig.JointIndexByName('Head');
     if J >= 0 then
     begin
-      P := Rig.JointParent[J];
+      P := J;
       while (P >= 0) and (FShHeadAnc < 0) do
       begin
-        for I := 0 to 4 do
+        for I := 0 to RiderSpineChainCount-1 do
           if SpineIdx[I] = P then FShHeadAnc := I;
         P := Rig.JointParent[P];
       end;
     end;
 
     { ── позвоночник: FK-цепочка с кватернионами из uSpineQ* ── }
-    SL.Add('vec4 gskSpineR[5]; vec3 gskSpineP[5];');
+    SL.Add(Format('vec4 gskSpineR[%d]; vec3 gskSpineP[%d];',
+      [RiderSpineChainCount,RiderSpineChainCount]));
     SL.Add('void gskSolveSpine() {');
 
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
       begin
         P := Rig.JointParent[SpineIdx[I]];
         SpIdx := -1;
-        for J := 0 to 4 do if SpineIdx[J] = P then SpIdx := J;
+        for J := 0 to RiderSpineChainCount-1 do if SpineIdx[J] = P then SpIdx := J;
         if SpIdx >= 0 then
         begin
           { родитель — сустав той же цепи: его текущие r/p уже посчитаны }
@@ -1191,7 +1217,7 @@ begin
           SL.Add('  vec3 p' + IntToStr(I) + ' = gskSPP' + IntToStr(I) + ';');
         end;
       end;
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
       begin
         SL.Add('  gskSpineR[' + IntToStr(I) + '] = r' + IntToStr(I) + ';');
@@ -1203,7 +1229,7 @@ begin
     SL.Add('}');
     SL.Add('mat4 gskSpineD(int idx) {');
     SL.Add('  vec4 r; vec3 p; gskSpineRP(idx, r, p);');
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
         SL.Add('  if (idx == ' + IntToStr(I) + ') return gskDMat(r, p, gskSPR' + IntToStr(I) + ', gskSPP' + IntToStr(I) + ');');
     SL.Add('  return mat4(1.0);');
@@ -1218,19 +1244,14 @@ begin
         if ClavParentSpine[Side] >= 0 then
         begin
           SL.Add('  vec4 rb; vec3 pb; gskSpineRP(' + IntToStr(ClavParentSpine[Side]) + ', rb, pb);');
-          { этап 3-хвост: shoulder-twist из fore-aft асимметрии хватов (bike frame),
-            порт AnimateFrame: clamp((GripR.X-GripL.X)*220, ±22°); тот же знак L/R }
-          SL.Add('  float twist = clamp((uGripR.x - uGripL.x) * 220.0, -22.0, 22.0);');
-          SL.Add('  float round = radians(uShoulderRound * ' + GNum(1 - 2*Side) + ' + twist);');  { R: round+, L: round- }
-          SL.Add('  vec4 qCl = qmul(gskQAA(vec3(0.0,1.0,0.0), round), qmul(rb, qmul(gskQConj(' + S + 'PR), ' + S + 'CR)));');
+          SL.Add('  vec4 chest = qmul(rb,gskQConj(' + S + 'PR));');
+          SL.Add('  vec4 qCl = qmul(chest,qmul(uClavicleQ' + IntToStr(Side) + ',' + S + 'CR));');
           SL.Add('  vec3 pCl = pb + gskQRot(rb, ' + S + 'CO);');
         end
         else
         begin
           { родитель ключицы вне цепи позвоночника — не анимируется: база = bind }
-          SL.Add('  float twist = clamp((uGripR.x - uGripL.x) * 220.0, -22.0, 22.0);');
-          SL.Add('  float round = radians(uShoulderRound * ' + GNum(1 - 2*Side) + ' + twist);');
-          SL.Add('  vec4 qCl = qmul(gskQAA(vec3(0.0,1.0,0.0), round), ' + S + 'CR);');
+          SL.Add('  vec4 qCl = qmul(uClavicleQ' + IntToStr(Side) + ',' + S + 'CR);');
           SL.Add('  vec3 pCl = ' + S + 'CP;');
         end;
         SL.Add('  dCl = gskDMat(qCl, pCl, ' + S + 'CR, ' + S + 'CP);');
@@ -1239,15 +1260,15 @@ begin
         SL.Add('}');
       end;
 
+    AppendRiderGripGlsl(SL);
     { ── решатели конечностей ── }
     if LegOk[0] then EmitLegSolve('gskLegD_R', 'gskLGR_', 'uCrankR', +1);
     if LegOk[1] then EmitLegSolve('gskLegD_L', 'gskLGL_', 'uCrankL', -1);
     if ArmOk[0] then EmitArmSolve('gskArmD_R', 'gskAC0_A_', 'gskArmBase0', 'uGripR', 'uPronR', +1);
-    { -uPronL: same axis-mirror as CPU SolveLimb (see RiderTripo). } 
-    if ArmOk[1] then EmitArmSolve('gskArmD_L', 'gskAC1_A_', 'gskArmBase1', 'uGripL', '(-uPronL)', -1);
+    if ArmOk[1] then EmitArmSolve('gskArmD_L', 'gskAC1_A_', 'gskArmBase1', 'uGripL', 'uPronL', -1);
 
     { ── getD: отображение индекса сустава в дельта-матрицу ── }
-    SL.Add('mat4 gskDelta[20];');
+    SL.Add('mat4 gskDelta[22];');
     { Keep the dynamically indexed matrix bank small. A quaternion and pivot
       are enough; construct a twist matrix only for a vertex using a helper. }
     SL.Add('vec4 gskForeRoll[2];');
@@ -1258,15 +1279,17 @@ begin
     SL.Add('  vec3 p=gskForePivot[side];');
     SL.Add('  return gskDMat(q,p,vec4(0.0,0.0,0.0,1.0),p)*gskDelta[side==0?14:18];');
     SL.Add('}');
+    if FRider.Face<>nil then SL.Add(FRider.Face.ShaderSource)
+    else SL.Add('mat4 riderFaceDelta(int j){return mat4(1.0);}');
     SL.Add('mat4 gskGetD(int j) {');
-    SL.Add('  int code = uGskJointCode[j];');
+    SL.Add('  int routing = uGskJointCode[j]; int handSlot=routing/64; int code=routing-handSlot*64;');
     SL.Add('  if (code == 0) return gskRest(j);');
     SL.Add('  int kind = code / 8; int part = code - kind*8;');
-    SL.Add('  int slot = kind == 1 ? 1 : (kind == 2 ? 4 : (kind == 3 ? 7 : (kind == 4 ? 12 : 16)));');
+    SL.Add('  int slot = kind == 1 ? 1 : (kind == 2 ? 4 : (kind == 3 ? (part<5 ? 7 : 15) : (kind == 4 ? 12 : 16)));');
     SL.Add('  if (kind >= 4 && part >= 4) return gskTwistD(kind,part) * gskRest(j);');
     SL.Add('  mat4 hand = mat4(1.0);');
-    SL.Add('  if (kind >= 4 && part == 3 && uScalars[33 + kind - 4] > 0.5) hand = uGskHandRest[j];');
-    SL.Add('  return gskDelta[slot + part] * hand * gskRest(j);');
+    SL.Add('  if (kind >= 4 && part == 3 && uScalars[33 + kind - 4] > 0.5) hand = uGskHandRest[handSlot];');
+    SL.Add('  return gskDelta[slot + part] * hand * gskRest(j) * riderFaceDelta(j);');
     SL.Add('}');
 
     { ── plug: LBS по 4 влияниям ── }
@@ -1275,11 +1298,13 @@ begin
       { Corrective joints are fixed for this model. Resolve their matrix
         slots here instead of duplicating dynamic skeleton routing in each
         corrective expression (very expensive for the GLSL compiler). }
-      SL.Add('float gskPsdLocalX(mat3 childDelta, mat3 parentDelta, mat3 bindRot) {');
+      SL.Add('float gskPsdLocalComponent(mat3 childDelta, mat3 parentDelta, mat3 bindRot,int axis) {');
       SL.Add('  mat3 d=transpose(bindRot)*transpose(parentDelta)*childDelta*bindRot;');
+      SL.Add('  if(axis==1)return atan(-d[0][2],length(d[0].xy));');
+      SL.Add('  if(axis==2)return atan(d[0][1],d[0][0]);');
       SL.Add('  return atan(d[1][2], d[2][2]);');
       SL.Add('}');
-      SL.Add('float riderPsdAngle(int j) {');
+      SL.Add('float riderPsdComponent(int j,int axis) {');
       for I := 0 to NJ - 1 do
         if FRider.Correctives.NeededJoints[I] then
         begin
@@ -1290,11 +1315,12 @@ begin
             if J > 0 then S := S + ',';
             S := S + GNum(RestM[(J div 3)*4 + J mod 3]);
           end;
-          SL.Add('  if(j==' + IntToStr(I) + ') return gskPsdLocalX(' +
-            PsdRotation(I) + ',' + PsdRotation(Rig.JointParent[I]) + ',' + S + '));');
+          SL.Add('  if(j==' + IntToStr(I) + ') return gskPsdLocalComponent(' +
+            PsdRotation(I) + ',' + PsdRotation(Rig.JointParent[I]) + ',' + S + '),axis);');
         end;
       SL.Add('  return 0.0;'); SL.Add('}');
       SL.Add(FRider.Correctives.ShaderSource);
+      if FRider.Correctives.Body<>nil then SL.Add(FRider.Correctives.Body.ShaderSource('gskGetD'));
     end;
     SL.Add('void PLUG_vertex_object_space(inout vec4 vertex, inout vec3 normal) {');
     SL.Add('  vec4 W = castle_SkinWeights0;');
@@ -1308,13 +1334,21 @@ begin
     if FRider.Correctives <> nil then
     begin
       SL.Add('  int psdMask=int(riderPsdSpan.z+0.5);');
+      if FRider.Correctives.Body<>nil then
+      begin
+        SL.Add('  int tissueMask=int(riderTissue.w+0.5);');
+        SL.Add('  int combined=0;int bitValue=1;for(int bit=0;bit<5;bit++){if(mod(float(psdMask/bitValue),2.0)>0.5 || mod(float(tissueMask/bitValue),2.0)>0.5)combined+=bitValue;bitValue*=2;}psdMask=combined;');
+      end;
       SL.Add('  need[1] = (psdMask - (psdMask/2)*2) != 0;');
       SL.Add('  need[2] = ((psdMask/2) - (psdMask/4)*2) != 0;');
-      SL.Add('  need[3] = psdMask >= 4;');
+      SL.Add('  need[3] = ((psdMask/4) - (psdMask/8)*2) != 0;');
+      SL.Add('  need[4] = ((psdMask/8) - (psdMask/16)*2) != 0;');
+      SL.Add('  need[5] = ((psdMask/16) - (psdMask/32)*2) != 0;');
+      SL.Add('  armLimb[0] = need[4]; armLimb[1] = need[5];');
     end;
     SL.Add('  for (int i = 0; i < uGskIterations[2]; i++) {');
     SL.Add('    if (W[i] <= 0.0) continue;');
-    SL.Add('    int code = uGskJointCode[J[i]]; int kind = code / 8;');
+    SL.Add('    int routing = uGskJointCode[J[i]]; int code=routing-(routing/64)*64; int kind = code / 8;');
     SL.Add('    need[kind] = true;');
     SL.Add('    if (kind >= 4 && code - kind*8 > 0) armLimb[kind-4] = true;');
     SL.Add('  }');
@@ -1324,14 +1358,23 @@ begin
     if LegOk[1] then
       SL.Add('  if (need[2]) gskLegD_L(gskDelta[4], gskDelta[5], gskDelta[6]);');
     SL.Add('  if (need[3]) {');
-    for I := 0 to 4 do
+    for I := 0 to RiderSpineChainCount-1 do
       if FSpineEx[I] then
-        SL.Add('    gskDelta[' + IntToStr(7 + I) + '] = gskSpineD(' + IntToStr(I) + ');');
+        SL.Add('    gskDelta[' + IntToStr(SpineMatrixSlot(I)) + '] = gskSpineD(' + IntToStr(I) + ');');
     SL.Add('  }');
     if ArmOk[0] then
       SL.Add('  if (need[4]) gskArmD_R(armLimb[0], gskDelta[12], gskDelta[13], gskDelta[14], gskDelta[15], gskForeRoll[0], gskForePivot[0]);');
     if ArmOk[1] then
       SL.Add('  if (need[5]) gskArmD_L(armLimb[1], gskDelta[16], gskDelta[17], gskDelta[18], gskDelta[19], gskForeRoll[1], gskForePivot[1]);');
+    if (FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then
+    begin
+      SL.Add('vec3 psdP,psdN;riderPsdOffset(psdP,psdN);vec3 p=castle_Vertex.xyz+psdP;');
+      SL.Add('#ifdef RIDER_SURFACE_MOTION');SL.Add('p+=riderSurfaceOffset();');SL.Add('#endif');
+      SL.Add('vec3 n=vec3(0.0,1.0,0.0);');
+      SL.Add('#if !defined(CASTLE_SHADOW_DEPTH) || defined(CASTLE_CACHE_DEFORMATION)');
+      SL.Add('n=castle_Normal+psdN;');SL.Add('#endif');
+      SL.Add('vec3 outP,outN;bodyDeform(p,n,W,J,outP,outN);vertex=vec4(outP,1.0);normal=outN;');
+    end else begin
     { Zero-weight joints do not contribute and need no procedural solve. }
     SL.Add('  mat4 M = mat4(0.0);');
     SL.Add('  for (int influence = 0; influence < uGskIterations[2]; influence++)');
@@ -1340,6 +1383,9 @@ begin
       в GLSL-строке { } это БРАСЫ, а не комментарий!) }
     SL.Add('#if defined(CASTLE_SHADOW_DEPTH) && !defined(CASTLE_CACHE_DEFORMATION)');
     SL.Add('  vertex = M * castle_Vertex;');
+    SL.Add('#ifdef RIDER_SURFACE_MOTION');
+    SL.Add('  vertex += M * vec4(riderSurfaceOffset(),0.0);');
+    SL.Add('#endif');
     SL.Add('#else');
     SL.Add('  mat4 C = M * inverse(skinMatrix);');
     SL.Add('  vertex = C * vertex;');
@@ -1350,6 +1396,7 @@ begin
       SL.Add('  vec3 psdP, psdN; riderPsdOffset(psdP, psdN);');
       SL.Add('  vertex += M * vec4(psdP, 0.0);');
       SL.Add('  normal += mat3(M) * psdN;');
+    end;
     end;
     SL.Add('}');
 
@@ -1426,14 +1473,14 @@ begin
   for I := 0 to GPU_SHJ_COUNT - 1 do FShRigPts[I] := FShBind[I];
 
   { ── спина: FK-цепь, зеркало gskSpineRP ── }
-  for I := 0 to 4 do
+  for I := 0 to RiderSpineChainCount-1 do
     if FShSpine[I].Ex then
       with FShSpine[I] do
       begin
         if ParentInChain then
         begin
-          FShRS[I] := QuatMul(FShDelta[I],
-            QuatMul(FShRS[ParentSpine], QuatMul(QuatConj(FShSpine[ParentSpine].PR), PR)));
+          FShRS[I] := QuatMul(FShRS[ParentSpine], QuatMul(QuatConj(FShSpine[ParentSpine].PR),
+            QuatMul(FShDelta[I], PR)));
           FShPS[I] := V3Add(FShPS[ParentSpine], QuatRotateV3(FShRS[ParentSpine], PO));
         end
         else
@@ -1441,10 +1488,10 @@ begin
           FShRS[I] := QuatMul(FShDelta[I], PR);
           FShPS[I] := PP;
         end;
-        FShRigPts[SHJ_WAIST + I] := FShPS[I];
+        if I<5 then FShRigPts[SHJ_WAIST + I] := FShPS[I];
       end;
 
-  { ── голова: rigid-follow ближайшего предка в цепи (D_head = D_anc) ── }
+  { Head/helmet use the same complete cervical chain as the skin shader. }
   if FShEx[SHJ_HEAD] and (FShHeadAnc >= 0) and FShSpine[FShHeadAnc].Ex then
   begin
     dq := QuatMul(FShRS[FShHeadAnc], QuatConj(FShSpine[FShHeadAnc].PR));
@@ -1462,11 +1509,12 @@ end;
 
 procedure TGpuRiderSkin.UpdateShadowLimbs;
 var
+  GripFrame:TRiderGripFrame;
   M: TMatrix4;
   I, Side, Pass: Integer;
   Crk, Pedal, TgtV, GripV: TVector3;
-  AngRad, Ca, Sa, FlexRad, CrankAng, RoundRad, Reach, Sl, Pron: Single;
-  FreeF, TwistDeg, Ptv, Hang, Hs: Single;
+  AngRad, Ca, Sa, FlexRad, CrankAng, Reach, Sl, Pron: Single;
+  FreeF, Ptv, Hang, Hs: Single;
   Tgt, Hint, Root, Aim, Mid, UDir, MDir, NewAim, Sv, FoAxis: TTripoVec3;
   DirH, AxL, ContactLower, ContactAxis: TTripoVec3;
   ContactLength: Single;
@@ -1546,24 +1594,19 @@ begin
       end;
 
   { ── руки: зеркало gskArmBase* + EmitArmSolve ── }
-  TwistDeg := (FShInGripR.X - FShInGripL.X) * 220.0;   { зеркало twist в gskArmBase* }
-  if TwistDeg > 22.0 then TwistDeg := 22.0
-  else if TwistDeg < -22.0 then TwistDeg := -22.0;
   for Side := 0 to 1 do
     if FShArms[Side].Ok then
       with FShArms[Side] do
       begin
-        RoundRad := DegToRad(FShInPose.ShoulderRoundDeg * (1 - 2 * Side) + TwistDeg);  { R: round+, L: round- }
         if ClavInSpine then
         begin
           Rb := FShRS[ParentSpine];  Pb := FShPS[ParentSpine];
-          qCl := QuatMul(QuatFromAxisAngle(0, 1, 0, RoundRad),
-            QuatMul(Rb, QuatMul(QuatConj(PR), CR)));
+          qCl := QuatMul(Rb,QuatMul(QuatConj(PR),QuatMul(FShClavicleDelta[Side],CR)));
           pCl := V3Add(Pb, QuatRotateV3(Rb, CO));
         end
         else
         begin
-          qCl := QuatMul(QuatFromAxisAngle(0, 1, 0, RoundRad), CR);
+          qCl := QuatMul(FShClavicleDelta[Side], CR);
           pCl := CP;
         end;
         qU0 := QuatMul(qCl, QuatMul(QuatConj(CR), UR));
@@ -1575,7 +1618,9 @@ begin
         if Side = 0 then Hint := V3Add(Hint, V3Scale(FShFlare, FShInPose.ElbowFlare))
         else Hint := V3Sub(Hint, V3Scale(FShFlare, FShInPose.ElbowFlare));
         if Side = 0 then Pron := FShInPose.ArmPronationR
-        else Pron := -FShInPose.ArmPronationL;  { mirror: see RiderTripo SolveLimb }
+        else Pron := FShInPose.ArmPronationL;
+        if Side=0 then GripFrame:=FShInPose.HandFrameR else GripFrame:=FShInPose.HandFrameL;
+        GripFrame:=TransformGripFrame(GripFrame,FShInInvP);
         Root := pSh;  Aim := Tgt;  Reach := L1 + L2;
         pM := V3(0, 0, 0);
         for Pass := 0 to 7 do
@@ -1593,26 +1638,8 @@ begin
           qM := QuatMul(QuatFromTo(QuatRotateV3(qMpre, AXE), MDir), qMpre);
           qEnat := QuatMul(qM, QuatMul(QuatConj(MR), ER));
           FoAxis := V3Norm(V3Sub(Aim, pM));
-          { зеркало: фейд пронации у вертикали (cPronVertDead=0.65) +
-            wrist-leveling (cap 40°) — формулы SolveLimb, как в GLSL }
-          Ptv := (Abs(FoAxis.Y) - 0.65) / 0.35;
-          if Ptv < 0 then Ptv := 0 else if Ptv > 1 then Ptv := 1;
-          qE := QuatMul(QuatFromAxisAngle(FoAxis.X, FoAxis.Y, FoAxis.Z,
-            DegToRad(Pron * (1 - Ptv))), qEnat);
-          DirH := V3(FoAxis.X, 0, FoAxis.Z);
-          if V3Len(DirH) > 1e-3 then
-          begin
-            DirH := V3Norm(DirH);
-            AxL := V3Cross(FoAxis, DirH);
-            Hs := V3Len(AxL);
-            if Hs > 1e-6 then
-            begin
-              AxL := V3Scale(AxL, 1 / Hs);
-              Hang := ArcTan2(Hs, V3Dot(FoAxis, DirH)) * EnsureRange(FShInPose.HandLevel, 0.0, 1.0);
-              if Hang > 0.698132 then Hang := 0.698132;
-              qE := QuatMul(QuatFromAxisAngle(AxL.X, AxL.Y, AxL.Z, Hang), qE);
-            end;
-          end;
+          qE:=RiderGripPoseOrientation(qEnat,FShGripTarget[Side],FoAxis,HandForward,GripFrame.Weight,
+            Pron,FShInPose.HandLevel,Side);
           HandPos := V3Add(pM, V3Scale(MDir, L2));
           NewAim := V3Sub(Tgt, QuatRotateV3(qE, CT));
           if V3Len(V3Sub(NewAim, RequestedAim)) < 1e-5 then Break;
@@ -1623,6 +1650,10 @@ begin
         FShRigPts[SHJ_UPARM_R + Side] := pSh;
         FShRigPts[SHJ_FORE_R + Side] := pM;
         FShRigPts[SHJ_HAND_R + Side] := HandPos;
+        FShHandQ[Side]:=qE;
+        qEnat:=QuatNormalize(QuatMul(qE,QuatConj(qEnat)));
+        if qEnat.W<0 then begin qEnat.X:=-qEnat.X;qEnat.Y:=-qEnat.Y;qEnat.Z:=-qEnat.Z;qEnat.W:=-qEnat.W;end;
+        FShHandTwist[Side]:=RadToDeg(2*ArcTan2(V3Dot(V3(qEnat.X,qEnat.Y,qEnat.Z),FoAxis),qEnat.W));
         Sv := V3Add(HandPos, QuatRotateV3(qE, CT));
         FShContacts[2 + Side] := FRider.Scene.Transform.MultPoint(Vector3(Sv.X, Sv.Y, Sv.Z));
       end;
@@ -1677,6 +1708,20 @@ begin
   if Result then P := FShContacts[Index];
 end;
 
+function TGpuRiderSkin.ShadowHandFrame(Side:Integer;out Forward,Palm:TVector3;out Twist:Single):Boolean;
+var Dummy:TVector3; V:TTripoVec3;
+begin
+  Forward:=TVector3.Zero;Palm:=TVector3.Zero;Twist:=0;
+  Result:=False;if (Side<0) or (Side>1) then Exit;
+  ShadowJoint('Head',Dummy);
+  Result:=FShValid and FShArms[Side].Ok;if not Result then Exit;
+  Twist:=FShHandTwist[Side];
+  V:=QuatRotateV3(FShHandQ[Side],FShArms[Side].HandForward);
+  Forward:=FRider.Scene.Transform.MultDirection(Vector3(V.X,V.Y,V.Z)).Normalize;
+  V:=QuatRotateV3(FShHandQ[Side],FShArms[Side].HandPalm);
+  Palm:=FRider.Scene.Transform.MultDirection(Vector3(V.X,V.Y,V.Z)).Normalize;
+end;
+
 function TGpuRiderSkin.Active: Boolean;
 begin
   Result := (FEffect <> nil) and FEffect.Enabled;
@@ -1685,6 +1730,7 @@ end;
 procedure TGpuRiderSkin.SetActive(AOn: Boolean);
 begin
   if FRider.Correctives <> nil then FRider.Correctives.SetGpuActive(AOn);
+  if FRider.Face<>nil then FRider.Face.Gpu:=AOn;
   if (FEffect <> nil) and (FEffect.Enabled <> AOn) then
   begin
     FEffect.Enabled := AOn;   { FdEnabled.Send внутри; ProcessEvents включён в Build }
@@ -1703,9 +1749,10 @@ procedure TGpuRiderSkin.SendFrame(const Phase: Single; const InvP: TMatrix4;
   const Pose: TRiderPose);
 var
   I, ci, ri: Integer;
-  Ang: array[0..4] of Single;
+  Ang: TSpineAngles;
   ChS, ChM, ChV: Boolean;
   FootYaw: TTripoVec4;
+  GripFrame:TRiderGripFrame;
 
   function FV(const V: TVector3): string;
   begin Result := Format('(%.5f,%.5f,%.5f)', [V.X, V.Y, V.Z]); end;
@@ -1750,9 +1797,9 @@ begin
   begin
     SpineAutoLeanDeg(Pose.TorsoLeanDeg, Pose.SpineCurve, FSpineIdx, Ang);
   end;
-  for I := 0 to 4 do
-    FShDelta[I] := RiderSpineDelta(FRider.LeanAxis,
-      Ang[I], Pose.SpineYaw[I], Pose.SpineRoll[I]);
+  for I := 0 to RiderSpineChainCount-1 do
+    FShDelta[I] := RiderSpineChainDelta(FRider.LeanAxis,
+      Ang, Pose.SpineYaw, Pose.SpineRoll, FSpineIdx,I,FRider.HasParametricBody);
   { This FK was already necessary every frame for the external helmet. Share
     its rotations with the shader instead of evaluating the same chain twice. }
   UpdateShadowSpine;
@@ -1765,6 +1812,25 @@ begin
   FScalarsList.Add(FootYaw.W);
   FScalarsList.Add(Ord(Pose.HandPosR > 0));
   FScalarsList.Add(Ord(Pose.HandPosL > 0));
+  for I:=0 to 1 do begin
+    FShClavicleDelta[I]:=RiderScapulaDelta(FRider.LeanAxis,
+      Pose.ShoulderRoundDeg+Pose.ScapulaProtraction[I],
+      EnsureRange((GripR.X-GripL.X)*220.0,-22.0,22.0),Pose.ScapulaElevation[I],I);
+    FScalarsList.Add(FShClavicleDelta[I].X);FScalarsList.Add(FShClavicleDelta[I].Y);
+    FScalarsList.Add(FShClavicleDelta[I].Z);FScalarsList.Add(FShClavicleDelta[I].W);
+  end;
+  FScalarsList.Add(Pose.HandFrameR.Weight);FScalarsList.Add(Pose.HandFrameL.Weight);
+  for I:=0 to 1 do begin
+    if I=0 then GripFrame:=Pose.HandFrameR else GripFrame:=Pose.HandFrameL;
+    GripFrame:=TransformGripFrame(GripFrame,InvP);
+    FShGripTarget[I]:=RiderGripTarget(FShArms[I].HandForward,FShArms[I].HandPalm,GripFrame);
+    FScalarsList.Add(FShGripTarget[I].X);FScalarsList.Add(FShGripTarget[I].Y);
+    FScalarsList.Add(FShGripTarget[I].Z);FScalarsList.Add(FShGripTarget[I].W);
+  end;
+  for I := 5 to RiderSpineChainCount-1 do begin
+    FScalarsList.Add(FShRS[I].X);FScalarsList.Add(FShRS[I].Y);
+    FScalarsList.Add(FShRS[I].Z);FScalarsList.Add(FShRS[I].W);
+  end;
   FVecsList.Clear;
   FVecsList.Add(OBB);
   FVecsList.Add(CrankR);

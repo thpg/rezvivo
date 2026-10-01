@@ -83,6 +83,10 @@ begin
     BZ := Signs[I] * FBW;
     Skel.AddBone('grip_inner_' + Names[I], Vector3(StemEnd.X, StemEnd.Y + FBR * 0.3, Signs[I] * FBW * 0.6));
     Skel.AddBone('grip_'       + Names[I], Vector3(BarEndX, BarEndY, BZ));
+    { Palm on the middle of the rubber grip, clear of the end cap. All road
+      grip slots fall back to this contact when a flat bar is fitted. }
+    Skel.AddBone('place_' + Names[I] + '_1',
+      (Vector3(BarEndX,BarEndY,BZ)+Skel['grip_inner_'+Names[I]])*0.5+Vector3(0,0.014,0));
     Skel.AddBone('brake_lever_'     + Names[I], Vector3(BarEndX + 0.015, BarEndY - 0.005, BZ));
     Skel.AddBone('brake_lever_end_' + Names[I], Vector3(BarEndX + 0.045, BarEndY - 0.035, BZ));
   end;

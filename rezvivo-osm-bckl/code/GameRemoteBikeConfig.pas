@@ -8,7 +8,7 @@ interface
 function SanitizeRemoteBikeConfig(const Input:string;out Output,ErrorText:string):Boolean;
 
 implementation
-uses SysUtils,Classes,Math,fpjson,jsonparser;
+uses RiderBodyParameters, SysUtils,Classes,Math,fpjson,jsonparser;
 
 procedure Require(B:Boolean);
 begin if not B then raise Exception.Create('Invalid remote bike configuration');end;
@@ -192,12 +192,13 @@ begin
       S:=ObjectAt(Root,'tripoRider');
       if S<>nil then begin
         O:=TJSONObject.Create;Safe.Add('tripoRider',O);
-        { Never resolve the sender's path. Only use its basename to choose one
-          of the two fixed packaged avatars, including old absolute paths. }
+        { Never resolve the sender's path. The basename only migrates the old
+          sex preset; all remote bodies use the fixed packaged shared model. }
         Path:=StringReplace(S.Get('path',''), '\','/',[rfReplaceAll]);
         Path:=Copy(Path,LastDelimiter('/',Path)+1,MaxInt);
-        if SameText(Path,'FEM.glb')then O.Add('path','castle-data:/avatars/FEM.glb')
-        else O.Add('path','castle-data:/avatars/MEN.glb');
+        O.Add('path','castle-data:/avatars/RIDER.glb');
+        O.Add('body',WriteRiderBody(ReadRiderBody(ObjectAt(S,'body'),
+          DefaultRiderBody(Ord(SameText(Path,'FEM.glb'))))));
         Numbers(S,O,'scale',0.5,1.5);Numbers(S,O,'yaw',-180,180);Numbers(S,O,'pedalDir',-1,1,True);
         Booleans(S,O,'showRider');Numbers(S,O,'ankleOffX,ankleOffY,ankleOffZ',-100,100);
         Numbers(S,O,'stanceHalf',0,250);Numbers(S,O,'footYawDeg',-45,45);

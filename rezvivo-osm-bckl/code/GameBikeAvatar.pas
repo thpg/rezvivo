@@ -69,7 +69,7 @@ function ResolveActiveBikeBuildUrl: string;
 function BikeJsonUrlToFilename(const AUrl: string): string;
 
 { Подмена/добавление tripoRider.path в тексте bike JSON (для превью Байкфита). }
-function InjectRiderPath(const AJsonText, ARiderGlb: string): string;
+function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean=True): string;
 
 { Загрузка с учётом Байкфита: bike JSON + подмена tripoRider.path на
   SelectedRiderGlb (если задан). }
@@ -138,7 +138,7 @@ procedure ReorientBikeRoot(Root: TX3DRootNode);
 implementation
 
 
-uses
+uses RiderBodyParameters, RiderHair, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
   DebugLog, AppSettings, RiderTripo;
@@ -609,7 +609,7 @@ begin
 end;
 
 { Inject/override tripoRider.path in bike JSON text. }
-function InjectRiderPath(const AJsonText, ARiderGlb: string): string;
+function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean): string;
 var
   Data: TJSONData;
   Root, Sec: TJSONObject;
@@ -632,6 +632,9 @@ begin
         Root.Add('tripoRider', Sec);
       end;
       Sec.Strings['path'] := Path;
+      if UseProfile then begin
+        Sec.Delete('body');Sec.Add('body',WriteRiderBody(AvatarBodyParameters));
+      end;
       if Sec.Find('showRider') = nil then
         Sec.Add('showRider', True)
       else
@@ -705,6 +708,7 @@ begin
     Result.ClothDyePresetMode := cdmShader;
   ApplyBikeFitColorsToInstance(Result);
   AttachTripoRiderFromJSON(Result, JsonText);
+  if Result<>nil then Result.BodyParameters:=AvatarBodyParameters;
   if (Settings <> nil) and Settings.FitParamsValid and (Result <> nil) then
   begin
     ApplyRiderShapeAdjustments(Result,
@@ -718,7 +722,7 @@ begin
 end;
 
 function LoadCompanionBikeInstance(AOwner: TComponent): TBikeInstance;
-var Text: TStringList; JsonText, Gender, Rider: string; Slot: TClothSlot;
+var Text: TStringList; JsonText, Gender, Rider: string; Slot: TClothSlot; Body:TRiderBodyParameters;
 begin
   Gender := 'female';
   if (Settings <> nil) and SameText(Settings.GetGender, 'female') then Gender := 'male';
@@ -726,7 +730,7 @@ begin
   Text := TStringList.Create;
   try
     Text.LoadFromFile(BikeJsonUrlToFilename('castle-data:/bike_road2.json'));
-    JsonText := InjectRiderPath(Text.Text, Rider);
+    JsonText := InjectRiderPath(Text.Text, Rider,False);
   finally Text.Free end;
   Result := LoadBikeInstanceFromJSONString(JsonText, AOwner, 15, 40, 80, False);
   try
@@ -734,6 +738,8 @@ begin
     for Slot := csJersey to csGloves do
       Result.StageRiderClothColor(Slot, Vector3(1, 1, 1));
     AttachTripoRiderFromJSON(Result, JsonText);
+    Body:=DefaultRiderBody(1-AvatarBodyParameters.Sex);
+    Result.BodyParameters:=Body;
     if Result.TripoRider <> nil then
       Result.TripoRider.ApplyHelmetColor(Vector3(1, 1, 1), True);
   except FreeAndNil(Result); raise end;
@@ -767,6 +773,8 @@ var
   HelmetC: TVector3;
 begin
   if (Inst = nil) or (Settings = nil) then Exit;
+  if Inst.TripoRider<>nil then
+    Inst.TripoRider.HairStyle:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
   if Trim(Settings.BikeFitColors) = '' then Exit;
   AnyCloth := False;
   HelmetOn := True;   { станет False, если валидного hex в слоте 9 нет }
@@ -817,6 +825,11 @@ var
   Same: Boolean;
 begin
   if (Inst = nil) or (Inst.TripoRider = nil) then Exit;
+  if Inst.TripoRider.HasParametricBody then
+  begin
+    Inst.BodyParameters:=AvatarBodyParameters;
+    Exit;
+  end;
   RestH := Inst.TripoRider.RestHeight;
   RestI := Inst.TripoRider.StableLegReach;
   if RestH < 0.5 then RestH := 1.75;

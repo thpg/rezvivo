@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "Frisur",
+  "No hair": "Ohne Haare",
+  "Short crop": "Kurzhaar",
+  "Swept back": "Zurückgekämmt",
+  "Curly hair": "Locken",
+  "Ponytail": "Pferdeschwanz",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(keine Datei ausgewählt)",
   "(no profile data)": "(keine Profildaten)",
@@ -305,5 +311,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "Die letzte Fahrt konnte nicht gespeichert werden. Starte die App neu und stelle die Fahrt wieder her, bevor du das Konto wechselst.",
   "Could not finish saved ride": "Gespeicherte Fahrt konnte nicht beendet werden",
   "Account change in progress. Please wait.": "Das Konto wird gewechselt. Bitte warten.",
-  "Always on top": "Immer im Vordergrund"
+  "Always on top": "Immer im Vordergrund",
+  "Buzz cut": "Kurz geschoren",
+  "Side part": "Seitenscheitel",
+  "Tight curls": "Enge Locken",
+  "Medium length": "Mittellang",
+  "Braid": "Zopf",
+  "Hair quality": "Haarqualität",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "Steuert Haardetails, Beleuchtung und Bewegungsrate. Wird sofort angewendet."
 }

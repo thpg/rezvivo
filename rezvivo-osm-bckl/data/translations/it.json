@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "Acconciatura",
+  "No hair": "Senza capelli",
+  "Short crop": "Taglio corto",
+  "Swept back": "Pettinati indietro",
+  "Curly hair": "Ricci",
+  "Ponytail": "Coda di cavallo",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(nessun file selezionato)",
   "(no profile data)": "(nessun dato profilo)",
@@ -302,5 +308,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "Non è stato possibile salvare l’ultima pedalata. Riavvia l’app e recuperala prima di cambiare account.",
   "Could not finish saved ride": "Impossibile terminare la pedalata salvata",
   "Account change in progress. Please wait.": "Cambio account in corso. Attendi.",
-  "Always on top": "Sempre in primo piano"
+  "Always on top": "Sempre in primo piano",
+  "Buzz cut": "Rasati",
+  "Side part": "Riga laterale",
+  "Tight curls": "Ricci stretti",
+  "Medium length": "Media lunghezza",
+  "Braid": "Treccia",
+  "Hair quality": "Qualità dei capelli",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "Regola dettagli, illuminazione e frequenza di animazione dei capelli. Effetto immediato."
 }

@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "헤어스타일",
+  "No hair": "머리카락 없음",
+  "Short crop": "짧은 머리",
+  "Swept back": "뒤로 넘긴 머리",
+  "Curly hair": "곱슬머리",
+  "Ponytail": "포니테일",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(파일 미선택)",
   "(no profile data)": "(프로필 데이터 없음)",
@@ -302,5 +308,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "마지막 라이딩을 저장하지 못했습니다. 계정을 전환하기 전에 앱을 다시 시작하여 라이딩을 복구하세요.",
   "Could not finish saved ride": "저장된 라이딩을 종료할 수 없습니다",
   "Account change in progress. Please wait.": "계정을 전환하는 중입니다. 잠시 기다려 주세요.",
-  "Always on top": "항상 위에 표시"
+  "Always on top": "항상 위에 표시",
+  "Buzz cut": "버즈 컷",
+  "Side part": "옆 가르마",
+  "Tight curls": "촘촘한 곱슬",
+  "Medium length": "중간 길이",
+  "Braid": "땋은 머리",
+  "Hair quality": "머리카락 품질",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "머리카락의 세부 표현, 조명 및 움직임 갱신 빈도를 조절합니다. 즉시 적용됩니다."
 }

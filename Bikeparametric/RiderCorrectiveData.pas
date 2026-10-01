@@ -11,6 +11,10 @@ uses Classes, SysUtils, fpjson;
 
 function OpenRiderCorrectiveData(const ModelPath: string;
   out Metadata: TJSONObject): TMemoryStream;
+{ Shared bounded GLB reader for authored per-vertex data blocks. }
+function OpenRiderEmbeddedData(const ModelPath, Key: string;
+  out Metadata: TJSONObject): TMemoryStream;
+function ReadRiderExtra(const ModelPath, Key:string):TJSONObject;
 procedure EmbedRiderCorrectiveData(Root: TJSONObject; var Bin: TBytes;
   const SourcePath: string);
 
@@ -19,6 +23,26 @@ implementation
 uses jsonparser, GltfCore;
 
 const AtlasKey = 'riderPoseAtlas';
+
+function ReadRiderExtra(const ModelPath,Key:string):TJSONObject;
+var F:TFileStream; H:array[0..4]of LongWord; S:RawByteString;
+  D:TJSONData; O:TJSONObject;
+begin
+  Result:=nil;D:=nil;
+  F:=TFileStream.Create(ModelPath,fmOpenRead or fmShareDenyNone);
+  try
+    if F.Size<SizeOf(H) then Exit;
+    F.ReadBuffer(H,SizeOf(H));
+    if (H[0]<>GLB_MAGIC) or (H[1]<>2) or (H[4]<>GLB_CHUNK_JSON) or
+      (H[3]>16*1024*1024) or (H[3]>F.Size-SizeOf(H)) then Exit;
+    SetLength(S,H[3]);if H[3]>0 then F.ReadBuffer(S[1],H[3]);
+    D:=GetJSON(S);
+    if D is TJSONObject then begin
+      O:=ObjOf(ObjOf(TJSONObject(D),'extras'),Key);
+      if O<>nil then Result:=TJSONObject(O.Clone);
+    end;
+  finally D.Free;F.Free end;
+end;
 
 function ReadMetadata(const Path: string): TJSONObject;
 var S: TStringList; D: TJSONData;
@@ -53,7 +77,7 @@ begin
   end;
 end;
 
-function OpenRiderCorrectiveData(const ModelPath: string;
+function OpenRiderEmbeddedData(const ModelPath, Key: string;
   out Metadata: TJSONObject): TMemoryStream;
 var
   F: TFileStream;
@@ -96,11 +120,12 @@ begin
     D := GetJSON(Json);
     if not (D is TJSONObject) then Exit;
     Root := TJSONObject(D);
-    Atlas := ObjOf(ObjOf(Root, 'extras'), AtlasKey);
+    Atlas := ObjOf(ObjOf(Root, 'extras'), Key);
     if Atlas = nil then
     begin
       { Do not apply abandoned sidecars to an unrelated replacement avatar. }
-      if ObjOf(ObjOf(Root, 'extras'), 'poseCorrectives') <> nil then
+      if (Key = AtlasKey) and
+        (ObjOf(ObjOf(Root, 'extras'), 'poseCorrectives') <> nil) then
         Result := OpenSidecar(ModelPath, Metadata);
       Exit;
     end;
@@ -124,6 +149,12 @@ begin
   finally
     D.Free; F.Free;
   end;
+end;
+
+function OpenRiderCorrectiveData(const ModelPath: string;
+  out Metadata: TJSONObject): TMemoryStream;
+begin
+  Result := OpenRiderEmbeddedData(ModelPath, AtlasKey, Metadata);
 end;
 
 procedure EmbedRiderCorrectiveData(Root: TJSONObject; var Bin: TBytes;

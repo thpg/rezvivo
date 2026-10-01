@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "发型",
+  "No hair": "无头发",
+  "Short crop": "短发",
+  "Swept back": "后梳发型",
+  "Curly hair": "卷发",
+  "Ponytail": "马尾",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(未选择文件)",
   "(no profile data)": "(无个人资料数据)",
@@ -313,5 +319,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "上次骑行未能保存。请重启应用并恢复骑行后，再切换账号。",
   "Could not finish saved ride": "无法结束已保存的骑行",
   "Account change in progress. Please wait.": "正在切换账号，请稍候。",
-  "Always on top": "始终置顶"
+  "Always on top": "始终置顶",
+  "Buzz cut": "寸头",
+  "Side part": "侧分",
+  "Tight curls": "小卷发",
+  "Medium length": "中长发",
+  "Braid": "辫子",
+  "Hair quality": "头发质量",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "控制头发细节、光照和运动更新频率。立即生效。"
 }

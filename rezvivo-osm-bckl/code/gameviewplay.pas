@@ -590,7 +590,7 @@ implementation
 uses UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
   GameActivityAccounting, GameMenuTheme, GameViewMenu, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
-  Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader;
+  Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair;
 
 const
   MaxPower = 2500.0;
@@ -1869,7 +1869,7 @@ begin
   for I := 0 to FBotBikes.Count - 1 do
   begin
     BotBike := TBikeInstance(FBotBikes[I]);
-    if Assigned(FBotAgents) and (I < FBotAgents.Count) then
+    if FPerfAnim and Assigned(FBotAgents) and (I < FBotAgents.Count) then
     begin
       Ag := TPhysicalAgent(FBotAgents[I]);
       ApplySteerFromPhysics(BotBike, Ag);
@@ -2106,7 +2106,7 @@ begin
     B.Group.Exists := FPerfRiders;
     B.ShowShadow := FPerfShadows;
     B.AnimationEnabled := FPerfAnim;
-    if FPerfAnim then B.AnimateFrame(SecondsPassed);
+    B.AnimateFrame(SecondsPassed); { disabled animation updates only world light }
   end;
 end;
 
@@ -2389,6 +2389,7 @@ begin
     raise EInvalidOperation.Create(UiText('Account change in progress. Please wait.'));
   inherited;
   LocalizeDesignedUi(Self);
+  RiderWindSampler:=@WindVelocityAt;
   SceneLifecycleLog(Format('=== TViewPlay.Start BEGIN (old bike inst=$%p) ===',
     [Pointer(FBikeInstance)]));
   Enemies := TEnemyList.Create(true);
@@ -4901,10 +4902,15 @@ begin
     FBikeInstance.AnimateFrame(PhysDt);
   end;
 
+  { Frozen poses still move with the physical agent. Keep their sun aligned
+    without running IK, deformation or GPU animation updates. }
+  if not FFocusMode and (PhysDt>0) and not FPerfAnim and Assigned(FBikeInstance) then
+    FBikeInstance.AnimateFrame(Single(0));
+
   T4c := Timer;   { TEMP-DIAG: конец AnimateFrame аватара }
 
   { Боты на общем пайплайне: без AnimateFrame их Tripo-райдер не позируется. }
-  if not FFocusMode and (PhysDt>0) and FPerfAnim then
+  if not FFocusMode and (PhysDt>0) then
   begin
     UpdateBotPoseManagers(PhysDt);
     AnimateBotBikes(PhysDt);
@@ -4925,7 +4931,7 @@ begin
 
   T4e := Timer;   { TEMP-DIAG: конец FPoseManager.Update (+ bots) }
 
-  if not FFocusMode and (PhysDt>0) and FPerfAnim then
+  if not FFocusMode and (PhysDt>0) then
     FRemoteRiders.AnimateAllRiders(PhysDt);
 
   if HasActiveState and FActiveAvatarAgent.State.AutoMove then

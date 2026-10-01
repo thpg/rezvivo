@@ -451,6 +451,16 @@ begin
     Off := ArcOffset(0.85); Skel.AddBone('drop_lower_' + Names[I], Vector3(StemEnd.X + Off.X, StemEnd.Y + Off.Y, BZ));
     Off := ArcOffset(1.00); Skel.AddBone('hook_start_' + Names[I], Vector3(StemEnd.X + Off.X, StemEnd.Y + Off.Y, BZ));
     Skel.AddBone('hook_end_' + Names[I], Vector3(StemEnd.X + FHkX, StemEnd.Y + FHkY, BZ));
+    if not HandsOK then begin
+      Skel.AddBone('place_'+Names[I]+'_1',HB+Vector3(HoodC*0.25,HoodS*0.25,0));
+      Skel.AddBone('place_'+Names[I]+'_2',Skel['ramp_start_'+Names[I]]+Vector3(0,0.014,0));
+      Off:=ArcOffset(0.65);
+      Skel.AddBone('place_'+Names[I]+'_3',Vector3(StemEnd.X+Off.X,StemEnd.Y+Off.Y,BZ+Signs[I]*0.014));
+      Off:=ArcOffset(0.45);
+      Skel.AddBone('place_'+Names[I]+'_4',Vector3(StemEnd.X+Off.X,StemEnd.Y+Off.Y,BZ+Signs[I]*0.014));
+      Skel.AddBone('place_'+Names[I]+'_5',Vector3(StemEnd.X,StemEnd.Y+0.014,BZ*0.50));
+      Skel.AddBone('place_'+Names[I]+'_6',Vector3(StemEnd.X,StemEnd.Y+0.014,BZ*0.31));
+    end;
   end;
 
   { every hand-grip position from the glb (PlaceR1..N / PlaceL1..N) -> place_r_n /
@@ -459,6 +469,17 @@ begin
   if HandsOK then
   begin
     NP := ReadModelPlaces(PRs, PLs);
+    if NP>=4 then begin
+      PRs[2]:=PRs[3]+Vector3(-0.012,-0.018,0);
+      PLs[2]:=PLs[3]+Vector3(-0.012,-0.018,0);
+    end;
+    { The authored Place6 points float in front of a bar with no extensions.
+      Keep the selectable slot, but use a real narrow-top contact. }
+    if NP>=6 then begin
+      PRs[5]:=PRs[4];PLs[5]:=PLs[4];
+      PRs[5].Z:=FS.Z+(PRs[4].Z-FS.Z)*0.62;
+      PLs[5].Z:=FS.Z+(PLs[4].Z-FS.Z)*0.62;
+    end;
     for J := 0 to NP - 1 do
     begin
       Skel.AddBone('place_r_' + IntToStr(J + 1),

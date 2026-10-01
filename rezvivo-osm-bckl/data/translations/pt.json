@@ -1,4 +1,10 @@
 {
+  "Hairstyle": "Penteado",
+  "No hair": "Sem cabelo",
+  "Short crop": "Corte curto",
+  "Swept back": "Penteado para trás",
+  "Curly hair": "Cachos",
+  "Ponytail": "Rabo de cavalo",
   "%.1f kg": "%.1f kg",
   "(no file selected)": "(nenhum arquivo selecionado)",
   "(no profile data)": "(sem dados de perfil)",
@@ -302,5 +308,12 @@
   "The last ride could not be saved. Restart the app to recover it before switching accounts.": "Não foi possível guardar o último percurso. Reinicie a aplicação e recupere-o antes de trocar de conta.",
   "Could not finish saved ride": "Não foi possível terminar o percurso guardado",
   "Account change in progress. Please wait.": "A trocar de conta. Aguarde.",
-  "Always on top": "Sempre no topo"
+  "Always on top": "Sempre no topo",
+  "Buzz cut": "Corte raspado",
+  "Side part": "Risca lateral",
+  "Tight curls": "Cachos fechados",
+  "Medium length": "Comprimento médio",
+  "Braid": "Trança",
+  "Hair quality": "Qualidade do cabelo",
+  "Controls hair detail, lighting and motion update rate. Applies immediately.": "Controla detalhes, iluminação e frequência de animação do cabelo. Aplicação imediata."
 }

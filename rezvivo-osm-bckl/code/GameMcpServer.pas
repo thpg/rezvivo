@@ -1596,6 +1596,7 @@ procedure CmdRiderRender(const AParams: TJSONObject; AResult: TJSONObject);
 var
   S: TCastleScene;
   N: TX3DNode;
+  SunWorld: TVector3;
   Stats: TRenderStatistics;
   Part: TEffectPartNode;
   ShaderText: TStringList;
@@ -1654,6 +1655,14 @@ begin
   AResult.Add('scene_lights', S.RenderOptions.ReceiveSceneLights);
   AResult.Add('global_lights', S.RenderOptions.ReceiveGlobalLights);
   AResult.Add('lights', ViewPlay.Bike.TripoRider.LightDiag);
+  N := S.RootNode.FindNode(TDirectionalLightNode, 'RiderKey', [fnNilOnMissing]);
+  if (N <> nil) and S.HasWorldTransform then
+  begin
+    SunWorld := S.WorldTransform.MultDirection(TDirectionalLightNode(N).Direction).Normalize;
+    AResult.Add('sun_direction_world', TJSONArray.Create([SunWorld.X, SunWorld.Y, SunWorld.Z]));
+    AResult.Add('sun_direction_error', (SunWorld - ViewPlay.Bike.ShadowSunWorldDir.Normalize).Length);
+  end;
+  AResult.Add('ground_shade_level', ViewPlay.Bike.TripoRider.GroundShade);
   AResult.Add('triangles', S.TrianglesCount);
   AResult.Add('vertices', S.VerticesCount);
   Stats := ViewPlay.MainViewport.Statistics;
@@ -1877,6 +1886,9 @@ begin
   AResult.Add('ok', True);
 end;
 
+procedure CmdBikeFitBody(const AParams:TJSONObject;AResult:TJSONObject);
+begin EnsureBikeFitPage.McpBody(AParams,AResult) end;
+
 procedure CmdBikeFitNudge(const AParams: TJSONObject; AResult: TJSONObject);
 var
   P: TBikeFitPage;
@@ -1900,6 +1912,13 @@ begin
   P.McpSetColor(AParams.Get('slot', ''), Vector3(R / 255, G / 255, B / 255),
     AParams.Get('on', True));
   AResult.Add('ok', True);
+end;
+
+procedure CmdBikeFitHair(const AParams:TJSONObject;AResult:TJSONObject);
+var P:TBikeFitPage;
+begin
+  P:=EnsureBikeFitPage;P.McpSetHair(AParams.Get('style','short'));
+  P.McpFillStatus(AResult);AResult.Add('ok',True);
 end;
 
 procedure CmdBikeFitLighting(const AParams: TJSONObject; AResult: TJSONObject);
@@ -2260,17 +2279,19 @@ begin
     '"inline":{"type":"boolean","description":"include PNG base64 in the reply (default true)"}' +
     '}}',
     @CmdScreenshot);
+  RegisterMcpCommand('bikefit.body','Read/change shared avatar physical parameters.',
+    '{"type":"object"}',@CmdBikeFitBody);
   RegisterMcpCommand('bikefit.status',
     'Open bike-fit and return fit, camera and live ride sharing status.',
     '{"type":"object","properties":{}}',
     @CmdBikeFitStatus);
   RegisterMcpCommand('bikefit.select_rider',
-    'Open bike-fit and select rider: 0=male (MEN.glb), 1=female (FEM.glb).',
+    'Open bike-fit and select rider: 0=male preset, 1=female preset; one shared model.',
     '{"type":"object","properties":{"index":{"type":"integer"}},"required":["index"]}',
     @CmdBikeFitSelect);
   RegisterMcpCommand('bikefit.nudge',
     'Change a fit param by signed UI steps. param: height|inseam|bulk|' +
-    'belly|seat|offset|spacers|stem|cadence.',
+    'belly|seat|offset|spacers|stem|cadence|effort (5% FTP per step).',
     '{"type":"object","properties":{' +
     '"param":{"type":"string"},' +
     '"steps":{"type":"integer","description":"signed click count (default 1)"}},' +
@@ -2287,6 +2308,10 @@ begin
     '"on":{"type":"boolean"}},' +
     '"required":["slot"]}',
     @CmdBikeFitSetColor);
+  RegisterMcpCommand('bikefit.set_hair',
+    'Select and save rider hairstyle: bald, buzz, short, swept, parted, curly, coils, medium, ponytail, braid.',
+    '{"type":"object","properties":{"style":{"type":"string"}},"required":["style"]}',
+    @CmdBikeFitHair);
   RegisterMcpCommand('bikefit.lighting',
     'Set/inspect bike-fit page lighting on the fly (omit an argument to keep it): ' +
     'env = rider IBL ambient, key/fill = result viewport directional lights, ' +

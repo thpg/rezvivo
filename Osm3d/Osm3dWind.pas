@@ -63,6 +63,8 @@ function WindNow: Single;
 { Current base wind speed — base range remapped by a slow value-noise over time
   (period ~ BaseChangeInterval). This is the "main wind speed that changes". }
 function WindCurrentBaseSpeed: Single;
+{ Same coarse travelling gust field as WIND_GLSL, for CPU guide physics. }
+function WindVelocityAt(const WorldPosition:TVector3):TVector3;
 
 { Look up / clear / push the WIND_GLSL uniforms for a program. WindSetUniforms
   reads GlobalWind + WindNow and pushes everything (each location guarded). }
@@ -191,6 +193,34 @@ begin
   else
     N := VNoise1(WindNow / Cfg.BaseChangeInterval);
   Result := Cfg.BaseSpeedMin + N * (Cfg.BaseSpeedMax - Cfg.BaseSpeedMin);
+end;
+
+function WindVelocityAt(const WorldPosition:TVector3):TVector3;
+var D:TVector2; Base,Cell,X,Z,IX,IZ,U,V,A,B,C,E,N,Speed:Single;
+  function Corner(X,Z:Single):Single;
+  var DotValue:Single;
+  begin
+    X:=X-Floor(X/4)*4; Z:=Z-Floor(Z/4)*4;
+    X:=X*123.34; X:=X-Floor(X);
+    Z:=Z*345.45; Z:=Z-Floor(Z);
+    DotValue:=X*(X+34.345)+Z*(Z+34.345);
+    X:=X+DotValue; Z:=Z+DotValue;
+    Result:=X*Z; Result:=Result-Floor(Result);
+  end;
+begin
+  D:=GlobalWind.Direction;
+  if D.Length>1e-5 then D:=D.Normalize else D:=Vector2(1,0);
+  Base:=WindCurrentBaseSpeed;Cell:=Max(GlobalWind.RepeatLength/4,0.001);
+  X:=(WorldPosition.X-D.X*Base*WindNow)/Cell;
+  Z:=(WorldPosition.Z-D.Y*Base*WindNow)/Cell;
+  IX:=Floor(X);IZ:=Floor(Z);U:=X-IX;V:=Z-IZ;
+  U:=U*U*(3-2*U);V:=V*V*(3-2*V);
+  A:=Corner(IX,IZ);B:=Corner(IX+1,IZ);
+  C:=Corner(IX,IZ+1);E:=Corner(IX+1,IZ+1);
+  N:=(A+(B-A)*U)*(1-V)+(C+(E-C)*U)*V;
+  Speed:=Base+GlobalWind.GustSpeedMin+
+    (GlobalWind.GustSpeedMax-GlobalWind.GustSpeedMin)*N;
+  Result:=Vector3(D.X*Speed,0,D.Y*Speed);
 end;
 
 function WindCacheUniforms(AProgram: GLuint): TWindUniforms;
