@@ -3,3 +3,8 @@ DejaVu*.ttf
   License: http://dejavu-fonts.org/wiki/License
     May also be found in /usr/share/doc/ttf-dejavu/copyright
     on a Debian system with ttf-dejavu installed.
+
+Montserrat-Regular.ttf, Montserrat-Bold.ttf
+  Source: https://github.com/JulietaUla/Montserrat/tree/master/fonts/ttf
+  Copyright 2024 The Montserrat.Git Project Authors.
+  License: SIL Open Font License 1.1, included in Montserrat-OFL.txt.

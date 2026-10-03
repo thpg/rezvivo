@@ -9,9 +9,12 @@
     Pass 4  (stylize)         — color posterization + procedural hatching in
                                 the shadows (comic/hand-drawn look); OFF by
                                 default
+    Pass 5  (optical softness) — distant and lens-edge blur. One pass;
+                                keeps the central rider area and UI sharp.
 
   Individual switches: FogEnabled, BloomEnabled, ToneEnabled,
-  PosterizeEnabled, KuwaharaEnabled, HatchEnabled — plus the master Enabled.
+  PosterizeEnabled, KuwaharaEnabled, HatchEnabled, SofteningLevel — plus
+  the master Enabled.
   By default ONLY the fog is on: Enabled is a shared master for all passes,
   so switching the fog on must not silently bring bloom/tone along.
   Effects sharing a pass are gated by uniforms (a uniform branch is free on
@@ -21,8 +24,8 @@
   FOG works off the DEPTH buffer, so it covers EVERYTHING that writes depth —
   including the raw-GL instanced vegetation that never receives TCastleFog.
   Keep Viewport.Fog = nil while it is on (double fog otherwise). Sky is
-  detected by reconstructed DISTANCE (>= 98% of far), never by a raw-depth
-  epsilon — the depth buffer is non-linear and far geometry reads > 0.9999.
+  detected by the exact clear depth (1), never by an arbitrary depth epsilon
+  or a fraction of the far plane, which may be infinite.
   FogClearZone (0 = off) keeps a fully clear sphere around the camera: the
   fog distance is measured from its BOUNDARY, not from the eye, so the
   near scene stays crisp and the falloff still starts from zero there.
@@ -44,7 +47,7 @@ interface
 
 uses
   Classes, SysUtils,
-  CastleViewport, CastleVectors, X3DNodes, X3DFields, CastleRenderOptions;
+  CastleViewport, CastleVectors, CastleProjection, X3DNodes, X3DFields, CastleRenderOptions;
 
 type
   TSFFloatArray = array of TSFFloat;
@@ -52,7 +55,11 @@ type
   TScreenFX = class
   private
     FViewport: TCastleViewport;
-    FBloomH, FBloomV, FKuwahara, FStylize: TScreenEffectNode;
+    FBloomH, FBloomV, FKuwahara, FStylize, FSoftening: TScreenEffectNode;
+    FSofteningLevel: Integer;
+    FUniSoftStrength, FUniSoftRadius, FUniDepthNear, FUniDepthFar,
+      FUniDepthOrtho: TSFFloat;
+    FPreviousProjection: TProjectionEvent;
     { uniform handles (threshold/strength live in both bloom passes) }
     FUniThresholdH, FUniThresholdV: TSFFloat;
     FUniStrengthH, FUniStrengthV: TSFFloat;
@@ -70,6 +77,8 @@ type
     FFogColor: TVector3;
     FFogRange, FFogDepthNear, FFogDepthFar, FFogClearZone: Single;
     FPosterLevels, FHatchStrength: Single;
+    procedure ProjectionChanged(var Projection: TProjection);
+    procedure SetSofteningLevel(const Value: Integer);
     function MakeEffect(const FragmentCode: String;
       const UniNames: array of String; const UniValues: array of Single;
       out UniFields: TSFFloatArray;
@@ -102,6 +111,9 @@ type
 
     { Master switch for all passes (default True). }
     property Enabled: Boolean read FEnabled write SetEnabled;
+    { 0 off, 1 subtle, 2 stronger. No change to colour/exposure or to the UI. }
+    property SofteningLevel: Integer read FSofteningLevel write SetSofteningLevel;
+    function ActivePassCount: Integer;
     { ── individual effect switches ── }
     property FogEnabled: Boolean read FFogEnabled write SetFogEnabled;             { default True }
     property BloomEnabled: Boolean read FBloomEnabled write SetBloomEnabled;       { default False }
@@ -138,9 +150,8 @@ type
       Default (0.75, 0.80, 0.88), a pale blue-gray. }
     property FogColor: TVector3 read FFogColor write SetFogColor;
     { Camera near/far used to turn depth-buffer values into meters.
-      Auto-read from the viewport camera at creation when it has explicit
-      values; override if the camera uses auto (0) planes and the fog
-      distance looks off. }
+      Updated from the effective viewport projection before each render;
+      far=0 is CGE's infinite far plane. }
     property FogDepthNear: Single read FFogDepthNear write SetFogDepthNear;
     property FogDepthFar: Single read FFogDepthFar write SetFogDepthFar;
 
@@ -154,7 +165,51 @@ type
 
 implementation
 
+uses Math;
+
 const
+  { A normalized gather, with a fixed footprint per resolution and mode. Its
+    blend changes continuously, so camera motion cannot cause tap-radius steps.
+    Lens softness depends on screen position, independently of scene depth;
+    protect an oval around the rider, not the whole foreground plane.
+    Reject closer samples to prevent sharp foreground silhouettes bleeding
+    into the background. No history buffer, autofocus jumps or temporal noise. }
+  SofteningFrag: String =
+    'uniform float soft_strength, soft_radius;' + LineEnding +
+    'uniform float depth_near, depth_far, depth_ortho;' + LineEnding +
+    'float fx_depth(ivec2 p) {' + LineEnding +
+    '  float d = screen_get_depth_fast(p);' + LineEnding +
+    '  if (depth_ortho > 0.5) return mix(depth_near, depth_far, d);' + LineEnding +
+    '  if (depth_far <= 0.0) return depth_near / max(1.0-d, 1e-7);' + LineEnding +
+    '  return depth_near / max(1.0-d*(1.0-depth_near/depth_far), 1e-7);' + LineEnding +
+    '}' + LineEnding +
+    'void fx_tap(ivec2 p, ivec2 offset, float kernel, float z,' + LineEnding +
+    '            inout vec3 sum, inout float weight) {' + LineEnding +
+    '  ivec2 q = clamp(p+offset, ivec2(0), ivec2(screen_width-1, screen_height-1));' + LineEnding +
+    '  float dz = fx_depth(q);' + LineEnding +
+    '  float w = kernel * smoothstep(z-max(1.0,z*0.12), z-max(0.2,z*0.025), dz);' + LineEnding +
+    '  sum += screen_get_color(q).rgb*w; weight += w;' + LineEnding +
+    '}' + LineEnding +
+    'void main(void) {' + LineEnding +
+    '  ivec2 p = screen_position();' + LineEnding +
+    '  vec4 base = screen_get_color(p);' + LineEnding +
+    '  float z = fx_depth(p);' + LineEnding +
+    '  vec2 uv = (vec2(p)+0.5)/vec2(screen_width,screen_height);' + LineEnding +
+    '  float edge = length((uv-vec2(0.5,0.45))*vec2(2.0,1.5));' + LineEnding +
+    '  float distant = smoothstep(24.0,160.0,z);' + LineEnding +
+    '  float peripheral = smoothstep(0.52,0.98,edge);' + LineEnding +
+    '  float blend = soft_strength*max(0.75*distant,peripheral);' + LineEnding +
+    '  if (blend < 0.002) { gl_FragColor=base; return; }' + LineEnding +
+    '  int r = int(max(1.0,floor(float(screen_height)*soft_radius/900.0+0.5)));' + LineEnding +
+    '  vec3 sum=base.rgb*4.0; float weight=4.0;' + LineEnding +
+    '  fx_tap(p,ivec2(r,0),2.0,z,sum,weight); fx_tap(p,ivec2(-r,0),2.0,z,sum,weight);' + LineEnding +
+    '  fx_tap(p,ivec2(0,r),2.0,z,sum,weight); fx_tap(p,ivec2(0,-r),2.0,z,sum,weight);' + LineEnding +
+    '  fx_tap(p,ivec2(r,r),1.0,z,sum,weight); fx_tap(p,ivec2(-r,r),1.0,z,sum,weight);' + LineEnding +
+    '  fx_tap(p,ivec2(r,-r),1.0,z,sum,weight); fx_tap(p,ivec2(-r,-r),1.0,z,sum,weight);' + LineEnding +
+    '  fx_tap(p,ivec2(2*r,0),0.5,z,sum,weight); fx_tap(p,ivec2(-2*r,0),0.5,z,sum,weight);' + LineEnding +
+    '  fx_tap(p,ivec2(0,2*r),0.5,z,sum,weight); fx_tap(p,ivec2(0,-2*r),0.5,z,sum,weight);' + LineEnding +
+    '  gl_FragColor=vec4(mix(base.rgb,sum/weight,blend),base.a);' + LineEnding +
+    '}';
   { ── Pass 1: depth fog + horizontal bloom ──
     Fog: reconstruct linear eye distance from the depth buffer ONCE (for the
     center pixel) and mix toward fog_color (exp2 falloff). The glow gathered
@@ -162,9 +217,8 @@ const
     deep in the fog then blooms as dimly as it looks; neighbouring taps sit at
     nearly the same distance, so the approximation is invisible and it saves
     8 depth fetches per pixel.
-    Sky test is DISTANCE-based (>= 98% of far), not a raw-depth epsilon: the
-    depth buffer is non-linear and everything beyond ~1.5 km already reads
-    > 0.9999, so an epsilon test wrongly classified far geometry as sky. }
+    Only the exact clear-depth value is sky: a raw-depth epsilon wrongly
+    classifies distant geometry because perspective depth is nonlinear. }
   BloomFragH: String =
     'uniform float bloom_threshold;' + LineEnding +
     'uniform float bloom_strength;' + LineEnding +
@@ -186,9 +240,10 @@ const
     '  vec3 col = screen_get_color(p).rgb;' + LineEnding +
     '  float f = 1.0;  /* fog transmittance of THIS pixel: 1 = clear */' + LineEnding +
     '  if (fog_range > 0.0) {' + LineEnding +
-    '    float ndc = screen_get_depth(p) * 2.0 - 1.0;' + LineEnding +
-    '    float dist = (2.0 * fog_near * fog_far) / (fog_far + fog_near - ndc * (fog_far - fog_near));' + LineEnding +
-    '    if (dist < fog_far * 0.98) {  /* at/near far plane = sky, keep as authored */' + LineEnding +
+    '    float raw_depth = screen_get_depth_fast(p);' + LineEnding +
+    '    float inv_far = fog_far > 0.0 ? fog_near/fog_far : 0.0;' + LineEnding +
+    '    float dist = fog_near / max(1.0-raw_depth*(1.0-inv_far),1e-7);' + LineEnding +
+    '    if (raw_depth < 1.0) { /* clear-depth sky; no arbitrary distance cutoff */' + LineEnding +
     '      /* clear zone: measure from its boundary, not from the eye. At the' + LineEnding +
     '         boundary d = 0 — same start as at the camera, so no step. */' + LineEnding +
     '      float d = max(dist - fog_clear, 0.0);' + LineEnding +
@@ -420,6 +475,12 @@ begin
   FUniPosterLevels  := U[0];
   FUniHatchStrength := U[1];
 
+  FSoftening := MakeEffect(SofteningFrag,
+    ['soft_strength','soft_radius','depth_near','depth_far','depth_ortho'],
+    [0,1,FFogDepthNear,FFogDepthFar,0], U, true, Sh);
+  FUniSoftStrength:=U[0]; FUniSoftRadius:=U[1];
+  FUniDepthNear:=U[2]; FUniDepthFar:=U[3]; FUniDepthOrtho:=U[4];
+
   { Chain order: fog+blur, blur+tonemap, then the stylization on the final
     colors — paint first (Kuwahara), quantize and hatch the painted image. }
   if Assigned(FViewport) then
@@ -428,6 +489,9 @@ begin
     FViewport.AddScreenEffect(FBloomV);
     FViewport.AddScreenEffect(FKuwahara);
     FViewport.AddScreenEffect(FStylize);
+    FViewport.AddScreenEffect(FSoftening);
+    FPreviousProjection:=FViewport.OnProjection;
+    FViewport.OnProjection:=@ProjectionChanged;
   end;
 
   ApplyState;
@@ -440,12 +504,15 @@ begin
     free them manually here. }
   if Assigned(FViewport) then
   begin
+    if TMethod(FViewport.OnProjection).Data=Pointer(Self) then
+      FViewport.OnProjection:=FPreviousProjection;
     FViewport.RemoveScreenEffect(FBloomH);
     FViewport.RemoveScreenEffect(FBloomV);
     FViewport.RemoveScreenEffect(FKuwahara);
     FViewport.RemoveScreenEffect(FStylize);
+    FViewport.RemoveScreenEffect(FSoftening);
   end;
-  FBloomH := nil; FBloomV := nil; FKuwahara := nil; FStylize := nil;
+  FBloomH := nil; FBloomV := nil; FKuwahara := nil; FStylize := nil; FSoftening:=nil;
   inherited Destroy;
 end;
 
@@ -481,6 +548,40 @@ begin
     FKuwahara.Enabled := FEnabled and FKuwaharaEnabled;
   if Assigned(FStylize) then
     FStylize.Enabled := FEnabled and (FPosterEnabled or FHatchEnabled);
+  if Assigned(FSoftening) then
+    FSoftening.Enabled:=FEnabled and (FSofteningLevel>0);
+end;
+
+procedure TScreenFX.ProjectionChanged(var Projection: TProjection);
+var Ortho: Single;
+begin
+  if Assigned(FPreviousProjection) then FPreviousProjection(Projection);
+  { Auto near/far may differ from Camera.ProjectionNear/Far (zero means auto).
+    Use the exact projection being rendered, including an infinite far plane. }
+  if FUniDepthNear.Value<>Projection.ProjectionNear then
+    FUniDepthNear.Send(Projection.ProjectionNear);
+  if FUniDepthFar.Value<>Projection.ProjectionFar then
+    FUniDepthFar.Send(Projection.ProjectionFar);
+  Ortho:=Ord(Projection.ProjectionType=ptOrthographic);
+  if FUniDepthOrtho.Value<>Ortho then FUniDepthOrtho.Send(Ortho);
+  if FFogDepthNear<>Projection.ProjectionNear then SetFogDepthNear(Projection.ProjectionNear);
+  if FFogDepthFar<>Projection.ProjectionFar then SetFogDepthFar(Projection.ProjectionFar);
+end;
+
+procedure TScreenFX.SetSofteningLevel(const Value: Integer);
+begin
+  if FSofteningLevel=EnsureRange(Value,0,2) then Exit;
+  FSofteningLevel:=EnsureRange(Value,0,2);
+  if FSofteningLevel=2 then
+  begin FUniSoftStrength.Send(0.98); FUniSoftRadius.Send(3.0) end
+  else begin FUniSoftStrength.Send(0.90); FUniSoftRadius.Send(2.0) end;
+  ApplyState;
+end;
+
+function TScreenFX.ActivePassCount: Integer;
+begin
+  Result:=Ord(FBloomH.Enabled)+Ord(FBloomV.Enabled)+Ord(FKuwahara.Enabled)+
+    Ord(FStylize.Enabled)+Ord(FSoftening.Enabled);
 end;
 
 procedure TScreenFX.SetEnabled(const V: Boolean);

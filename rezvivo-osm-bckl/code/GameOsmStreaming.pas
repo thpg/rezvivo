@@ -36,7 +36,7 @@ uses
   Classes, SysUtils,
   CastleVectors, CastleViewport, CastleUIControls,
   Osm3dGeoMath, Osm3dMapUtils, Osm3dStudioSettings, Osm3dStreamingLauncher,
-  FitFile, GamePath;
+  FitFile, GamePath, GameFitLoadProfile;
 
 type
   { Назначение ApplySnappedWidths — разный эффект на геометрию пути:
@@ -62,6 +62,8 @@ type
     FOrigin:     TLatLon;
     FRoute:      TRouteLatLonArray;
     FActive:     Boolean;
+    FFitLoad: TFitLoadProfile;
+    procedure ApplyFitLoad(APath: TGamePath; Snapped: Boolean);
 
     { Лог стриминга — приходит уже маршалленным в главный поток. }
     procedure HandleStreamLog(const Line: string);
@@ -96,6 +98,7 @@ type
       const ACacheRoot: string = '';
       const ARoutesFolder: string = '';
       const ASelectedFit: string = ''): Boolean;
+    procedure SetFitLoadReference(Fit: TFitFile);
 
     { Запустить асинхронную привязку маршрута к дорожной сети OSM.
       Безопасно звать сразу после StartFromFit; результат публикуется
@@ -217,7 +220,7 @@ implementation
 
 uses
   Math, CastleLog, DebugLog,
-  Osm3dStreamingMap, Osm3dRouteBuildings;
+  Osm3dStreamingMap, Osm3dRouteBuildings, Osm3dFitHeightLayer;
 
 constructor TGameOsmStreaming.Create;
 begin
@@ -647,6 +650,7 @@ begin
   APath.LoadFromMemory(LocalCenters,Widths);
   APath.UsePreparedCornerHints(
     RouteNeedsTurnarounds(FSession.Map.SnappedRouteCenters));
+  ApplyFitLoad(APath,True);
   Result:=Length(Centers);
   WritelnLog('Osm3d',Format('ApplySnappedWidths: prepared building-safe path, %d points',[Result]));
 end;
@@ -705,12 +709,53 @@ begin
   if ASnapped and SnapReady then
     APath.UsePreparedCornerHints(
       RouteNeedsTurnarounds(FSession.Map.SnappedRouteCenters));
+  ApplyFitLoad(APath,ASnapped and SnapReady);
   Result := APath.PointCount;
 
   WritelnLog('Osm3d', Format(
     'LoadAvatarPath: путь загружен (проекция сессии), источник %s, точек %d; '
     + 'start world %s',
     [Source, Result, LocalPts[0].ToString]));
+end;
+
+procedure TGameOsmStreaming.SetFitLoadReference(Fit: TFitFile);
+var Points:TFitGeoAltArray; D,H:TFitLoadValues; I:Integer;
+  HasDistance,Calibrated:Boolean;Closing:Double;Layer:TFitHeightLayer;
+begin
+  FFitLoad:=Default(TFitLoadProfile);
+  if (Fit=nil) or not Fit.HasAltitude then Exit;
+  Points:=Fit.ToGeoAltPoints;
+  if (Length(Points)<2) or (Length(Points)<>Length(FRoute)) then Exit;
+  SetLength(D,Length(Points));SetLength(H,Length(Points));
+  Layer:=nil;
+  if (FSession<>nil) and (FSession.Map<>nil) then Layer:=FSession.Map.FitPhysLayer;
+  Calibrated:=(Layer<>nil) and Layer.HasSelectedDatum;
+  HasDistance:=Points[High(Points)].DistanceM-Points[0].DistanceM>20;
+  for I:=0 to High(Points) do begin
+    if HasDistance then D[I]:=Points[I].DistanceM
+    else if I>0 then D[I]:=D[I-1]+FRoute[I-1].DistanceTo(FRoute[I]);
+    if Points[I].HasAltitude then H[I]:=Points[I].AltM else H[I]:=NaN;
+    if Calibrated and Points[I].HasAltitude then
+      Layer.CorrectSelectedAltitude(Points[I].TimeSec,Points[I].AltM,H[I]);
+  end;
+  Closing:=0;
+  if not RouteNeedsTurnarounds(FRoute) then Closing:=Max(2.0,FRoute[0].DistanceTo(FRoute[High(FRoute)]));
+  FFitLoad:=BuildFitLoadProfile(D,H,Closing);
+  FFitLoad.DatumCorrected:=Calibrated;
+  WritelnLog('FIT load',Format('distance profile: %d samples, %.1f km, step %.2f m; datum=%s stationary=%d spikes=%d residual_loop_drift=%.2f m',
+    [Length(FFitLoad.HeightM),FFitLoad.LengthM/1000,FFitLoad.StepM,
+     BoolToStr(Calibrated,True),FFitLoad.StationarySamples,FFitLoad.RejectedSpikes,FFitLoad.LoopDriftM]));
+end;
+
+procedure TGameOsmStreaming.ApplyFitLoad(APath:TGamePath;Snapped:Boolean);
+var Indices:TFitLoadValues;I:Integer;
+begin
+  if APath=nil then Exit;
+  if Snapped then APath.SetFitLoadProfile(FFitLoad,FSession.Map.RideRouteSource)
+  else begin
+    SetLength(Indices,APath.PointCount);for I:=0 to High(Indices) do Indices[I]:=I;
+    APath.SetFitLoadProfile(FFitLoad,Indices);
+  end;
 end;
 
 end.

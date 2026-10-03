@@ -199,7 +199,7 @@ end;
 
 type
   TCsvRide = record
-    Lat, Lon, AltCal: TDblArr;
+    Lat, Lon, AltCal, TimeSec, AltFit: TDblArr;
     Deck: TBoolArr;
     Empty: Boolean;   { валидный маркер «файл пропущен» (мало точек) }
   end;
@@ -215,15 +215,14 @@ begin
   Result := Format('%s|%d', [AName, AMTime]);
 end;
 
-{ Прочитать кэш v3. True только если версия И src-сигнатура совпали.
-  Слою нужны lat/lon/alt_fitcorr_m/deck; t_sec и alt_dem_m в кэше — для
-  офлайн-анализа и будущей межфайловой сшивки, здесь не читаются. }
+{ Read the validated cache. Time and raw altitude preserve the selected
+  ride's datum correction for the distance-indexed load profile. }
 function ReadCacheCsv(const APath, ASrcSig: string;
   out ARide: TCsvRide): Boolean;
 var
   L: TStringList;
   Fmt: TFormatSettings;
-  I, N, CiLat, CiLon, CiCal, CiDeck, M: Integer;
+  I, N, CiLat, CiLon, CiCal, CiDeck, CiTime, CiRaw, M: Integer;
   Line: string;
   F: TStrArr;
   VerOk, SigOk, PermanentEmpty: Boolean;
@@ -236,7 +235,7 @@ begin
   try
     L.LoadFromFile(APath);
     VerOk := False; SigOk := False; PermanentEmpty := False;
-    CiLat := -1; CiLon := -1; CiCal := -1; CiDeck := -1;
+    CiLat := -1; CiLon := -1; CiCal := -1; CiDeck := -1;CiTime:=-1;CiRaw:=-1;
     N := -1;
     for I := 0 to L.Count - 1 do
     begin
@@ -256,6 +255,8 @@ begin
         CiLon  := CsvColIndex(Line, 'lon');
         CiCal  := CsvColIndex(Line, 'alt_fitcorr_m');
         CiDeck := CsvColIndex(Line, 'deck');
+        CiTime := CsvColIndex(Line, 't_sec');
+        CiRaw  := CsvColIndex(Line, 'alt_fit_m');
         N := I;
         Break;
       end;
@@ -270,6 +271,8 @@ begin
     SetLength(ARide.Lon,    L.Count - N - 1);
     SetLength(ARide.AltCal, L.Count - N - 1);
     SetLength(ARide.Deck,   L.Count - N - 1);
+    SetLength(ARide.TimeSec,L.Count - N - 1);
+    SetLength(ARide.AltFit,L.Count - N - 1);
     M := 0;
     for I := N + 1 to L.Count - 1 do
     begin
@@ -281,6 +284,11 @@ begin
       ARide.Lat[M]    := StrToFloatDef(Trim(F[CiLat]), 0, Fmt);
       ARide.Lon[M]    := StrToFloatDef(Trim(F[CiLon]), 0, Fmt);
       ARide.AltCal[M] := StrToFloatDef(Trim(F[CiCal]), 0, Fmt);
+      ARide.TimeSec[M]:=NaN;ARide.AltFit[M]:=NaN;
+      if (CiTime>=0) and (CiTime<=High(F)) then
+        ARide.TimeSec[M]:=StrToFloatDef(Trim(F[CiTime]),NaN,Fmt);
+      if (CiRaw>=0) and (CiRaw<=High(F)) then
+        ARide.AltFit[M]:=StrToFloatDef(Trim(F[CiRaw]),NaN,Fmt);
       ARide.Deck[M]   := (CiDeck >= 0) and (CiDeck <= High(F)) and
                          (Trim(F[CiDeck]) = '1');
       Inc(M);
@@ -289,6 +297,7 @@ begin
     SetLength(ARide.Lon,    M);
     SetLength(ARide.AltCal, M);
     SetLength(ARide.Deck,   M);
+    SetLength(ARide.TimeSec,M);SetLength(ARide.AltFit,M);
     Result := M >= 2;
   finally
     L.Free;
@@ -633,7 +642,7 @@ var
   AllLL: array of TLatLon;
   FitPath, SelName, Mask: string;
   Csv: TCsvRide;
-  T0, Lat, Lon, AltFit, Dem, AltCal: TDblArr;
+  T0, Lat, Lon, AltFit, Dem, AltCal, SelectedT, SelectedRaw, SelectedCal: TDblArr;
   Deck: TBoolArr;
   Landing: Double;
   Cut, CutAll, Rejected: Integer;
@@ -668,6 +677,7 @@ begin
   Result := '';
   if ALayer = nil then Exit('fit-layer: nil layer');
   ALayer.Clear;
+  SelName:=ExtractFileName(ASelectedFile);
   if AZoom <= 0 then AZoom := FITL_DEM_ZOOM_DEFAULT;
   if AFetcher <> nil then
     DemSig := HeightDatasetCacheKey(AFetcher.UrlTemplate)
@@ -751,6 +761,9 @@ begin
         if not Csv.Empty then
         begin
           AppendRide(Csv.Lat, Csv.Lon, Csv.AltCal, Csv.Deck);
+          if SameText(Names[I],SelName) then begin
+            SelectedT:=Csv.TimeSec;SelectedRaw:=Csv.AltFit;SelectedCal:=Csv.AltCal;
+          end;
           Inc(FromCache);
         end;
         Continue;
@@ -771,6 +784,9 @@ begin
           [Names[I], Landing,
            IfThen(Cut > 0, Format(', вырезано %d точек', [Cut]), '')]));
         AppendRide(Lat, Lon, AltCal, Deck);
+        if SameText(Names[I],SelName) then begin
+          SelectedT:=T0;SelectedRaw:=AltFit;SelectedCal:=AltCal;
+        end;
         Inc(Computed);
         Inc(CutAll, Cut);
       end
@@ -810,6 +826,7 @@ begin
   end;
 
   ALayer.SetData(Pts, Origin, FnvHex(SigSrc));
+  ALayer.SetSelectedDatum(SelName,SelectedT,SelectedRaw,SelectedCal);
 
   DeckAll := 0; GndAll := 0;
   for I := 0 to High(Pts) do

@@ -39,12 +39,12 @@ procedure McpUnregisterPlayObjects;
 implementation
 
 uses
-  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe,
+  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap,
   Classes, SysUtils, Math, fpjson, base64,
   CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages,
   CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog,
-  CastleScene, CastleTransform, X3DNodes,
+  CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
   McpRegistry, McpStdio,
   AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace,
   BikeParametric, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
@@ -700,6 +700,8 @@ begin
     Arr.Add(ViewPlay.AvatarTransform.Direction.Y);
     Arr.Add(ViewPlay.AvatarTransform.Direction.Z);
     AResult.Add('avatar_dir', Arr);
+    AResult.Add('avatar_up', TJSONArray.Create([ViewPlay.AvatarTransform.Up.X,
+      ViewPlay.AvatarTransform.Up.Y, ViewPlay.AvatarTransform.Up.Z]));
   end;
 
   case ViewPlay.CameraMode of
@@ -743,6 +745,7 @@ var
   GroundTracking:TGroundTrackingReplay;
   TrafficSnapshot:TLaneReplayState;
   TrafficIndex:Integer;
+  LoadGrade,LoadStation,LoadHeight:Single;
   procedure Vec(const Name: String; const V: TVector3);
   var A: TJSONArray;
   begin A:=TJSONArray.Create; A.Add(V.X); A.Add(V.Y); A.Add(V.Z); AResult.Add(Name,A) end;
@@ -757,6 +760,24 @@ begin
   AResult.Add('segment',Ag.Path.Position.Segment); AResult.Add('t',Ag.Path.Position.T);
   AResult.Add('speed',Ag.State.CurrentSpeed); AResult.Add('distance',Ag.State.CumulativeDistance);
   AResult.Add('power',Ag.State.AppliedPowerWatts);
+  { One read-only snapshot keeps FIT transport, clock and physics comparable
+    without races between separate MCP calls or per-frame file logging. }
+  AResult.Add('physics_time_sec',Ag.State.SimulationTime);
+  AResult.Add('mass_kg',Ag.State.AvatarMass);
+  AResult.Add('cda_m2',Ag.State.DragCoefficient*Ag.State.FrontalArea);
+  AResult.Add('crr',Ag.State.RollingResistance);
+  if Assigned(DeviceService) and DeviceService.IsSimulationActive then
+  begin
+    AResult.Add('sim_position_sec',DeviceService.SimPositionSec);
+    if DeviceService.ControlDevice<>nil then
+    begin
+      AResult.Add('sim_record_sec',DeviceService.ControlDevice.LastData.ElapsedTime);
+      AResult.Add('sensor_power_w',DeviceService.ControlDevice.LastData.InstantPower);
+      AResult.Add('fit_speed_kmh',DeviceService.ControlDevice.LastData.InstantSpeed);
+      AResult.Add('sensor_cadence',DeviceService.ControlDevice.LastData.InstantCadence);
+      AResult.Add('sensor_hr',DeviceService.ControlDevice.LastData.HeartRate);
+    end;
+  end;
   AResult.Add('lane_offset',Ag.State.LaneOffset);
   AResult.Add('applied_lane_offset',Ag.Path.LastLaneOffsetM);
   AResult.Add('prepared_building_route',Ag.Path.PreparedBuildingRoute);
@@ -801,14 +822,27 @@ begin
       O.Add('power',TrafficAgent.State.AppliedPowerWatts);
       O.Add('ground_pitch_deg',TrafficAgent.State.CurrentGroundPitch);
       O.Add('slope_deg',TrafficAgent.State.CurrentSlopeAngle);
+      O.Add('fit_load_valid',TrafficAgent.Path.FitLoadAtPosition(
+        TrafficAgent.Path.Position,LoadGrade,LoadStation,LoadHeight));
+      O.Add('fit_load_grade_pct',LoadGrade);
+      O.Add('fit_load_datum_corrected',TrafficAgent.Path.FitLoadDatumCorrected);
+      O.Add('fit_load_station_m',LoadStation);
+      O.Add('fit_load_height_m',LoadHeight);
       O.Add('front_ground_valid',TrafficAgent.State.FrontGroundPointValid);
       O.Add('rear_ground_valid',TrafficAgent.State.RearGroundPointValid);
       if TrafficAgent.Physics<>nil then begin
         { Read the existing contact plane only; this diagnostic never samples
           the ground or changes the GPU query queue. }
         GroundTracking:=TrafficAgent.Physics.CaptureReplay;
+        O.Add('road_grade_pct',GroundTracking.RoadSlopeGrade);
+        O.Add('road_grade_valid',GroundTracking.RoadSlopeValid);
+        O.Add('road_grade_pending_sec',GroundTracking.RoadSlopeMissSec);
+        O.Add('fit_grade_pending_sec',GroundTracking.FitSlopeMissSec);
+        O.Add('fit_correction_grade_pct',GroundTracking.SlopeCorrSmooth);
+        O.Add('fit_elevation_debt_m',GroundTracking.ElevDebtM);
         O.Add('ground_lease_limited_steps',Int64(TrafficAgent.Physics.GroundLeaseLimitedSteps));
         O.Add('ground_lease_rejected_m',TrafficAgent.Physics.GroundLeaseRejectedMeters);
+        O.Add('ground_wait_sec',TrafficAgent.Physics.GroundWaitSeconds);
         O.Add('ground_probe_valid',GroundTracking.SmoothedGroundYValid);
         O.Add('ground_probe_position',TJSONArray.Create([
           GroundTracking.GroundProbePosition.X,GroundTracking.GroundProbePosition.Y,
@@ -960,11 +994,27 @@ procedure CmdBikeAnimDebug(const AParams: TJSONObject; AResult: TJSONObject);
 var
   Anim: TJSONObject;
   Ag: TPhysicalAgent;
+  ParentNode: TCastleTransform;
+  Parents: TJSONArray;
+  Item: TJSONObject;
 begin
   if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
     raise Exception.Create('bike not available (play view not started?)');
   Anim := ViewPlay.Bike.AnimDebugJson;
   Anim.Add('motion', ViewPlay.Bike.RiderMotionDebugJson);
+  Parents := TJSONArray.Create;
+  Anim.Add('parents', Parents);
+  ParentNode := ViewPlay.Bike.Group;
+  while ParentNode <> nil do
+  begin
+    Item := TJSONObject.Create; Parents.Add(Item);
+    Item.Add('name', ParentNode.Name);
+    Item.Add('position', TJSONArray.Create([ParentNode.Translation.X,ParentNode.Translation.Y,ParentNode.Translation.Z]));
+    Item.Add('direction', TJSONArray.Create([ParentNode.Direction.X,ParentNode.Direction.Y,ParentNode.Direction.Z]));
+    Item.Add('up', TJSONArray.Create([ParentNode.Up.X,ParentNode.Up.Y,ParentNode.Up.Z]));
+    Item.Add('scale', TJSONArray.Create([ParentNode.Scale.X,ParentNode.Scale.Y,ParentNode.Scale.Z]));
+    ParentNode := ParentNode.Parent;
+  end;
   { Body lean (roll) lives on the avatar agent, not on TBikeInstance. }
   Ag := nil;
   if Assigned(ViewPlay.World) and (ViewPlay.World.Agents.Count > 0) then
@@ -975,11 +1025,75 @@ begin
     Anim.Add('target_lean_deg', Ag.State.TargetTurnAngle);
     Anim.Add('curvature', Ag.State.CurrentCurvature);
     Anim.Add('speed_mps', Ag.State.CurrentSpeed);
+    Anim.Add('yaw_rate_rad', Ag.State.CurrentYawRateRad);
+    if Ag.Actor<>nil then Anim.Add('rider_owns_lean',Ag.Actor.RiderOwnsLean);
   end;
   AResult.Add('anim', Anim);
 end;
 
 { ── bike.set_gpu_anim ────────────────────────────────────────────────── }
+
+procedure CmdBikeMotionSample(const AParams: TJSONObject; AResult: TJSONObject);
+var
+  State: TBikePlaybackState;
+  Anchor, Facing: TJSONArray;
+  Paused: Boolean;
+  CurSec, TotalSec: Integer;
+  Cadence: Single;
+begin
+  if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
+    raise Exception.Create('Start a ride before sampling its rider');
+  if (not Assigned(DeviceService)) or
+     (not DeviceService.SimPlayerInfo(Paused, CurSec, TotalSec)) or not Paused then
+    raise Exception.Create('Pause the FIT simulation before sampling its rider');
+  { Explicit MCP diagnostic only. Keep the live GPU animation/deformation
+    path; a paused simulation already prevents the normal clock advancing. }
+  State := ViewPlay.Bike.CaptureReplay;
+  State.Phase := Frac(AParams.Get('phase', Double(State.Phase)));
+  State.BreathPhase := Frac(AParams.Get('breath', Double(State.BreathPhase)));
+  State.BreathLoad := EnsureRange(AParams.Get('breath_load', Double(State.BreathLoad)),0.0,2.0);
+  State.RiderEffort := EnsureRange(AParams.Get('effort', Double(State.RiderEffort)),0.0,3.0);
+  State.RiderEffortTarget := State.RiderEffort;
+  State.BodyDynamicsInput.PowerW:=State.RiderEffort*220;
+  State.BodyDynamicsInput.LateralAccel:=AParams.Get('lateral_accel',0.0);
+  State.BodyDynamicsInput.ExternalLeanDeg:=0;
+  State.BodyDynamicsSituation:=True;
+  if AParams.Find('body_dynamics')<>nil then
+    State.BodyDynamicsEnabled:=AParams.Get('body_dynamics',True);
+  State.AnimElapsed := AParams.Get('time', Double(State.AnimElapsed));
+  State.SteerAngleDeg := 0;
+  State.PedalSteerDeg := 0;
+  State.PedalLeanDeg := 0;
+  Cadence := EnsureRange(AParams.Get('cadence', Double(State.MotionCadence)),0.0,200.0);
+  State.MotionCadence := Cadence;
+  State.PedalRate := Cadence / 60;
+  if Cadence > 0 then State.CrankIntervalCur := 60 / Cadence
+  else State.CrankIntervalCur := 9999;
+  State.TripoPrevElapsed := State.AnimElapsed;
+  State.PhasePrevElapsed := State.AnimElapsed;
+  Anchor := AParams.Get('anchor', TJSONArray(nil));
+  Facing := AParams.Get('facing', TJSONArray(nil));
+  if Assigned(Anchor) and (Anchor.Count <> 3) then
+    raise Exception.Create('anchor must contain three coordinates');
+  if Assigned(Facing) and (Facing.Count <> 3) then
+    raise Exception.Create('facing must contain three coordinates');
+  if Assigned(Anchor) then ViewPlay.AvatarTransform.Translation :=
+    Vector3(Anchor.Floats[0], Anchor.Floats[1], Anchor.Floats[2]);
+  if Assigned(Facing) then
+  begin
+    ViewPlay.AvatarTransform.SetView(
+      Vector3(Facing.Floats[0], Facing.Floats[1], Facing.Floats[2]), Vector3(0,1,0));
+    { Physics stores pitch/turn roll on SceneAvatar, below AvatarTransform.
+      A reproducible flat-road diagnostic must clear that second transform,
+      while AnimateFrame below retains the rider's own pedal-induced roll. }
+    if Assigned(ViewPlay.Bike.Group.Parent) then
+      ViewPlay.Bike.Group.Parent.Rotation := Vector4(0,1,0,ModelBaseYRotation);
+  end;
+  ViewPlay.Bike.RestoreReplay(State);
+  ViewPlay.Bike.SampleRiderDynamics;
+  AResult.Add('sample', ViewPlay.Bike.RiderMotionDebugJson);
+  AResult.Add('gpu', ViewPlay.Bike.GpuAnim);
+end;
 
 procedure CmdBikeSetGpuAnim(const AParams: TJSONObject; AResult: TJSONObject);
 begin
@@ -1499,6 +1613,75 @@ begin
   AResult.Add('path', PerformanceRiderModel);
 end;
 
+procedure CmdPerfObjects(const AParams:TJSONObject; AResult:TJSONObject);
+var Target:TCastleTransform;Node:TX3DNode;Parts:TStringList;I,N:Integer;
+  Path,NodePath:string;Rows:TJSONArray;WithNodes:Boolean;
+  procedure ListNode(A:TX3DNode;const TP,NP:string;Depth:Integer);
+  var J:Integer;Row:TJSONObject;V:TX3DField;
+  begin
+    if (A=nil)or(Depth>64)or(Rows.Count>=8192)then Exit;
+    Row:=TJSONObject.Create(['transform',TP,'node',NP,'class',A.ClassName,'name',A.X3DName]);
+    V:=A.Field('visible',False);if V is TSFBool then Row.Add('visible',TSFBool(V).Value);
+    Rows.Add(Row);
+    if A is TAbstractGroupingNode then
+      for J:=0 to TAbstractGroupingNode(A).FdChildren.Count-1 do
+        ListNode(TAbstractGroupingNode(A).FdChildren[J],TP,NP+'/'+IntToStr(J),Depth+1);
+  end;
+  procedure ListTransform(T:TCastleTransform;const TP:string;Depth:Integer);
+  var J:Integer;Row:TJSONObject;
+  begin
+    if (T=nil)or(Depth>64)or(Rows.Count>=8192)then Exit;
+    Row:=TJSONObject.Create(['transform',TP,'class',T.ClassName,'name',T.Name,
+      'exists',T.Exists,'visible',T.Visible]);Rows.Add(Row);
+    if T is TCastleScene then begin
+      if TCastleScene(T).RootNode<>nil then begin
+        Row.Add('root',TCastleScene(T).RootNode.X3DName);
+        if WithNodes then ListNode(TCastleScene(T).RootNode,TP,'',0);
+      end;
+    end;
+    for J:=0 to T.Count-1 do ListTransform(T[J],TP+'/'+IntToStr(J),Depth+1);
+  end;
+begin
+  if (ViewPlay=nil)or not ViewPlay.SessionAlive then
+    raise Exception.Create('Active ride required');
+  if (AParams.Find('visible')<>nil)and(AParams.Find('transform')=nil)then
+    raise Exception.Create('A current transform path is required');
+  Target:=ViewPlay.MainViewport.Items;Path:=AParams.Get('transform','');
+  Parts:=TStringList.Create;
+  try
+    Parts.StrictDelimiter:=True;Parts.Delimiter:='/';Parts.DelimitedText:=Path;
+    for I:=0 to Parts.Count-1 do if Parts[I]<>'' then begin
+      if not TryStrToInt(Parts[I],N)or(N<0)or(N>=Target.Count)then
+        raise Exception.Create('Invalid transform path');
+      Target:=Target[N];
+    end;
+    Node:=nil;NodePath:=AParams.Get('node','');
+    if AParams.Find('node')<>nil then begin
+      if not(Target is TCastleScene)then raise Exception.Create('Node path requires a scene');
+      Node:=TCastleScene(Target).RootNode;
+      if Node=nil then raise Exception.Create('Scene has no root');
+      Parts.DelimitedText:=NodePath;
+      for I:=0 to Parts.Count-1 do if Parts[I]<>'' then begin
+        if not(Node is TAbstractGroupingNode)then raise Exception.Create('Node is not a group');
+        if not TryStrToInt(Parts[I],N)or(N<0)or(N>=TAbstractGroupingNode(Node).FdChildren.Count)then
+          raise Exception.Create('Invalid node path');
+        Node:=TAbstractGroupingNode(Node).FdChildren[N];
+      end;
+    end;
+    { Visible, not Exists: keep lights, physics and resource ownership intact.
+      Paths are session-local. Nothing is stored or traversed between MCP calls. }
+    if AParams.Find('visible')<>nil then begin
+      if Node=nil then Target.Visible:=AParams.Get('visible',True)
+      else if Node is TAbstractShapeNode then TAbstractShapeNode(Node).Visible:=AParams.Get('visible',True)
+      else if Node is TAbstractGroupingNode then TAbstractGroupingNode(Node).Visible:=AParams.Get('visible',True)
+      else raise Exception.Create('Only drawable groups/shapes can be hidden');
+    end;
+    Rows:=TJSONArray.Create;AResult.Add('objects',Rows);WithNodes:=AParams.Get('nodes',False);
+    if Node<>nil then ListNode(Node,Path,NodePath,0) else ListTransform(Target,Path,0);
+    AResult.Add('truncated',Rows.Count>=8192);
+  finally Parts.Free end;
+end;
+
 procedure CmdPerfSet(const AParams: TJSONObject; AResult: TJSONObject);
 var RoadMode: string;
 begin
@@ -1592,6 +1775,23 @@ begin
   AResult.Add('animate_signals', AnimateTrafficSignalsActive);
 end;
 
+type
+  TMcpEffectParts = class(TX3DNodeList)
+    Stage: TShaderType;
+    procedure Collect(Node: TX3DNode);
+  end;
+
+procedure TMcpEffectParts.Collect(Node: TX3DNode);
+var I: Integer; Part: TEffectPartNode;
+begin
+  for I := 0 to TEffectNode(Node).FdParts.Count-1 do
+    if TEffectNode(Node).FdParts[I] is TEffectPartNode then
+    begin
+      Part := TEffectPartNode(TEffectNode(Node).FdParts[I]);
+      if Part.ShaderType = Stage then AddIfNotExists(Part);
+    end;
+end;
+
 procedure CmdRiderRender(const AParams: TJSONObject; AResult: TJSONObject);
 var
   S: TCastleScene;
@@ -1600,36 +1800,87 @@ var
   Stats: TRenderStatistics;
   Part: TEffectPartNode;
   ShaderText: TStringList;
+  Parts: TMcpEffectParts;
+  EffectName, StageName: String;
+  I: Integer;
+  Responses, ResponseUpdate: TMFVec4f;
+  ResponseValues, ResponseInput: TJSONArray;
+  Response: TVector4;
 begin
   if (ViewPlay = nil) or (ViewPlay.Bike = nil) or
      (ViewPlay.Bike.TripoRider = nil) then
     raise Exception.Create('Active rider required');
   S := ViewPlay.Bike.TripoRider.Scene;
+  N := S.RootNode.FindNode(TEffectNode, 'TripoGpuSkin', [fnNilOnMissing]);
+  if (N <> nil) and (N.Field('uMuscleResponse', False) is TMFVec4f) then
+  begin
+    Responses := TMFVec4f(N.Field('uMuscleResponse'));
+    if AParams.Find('muscle_responses') <> nil then
+    begin
+      ResponseInput := AParams.Arrays['muscle_responses'];
+      if ResponseInput.Count <> Responses.Count then
+        raise Exception.Create('Expected one response for each rider muscle');
+      for I := 0 to ResponseInput.Count-1 do
+        if (ResponseInput.Types[I] <> jtArray) or (ResponseInput.Arrays[I].Count <> 4) then
+          raise Exception.Create('Muscle response must have four numbers');
+      ResponseUpdate := TMFVec4f.Create(nil, False, 'response', []);
+      try
+        for I := 0 to Responses.Count-1 do
+          ResponseUpdate.Items.Add(Vector4(ResponseInput.Arrays[I].Floats[0],
+            ResponseInput.Arrays[I].Floats[1], ResponseInput.Arrays[I].Floats[2],
+            ResponseInput.Arrays[I].Floats[3]));
+        Responses.Send(ResponseUpdate);
+      finally ResponseUpdate.Free end;
+    end;
+    ResponseValues := TJSONArray.Create;
+    for I := 0 to Responses.Count-1 do
+    begin
+      Response := Responses.Items[I];
+      ResponseValues.Add(TJSONArray.Create([Response.X,Response.Y,Response.Z,Response.W]));
+    end;
+    AResult.Add('muscle_responses', ResponseValues);
+  end;
   if (AParams.Find('shader_file') <> nil) or
      (AParams.Find('save_shader_file') <> nil) then
   begin
-    N := S.RootNode.FindNode(TEffectNode, 'TripoGpuSkin', [fnNilOnMissing]);
-    if (N = nil) or (TEffectNode(N).FdParts.Count = 0) then
-      raise Exception.Create('GPU skin effect required');
-    Part := TEffectNode(N).FdParts[0] as TEffectPartNode;
-    Part.Scene := S;
+    EffectName := AParams.Get('shader_effect', 'TripoGpuSkin');
+    StageName := AParams.Get('shader_stage', 'vertex');
+    Parts := TMcpEffectParts.Create(False);
     ShaderText := TStringList.Create;
     try
+      if StageName = 'vertex' then Parts.Stage := stVertex
+      else if StageName = 'fragment' then Parts.Stage := stFragment
+      else raise Exception.Create('shader_stage: expected vertex or fragment');
+      S.RootNode.EnumerateNodes(TEffectNode, EffectName, @Parts.Collect, False);
+      if Parts.Count = 0 then raise Exception.Create('Rider shader effect/stage not found');
       if AParams.Find('shader_file') <> nil then
       begin
         ShaderText.LoadFromFile(AParams.Get('shader_file', ''));
-        Part.Contents := ShaderText.Text;
+        for I := 0 to Parts.Count-1 do
+        begin
+          Part := TEffectPartNode(Parts[I]);
+          Part.Scene := S;
+          Part.Contents := ShaderText.Text;
+        end;
         S.ChangedAll;
       end;
       if AParams.Find('save_shader_file') <> nil then
       begin
-        ShaderText.Text := Part.Contents;
+        ShaderText.Text := TEffectPartNode(Parts[0]).Contents;
         ShaderText.SaveToFile(AParams.Get('save_shader_file', ''));
       end;
-    finally ShaderText.Free end;
+      AResult.Add('shader_parts', Parts.Count);
+    finally ShaderText.Free; Parts.Free end;
   end;
   if AParams.Find('lighting') <> nil then
     S.RenderOptions.Lighting := AParams.Get('lighting', True);
+  if ViewPlay.Bike.TripoRider.SelfOcclusion<>nil then
+  begin
+    if AParams.Find('self_occlusion')<>nil then
+      ViewPlay.Bike.TripoRider.SelfOcclusion.Strength:=AParams.Get('self_occlusion',0.75);
+    AResult.Add('self_occlusion',ViewPlay.Bike.TripoRider.SelfOcclusion.Strength);
+    AResult.Add('self_occlusion_pose_samples',Int64(ViewPlay.Bike.TripoRider.SelfOcclusion.PoseSamples));
+  end;
   if AParams.Find('textures') <> nil then
     S.RenderOptions.Textures := AParams.Get('textures', True);
   if AParams.Find('scene_lights') <> nil then
@@ -1678,6 +1929,28 @@ begin
     raise Exception.Create('Start a ride before the shadow test');
   ViewPlay.SetShadowTestRiders(AParams.Get('count', 0), AParams.Get('zones', False));
   AResult.Add('count', AParams.Get('count', 0));
+end;
+
+procedure CmdScreenFX(const AParams:TJSONObject;AResult:TJSONObject);
+var FX:TScreenFX;
+begin
+  if not Assigned(ViewPlay) or not ViewPlay.SessionAlive or
+     not Assigned(ViewPlay.ScreenFX) then raise Exception.Create('Start a ride first');
+  FX:=ViewPlay.ScreenFX;
+  if AParams.Find('enabled')<>nil then FX.Enabled:=AParams.Get('enabled',True);
+  if AParams.Find('softening')<>nil then FX.SofteningLevel:=AParams.Get('softening',0);
+  if AParams.Find('fog')<>nil then FX.FogEnabled:=AParams.Get('fog',False);
+  if AParams.Find('bloom')<>nil then FX.BloomEnabled:=AParams.Get('bloom',False);
+  if AParams.Find('tone')<>nil then FX.ToneEnabled:=AParams.Get('tone',False);
+  if AParams.Find('kuwahara')<>nil then FX.KuwaharaEnabled:=AParams.Get('kuwahara',False);
+  if AParams.Find('posterize')<>nil then FX.PosterizeEnabled:=AParams.Get('posterize',False);
+  if AParams.Find('hatch')<>nil then FX.HatchEnabled:=AParams.Get('hatch',False);
+  AResult.Add('enabled',FX.Enabled);AResult.Add('softening',FX.SofteningLevel);
+  AResult.Add('fog',FX.FogEnabled);AResult.Add('bloom',FX.BloomEnabled);
+  AResult.Add('tone',FX.ToneEnabled);AResult.Add('kuwahara',FX.KuwaharaEnabled);
+  AResult.Add('posterize',FX.PosterizeEnabled);AResult.Add('hatch',FX.HatchEnabled);
+  AResult.Add('active_passes',FX.ActivePassCount);
+  AResult.Add('depth_near',FX.FogDepthNear);AResult.Add('depth_far',FX.FogDepthFar);
 end;
 
 procedure CmdPerfCapture(const AParams:TJSONObject;AResult:TJSONObject);
@@ -1920,6 +2193,9 @@ begin
   P:=EnsureBikeFitPage;P.McpSetHair(AParams.Get('style','short'));
   P.McpFillStatus(AResult);AResult.Add('ok',True);
 end;
+
+procedure CmdBikeFitHead(const AParams:TJSONObject;AResult:TJSONObject);
+begin EnsureBikeFitPage.McpHead(AParams,AResult) end;
 
 procedure CmdBikeFitLighting(const AParams: TJSONObject; AResult: TJSONObject);
 var
@@ -2193,6 +2469,10 @@ begin
     'CycleInterval/ElapsedTimeInCycle, scene playback state.',
     '',
     @CmdBikeAnimDebug);
+  RegisterMcpCommand('bike.motion_sample',
+    'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation.',
+    '{"type":"object","properties":{"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
+    @CmdBikeMotionSample);
   RegisterMcpCommand('bike.set_gpu_anim',
     'Switch avatar bike/rider animation between the GPU path (true) and ' +
     'the legacy CPU path (false), live. Mirrors the editor command.',
@@ -2222,6 +2502,10 @@ begin
   RegisterMcpCommand('path.surface_layers','Find loaded multi-level surfaces along the rider path. Diagnostic only.','',@CmdPathSurfaceLayers);
   RegisterMcpCommand('ground.curb_probe','Compare ground height with and without the nearest rendered curb.',
     '{"type":"object","properties":{"x":{"type":"number"},"z":{"type":"number"}}}',@CmdCurbProbe);
+  RegisterMcpCommand('perf.objects',
+    'List live transform paths and optional X3D group/shape paths. Temporarily set visible for object-isolation measurements. '+
+    'Keeps lights and physics; paths must be obtained again after scene changes. Not persisted.',
+    '{"type":"object","properties":{"transform":{"type":"string"},"node":{"type":"string"},"nodes":{"type":"boolean"},"visible":{"type":"boolean"}}}',@CmdPerfObjects);
   RegisterMcpCommand('perf.set',
     'Toggle frame-cost components for isolated perf measurements: ' +
     'anim (all bike AnimateFrame), riders (Tripo rider meshes), ' +
@@ -2248,6 +2532,8 @@ begin
     '(real / only-render). geometry=true also counts resident OSM tiles, vertices and triangles.',
     '{"type":"object","properties":{"geometry":{"type":"boolean"}}}',
     @CmdPerfState);
+  RegisterMcpCommand('fx.configure','Inspect or temporarily compare screen effects in the active ride. Does not save settings.',
+    '{"type":"object","properties":{"enabled":{"type":"boolean"},"softening":{"type":"integer","minimum":0,"maximum":2},"fog":{"type":"boolean"},"bloom":{"type":"boolean"},"tone":{"type":"boolean"},"kuwahara":{"type":"boolean"},"posterize":{"type":"boolean"},"hatch":{"type":"boolean"}}}',@CmdScreenFX);
   RegisterMcpCommand('perf.capture',
     'Explicit bounded frame-time capture. start/read/stop; read reset=true drains a window. ' +
     'Reports frame median/p95/p99/1% low, raw update, render submission, asynchronous GPU timestamps and VRAM. ' +
@@ -2260,12 +2546,15 @@ begin
     '{"type":"object","properties":{"enabled":{"type":"boolean"},"batched":{"type":"boolean"},"traffic_signals":{"type":"boolean"},"animate_signals":{"type":"boolean"}}}',
     @CmdPoiModels);
   RegisterMcpCommand('perf.rider_render',
-    'Diagnostic rider/bike render stages. Omit fields to inspect; all defaults enabled.',
+    'Diagnostic rider render stages. Omit fields to inspect. Changes are temporary and affect the active rider only.',
     '{"type":"object","properties":{"lighting":{"type":"boolean"},' +
     '"textures":{"type":"boolean"},"scene_lights":{"type":"boolean"},' +
     '"global_lights":{"type":"boolean"},"environment":{"type":"boolean"},' +
     '"ground_shade":{"type":"boolean"},' +
-    '"shader_file":{"type":"string"},"save_shader_file":{"type":"string"}}}',
+    '"self_occlusion":{"type":"number","minimum":0,"maximum":1},' +
+    '"muscle_responses":{"type":"array","items":{"type":"array","items":{"type":"number"}}},' +
+    '"shader_file":{"type":"string"},"save_shader_file":{"type":"string"},' +
+    '"shader_effect":{"type":"string"},"shader_stage":{"type":"string","enum":["vertex","fragment"]}}}',
     @CmdRiderRender);
   RegisterMcpCommand('perf.rider_model',
     'Set a local rider model for the next ride benchmark. Stop the ride first. Empty path restores profile selection. Not persisted.',
@@ -2299,7 +2588,7 @@ begin
     @CmdBikeFitNudge);
   RegisterMcpCommand('bikefit.set_color',
     'Set or clear a color slot of the bike-fit result preview. slot: ' +
-    'jersey|shorts|socks|boots|gloves|skin|hair|frame|rim; r,g,b 0..255; ' +
+    'jersey|shorts|socks|boots|gloves|skin|hair|helmet|frame|rim; r,g,b 0..255; ' +
     'on=false restores stock. Bike-fit preview uses a live shader; ' +
     'play still bakes cloth into the texture.',
     '{"type":"object","properties":{' +
@@ -2309,9 +2598,16 @@ begin
     '"required":["slot"]}',
     @CmdBikeFitSetColor);
   RegisterMcpCommand('bikefit.set_hair',
-    'Select and save rider hairstyle: bald, buzz, short, swept, parted, curly, coils, medium, ponytail, braid.',
+    'Select and save rider hairstyle: bald, short, curly, medium, ponytail, braid, long_braid, double_braids, dreadlocks.',
     '{"type":"object","properties":{"style":{"type":"string"}},"required":["style"]}',
     @CmdBikeFitHair);
+  RegisterMcpCommand('bikefit.head',
+    'Head editor: save headwear/hair/mustache/beard, category 0..3, open, yaw; optional thumbnail PNG of the actual preview.',
+    '{"type":"object","properties":{"headwear":{"type":"string"},"hair":{"type":"string"},'+
+    '"mustache":{"type":"string"},"beard":{"type":"string"},"category":{"type":"integer"},'+
+    '"open":{"type":"boolean"},"yaw":{"type":"number"},"thumbnail":{"type":"string"},'+
+    '"manual_face":{"type":"boolean"},"jaw":{"type":"number"},"smile":{"type":"number"},'+
+    '"strain":{"type":"number"}}}',@CmdBikeFitHead);
   RegisterMcpCommand('bikefit.lighting',
     'Set/inspect bike-fit page lighting on the fly (omit an argument to keep it): ' +
     'env = rider IBL ambient, key/fill = result viewport directional lights, ' +

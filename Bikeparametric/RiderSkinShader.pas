@@ -5,7 +5,7 @@ uses X3DNodes,X3DFields,CastleVectors;
 type
   TRiderSkin=class
   private
-    FScale:Single;
+    FScale,FHeadSurfaceOffset:Single;
     FTime:Double;
     FFields:array of TSFVec4f;
     FMouthFields:array of TSFFloat;
@@ -15,6 +15,7 @@ type
     FGeometricFace,FGeometricEyes,FDetailActive:Boolean;
     procedure Visit(Node:TX3DNode);
     procedure VisitEye(Sh:TShapeNode);
+    procedure VisitOral(Sh:TShapeNode);
     procedure SetTime(const Value:Double);
   public
     constructor Create(Root:TX3DNode;Height:Single;const FaceFile:String;GeometricFace:Boolean=False;GeometricEyes:Boolean=False);
@@ -65,6 +66,15 @@ begin
   Result:=SkinDiffusionTexture;
 end;
 const
+  OralVS=
+    'attribute float riderEnamel;varying float roEnamel;'+#10+
+    'void PLUG_vertex_eye_space(const vec4 v,const vec3 n){roEnamel=riderEnamel;}';
+  OralFS=
+    'varying float roEnamel;'+#10+
+    'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(0.78,0.40,roEnamel);}'+#10+
+    // The lining is inside the lips, not an exposed skin surface. Ambient
+    // occlusion also applies to the shared rider sky-light approximation.
+    'void PLUG_material_occlusion(inout vec4 light){light.rgb*=mix(0.14,0.90,roEnamel);}';
   EyeVS=
     'attribute vec2 riderEyeUV;varying vec2 reUV;'+#10+
     'void PLUG_vertex_eye_space(const vec4 v,const vec3 n){reUV=riderEyeUV*2.0-1.0;}';
@@ -80,12 +90,12 @@ const
     ' c.rgb*=1.0-0.34*smoothstep(0.0,0.8,p.y); }'+#10+
     'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(0.10,0.24,smoothstep(0.95,1.12,reR));}';
   SkinVS=
-    'attribute vec3 riderSkinRest;varying vec3 rsPosition;'+#10+
-    'void PLUG_vertex_eye_space(const vec4 v,const vec3 n){rsPosition=riderSkinRest;}';
+    'attribute vec4 riderSkinRest;varying vec3 rsPosition;varying float rsCavity;'+#10+
+    'void PLUG_vertex_eye_space(const vec4 v,const vec3 n){rsPosition=riderSkinRest.xyz;rsCavity=riderSkinRest.w;}';
   SkinFS=
-    'varying vec3 rsPosition;uniform float rsPortrait,rsFaceValid,rsGeometricEyes;uniform vec4 rsFace;'+#10+
+    'varying vec3 rsPosition;varying float rsCavity;uniform float rsPortrait,rsFaceValid,rsGeometricEyes,rsCleanPortrait;uniform vec4 rsFace;'+#10+
     'uniform sampler2D rsDiffusion;vec3 rsSmoothNormal=vec3(0.0,1.0,0.0);float rsCurvature=0.0;'+#10+
-    'uniform vec3 rsEyeL,rsEyeR,rsSkinL,rsSkinR,rsIrisL,rsIrisR,rsMouth;uniform float riderSurfaceAmount;'+#10+
+    'uniform vec3 rsEyeL,rsEyeR,rsSkinL,rsSkinR,rsIrisL,rsIrisR,rsMouth;uniform float riderSurfaceAmount,rsHeadSurfaceOffset;'+#10+
     'vec3 rsAlbedo=vec3(0.4);float rsPores=0.0,rsOil=0.0,rsThin=0.0,rsEye=0.0,rsCrease=0.0,rsLip=0.0,rsBodyTone=0.0,rsJointTone=0.0,rsInnerTone=0.0;'+#10+
     'vec3 rsEyeOffset(){return rsPosition-(rsPosition.x<0.0?rsEyeL:rsEyeR);}'+#10+
     'float rsEyeArea(vec3 q){vec2 radius=mix(vec2(0.014,0.0070),vec2(0.018,0.010),rsFace.x);float e=length(q.xy/radius);return (1.0-smoothstep(mix(0.90,0.55,rsFace.x),1.04,e))*(1.0-smoothstep(0.008,0.016,abs(q.z)))*rsFaceValid*rsPortrait;}'+#10+
@@ -102,6 +112,11 @@ const
     ' vec2 q=p/0.00065;vec2 f=exp2(-6.0*fwidth(q)*fwidth(q));'+#10+
     ' return (sin(q.x*6.283185+sin(q.y*3.1))*sin(q.y*5.7+sin(q.x*2.3)))*f.x*f.y; }'+#10+
     'void PLUG_fragment_eye_space(const vec4 v,inout vec3 n){'+#10+
+    // Retain compatibility with older imported portraits. The anatomical
+    // head has consistently wound, single-sided eyelid and lip loops.
+    '#ifndef CASTLE_BUGGY_FRONT_FACING'+#10+
+    ' if(rsPortrait>0.5 && rsCleanPortrait<0.5){if(gl_FrontFacing){}else n=-n;}'+#10+
+    '#endif'+#10+
     ' rsSmoothNormal=normalize(n);'+#10+
     // Estimate curvature before pore/facial detail so micro normals cannot
     // make the skin glow. Clamp the small, noisy end of the pixel footprint.
@@ -122,7 +137,7 @@ const
     ' float arm=rsBand(abs(p.x),0.27,0.36,0.59,0.65);'+#10+
     ' float armAxis=1.43-(abs(p.x)-0.22)*0.105;'+#10+
     ' rsInnerTone=body*arm*(1.0-smoothstep(armAxis-0.022,armAxis+0.016,p.y));'+#10+
-    ' vec3 h=p-vec3(0.0,1.612,-0.040);float front=smoothstep(0.025,0.060,h.z);'+#10+
+    ' vec3 h=p-vec3(0.0,1.612+rsHeadSurfaceOffset,-0.040);float front=smoothstep(0.025,0.060,h.z);'+#10+
     ' rsOil=rsPortrait*front*(1.0-smoothstep(0.016,0.040,abs(h.x)))*rsBand(h.y,-0.025,0.0,0.09,0.12);'+#10+
     ' rsThin=rsPortrait*smoothstep(0.063,0.082,abs(h.x))*rsBand(h.y,-0.025,-0.005,0.050,0.075);'+#10+
     ' vec3 lip=p-rsMouth;float lipY=lip.y-0.0012*pow(lip.x/0.030,2.0);'+#10+
@@ -138,14 +153,30 @@ const
     ' float lower=mix(1.0,smoothstep(lowY-edge,lowY+edge,eye.y),rsFace.w);'+#10+
     ' rsEye=area*(1.0-lid)*lower;'+#10+
     ' cornea=max(1.0-dot(eye.xy/vec2(0.012,0.006),eye.xy/vec2(0.012,0.006)),0.0); }'+#10+
-    ' float fold=0.0;if(rsGeometricEyes>0.5 && rsPortrait>0.5){vec3 q=rsEyeOffset();vec2 margin=rsLidMargins(q);fold=rsFurrow(q.y-margin.x-0.0035,0.0007)*(1.0-smoothstep(0.010,0.017,abs(q.x)))*(1.0-smoothstep(0.016,0.025,abs(q.z)));}'+#10+
+    ' float fold=0.0;if(rsGeometricEyes>0.5 && rsPortrait>0.5 && rsCleanPortrait<0.5){vec3 q=rsEyeOffset();vec2 margin=rsLidMargins(q);fold=rsFurrow(q.y-margin.x-0.0035,0.0007)*(1.0-smoothstep(0.010,0.017,abs(q.x)))*(1.0-smoothstep(0.016,0.025,abs(q.z)));}'+#10+
     ' float height=rsPores*0.000020*(1.0-area)*(1.0-0.7*rsLip)+rsEye*cornea*0.00020-rsCrease*0.00016-fold*0.00025;vec3 N=normalize(n),dx=dFdx(v.xyz),dy=dFdy(v.xyz);'+#10+
     ' vec3 a=cross(dy,N),b=cross(N,dx);float det=dot(dx,a);'+#10+
     ' if(det*det>1e-12*dot(dx,dx)*dot(dy,dy)){vec3 g=(a*dFdx(height)+b*dFdy(height))/det;n=normalize(N-g*min(1.0,mix(0.12,0.35,rsFace.w)/max(length(g),1e-6)));}'+#10+
     '}'+#10+
     'void PLUG_main_texture_apply(inout vec4 c,const vec3 n){'+#10+
-    ' c.rgb*=vec3(1.0)+vec3(0.019,0.014,0.011)*rsBodyTone+vec3(0.033,-0.024,-0.030)*rsJointTone+vec3(0.038,0.032,0.024)*rsInnerTone;'+#10+
-    ' if(rsPortrait>0.5 && rsFaceValid>0.5 && rsGeometricEyes>0.5){'+#10+
+    ' c.rgb*=vec3(1.0)+vec3(0.045,0.028,0.014)*rsBodyTone+vec3(0.070,-0.026,-0.038)*rsJointTone+vec3(0.038,0.032,0.024)*rsInnerTone;'+#10+
+    ' if(rsCleanPortrait>0.5){'+#10+
+    ' vec3 p=rsPosition;vec3 skin=(rsSkinL+rsSkinR)*0.5;'+#10+
+    // The CC0 scan contains shaved scalp stubble. The base scalp is bald;
+    // visible hair belongs exclusively to the selected groom.
+    ' float scalpY=p.y-rsHeadSurfaceOffset;'+#10+
+    ' float scalp=max(smoothstep(1.714,1.755,scalpY),(1.0-smoothstep(-0.035,0.020,p.z))*smoothstep(1.58,1.68,scalpY));'+#10+
+    ' scalp=max(scalp,smoothstep(0.047,0.069,abs(p.x))*smoothstep(1.678,1.722,scalpY));'+#10+
+    ' c.rgb=mix(c.rgb,skin*(0.99+0.01*rsPores),scalp);'+#10+
+    // Fine brow strands use rest-space coordinates, so they follow the same
+    // deformed loops as the brow surface, without another draw or atlas.
+    ' float t=(abs(p.x)-0.010)/0.048;float eyeY=(rsEyeL.y+rsEyeR.y)*0.5;'+#10+
+    ' float line=eyeY+0.021+0.004*sin(clamp(t,0.0,1.0)*3.141593)-0.003*t;'+#10+
+    ' float thick=mix(0.0024,0.0006,clamp(t,0.0,1.0));float fw=max(fwidth(p.y),0.00022);'+#10+
+    ' float brow=(1.0-smoothstep(thick-fw,thick+fw,abs(p.y-line)))*rsBand(t,-0.07,0.12,0.86,1.06)*smoothstep(0.035,0.060,p.z);'+#10+
+    ' float strand=sin((abs(p.x)+(p.y-line)*0.75)*6800.0);float detail=exp2(-4.0*pow(fwidth(p.x*6800.0),2.0));'+#10+
+    ' c.rgb=mix(c.rgb,vec3(0.065,0.038,0.024)*(0.90+0.20*strand*detail),brow*0.77); }'+#10+
+    ' if(rsPortrait>0.5 && rsFaceValid>0.5 && rsGeometricEyes>0.5 && rsCleanPortrait<0.5){'+#10+
     ' vec3 q=rsEyeOffset();float lid=(1.0-smoothstep(0.94,1.22,length(q.xy/vec2(0.019,0.014))))*(1.0-smoothstep(0.016,0.025,abs(q.z)));'+#10+
     ' vec3 skin=rsPosition.x<0.0?rsSkinL:rsSkinR;skin*=0.97+0.03*rsPores;'+#10+
     ' c.rgb=mix(c.rgb,skin,lid);vec2 margin=rsLidMargins(q);float span=1.0-smoothstep(0.0122,0.0134,abs(q.x));'+#10+
@@ -173,15 +204,19 @@ const
     ' float cavity=(1.0-smoothstep(gap-edge,gap+edge,abs(m.y+0.0005)))*smoothstep(0.035,0.065,rsPosition.z)*mw*rsFaceValid*rsPortrait;'+#10+
     ' cavity*=smoothstep(0.08,0.30,riderSurfaceAmount);c.rgb=mix(c.rgb,vec3(0.018,0.006,0.006),cavity); }rsAlbedo=c.rgb;'+#10+
     '}'+#10+
-    'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(mix(clamp(mix(0.48,0.55,rsPortrait)-0.16*rsOil+0.035*rsPores+0.030*rsBodyTone-0.035*rsJointTone+0.025*rsInnerTone,0.35,0.66),0.33,rsLip),0.22,rsEye);}'+#10+
+    // Broad body highlights must not turn the whole forearm/knee into a
+    // polished strip. Retain the spatial variation and skin reflection;
+    // portrait oil, lip and eye responses keep their own existing values.
+    'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(mix(clamp(mix(0.54,mix(0.55,0.62,rsCleanPortrait),rsPortrait)-mix(0.16,0.09,rsCleanPortrait)*rsOil+0.035*rsPores+0.055*rsBodyTone-0.015*rsJointTone+0.040*rsInnerTone,0.35,mix(0.74,0.70,rsPortrait)),mix(0.33,0.40,rsCleanPortrait),rsLip),0.22,rsEye);}'+#10+
     'void PLUG_physical_light_surface(inout vec3 diff,inout vec3 spec,const vec3 L,const vec3 N,const vec3 V){spec*=0.72;}'+#10+
+    'void PLUG_material_occlusion(inout vec4 light){light.rgb*=mix(1.0,0.10,rsCavity);}'+#10+
     'void PLUG_physical_light_contribution(inout vec3 light,const vec3 L,const vec3 N,const vec3 V){'+#10+
     ' float nl=dot(rsSmoothNormal,L);vec2 uv=vec2(nl*0.5+0.5,rsCurvature/200.0);'+#10+
     ' uv=uv*vec2(127.0/128.0,31.0/32.0)+vec2(0.5/128.0,0.5/32.0);'+#10+
     ' vec3 integrated=texture2D(rsDiffusion,uv).rgb;'+#10+
     // Replace part of the Lambert lobe; do not add an unrelated red glow.
     // Shadow attenuation is still applied by the enclosing light code.
-    ' light+=rsAlbedo*(1.0-rsEye)*0.80*(integrated-vec3(max(nl,0.0)))/3.14159265;'+#10+
+    ' light+=rsAlbedo*(1.0-rsEye)*(1.0-rsCavity)*0.80*(integrated-vec3(max(nl,0.0)))/3.14159265;'+#10+
     ' light+=rsAlbedo*vec3(1.0,0.38,0.21)*(rsThin*0.12*pow(max(-nl,0.0),2.0))/3.14159265;'+#10+
     '}';
 procedure TRiderSkin.VisitEye(Sh:TShapeNode);
@@ -203,18 +238,43 @@ begin
   F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=EyeFS;
   Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
 end;
+procedure TRiderSkin.VisitOral(Sh:TShapeNode);
+var Geo:TAbstractComposedGeometryNode;Colors:TColorRGBANode;Coord:TCoordinateNode;
+  Attr:TFloatVertexAttributeNode;App:TAppearanceNode;Eff:TEffectNode;V,F:TEffectPartNode;
+  I:Integer;C:TVector4;
+begin
+  App:=TAppearanceNode(Sh.Appearance);
+  for I:=0 to App.FdEffects.Count-1 do if App.FdEffects[I].X3DName='RiderOralSurface'then Exit;
+  Geo:=TAbstractComposedGeometryNode(Sh.Geometry);
+  if not(Geo.FdColor.Value is TColorRGBANode)or not(Geo.Coord is TCoordinateNode)then Exit;
+  Colors:=TColorRGBANode(Geo.FdColor.Value);Coord:=TCoordinateNode(Geo.Coord);
+  if Colors.FdColor.Count<>Coord.FdPoint.Count then Exit;
+  Attr:=TFloatVertexAttributeNode.Create;Attr.NameField:='riderEnamel';Attr.NumComponents:=1;
+  // Crowns and lining already have separate vertices in the one oral mesh.
+  // Classify their authored vertex colours once, without another draw call.
+  for I:=0 to Colors.FdColor.Count-1 do begin
+    C:=Colors.FdColor.Items[I];
+    Attr.FdValue.Items.Add(Ord((C.Y>0.70*C.X)and(C.Z>0.55*C.X)));
+  end;
+  Geo.FdAttrib.Add(Attr);
+  Eff:=TEffectNode.Create('RiderOralSurface');Eff.Language:=slGLSL;Eff.UniformMissing:=umIgnore;
+  V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=OralVS;
+  F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=OralFS;
+  Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
+end;
 procedure TRiderSkin.Visit(Node:TX3DNode);
 var Sh:TShapeNode;App:TAppearanceNode;Mat:TPhysicalMaterialNode;
   Geo:TAbstractComposedGeometryNode;Coord:TCoordinateNode;Attr:TFloatVertexAttributeNode;
   Eff:TEffectNode;V,F:TEffectPartNode;Nm:String;P,Delta:TVector3;I:Integer;Portrait:Boolean;FaceField:TSFVec4f;
   Morph:TFloatVertexAttributeNode;MouthField:TSFFloat;Weight:Single;
-  DiffusionField:TSFNode;
+  DiffusionField:TSFNode;SkinUV:TX3DNode;SkinTex:TTextureCoordinateNode;Cavity:Single;TexP:TVector2;
 begin
   Sh:=TShapeNode(Node);
   if not(Sh.Appearance is TAppearanceNode)or not(Sh.Appearance.Material is TPhysicalMaterialNode)
     or not(Sh.Geometry is TAbstractComposedGeometryNode)then Exit;
   App:=TAppearanceNode(Sh.Appearance);Mat:=TPhysicalMaterialNode(App.Material);
   Nm:=LowerCase(App.X3DName+' '+Mat.X3DName);
+  if(Pos('mouth',Nm)>0)and(Pos('enamel',Nm)>0)then begin VisitOral(Sh);Exit end;
   if(Pos('eye_surface',Nm)>0)or(Pos('eye surface',Nm)>0)then begin VisitEye(Sh);Exit end;
   Portrait:=Pos('portrait',Nm)>0;
   if not Portrait and(Pos('skin -',Nm)=0)and(Pos('part_skin',Nm)=0)then Exit;
@@ -224,10 +284,20 @@ begin
     if(Geo.FdAttrib[I]is TFloatVertexAttributeNode)and
       (TFloatVertexAttributeNode(Geo.FdAttrib[I]).NameField='riderSkinRest')then Attr:=TFloatVertexAttributeNode(Geo.FdAttrib[I]);
   if Attr=nil then begin
-    Attr:=TFloatVertexAttributeNode.Create;Attr.NameField:='riderSkinRest';Attr.NumComponents:=3;
+    Attr:=TFloatVertexAttributeNode.Create;Attr.NameField:='riderSkinRest';Attr.NumComponents:=4;
+    SkinUV:=Geo.TexCoord;SkinTex:=nil;
+    if(SkinUV is TMultiTextureCoordinateNode)and(TMultiTextureCoordinateNode(SkinUV).FdTexCoord.Count>0)then
+      SkinUV:=TMultiTextureCoordinateNode(SkinUV).FdTexCoord[0];
+    if SkinUV is TTextureCoordinateNode then SkinTex:=TTextureCoordinateNode(SkinUV);
     for I:=0 to Coord.FdPoint.Count-1 do begin
       P:=Coord.FdPoint.Items[I]*FScale;
       Attr.FdValue.Items.Add(P.X);Attr.FdValue.Items.Add(P.Y);Attr.FdValue.Items.Add(P.Z);
+      Cavity:=0;
+      if(Pos('anatomicalportrait',Nm)>0)and(SkinTex<>nil)and(I<SkinTex.FdPoint.Count)then begin
+        TexP:=SkinTex.FdPoint.Items[I];
+        if(TexP.X>0.75)and(TexP.X<0.93)and((TexP.Y<0.14)or(TexP.Y>0.86))then Cavity:=1;
+      end;
+      Attr.FdValue.Items.Add(Cavity);
     end;
     Geo.FdAttrib.Add(Attr);
   end;
@@ -248,11 +318,13 @@ begin
   DiffusionField:=TSFNode.Create(Eff,True,'rsDiffusion',[TImageTextureNode]);
   DiffusionField.Value:=SkinDiffusionLut;Eff.AddCustomField(DiffusionField);
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsPortrait',Ord(Portrait)));
+  Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsCleanPortrait',Ord(Pos('anatomicalportrait',Nm)>0)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsFaceValid',Ord(FFaceValid and Portrait)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsGeometricEyes',Ord(FGeometricEyes)));
   MouthField:=TSFFloat.Create(Eff,True,'riderSurfaceAmount',0);Eff.AddCustomField(MouthField);
   if Portrait then begin SetLength(FMouthFields,Length(FMouthFields)+1);FMouthFields[High(FMouthFields)]:=MouthField end;
   Eff.AddCustomField(TSFVec3f.Create(Eff,True,'rsMouth',FMouth));
+  Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsHeadSurfaceOffset',FHeadSurfaceOffset));
   FaceField:=TSFVec4f.Create(Eff,True,'rsFace',TVector4.Zero);Eff.AddCustomField(FaceField);
   if Portrait then begin SetLength(FFields,Length(FFields)+1);FFields[High(FFields)]:=FaceField end;
   Eff.AddCustomField(TSFVec3f.Create(Eff,True,'rsEyeL',FEyes[0]));
@@ -286,6 +358,7 @@ begin
         Source:=TFileStream.Create(FaceFile,fmOpenRead or fmShareDenyWrite);Data:=GetJSON(Source);
         Eyes:=TJSONObject(Data).Arrays['eyes'];if Eyes.Count<>2 then raise Exception.Create('Invalid eyes');
         FMouth:=Vec(Data,'mouth',False);
+        FHeadSurfaceOffset:=TJSONObject(Data).Get('surface_offset_y',0.0);
         for I:=0 to 1 do begin
           FEyes[I]:=Vec(Eyes.Items[I],'center',False);
           FEyeSkin[I]:=Vec(Eyes.Items[I],'skin_rgb',True);FIris[I]:=Vec(Eyes.Items[I],'iris_rgb',True);

@@ -5,7 +5,7 @@ uses CastleVectors, CastleColors, GamePath, GameWorkoutPlayer;
 const WorkoutGateLeadSeconds=15.0;
 type
   TWorkoutGatePose=record
-    Visible:Boolean;
+    Visible,Finish:Boolean;
     Position,Forward:TVector3;
     Width,Opacity,FilmOpacity,Remaining,DistanceAhead:Single;
     Color:TCastleColor;
@@ -21,7 +21,7 @@ type
     FLastIndex:Integer;
     FLastElapsed:Double;
     FLastPosition:TVector3;
-    FLastSpeed,FSpeed,FAcceleration,FPassedAge,FVisibleAge:Single;
+    FLastSpeed,FSpeed,FAcceleration,FVisibleAge:Single;
     FCrossings:Integer;
     FCrossingPoint:TVector3;
     FCrossingElapsed:Double;
@@ -85,13 +85,14 @@ procedure TWorkoutGateGuide.Reset;
 begin
   FUpcoming:=Default(TWorkoutGatePose);FPassed:=FUpcoming;
   FHaveSample:=False;FWasRunning:=False;FRoute:=nil;
-  FVisibleAge:=0;FPassedAge:=0;FCrossings:=0;
+  FVisibleAge:=0;FCrossings:=0;
   FCrossingElapsed:=0;FCrossingPlaneError:=0;
 end;
 
 procedure TWorkoutGateGuide.Update(Player:TWorkoutPlayer;Route:TGamePath;
   const RiderPosition,RiderForward:TVector3;Speed,Seconds:Single;WorldReady:Boolean);
 var Remaining,Alpha,RawAccel,PredictSpeed,Distance,Fraction,Age:Single;
+    BoundaryElapsed,ElapsedStep:Double;
     Running,Changed:Boolean;
 begin
   if (Player=nil) or (Player.Plan=nil) or (Route=nil) or
@@ -104,30 +105,26 @@ begin
     (Player.Elapsed<FLastElapsed-0.00001);
   if Changed then begin
     FUpcoming.Visible:=False;FPassed.Visible:=False;FHaveSample:=False;
-    FSpeed:=Speed;FAcceleration:=0;FVisibleAge:=0;FPassedAge:=0;
+    FSpeed:=Speed;FAcceleration:=0;FVisibleAge:=0;
   end;
-  if FPassed.Visible then begin
-    FPassedAge:=FPassedAge+Seconds;
-    FPassed.Opacity:=Sqr(Max(0.0,1-FPassedAge/1.6));
-    { The film fades before the chase camera reaches it. No full-screen flash. }
-    FPassed.FilmOpacity:=Max(0.0,1-FPassedAge/0.18);
-    FPassed.Visible:=FPassedAge<1.6;
-  end;
+  { The marker belongs to an interval boundary, not to either adjoining
+    interval. Retire it as the rider crosses; never redraw it behind the
+    rider for the chase camera to pass a second time. Passed is diagnostics. }
+  FPassed.Visible:=False;
   if FHaveSample and FWasRunning and FUpcoming.Visible and
-     (Player.Index<>FLastIndex) and (Player.Index<Player.Plan.Segments.Count) then begin
+     (Player.Index>=FUpcoming.NextIndex) and (Player.Index>FLastIndex) then begin
+    BoundaryElapsed:=FLastElapsed+FUpcoming.Remaining;
+    ElapsedStep:=Player.Elapsed-FLastElapsed;
     Fraction:=1;
-    if Seconds>0 then
-      Fraction:=EnsureRange((Player.StageStartElapsed-FLastElapsed)/Seconds,0.0,1.0);
+    if ElapsedStep>0 then
+      Fraction:=EnsureRange((BoundaryElapsed-FLastElapsed)/ElapsedStep,0.0,1.0);
     FCrossingPoint:=FLastPosition+(RiderPosition-FLastPosition)*Fraction;
     FPassed:=WorkoutGatePlacement(Route,FCrossingPoint,RiderForward,0);
-    FPassed.NextIndex:=Player.Index;
-    FPassed.Color:=WorkoutSegmentColor(Player.Plan.Segments[Player.Index],Player.VisualPowerScale);
-    FPassedAge:=Seconds*(1-Fraction);
-    FPassed.Opacity:=Sqr(Max(0.0,1-FPassedAge/1.6));
-    FPassed.FilmOpacity:=Max(0.0,1-FPassedAge/0.18);
-    FPassed.Visible:=FPassedAge<1.6;
+    FPassed.NextIndex:=FUpcoming.NextIndex;FPassed.Finish:=FUpcoming.Finish;
+    FPassed.Color:=FUpcoming.Color;FPassed.Visible:=False;
+    FPassed.Opacity:=0;FPassed.FilmOpacity:=0;
     FCrossingPlaneError:=Abs(TVector3.DotProduct(FCrossingPoint-FPassed.Position,FPassed.Forward));
-    FCrossingElapsed:=Player.StageStartElapsed;Inc(FCrossings);
+    FCrossingElapsed:=BoundaryElapsed;Inc(FCrossings);
     FVisibleAge:=0;
   end;
   Running:=Player.State=wsRunning;
@@ -140,7 +137,7 @@ begin
   end;
   Remaining:=Player.StageRemaining;
   FUpcoming.Visible:=False;
-  if Running and (Player.Index+1<Player.Plan.Segments.Count) and
+  if Running and (Player.Index<Player.Plan.Segments.Count) and
      (Remaining>0) and (Remaining<=WorkoutGateLeadSeconds) then begin
     FVisibleAge:=FVisibleAge+Seconds;
     { Smooth a short acceleration forecast, not the final world position.
@@ -152,7 +149,9 @@ begin
     Distance:=Max(0.5,PredictSpeed)*Remaining;
     FUpcoming:=WorkoutGatePlacement(Route,RiderPosition,RiderForward,Distance);
     FUpcoming.NextIndex:=Player.Index+1;FUpcoming.Remaining:=Remaining;
-    FUpcoming.Color:=WorkoutSegmentColor(Player.Plan.Segments[Player.Index+1],Player.VisualPowerScale);
+    FUpcoming.Finish:=FUpcoming.NextIndex=Player.Plan.Segments.Count;
+    if FUpcoming.Finish then FUpcoming.Color:=Vector4(1.0,0.82,0.38,1)
+    else FUpcoming.Color:=WorkoutSegmentColor(Player.Plan.Segments[FUpcoming.NextIndex],Player.VisualPowerScale);
     Age:=Min(FVisibleAge,WorkoutGateLeadSeconds-Remaining);
     FUpcoming.Opacity:=EnsureRange(Age/0.35,0.0,1.0);
     FUpcoming.FilmOpacity:=1;

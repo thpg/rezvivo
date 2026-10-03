@@ -401,12 +401,11 @@ end;
 function TGameDeviceService.IsTransportEnabledInGame(
   ATransport: TTransportType): Boolean;
 begin
-  // ANT+ устройства видны на странице девайсов, но пока не интегрированы
-  // в игровой цикл — auto-connect/auto-assign их пропускают. Когда
-  // потребуется реальное использование, достаточно убрать ttANTPlus
-  // из этого списка.
+  { BLE and ANT+ feed the same sensor slots and trainer-control interface.
+    Only FIT simulation is exclusive; adapter availability and the saved
+    per-role selection are checked by the manager/assignment layer. }
   if FSimulationEnabled then Result := ATransport = ttSim
-  else Result := not (ATransport in [ttANTPlus, ttSim]);
+  else Result := ATransport <> ttSim;
 end;
 
 function TGameDeviceService.AcceptSimulationDevice(const Device: TDeviceInfo): Boolean;

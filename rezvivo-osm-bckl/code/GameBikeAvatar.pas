@@ -138,7 +138,7 @@ procedure ReorientBikeRoot(Root: TX3DRootNode);
 implementation
 
 
-uses RiderBodyParameters, RiderHair, GameUserData,
+uses RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
   DebugLog, AppSettings, RiderTripo;
@@ -773,9 +773,15 @@ var
   HelmetC: TVector3;
 begin
   if (Inst = nil) or (Settings = nil) then Exit;
-  if Inst.TripoRider<>nil then
+  if Inst.TripoRider<>nil then begin
     Inst.TripoRider.HairStyle:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
-  if Trim(Settings.BikeFitColors) = '' then Exit;
+    Inst.TripoRider.SetHeadAppearance(ParseHeadwear(UserPreference('rider_headwear','helmet')),
+      ParseBeard(UserPreference('rider_beard','none')),ParseMustache(UserPreference('rider_mustache','none')));
+  end;
+  if Trim(Settings.BikeFitColors) = '' then begin
+    if Inst.TripoRider<>nil then Inst.TripoRider.ApplyHelmetColor(Vector3(1,1,1),False);
+    Exit;
+  end;
   AnyCloth := False;
   HelmetOn := True;   { станет False, если валидного hex в слоте 9 нет }
   HelmetC := Vector3(0, 0, 0);
@@ -813,8 +819,8 @@ begin
     else
       Logger.Info('[BikeAvatar] cloth dye staged for next rider load');
   end;
-  if HelmetOn and (Inst.TripoRider <> nil) then
-    Inst.TripoRider.ApplyHelmetColor(HelmetC, True);
+  if Inst.TripoRider <> nil then
+    Inst.TripoRider.ApplyHelmetColor(HelmetC,HelmetOn);
 end;
 
 procedure ApplyRiderShapeAdjustments(Inst: TBikeInstance;

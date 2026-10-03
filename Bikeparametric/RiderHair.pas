@@ -6,7 +6,7 @@ uses X3DNodes, X3DFields, CastleVectors, CastleScene, CastleTransform,
 type
   TRiderWindSampler=function(const WorldPosition:TVector3):TVector3;
   TRiderHairStyle = (rhsBald,rhsShort,rhsSwept,rhsCurly,rhsPonytail,
-    rhsBuzz,rhsParted,rhsCoils,rhsMedium,rhsBraid);
+    rhsBuzz,rhsParted,rhsCoils,rhsMedium,rhsBraid,rhsLongBraid,rhsDoubleBraids,rhsDreadlocks);
   TRiderHair = class
   private
     FRoot:TMatrixTransformNode;
@@ -27,6 +27,8 @@ type
     FPoints:TVector3List;
     FDetailField:TSFFloat;
     FStyleField:TSFFloat;
+    FHelmetField:TSFFloat;
+    FCoveredField:TSFFloat;
     FHead:TVector3;
     FScale:Single;
     FHelmet,FScalpAttached:Boolean;
@@ -41,6 +43,8 @@ type
     procedure EnsureStyle(Value:TRiderHairStyle);
     procedure SetStyle(Value:TRiderHairStyle);
     procedure SetColor(const Value:TVector3);
+    procedure SetHelmet(Value:Boolean);
+    procedure SetCovered(Value:Boolean);
     procedure SendPhysics;
     function FilterShape(const Shape:TAbstractShapeNode;const Params:TRenderParams):Boolean;
     function LodTriangleCount(Lod:Integer):Integer;
@@ -52,6 +56,7 @@ type
     procedure InstallScalp(Root:TX3DNode;const MaskPath:String);
     procedure BindScene(Scene:TCastleScene);
     procedure Update(Scene:TCastleScene;Dt,Speed:Single);
+    procedure SetTorso(Scene:TCastleScene;const A,B:TVector3;Radius:Single);
     function CaptureReplay:THairMotionState;
     procedure RestoreReplay(const Value:THairMotionState);
     procedure DebugJson(Result:TJSONObject);
@@ -59,7 +64,12 @@ type
     property Root:TMatrixTransformNode read FRoot;
     property Style:TRiderHairStyle read FStyle write SetStyle;
     property Color:TVector3 read FColor write SetColor;
+    property Helmet:Boolean read FHelmet write SetHelmet;
+    property Covered:Boolean write SetCovered;
   end;
+const SelectableHairStyles:array[0..8]of TRiderHairStyle=(rhsBald,rhsShort,rhsCurly,
+  rhsMedium,rhsPonytail,rhsBraid,rhsLongBraid,rhsDoubleBraids,rhsDreadlocks);
+function CanonicalHairStyle(Style:TRiderHairStyle):TRiderHairStyle;
 function RiderHairStyleId(Style:TRiderHairStyle):String;
 function RiderHairStyleCaption(Style:TRiderHairStyle):String;
 function ParseRiderHairStyle(const Id:String):TRiderHairStyle;
@@ -83,9 +93,14 @@ type
   end;
 const
   HairIds:array[TRiderHairStyle]of String=('bald','short','swept','curly','ponytail',
-    'buzz','parted','coils','medium','braid');
+    'buzz','parted','coils','medium','braid','long_braid','double_braids','dreadlocks');
   HairCaptions:array[TRiderHairStyle]of String=('No hair','Short crop','Swept back','Curly hair','Ponytail',
-    'Buzz cut','Side part','Tight curls','Medium length','Braid');
+    'Buzz cut','Side part','Tight curls','Medium length','Braid','Long braid','Two braids','Dreadlocks');
+function CanonicalHairStyle(Style:TRiderHairStyle):TRiderHairStyle;
+begin
+  case Style of rhsBuzz,rhsParted,rhsSwept:Result:=rhsShort;
+    rhsCoils:Result:=rhsCurly;else Result:=Style end;
+end;
 function RiderHairStyleId(Style:TRiderHairStyle):String;
 begin Result:=HairIds[Style] end;
 function RiderHairStyleCaption(Style:TRiderHairStyle):String;
@@ -94,7 +109,7 @@ function ParseRiderHairStyle(const Id:String):TRiderHairStyle;
 var S:TRiderHairStyle;
 begin
   if SameText(Trim(Id),'original')then Exit(rhsBald);
-  for S:=Low(S)to High(S)do if SameText(Trim(Id),HairIds[S])then Exit(S);
+  for S:=Low(S)to High(S)do if SameText(Trim(Id),HairIds[S])then Exit(CanonicalHairStyle(S));
   Result:=rhsShort;
 end;
 constructor TRiderHair.Create(Parent:TAbstractGroupingNode;const Head:TVector3;
@@ -106,7 +121,9 @@ begin
   FEffect:=TEffectNode.Create('RiderHairScattering');FEffect.Language:=slGLSL;FEffect.UniformMissing:=umIgnore;
   FColorField:=TSFVec3f.Create(FEffect,True,'rhColor',Vector3(0.055,0.024,0.011));
   FEffect.AddCustomField(FColorField);
-  FEffect.AddCustomField(TSFFloat.Create(FEffect,True,'rhHelmet',Ord(Helmet)));
+  FHelmetField:=TSFFloat.Create(FEffect,True,'rhHelmet',Ord(Helmet));
+  FEffect.AddCustomField(FHelmetField);
+  FCoveredField:=TSFFloat.Create(FEffect,True,'rhClothHat',0);FEffect.AddCustomField(FCoveredField);
   FStyleField:=TSFFloat.Create(FEffect,True,'rhStyle',Ord(rhsShort));FEffect.AddCustomField(FStyleField);
   FDetailField:=TSFFloat.Create(FEffect,True,'rhDetail',1);FEffect.AddCustomField(FDetailField);FDetail:=1;
   FPointsField:=TMFVec3f.Create(FEffect,True,'rhGuides',[]);
@@ -330,7 +347,10 @@ end;
 procedure TRiderHair.SetStyle(Value:TRiderHairStyle);
 var I:Integer;
 begin
+  Value:=CanonicalHairStyle(Value);
   if(FStyle=Value)and(FChoices.WhichChoice=Ord(Value))and FPhysics.State.Valid then Exit;
+  if not(Value in [rhsLongBraid,rhsDoubleBraids,rhsDreadlocks])then
+    FPhysics.SetTorso(TVector3.Zero,TVector3.Zero,0);
   FStyle:=Value;FCap.Visible:=Value<>rhsBald;FChoices.WhichChoice:=Ord(Value);
   if FScalpGroup<>nil then FScalpGroup.Visible:=Value<>rhsBald;
   FStyleField.Send(Ord(Value));
@@ -339,6 +359,20 @@ begin
     I:=FData.IndexOf(HairIds[Value]);
     if I>=0 then begin FPhysics.SetGuides(FData.Styles[I].Guides,FHelmet);SendPhysics end;
   end;
+end;
+procedure TRiderHair.SetHelmet(Value:Boolean);
+var I:Integer;
+begin
+  if FHelmet=Value then Exit;
+  FHelmet:=Value;FHelmetField.Send(Ord(Value));FTickAccum:=0;
+  if FData<>nil then begin
+    I:=FData.IndexOf(HairIds[FStyle]);
+    if I>=0 then begin FPhysics.SetGuides(FData.Styles[I].Guides,FHelmet);SendPhysics end;
+  end;
+end;
+procedure TRiderHair.SetCovered(Value:Boolean);
+begin
+  FCoveredField.Send(Ord(Value));
 end;
 procedure TRiderHair.SetColor(const Value:TVector3);
 var Linear:TVector3;I:Integer;C:Single;
@@ -366,7 +400,11 @@ begin
     NewDetail:=EnsureRange((Pixels-30)/100,0,1);if Quality=0 then NewDetail:=0;
     if Abs(NewDetail-FDetail)>0.025 then begin FDetail:=NewDetail;FDetailField.Send(FDetail) end;
   end;
-  if(Dt<=0)or not RiderHairProbePhysics then Exit;
+  if Dt<=0 then begin
+    if FStyle in [rhsLongBraid,rhsDoubleBraids,rhsDreadlocks]then SendPhysics;
+    Exit;
+  end;
+  if not RiderHairProbePhysics then Exit;
   FPhysics.SetDetail(FLod);
   FTickAccum:=FTickAccum+Dt;
   if(FLod>=2)and(FTickAccum<1/30)then Exit;
@@ -384,6 +422,15 @@ begin
   Gravity:=ToParent.MultDirection(Vector3(0,-9.81,0));
   FPhysics.Advance(FTickAccum,Frame,Gravity,Wind,ToParent.MultDirection(Forward),Speed);
   FTickAccum:=0;SendPhysics;
+end;
+procedure TRiderHair.SetTorso(Scene:TCastleScene;const A,B:TVector3;Radius:Single);
+var Inv,Frame:TMatrix4;Scale:Single;
+begin
+  if Scene=nil then Exit;
+  Frame:=Scene.Transform*FRoot.Matrix;
+  if not Frame.TryInverse(Inv)then Exit;
+  Scale:=Max(0.1,Frame.MultDirection(Vector3(0,1,0)).Length);
+  FPhysics.SetTorso(Inv.MultPoint(A),Inv.MultPoint(B),Radius/Scale);
 end;
 function TRiderHair.CaptureReplay:THairMotionState;
 begin

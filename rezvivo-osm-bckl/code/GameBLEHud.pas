@@ -467,7 +467,7 @@ begin
 
   if Assigned(FLabels.LabelSlope) then
     FLabels.LabelSlope.Caption :=
-      FloatToStrF(SlopeDegToGradePct(S.CurrentSlopeAngle), ffFixed, 7, 1) + '%';
+      FloatToStrF(SlopeDegToGradePct(S.CurrentSlopeAngle), ffFixed, 7, 1, FNumberFormat) + '%';
 
   if Assigned(FLabels.LabelPitch) then
     FLabels.LabelPitch.Caption :=
@@ -477,7 +477,7 @@ begin
       'dAng: ' + FloatToStrF(RadToDeg(S.CurrentTurnAngleDeltaRad), ffFixed, 7, 2) + '°';
 
   if Assigned(FLabels.LabelSpeed) then
-    FLabels.LabelSpeed.Caption := FloatToStrF(S.CurrentSpeed * 3.6, ffFixed, 7, 1);
+    FLabels.LabelSpeed.Caption := FloatToStrF(S.CurrentSpeed * 3.6, ffFixed, 7, 1, FNumberFormat);
 
   if Assigned(FLabels.LabelPower) then
     if Assigned(DeviceService.Power) and DeviceService.Power.HasData and
@@ -487,8 +487,8 @@ begin
     FLabels.LabelWork.Caption:=FormatFloat('#,##0.0',DailyTraining.WorkJoules/1000.0,FNumberFormat);
   if Assigned(FLabels.LabelWorkTSS)then
     if (FFtp>0)or(DailyTraining.TSS>0)then
-      FLabels.LabelWorkTSS.Caption:='TSS '+FormatFloat('0.0',DailyTraining.TSS,FNumberFormat)
-    else BindUiText(FLabels.LabelWorkTSS, 'TSS —');
+      FLabels.LabelWorkTSS.Caption:=FormatFloat('0.0',DailyTraining.TSS,FNumberFormat)
+    else FLabels.LabelWorkTSS.Caption:='—';
 
   if Assigned(FLabels.LabelCadence) then
   begin
@@ -510,10 +510,10 @@ begin
       if Abs(CorrGrade) < 0.05 then CorrGrade := 0;
       if CorrGrade >= 0 then
         FLabels.LabelCorr.Caption := '+' +
-          FloatToStrF(CorrGrade, ffFixed, 7, 1) + '%'
+          FloatToStrF(CorrGrade, ffFixed, 7, 1, FNumberFormat) + '%'
       else
         FLabels.LabelCorr.Caption := '−' +
-          FloatToStrF(Abs(CorrGrade), ffFixed, 7, 1) + '%';
+          FloatToStrF(Abs(CorrGrade), ffFixed, 7, 1, FNumberFormat) + '%';
     end
     else
       FLabels.LabelCorr.Caption := '—';

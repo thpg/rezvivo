@@ -54,7 +54,7 @@ const
 
 implementation
 
-uses BikeParametric_Frame;
+uses BikeParametric_Frame, BikeParametric_Wheel;
 
 constructor TForkComponent.Create;
 begin
@@ -93,9 +93,10 @@ end;
 
 procedure TForkComponent.ComputeBones(Skel: TBikeSkeleton);
 var
-  M, FrontHalfZ: Single;
-  HTB, HTT, StemBase, StemEnd: TVector3;
+  M, FrontHalfZ, CrownHalfZ, TireHalfWidth, BladeRadius: Single;
+  HTB, HTT, StemBase, StemEnd, CrownCenter, SteerUp: TVector3;
   Fr: TFrameComponent;
+  Wh: TWheelComponent;
 begin
   M := Skel.MM;
 
@@ -118,10 +119,18 @@ begin
   else FrontHalfZ := 100/2*M;
 
   HTB := Skel['head_tube_bottom'];
-  { crown dropped well below the head-tube bottom (was -0.01) so the raised arch apex
-    still clears the frame's head tube instead of poking up into it. }
-  Skel.AddBone('fork_crown_l', Vector3(HTB.X, HTB.Y-0.035, FrontHalfZ*0.5));
-  Skel.AddBone('fork_crown_r', Vector3(HTB.X, HTB.Y-0.035, -FrontHalfZ*0.5));
+  { Locate the crown in the steering frame, not along world Y. TireWidth is
+    the tire's half-width in the wheel generator. Leave room for both the
+    tire and the blade wall instead of squeezing the crown to half hub width. }
+  Wh := TWheelComponent(FindComponent(TWheelComponent));
+  if (Wh <> nil) and (Wh.TireWidth >= 5) then TireHalfWidth := Wh.TireWidth * M
+  else TireHalfWidth := DEF_TIRE_WIDTH * M;
+  BladeRadius := ForkBladeDia * 0.5 * M;
+  CrownHalfZ := Max(FrontHalfZ * 0.5, TireHalfWidth + BladeRadius + 5 * M);
+  SteerUp := Vector3(Skel.HTDirX, Skel.HTDirY, 0).Normalize;
+  CrownCenter := HTB - SteerUp * (CrownHalfZ + BladeRadius + 6 * M);
+  Skel.AddBone('fork_crown_l', CrownCenter + Vector3(0, 0, CrownHalfZ));
+  Skel.AddBone('fork_crown_r', CrownCenter - Vector3(0, 0, CrownHalfZ));
   Skel.AddBone('front_dropout_l', Vector3(Skel['front_axle'].X, Skel['front_axle'].Y, FrontHalfZ));
   Skel.AddBone('front_dropout_r', Vector3(Skel['front_axle'].X, Skel['front_axle'].Y, -FrontHalfZ));
 
@@ -133,189 +142,200 @@ begin
   Skel.AddBone('stem_end', StemEnd);
 end;
 
-{ Elliptical (flattened) tapered tube from PA to PB. Two semi-axes per end:
-  Lat = lateral (world-Z) half-width (the thin side), Dep = sagittal half-width
-  (the fore-aft "depth" you see from the side, the wide side). World-space verts. }
-function MakeForkBlade(Ctx: TBikeBuildContext; const PA, PB: TVector3;
-  LatA, DepA, LatB, DepB: Single; const Color, Spec: TVector3;
-  Shininess: Single): TTransformNode;
+{ One continuous surface from the positive-Z dropout, around the crown,
+  to the other dropout. A hole in the crown's upper surface is lofted into
+  the crown race. Shared vertices keep the shoulders smooth at every LOD;
+  there are no blade end caps or overlapping shells at the crown. }
+function MakeForkBody(Ctx: TBikeBuildContext;
+  const CrownPos, CrownNeg, DropPos, DropNeg, HeadBase, Up: TVector3;
+  LatTop, DepTop, LatTip, DepTip, HeadRadius: Single): TTransformNode;
 var
-  axis, e1, e2: TVector3;
-  L, Theta, ct, st: Single;
-  Slices, I, NI, BaseB, CenA, CenB: Integer;
-  IFS: TIndexedFaceSetNode; Coord: TCoordinateNode; Shape: TShapeNode;
-begin
-  axis := PB - PA; L := axis.Length;
-  if L < 1e-6 then begin Result := TTransformNode.Create; Exit; end;
-  axis := axis.Normalize;
-  e1 := Vector3(0, 0, 1) - axis * axis.Z;                 { lateral (Z) perp to axis }
-  if e1.Length < 1e-4 then e1 := Vector3(1, 0, 0) - axis * axis.X;
-  e1 := e1.Normalize;
-  e2 := TVector3.CrossProduct(axis, e1).Normalize;        { sagittal depth axis }
+  Coord: TCoordinateNode;
+  IFS: TIndexedFaceSetNode;
+  Shape: TShapeNode;
+  Lateral, ForwardAxis, Center, Radial, P, V: TVector3;
+  Span, Alpha, Angle: Single;
+  LegSeg, ArcSeg, TubeSeg, RingCount, I, J, K, NI, NJ: Integer;
+  HoleLo, HoleHi, Quarter, BoundaryCount, NeckStart, Cap: Integer;
+  Boundary: array of Integer;
+  Remap: array of Integer;
+  PackedPoints: array of TVector3;
+  UsedCount, OldIndex: Integer;
 
-  Slices := Ctx.LOD_TorusSeg;
-  if Slices < 8 then Slices := 8;
-  Coord := TCoordinateNode.Create;
-  for I := 0 to Slices - 1 do                             { ring A (PA) }
+  procedure Face(A, B, C: Integer; D: Integer = -1);
   begin
-    Theta := 2 * Pi * I / Slices; ct := Cos(Theta); st := Sin(Theta);
-    Coord.FdPoint.Items.Add(PA + e1 * (LatA * ct) + e2 * (DepA * st));
-  end;
-  for I := 0 to Slices - 1 do                             { ring B (PB) }
-  begin
-    Theta := 2 * Pi * I / Slices; ct := Cos(Theta); st := Sin(Theta);
-    Coord.FdPoint.Items.Add(PB + e1 * (LatB * ct) + e2 * (DepB * st));
-  end;
-  BaseB := Slices;
-  CenA := 2 * Slices; CenB := 2 * Slices + 1;
-  Coord.FdPoint.Items.Add(PA);
-  Coord.FdPoint.Items.Add(PB);
-
-  IFS := TIndexedFaceSetNode.Create;
-  IFS.Coord := Coord; IFS.Solid := false; IFS.CreaseAngle := 1.5;
-  for I := 0 to Slices - 1 do
-  begin
-    NI := (I + 1) mod Slices;
-    IFS.FdCoordIndex.Items.Add(I); IFS.FdCoordIndex.Items.Add(NI);
-    IFS.FdCoordIndex.Items.Add(BaseB + NI); IFS.FdCoordIndex.Items.Add(BaseB + I);
+    IFS.FdCoordIndex.Items.Add(A);
+    IFS.FdCoordIndex.Items.Add(B);
+    IFS.FdCoordIndex.Items.Add(C);
+    if D >= 0 then IFS.FdCoordIndex.Items.Add(D);
     IFS.FdCoordIndex.Items.Add(-1);
   end;
-  for I := Slices - 1 downto 0 do                          { cap A }
-  begin
-    NI := (I + Slices - 1) mod Slices;
-    IFS.FdCoordIndex.Items.Add(CenA); IFS.FdCoordIndex.Items.Add(I);
-    IFS.FdCoordIndex.Items.Add(NI); IFS.FdCoordIndex.Items.Add(-1);
-  end;
-  for I := 0 to Slices - 1 do                              { cap B }
-  begin
-    NI := (I + 1) mod Slices;
-    IFS.FdCoordIndex.Items.Add(CenB); IFS.FdCoordIndex.Items.Add(BaseB + I);
-    IFS.FdCoordIndex.Items.Add(BaseB + NI); IFS.FdCoordIndex.Items.Add(-1);
-  end;
 
-  if Ctx.AccumActive then
+  procedure Ring(const C, N, DepthAxis: TVector3; Lat, Dep: Single);
+  var Ndx: Integer; A: Single;
   begin
-    { батч: перо вилки в аккумулятор (координаты object-space, crease 1.5) }
-    Ctx.EmitBatched(IFS, Coord, Color, Spec, Shininess, 1.5,
-      TMatrix4.Identity);
-    Exit(nil);
+    for Ndx := 0 to TubeSeg - 1 do
+    begin
+      A := 2 * Pi * Ndx / TubeSeg;
+      Coord.FdPoint.Items.Add(C + N * (Lat * Cos(A)) +
+        DepthAxis * (Dep * Sin(A)));
+    end;
   end;
 
-  Shape := TShapeNode.Create;
-  Shape.Geometry := IFS;
-  Shape.Appearance := Ctx.MakeMaterial(Color, Spec, Shininess);
-  Result := TTransformNode.Create;
-  Result.AddChildren(Shape);
-end;
+  procedure BladeRing(const Drop, Crown: TVector3; T, Side: Single);
+  var C1, C2, C, Tangent, N, DepthAxis: TVector3; U, WidthT: Single;
+  begin
+    U := 1 - T;
+    C1 := Drop + (Crown - Drop) * 0.4;
+    C2 := Crown - Up * ((Crown - Drop).Length * 0.22);
+    C := Drop * (U*U*U) + C1 * (3*U*U*T) +
+      C2 * (3*U*T*T) + Crown * (T*T*T);
+    Tangent := ((C1 - Drop) * (3*U*U) + (C2 - C1) * (6*U*T) +
+      (Crown - C2) * (3*T*T)).Normalize * Side;
+    N := Lateral * Side;
+    N := (N - Tangent * TVector3.DotProduct(N, Tangent)).Normalize;
+    DepthAxis := TVector3.CrossProduct(Tangent, N).Normalize;
+    { Zero taper derivative at the crown matches the arch's section. }
+    WidthT := T * (2 - T);
+    Ring(C, N, DepthAxis, LatTip + (LatTop - LatTip) * WidthT,
+      DepTip + (DepTop - DepTip) * WidthT);
+  end;
 
-{ Half-torus crown arch from A to B (a "half donut") with an ELLIPTICAL (flattened)
-  tube: RBn = half-width along the out-of-plane axis (fore-aft, the wide side),
-  RRad = half-width in the arch plane (the thin side). The open ends sit on A and B
-  so the matching elliptical blades flow into it. Bulges toward BulgeTarget. }
-function MakeForkArch(Ctx: TBikeBuildContext; const A, B, BulgeTarget: TVector3;
-  RRad, RBn: Single; const Color, Spec: TVector3; Shininess: Single): TTransformNode;
-var
-  Cm, u, n, bn, bulge, radial, cl, vtx: TVector3;
-  L, R, Alpha, Beta, ca, sa, cb, sb: Single;
-  ArcSeg, TubeSeg, I, J, NI, NJ, AK, BK, CK, DK: Integer;
-  IFS: TIndexedFaceSetNode; Coord: TCoordinateNode; Shape: TShapeNode;
+  procedure BoundaryVertex(RingIndex, TubeIndex: Integer);
+  begin
+    Boundary[BoundaryCount] := RingIndex * TubeSeg + TubeIndex;
+    Inc(BoundaryCount);
+  end;
+
 begin
-  Cm := (A + B) * 0.5;
-  u  := B - A; L := u.Length;
-  if (L < 1e-6) or (RRad <= 0) or (RBn <= 0) then begin Result := TTransformNode.Create; Exit; end;
-  u := u.Normalize; R := L * 0.5;
+  Lateral := Vector3(0, 0, 1);
+  ForwardAxis := TVector3.CrossProduct(Up, Lateral).Normalize;
+  Center := (CrownPos + CrownNeg) * 0.5;
+  Span := (CrownPos - CrownNeg).Length * 0.5;
+  LegSeg := Max(3, Ctx.LOD_TorusSeg div 8);
+  ArcSeg := Max(8, ((Ctx.LOD_TorusSeg div 2 + 3) div 4) * 4);
+  TubeSeg := Max(8, ((Ctx.LOD_TorusTubeSeg + 3) div 4) * 4);
+  Quarter := TubeSeg div 4;
+  HoleLo := LegSeg + ArcSeg div 4;
+  HoleHi := LegSeg + ArcSeg * 3 div 4;
 
-  bulge := BulgeTarget - Cm;
-  bulge := bulge - u * TVector3.DotProduct(bulge, u);     { drop the part along the chord }
-  if bulge.Length < 1e-6 then
-  begin
-    bulge := Vector3(0, 1, 0);                            { fallback: world up }
-    bulge := bulge - u * TVector3.DotProduct(bulge, u);
-    if bulge.Length < 1e-6 then bulge := TVector3.CrossProduct(u, Vector3(1, 0, 0));
-  end;
-  n  := bulge.Normalize;
-  bn := TVector3.CrossProduct(u, n).Normalize;            { out of the arch plane (fore-aft) }
-
-  ArcSeg  := Max(8, Ctx.LOD_TorusSeg div 2);
-  TubeSeg := Max(6, Ctx.LOD_TorusTubeSeg);
   Coord := TCoordinateNode.Create;
-  for I := 0 to ArcSeg do
+  IFS := TIndexedFaceSetNode.Create;
+  IFS.Coord := Coord;
+  IFS.Solid := True;
+  IFS.CreaseAngle := 1.5;
+  for I := 0 to LegSeg do
+    BladeRing(DropPos, CrownPos, I / LegSeg, 1);
+  for I := 1 to ArcSeg do
   begin
     Alpha := Pi * I / ArcSeg;
-    ca := Cos(Alpha); sa := Sin(Alpha);
-    radial := u * ca + n * sa;
-    cl := Cm + radial * R;
-    for J := 0 to TubeSeg - 1 do
-    begin
-      Beta := 2 * Pi * J / TubeSeg; cb := Cos(Beta); sb := Sin(Beta);
-      vtx := cl + radial * (RRad * cb) + bn * (RBn * sb);
-      Coord.FdPoint.Items.Add(vtx);
-    end;
+    Radial := Lateral * Cos(Alpha) + Up * Sin(Alpha);
+    Ring(Center + Radial * Span, Radial, ForwardAxis, LatTop, DepTop);
   end;
+  for I := 1 to LegSeg do
+    BladeRing(DropNeg, CrownNeg, 1 - I / LegSeg, -1);
 
-  IFS := TIndexedFaceSetNode.Create;
-  IFS.Coord := Coord; IFS.Solid := false; IFS.CreaseAngle := 1.5;
-  for I := 0 to ArcSeg - 1 do
-  begin
-    NI := I + 1;
+  RingCount := LegSeg * 2 + ArcSeg + 1;
+  for I := 0 to RingCount - 2 do
     for J := 0 to TubeSeg - 1 do
     begin
-      NJ := (J + 1) mod TubeSeg;
-      AK := I  * TubeSeg + J;  BK := I  * TubeSeg + NJ;
-      CK := NI * TubeSeg + NJ; DK := NI * TubeSeg + J;
-      IFS.FdCoordIndex.Items.Add(AK); IFS.FdCoordIndex.Items.Add(BK);
-      IFS.FdCoordIndex.Items.Add(CK); IFS.FdCoordIndex.Items.Add(DK);
-      IFS.FdCoordIndex.Items.Add(-1);
+      if (I >= HoleLo) and (I < HoleHi) and
+         ((J < Quarter) or (J >= Quarter * 3)) then Continue;
+      NI := I + 1; NJ := (J + 1) mod TubeSeg;
+      Face(I * TubeSeg + J, I * TubeSeg + NJ,
+        NI * TubeSeg + NJ, NI * TubeSeg + J);
     end;
+
+  { Trace the crown opening once, without repeated corner vertices. }
+  SetLength(Boundary, 2 * (HoleHi - HoleLo) + TubeSeg);
+  BoundaryCount := 0;
+  for I := HoleLo to HoleHi - 1 do BoundaryVertex(I, Quarter * 3);
+  for J := Quarter * 3 to Quarter * 5 - 1 do BoundaryVertex(HoleHi, J mod TubeSeg);
+  for I := HoleHi downto HoleLo + 1 do BoundaryVertex(I, Quarter);
+  for J := Quarter downto -Quarter + 1 do BoundaryVertex(HoleLo, (J + TubeSeg) mod TubeSeg);
+
+  { The upper rim sits just inside the head tube. The stem and front axle
+    keep their original positions; the crown rotates with the fork. }
+  NeckStart := Coord.FdPoint.Items.Count;
+  P := HeadBase + Up * (1.5 * Ctx.Skeleton.MM);
+  for K := 0 to BoundaryCount - 1 do
+  begin
+    V := Coord.FdPoint.Items[Boundary[K]] - HeadBase;
+    Angle := ArcTan2(TVector3.DotProduct(V, ForwardAxis), V.Z);
+    Coord.FdPoint.Items.Add(P + Lateral * (HeadRadius * Cos(Angle)) +
+      ForwardAxis * (HeadRadius * Sin(Angle)));
   end;
+  for K := 0 to BoundaryCount - 1 do
+  begin
+    NI := (K + 1) mod BoundaryCount;
+    Face(Boundary[K], NeckStart + K, NeckStart + NI, Boundary[NI]);
+  end;
+  Cap := Coord.FdPoint.Items.Count;
+  Coord.FdPoint.Items.Add(P);
+  for K := 0 to BoundaryCount - 1 do
+    Face(Cap, NeckStart + (K + 1) mod BoundaryCount, NeckStart + K);
+
+  Cap := Coord.FdPoint.Items.Count;
+  Coord.FdPoint.Items.Add(DropPos);
+  for J := 0 to TubeSeg - 1 do
+    Face(Cap, (J + 1) mod TubeSeg, J);
+  Cap := Coord.FdPoint.Items.Count;
+  Coord.FdPoint.Items.Add(DropNeg);
+  I := (RingCount - 1) * TubeSeg;
+  for J := 0 to TubeSeg - 1 do
+    Face(Cap, I + J, I + (J + 1) mod TubeSeg);
+
+  { Discard the unused points inside the opening before uploading the mesh. }
+  SetLength(Remap, Coord.FdPoint.Items.Count);
+  SetLength(PackedPoints, Length(Remap));
+  for I := 0 to High(Remap) do Remap[I] := -1;
+  UsedCount := 0;
+  for I := 0 to IFS.FdCoordIndex.Items.Count - 1 do
+  begin
+    OldIndex := IFS.FdCoordIndex.Items[I];
+    if OldIndex < 0 then Continue;
+    if Remap[OldIndex] < 0 then
+    begin
+      Remap[OldIndex] := UsedCount;
+      PackedPoints[UsedCount] := Coord.FdPoint.Items[OldIndex];
+      Inc(UsedCount);
+    end;
+    IFS.FdCoordIndex.Items[I] := Remap[OldIndex];
+  end;
+  Coord.FdPoint.Items.Clear;
+  for I := 0 to UsedCount - 1 do Coord.FdPoint.Items.Add(PackedPoints[I]);
 
   if Ctx.AccumActive then
   begin
-    { батч: арка кроны в аккумулятор (координаты object-space, crease 1.5) }
-    Ctx.EmitBatched(IFS, Coord, Color, Spec, Shininess, 1.5,
-      TMatrix4.Identity);
+    Ctx.EmitBatched(IFS, Coord, Ctx.Colors.Frame, Ctx.Colors.FrameSpec,
+      0.85, 1.5, TMatrix4.Identity);
     Exit(nil);
   end;
-
   Shape := TShapeNode.Create;
   Shape.Geometry := IFS;
-  Shape.Appearance := Ctx.MakeMaterial(Color, Spec, Shininess);
+  Shape.Appearance := Ctx.MakeMaterial(Ctx.Colors.Frame, Ctx.Colors.FrameSpec, 0.85);
   Result := TTransformNode.Create;
   Result.AddChildren(Shape);
 end;
 
 procedure TForkComponent.BuildGeometry(Ctx: TBikeBuildContext);
 var
-  S: TBikeSkeleton; M: Single; Side: string; BulgeTgt, Cr, Dr: TVector3;
-  WideTop, WideBot, LatTop, LatBot: Single;
+  S: TBikeSkeleton;
+  Fr: TFrameComponent;
+  M, HeadRadius: Single;
+  Up: TVector3;
 begin
   S := Ctx.Skeleton; M := S.MM;
-  { Flattened (elliptical) profile, wider seen from the side (sagittal/fore-aft):
-    5 cm at the crown tapering to 3 cm at the dropout. The lateral (thin) axis stays
-    the round blade diameter (ForkBladeDia at crown -> ForkTipDia at dropout). }
-  WideTop := 0.05 / 2;   WideBot := 0.03 / 2;          { sagittal half-widths (wide) }
-  LatTop  := ForkBladeDia / 2 * M;
-  LatBot  := ForkTipDia   / 2 * M;
-
-  { steerer (head_tube_bottom -> head_tube_top) intentionally NOT drawn: it sits inside
-    the frame's head tube and is only ever visible when the frame is mis-placed. }
-  { crown = flattened half-torus arch joining the blade tops; wide fore-aft (RBn) and
-    thin in-plane (RRad), matching the blades at the crown. Frame colour.
-    батч: арка + оба пера в ОДИН меш по материалу рамы (crease 1.5).
-    Parent = SteerRoot when steer enabled (turns with bars/front wheel). }
+  Up := Vector3(S.HTDirX, S.HTDirY, 0).Normalize;
+  Fr := TFrameComponent(FindComponent(TFrameComponent));
+  if Fr <> nil then HeadRadius := Max(10, Fr.HeadTubeDia) * 0.5 * M
+  else HeadRadius := 22 * M;
+  HeadRadius := Max(4 * M, HeadRadius - M);
   Ctx.BeginAccum(Ctx.SteerRoot);
-  if S.HasBone('head_tube_bottom') then BulgeTgt := Ctx.O(S['head_tube_bottom'])
-  else BulgeTgt := Ctx.O(S['fork_crown_r']) + Vector3(0, 0.1, 0);
-  Ctx.Add(MakeForkArch(Ctx, Ctx.O(S['fork_crown_r']), Ctx.O(S['fork_crown_l']),
-    BulgeTgt, LatTop, WideTop, Ctx.Colors.Frame, Ctx.Colors.FrameSpec, 0.85));
-
-  for Side in ['l','r'] do
-  begin
-    Cr := Ctx.O(S['fork_crown_'+Side]);
-    Dr := Ctx.O(S['front_dropout_'+Side]);
-    Ctx.Add(MakeForkBlade(Ctx, Cr, Dr, LatTop, WideTop, LatBot, WideBot,
-      Ctx.Colors.Frame, Ctx.Colors.FrameSpec, 0.85));
-  end;
+  Ctx.Add(MakeForkBody(Ctx, Ctx.O(S['fork_crown_l']), Ctx.O(S['fork_crown_r']),
+    Ctx.O(S['front_dropout_l']), Ctx.O(S['front_dropout_r']),
+    Ctx.O(S['head_tube_bottom']), Up,
+    ForkBladeDia * 0.5 * M, 25 * M, ForkTipDia * 0.5 * M, 15 * M, HeadRadius));
   Ctx.EndAccum;
 end;
 

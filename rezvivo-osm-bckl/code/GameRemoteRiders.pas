@@ -753,6 +753,10 @@ begin
 
     Ag := FRemoteVisuals[I].Agent;
     if not Assigned(Ag) then Continue;
+    if Assigned(Ag.Actor)then
+      Ag.Actor.RiderOwnsLean:=FAnimationEnabled and
+        Assigned(FRemoteVisuals[I].BikeInst)and FRemoteVisuals[I].BikeInst.BodyDynamicsEnabled
+        and FRemoteVisuals[I].BikeInst.HasTripoRider;
     if FRideClient.PrivateRoom and not AHoldPhysics then begin
       { The owner supplies progress. Correct small mass/slope differences with
         speed, not repeated teleports; retain the usual traffic constraints. }
@@ -951,12 +955,29 @@ end;
 procedure TRemoteRidersManager.AnimateAllRiders(SecondsPassed: Single);
 var
   I: Integer;
+  Ag: TPhysicalAgent;
+  Bike: TBikeInstance;
+  ParentLean: Single;
 begin
   for I := 0 to FRemoteVisualCount - 1 do
   begin
     if not FRemoteVisuals[I].Active then Continue;
     if not Assigned(FRemoteVisuals[I].BikeInst) then Continue;
-    FRemoteVisuals[I].BikeInst.AnimateFrame(SecondsPassed);
+    Bike:=FRemoteVisuals[I].BikeInst;
+    Ag:=FRemoteVisuals[I].Agent;
+    if Assigned(Ag)and Assigned(Ag.State)then begin
+      ParentLean:=0;
+      if not Ag.Actor.RiderOwnsLean then ParentLean:=Ag.State.CurrentTurnAngle;
+      Bike.SetRiderDynamicsSituation(Ag.State.AppliedPowerWatts,
+        Ag.State.CurrentSpeed*Ag.State.CurrentYawRateRad,ParentLean,Ag.State.CurrentModelPitch);
+      Bike.SetRiderEffort(Ag.State.AppliedPowerWatts/220);
+      Bike.SetWheelSpeedMps(Ag.State.CurrentSpeed);
+    end;
+    Bike.AnimateFrame(SecondsPassed);
+    if Assigned(Ag)and Assigned(Ag.State)and Ag.Actor.RiderOwnsLean then begin
+      Ag.State.CurrentTurnAngle:=Bike.RiderTotalLeanDeg;
+      Ag.State.TargetTurnAngle:=Ag.State.CurrentTurnAngle;
+    end;
   end;
 end;
 

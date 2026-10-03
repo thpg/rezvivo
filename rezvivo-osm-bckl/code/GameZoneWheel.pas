@@ -21,8 +21,15 @@ type
     FPosition, FTargetPosition: Single;
     FOrientation, FShadeOrientation: TZoneWheelOrientation;
     FShade: TDrawableImage;
+    FFrame: TDrawableImage;
+    FFrameWidth, FFrameHeight: Integer;
+    FRoundedFrame: Boolean;
+    FFrameBackground: TCastleColor;
     FClip: TScissor;
     procedure EnsureShade;
+    procedure EnsureFrame(const W,H: Integer);
+    procedure SetRoundedFrame(const Value: Boolean);
+    procedure SetFrameBackground(const Value: TCastleColor);
     procedure SetSelected(const Value: Integer);
     procedure SetShowNumbers(const Value: Boolean);
     procedure SetShowNoSignalSector(const Value: Boolean);
@@ -36,6 +43,9 @@ type
     procedure Update(const SecondsPassed: Single; var HandleInput: Boolean); override;
     procedure Render; override;
     procedure GLContextClose; override;
+    { A pill-shaped bezel, antialiased independently of scene MSAA.
+      Background fills the cut-out corners and must match the owning panel. }
+    property FrameBackground: TCastleColor read FFrameBackground write SetFrameBackground;
   published
     property Selected: Integer read FSelected write SetSelected;
     property Position: Single read FPosition;
@@ -44,6 +54,7 @@ type
     property Orientation: TZoneWheelOrientation read FOrientation write SetOrientation;
     property ShowNoSignalSector: Boolean read FShowNoSignalSector write SetShowNoSignalSector;
     property ShowNumbers: Boolean read FShowNumbers write SetShowNumbers;
+    property RoundedFrame: Boolean read FRoundedFrame write SetRoundedFrame default false;
   end;
 
 implementation
@@ -56,11 +67,13 @@ begin
   Width:=30; Height:=56; FontSize:=24;
   FSelected:=-1; FShowNumbers:=True; FPosition:=-1; FTargetPosition:=-1;
   FClip:=TScissor.Create;
+  FFrameBackground:=White;
 end;
 
 destructor TCastleZoneWheel.Destroy;
 begin
   FreeAndNil(FShade);
+  FreeAndNil(FFrame);
   FreeAndNil(FClip);
   inherited;
 end;
@@ -68,7 +81,54 @@ end;
 procedure TCastleZoneWheel.GLContextClose;
 begin
   FreeAndNil(FShade);
+  FreeAndNil(FFrame);
   inherited;
+end;
+
+procedure TCastleZoneWheel.SetRoundedFrame(const Value: Boolean);
+begin
+  if FRoundedFrame=Value then Exit;
+  FRoundedFrame:=Value;
+  if not Value then FreeAndNil(FFrame);
+  VisibleChange([chRender]);
+end;
+
+procedure TCastleZoneWheel.SetFrameBackground(const Value: TCastleColor);
+begin
+  if TCastleColor.Equals(FFrameBackground,Value) then Exit;
+  FFrameBackground:=Value;
+  FreeAndNil(FFrame);
+  VisibleChange([chRender]);
+end;
+
+procedure TCastleZoneWheel.EnsureFrame(const W,H: Integer);
+var Img: TRGBAlphaImage; X,Y: Integer;
+  Radius,D,Outside,Alpha,Metal,V: Single; Color: TCastleColor;
+begin
+  if (FFrame<>nil) and (FFrameWidth=W) and (FFrameHeight=H) then Exit;
+  FreeAndNil(FFrame); FFrameWidth:=W; FFrameHeight:=H;
+  Radius:=Min(W,H)*0.5;
+  Img:=TRGBAlphaImage.Create(W,H);
+  try
+    for Y:=0 to H-1 do for X:=0 to W-1 do
+    begin
+      { Signed distance to a capsule: one-pixel coverage at both edges of
+        the rim. This mask is rebuilt only on resize/context recreation. }
+      D:=Sqrt(Sqr(Max(0,Abs(X+0.5-W*0.5)-(W*0.5-Radius)))+
+        Sqr(Max(0,Abs(Y+0.5-H*0.5)-(H*0.5-Radius))))-Radius;
+      Outside:=EnsureRange(D+0.5,0,1);
+      Alpha:=EnsureRange(D+Max(1.5,Radius*0.13)+0.5,0,1);
+      V:=(Y+0.5)/H;
+      Metal:=0.28+0.35*Power(V,3);
+      Color:=Vector4(Metal*0.90,Metal,Metal*1.06,1);
+      if Alpha>0 then
+        Color:=(Color*(Alpha-Outside)+FFrameBackground*Outside)/Alpha;
+      Color.W:=Alpha;
+      Img.Colors[X,Y,0]:=Color;
+    end;
+    FFrame:=TDrawableImage.Create(Img,True,True); Img:=nil;
+    FFrame.Alpha:=acBlending;
+  finally Img.Free end;
 end;
 
 procedure TCastleZoneWheel.Configure(const Colors: array of TCastleColor;
@@ -245,6 +305,24 @@ begin
     end;
     EnsureShade; FShade.Draw(Inside);
   finally FClip.Enabled:=False end;
+  if FRoundedFrame then
+  begin
+    EnsureFrame(Max(4,Ceil(R.Width)),Max(4,Ceil(R.Height)));
+    FFrame.Draw(R);
+    { Keep the centre marker out of the number and missing-signal cross. }
+    if Horizontal then
+    begin
+      DrawRectangle(FloatRectangle(CX-Scale*0.5,Inside.Bottom,Scale,3*Scale),White);
+      DrawRectangle(FloatRectangle(CX-Scale*0.5,Inside.Top-3*Scale,Scale,3*Scale),White);
+      if not FShowNumbers and (FSelected>=0) then
+        DrawRectangle(FloatRectangle(CX-Scale*0.5,Inside.Bottom,Scale,Inside.Height),White);
+    end else
+    begin
+      DrawRectangle(FloatRectangle(Inside.Left,CY-Scale*0.5,3*Scale,Scale),White);
+      DrawRectangle(FloatRectangle(Inside.Right-3*Scale,CY-Scale*0.5,3*Scale,Scale),White);
+    end;
+    Exit;
+  end;
   DrawRectangleOutline(R,Vector4(0.62,0.68,0.73,0.85),Scale);
   // Fixed centre tick belongs to the bezel, never scrolls with the sectors.
   if Horizontal then

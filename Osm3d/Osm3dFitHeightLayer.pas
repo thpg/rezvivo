@@ -133,6 +133,8 @@ type
     FInv:   Double;                                  { 1 / FITL_CELL_M }
     FActive: Boolean;
     FSig:   string;                                  { сигнатура набора }
+    FDatumTime, FDatumCorrection: array of Double;
+    FDatumSource: string;
     procedure BuildIndex;
     class function CellKey(ACx, ACz: Integer): Int64; static; inline;
     { Собрать целевые высоты FIT в (X,Z), РАЗДЕЛИВ по высоте на нижний и
@@ -166,6 +168,16 @@ type
     procedure SetData(const APts: TFitLayerPointArray;
       const AOrigin: TLatLon; const ASig: string);
     procedure Clear;
+
+    { The selected ride's EXISTING barometer calibration, before spatial
+      corridor blending. Load profiles sample it once during preparation;
+      route crossings and nearby bridge levels must never choose its source. }
+    procedure SetSelectedDatum(const Source: string;
+      const TimeSec, RawAlt, CalAlt: array of Double);
+    function CorrectSelectedAltitude(TimeSec, RawAlt: Double;
+      out CalAlt: Double): Boolean;
+    function HasSelectedDatum: Boolean;
+    property SelectedDatumSource: string read FDatumSource;
 
     property Active: Boolean read FActive;
     { Сигнатура набора заездов (в gen-hash: смена .fit → смена сигнатуры →
@@ -241,6 +253,49 @@ begin
   FreeAndNil(FProj);
   FActive := False;
   FSig := '';
+  FDatumTime:=nil;FDatumCorrection:=nil;FDatumSource:='';
+end;
+
+procedure TFitHeightLayer.SetSelectedDatum(const Source: string;
+  const TimeSec, RawAlt, CalAlt: array of Double);
+var I,N:Integer;
+begin
+  FDatumTime:=nil;FDatumCorrection:=nil;FDatumSource:='';
+  N:=Length(TimeSec);
+  if (N<2) or (Length(RawAlt)<>N) or (Length(CalAlt)<>N) then Exit;
+  for I:=0 to N-1 do begin
+    if IsNan(TimeSec[I]) or IsInfinite(TimeSec[I]) or
+       IsNan(RawAlt[I]) or IsInfinite(RawAlt[I]) or
+       IsNan(CalAlt[I]) or IsInfinite(CalAlt[I]) then Exit;
+    if (I>0) and (TimeSec[I]<TimeSec[I-1]) then Exit;
+  end;
+  SetLength(FDatumTime,N);SetLength(FDatumCorrection,N);
+  for I:=0 to N-1 do begin
+    FDatumTime[I]:=TimeSec[I];FDatumCorrection[I]:=RawAlt[I]-CalAlt[I];
+  end;
+  FDatumSource:=Source;
+end;
+
+function TFitHeightLayer.HasSelectedDatum: Boolean;
+begin Result:=Length(FDatumTime)>=2 end;
+
+function TFitHeightLayer.CorrectSelectedAltitude(TimeSec, RawAlt: Double;
+  out CalAlt: Double): Boolean;
+var Lo,Hi,M:Integer;F:Double;
+begin
+  CalAlt:=RawAlt;
+  Result:=HasSelectedDatum and not(IsNan(TimeSec) or IsInfinite(TimeSec));
+  if not Result then Exit;
+  Lo:=0;Hi:=High(FDatumTime);
+  if TimeSec<=FDatumTime[Lo] then CalAlt:=RawAlt-FDatumCorrection[Lo]
+  else if TimeSec>=FDatumTime[Hi] then CalAlt:=RawAlt-FDatumCorrection[Hi]
+  else begin
+    while Lo+1<Hi do begin
+      M:=(Lo+Hi) div 2;if FDatumTime[M]<=TimeSec then Lo:=M else Hi:=M;
+    end;
+    F:=(TimeSec-FDatumTime[Lo])/(FDatumTime[Hi]-FDatumTime[Lo]);
+    CalAlt:=RawAlt-(FDatumCorrection[Lo]+(FDatumCorrection[Hi]-FDatumCorrection[Lo])*F);
+  end;
 end;
 
 procedure TFitHeightLayer.SetData(const APts: TFitLayerPointArray;

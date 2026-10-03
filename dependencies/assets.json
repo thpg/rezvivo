@@ -78,16 +78,32 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/hair/FEM-face.json",
-    "bytes": 1334,
-    "sha256": "231a4759f7a55e358a50db78cd4847be9487039e66e491b3ee1b93f3c089773e",
+    "bytes": 832,
+    "sha256": "ff87bfdaaf9bad941ec7afe05877ba2037ea7209d95e36ebbdb4ceb9f8f3bf60",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created rider data and rendered hairstyle previews"
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/hair/FEM-groom.hair",
-    "bytes": 5709656,
-    "sha256": "cdcde47e2d3b1974fb30cda094af018fac676f55dc535ffda7ce12a861bf7a47",
+    "bytes": 9974144,
+    "sha256": "203f01feccc895318602f42e28bcd6c1f16b8e7afc1c68ab76f2d6beef03c7b3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/hair/FEM-head-parts.fit.bin",
+    "bytes": 7886093,
+    "sha256": "ce6bd13410239dfeb933014758421ea68937f3a4e6dfa345b6d765bc27a3d2af",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/hair/FEM-head-parts.glb",
+    "bytes": 3616328,
+    "sha256": "8b5a473157f5b65ea27cbab337e5250a86f36ad664f3300c1d85f1d5a11f64a6",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created rider data and rendered hairstyle previews"
@@ -102,16 +118,32 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/hair/MEN-face.json",
-    "bytes": 1337,
-    "sha256": "22ad31bc5c68880ca705c31a29020797db2a8051359c07919a48c71ea9af0558",
+    "bytes": 831,
+    "sha256": "c9f82fe182e850e8403a62dd66218d498d257531ffe55019f2be4b31b53223c2",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created rider data and rendered hairstyle previews"
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/hair/MEN-groom.hair",
-    "bytes": 5719952,
-    "sha256": "89a541559e73e57c2fe4d8264d8a80f47c850bc9fb4d7a1f610721e4f4b6f20b",
+    "bytes": 9973676,
+    "sha256": "c3769f795c81e27682e5b4d0ac0fc837f6f3b758460198798e53adce6177b564",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/hair/MEN-head-parts.fit.bin",
+    "bytes": 7909126,
+    "sha256": "e57cb86e9f44e014c01cd69faf1b0869dff5fdd20f2e8bcb001fea98ece800e5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/avatars/hair/MEN-head-parts.glb",
+    "bytes": 3616520,
+    "sha256": "09d7b70e9b44aed28ac0b8acce258f12a8e2bd6a9fcfc95e98d5cf6bd0374700",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created rider data and rendered hairstyle previews"
@@ -150,11 +182,11 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/RIDER.glb",
-    "bytes": 12583560,
-    "sha256": "1eec537df57a7e18fc74cff9608661db798c1c74a425014dd9aadc32c1093c3c",
+    "bytes": 15702452,
+    "sha256": "b970b5289c017268f0880ee563a6f87de825e13e3de65128381b82e988256616",
     "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "project-created rider data and rendered hairstyle previews"
+    "source": "REZVIVO; MakeHuman CC0 head asset data",
+    "evidence": "Project-created rider with adapted CC0 head; data/licenses/makehuman/NOTICE.txt"
   },
   {
     "path": "rezvivo-osm-bckl/data/bike/cranks/crank_l.glb",
@@ -1459,8 +1491,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/gameviewplay.castle-user-interface",
-    "bytes": 29119,
-    "sha256": "a2f6275075f6df9b8b8616a1f997da204afe63184510182489edb819fa38ccdd",
+    "bytes": 12935,
+    "sha256": "4ae790d3e25e4efe142e5bee4728b0e3813c0c5e7ef10fb6e45461c8ab84a753",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -1487,6 +1519,14 @@
     "sha256": "4222ebba5f49d59bc3c8a995bbbed5c62cc6b40a190a14fc1012516aaaafab18",
     "license": "LICENSE-TEXT",
     "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/makehuman/NOTICE.txt",
+    "bytes": 584,
+    "sha256": "ea16fb56f2a713e76cb436d05f804c982d7cc3665ae36248733b0d78ee01e6fb",
+    "license": "CC0-1.0",
+    "source": "MakeHuman asset data",
+    "evidence": "Included MakeHuman notice and upstream asset license"
   },
   {
     "path": "rezvivo-osm-bckl/data/licenses/openal-soft/COPYING.txt",
@@ -1525,8 +1565,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/menu/fonts/AUTHORS.txt",
-    "bytes": 210,
-    "sha256": "00580173077306dc8c67e2f7f32692489a082c8b287d894415f6bbb3bcac0d76",
+    "bytes": 450,
+    "sha256": "f550ec03c99be2db88701bea50ea8df95dea508770c8546fad6f4a482f44eaf0",
     "license": "SEE-LOCAL-NOTICES",
     "source": "adjacent font license files"
   },
@@ -1557,6 +1597,30 @@
     "sha256": "e9448e987983ab87c76ca21e5a358f31980cd6354d6c5ecd36af984fd6cbba72",
     "license": "SEE-LOCAL-NOTICES",
     "source": "adjacent font license files"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/Montserrat-Bold.ttf",
+    "bytes": 454864,
+    "sha256": "bc6e854971cea46b463be6f9eef4d9cd52f51cfc1fc0dd90c9d3e6483dc0ec61",
+    "license": "OFL-1.1",
+    "source": "Montserrat font project",
+    "evidence": "data/menu/fonts/Montserrat-OFL.txt"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/Montserrat-OFL.txt",
+    "bytes": 4400,
+    "sha256": "8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e",
+    "license": "OFL-1.1",
+    "source": "Montserrat font project",
+    "evidence": "data/menu/fonts/Montserrat-OFL.txt"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/fonts/Montserrat-Regular.ttf",
+    "bytes": 445928,
+    "sha256": "3e8abe50c44c82e2242e97d1ec8c0d385c4890cdc50447bcdb8605c81a38cfb2",
+    "license": "OFL-1.1",
+    "source": "Montserrat font project",
+    "evidence": "data/menu/fonts/Montserrat-OFL.txt"
   },
   {
     "path": "rezvivo-osm-bckl/data/menu/fonts/RUNTIME-NOTICE.txt",
@@ -1721,6 +1785,358 @@
     "path": "rezvivo-osm-bckl/data/menu/hair/swept.png",
     "bytes": 18672,
     "sha256": "c008b78b3064310f655b6768605381732b7cb0d49bc6ac5f4579c35834b0050b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_full-rear.png",
+    "bytes": 24157,
+    "sha256": "be804b95b4d0d05bcc4f46f07ca86cda43606b2f08ca8e2cbd1a6674300c1f8e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_full.png",
+    "bytes": 24512,
+    "sha256": "0216261c4b5048f4bec2d3050207d5510b161ef1b93a7d6c30f22027406c8034",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_goatee-rear.png",
+    "bytes": 23339,
+    "sha256": "6cc79ad16b2ccff70d904f296286c6002ee2813d9deae8c81149d332bf6dc42b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_goatee.png",
+    "bytes": 24066,
+    "sha256": "01c95aaf66000e574c659fff2da4eacadd712027bb7ca68a065460ce110599c4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_none-rear.png",
+    "bytes": 22858,
+    "sha256": "43819e3a8dcc8745949e5acbe4681c84acd35d67fa76f6d242c17bbdec6e9c63",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_none.png",
+    "bytes": 23281,
+    "sha256": "cfac2a3dab16953a653511a960f1cb0162d987e7d866c8ea11c13f1e8c017a03",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_short-rear.png",
+    "bytes": 24612,
+    "sha256": "9df22632343f8db73a23c1eae861aa46f1f2e56ec9322ed978baf7cec6bb4ef8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_short.png",
+    "bytes": 24905,
+    "sha256": "e3fd7237a811296a1a5cb3feef0fe2bbcec932a8de3744fe22ad83893f47d2f1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_stubble-rear.png",
+    "bytes": 24111,
+    "sha256": "d8795974ded0a631e99199ae188438b43fb721f583a7d8e1b81e4433b1453443",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/beard_stubble.png",
+    "bytes": 24446,
+    "sha256": "c508c54acba5844cdf17c51d2c170fc9b3a681aa501fd25ff1748cfe91a3cc3d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_bald-rear.png",
+    "bytes": 27261,
+    "sha256": "f9f7cc629f4bd4b444f9cadf33f52116486145f6e7e39952812025107fecd87b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_bald.png",
+    "bytes": 24005,
+    "sha256": "df4e4026374d5b01003cc75d2db3c19abcc6ec7c7f14951a520e8d83408ef14b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_braid-rear.png",
+    "bytes": 28478,
+    "sha256": "371d76ce5002b06dd1422f9364d95fe5ec575b6b1c52d4752310945b9d2a4508",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_braid.png",
+    "bytes": 24734,
+    "sha256": "3a6450a0d4a69b78b0dae5e8b5758d08b735b04cd5c8e123fccbcd3e7b41d53f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_curly-rear.png",
+    "bytes": 27517,
+    "sha256": "22a3ad40f5ba78b648fa935f85306fbeec65f6870a1032c249b3af0de5c716d2",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_curly.png",
+    "bytes": 25648,
+    "sha256": "6b57cbe2351745fb6361028ad68b9fddc08bd08d23e070cc20c610fb178eb25c",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_double_braids-rear.png",
+    "bytes": 30323,
+    "sha256": "22d1366dc0e31d2c4015d2048ab93c886433000208dfb34d266dccf6765b3d1d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_double_braids.png",
+    "bytes": 25563,
+    "sha256": "9a53d985c5affd6f0dc35908b75bb76c619e153467987053bdb2ebda7180e1a1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_dreadlocks-rear.png",
+    "bytes": 31453,
+    "sha256": "89015d356eb6334c361e77c81098541390bb3fd1530ec85cb78cf53d399580c8",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_dreadlocks.png",
+    "bytes": 27243,
+    "sha256": "e2ddd7faef8af8370e12bc9c8175eb8d5755c967af80fc607f34b59a4ecf049f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_long_braid-rear.png",
+    "bytes": 29895,
+    "sha256": "e48c6926b05309f369d5b9041e967c7beec4dda57dd1081f26f832fec44b53ba",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_long_braid.png",
+    "bytes": 27332,
+    "sha256": "4b0b261718bb7f653cf6c68fb9437dff0b78ce681161143c0d625e1ad490b744",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_medium-rear.png",
+    "bytes": 27892,
+    "sha256": "2f92156f28371341873d66694e8d7e9356673eb70be9110d2ab83b6b0b668ffb",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_medium.png",
+    "bytes": 25261,
+    "sha256": "084cf362355e088034683ae9023d078b2be1efc64818d1806a488bb0238bc88d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_ponytail-rear.png",
+    "bytes": 27839,
+    "sha256": "8772114f8c7646a5aad55566e4bc86e8eafba8825e70b87ea5c09d196443f0d3",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_ponytail.png",
+    "bytes": 24546,
+    "sha256": "b67c112b035c374e9e4b60b08cedff199a956fe0db4f7d490a692753ee8e0b66",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_short-rear.png",
+    "bytes": 27492,
+    "sha256": "b5226f6666a2bdf7a9cfa74d94b9bcd1855164cde236523337ab7a58c6a08e66",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/hair_short.png",
+    "bytes": 24675,
+    "sha256": "0572a06c642450aeff78de3a76efa65b8816cac8c9edd1ee8b958cfd9faa51b4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_bandana-rear.png",
+    "bytes": 19830,
+    "sha256": "39f34e407287526e6e15598cfe34c267c82f141dfc6a44961afc709961389f60",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_bandana.png",
+    "bytes": 21500,
+    "sha256": "d53fc48c980ea615d5bc8b812e6da8337b93f8101b54e1c095ed2d5817b23b14",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_cap-rear.png",
+    "bytes": 19335,
+    "sha256": "ae69152f596089421672c5b34f09ad1ddf5b0a23f36aef689b0e594b46f5ff83",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_cap.png",
+    "bytes": 21330,
+    "sha256": "f5cc3bd73367198cd5f693375ba7f67af6871f214cb06faf6b3e510bb2f46c57",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_helmet-rear.png",
+    "bytes": 25632,
+    "sha256": "1ff0f0bb13920bdabb0beacb87b409a260d8226c7ab1b2e40399fbd063623806",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_helmet.png",
+    "bytes": 27777,
+    "sha256": "238eb9df17dfe5431b0f271444e44dde8988728a7987a105ba34b11f882b954b",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_none-rear.png",
+    "bytes": 22433,
+    "sha256": "543f77f4712f1e456165d154dbf47c641e2ca725e4afbc012ca00cd618ba395e",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/headwear_none.png",
+    "bytes": 23534,
+    "sha256": "e167d351f15d0f9e8a4c0d105912d5d69b3d22dda781a38a472a2c72148bf438",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_classic-rear.png",
+    "bytes": 22926,
+    "sha256": "de07054ef1f6fd1a8d08e991d8b27bd999136a29a82d0233354f7cfd00ef0c60",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_classic.png",
+    "bytes": 23719,
+    "sha256": "c9c1068537b4bd9b7239a7df2dd400ab7dd1ce19fce2e787c058c85413d920df",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_handlebar-rear.png",
+    "bytes": 23081,
+    "sha256": "44671db2873051ebf5c26765f9dba6d597cdd7b6b61cc8db612250e4d9d12642",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_handlebar.png",
+    "bytes": 24000,
+    "sha256": "83d00f27e83237cf1789e2854662adea441c5592b5aa4d91ed71e9b5113b1395",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_none-rear.png",
+    "bytes": 22801,
+    "sha256": "6017d05cd2be1be80d3908153c8088083522063ea14fae9af66322e453868ca5",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_none.png",
+    "bytes": 23313,
+    "sha256": "2ef80f17bdee382c38b505cccfdf6d976f29888e77c71e6ae343d64a34be9a7f",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_pencil-rear.png",
+    "bytes": 22861,
+    "sha256": "114a3c7121de5598e7d4cfaceb598d7e483cfa4b2aaa3be8f3130468e8059e88",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "project-created rider data and rendered hairstyle previews"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/menu/head/mustache_pencil.png",
+    "bytes": 23517,
+    "sha256": "50e1c49e398ad3bdddd20eb651406ece87aa5b36360078682d7cfbd393cc2549",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created rider data and rendered hairstyle previews"
@@ -4049,96 +4465,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 25527,
-    "sha256": "d5f9b4f7c4bcecdf831d0d88356abf71de192e86f4ba279f3e8052586c6d740a",
+    "bytes": 26635,
+    "sha256": "9f378cdbf36b6930c656f688302fdf74213ab3f31d3fe8cc919bf9b3c66b2ee3",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 21188,
-    "sha256": "422f1c201bab2396e8b22416e6215c3a0162a361ac2730ef693fb0c51d2b4bdb",
+    "bytes": 22135,
+    "sha256": "f6a67e5984e49ec5f24da441b85d7dc8a4a81100e82ead1e0e6aa79bc3c6683c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 81878,
-    "sha256": "64822a94ef205787542d76647fd874612e9845afd46fa3e9e6f108312cf1e732",
+    "bytes": 82789,
+    "sha256": "224f6cc4430a790e14c0f6b56fc48dfa184119960661b4bf108cfed5d8c1f263",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 21194,
-    "sha256": "7f7950941dd2e0bb0a76d6e3da6bcea0b6bea637d6a200aa12404223d94af30b",
+    "bytes": 22146,
+    "sha256": "25d644aedd52cf339a2c03e1e60673a3a08d9177ab91bdcc73a993e6716dc420",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 21838,
-    "sha256": "fb2aaa3f39d51f4a6682f1b78b06045dc28bdba0ec12561744d6b5b655a49b78",
+    "bytes": 22827,
+    "sha256": "2e36530d07fec965064d6dd00af1427dc9830ba16bedbb6e6f3af8a7cf6c1e00",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 20944,
-    "sha256": "105dfbe6033a44f0f962096170113782f747a18f57f7f065e1a53b20de8ad41e",
+    "bytes": 21897,
+    "sha256": "0ebe31a0505718f09dfbb2801ba8ea17737d6942cecee59a85aa53b09179bca4",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 24187,
-    "sha256": "06aa5c716d602681f6f1797f2782f091c312b9b9ee996e4bfbcd40e1a3bb7003",
+    "bytes": 25213,
+    "sha256": "c491fdd71d9c6e922929cc70264f212a58b64c526ee4b8fdaa044107bb6fdfb6",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 22156,
-    "sha256": "9d20d37457c2d9641d9d50f99a6184752bb82cdc671fd28b379f4b261d79121e",
+    "bytes": 23136,
+    "sha256": "4cb82e2301bba94b59b4db337fc0c87f0a588d92572f80552d9e05ce67cb223a",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 20821,
-    "sha256": "f3209ce323935d0e88fba3918deae9461aea7814141aaf293398a932f1bb173b",
+    "bytes": 21768,
+    "sha256": "483f1151b03b1423726d03fc48a1a0e6874076851a7014c943a6c6e11388727f",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 116007,
-    "sha256": "3067721d48e299bea1035b9d9234f9cded37c92d0f1a0a0cda0af5ff973ed0c5",
+    "bytes": 117812,
+    "sha256": "e93351f7fbd52c501a564a79714b56e833d61d84e7fb1b04148f455442e43a2d",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 19637,
-    "sha256": "becb4b6bdd52b8d2f210bcd2d3fd31b271e7472b582b2428ebe15e04cd3f686d",
+    "bytes": 20522,
+    "sha256": "6ef934ad78a5762c73d18ce278a4998c18931b4cea4628f13386fd9ba8c6375e",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 19430,
-    "sha256": "b9021196c064a8169affd802cff71cf7cbe11868b30d49be9107683b604770db",
+    "bytes": 20318,
+    "sha256": "7fb0ac3e75c8a0b3a1652d289a16dda440c91db058d9a517433008370d420662",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

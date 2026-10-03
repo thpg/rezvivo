@@ -37,11 +37,11 @@ unit RiderTripo;
 
 interface
 
-uses RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics,
+uses RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
-  BikeLog, GltfCore, X3DLoad, CastleURIUtils, RiderPoseCorrectives, RiderEquipment, RiderMotion;
+  BikeLog, GltfCore, X3DLoad, CastleURIUtils, RiderPoseCorrectives, RiderEquipment, RiderMotion, RiderRuntimeAudit;
 
 const
   RiderSpineChainCount = 7;
@@ -320,12 +320,18 @@ type
     FBoneOrigNodeT: array[0..34] of TVector3;      { original CGE node translation }
     { ── optional 'Helmet' accessory node, animated to follow the head ── }
     FHair: TRiderHair;
+    FHeadAppearance:TRiderHeadAppearance;
+    FHeadwear:TRiderHeadwear;
+    FBeard:TRiderBeard;
+    FMustache:TRiderMustache;
     FHairStyle: TRiderHairStyle;
     FHairStyleOverride: Boolean;
     FHairMaskPath: String;
     FAuthorHeight: Single;
     FBaldHead: Boolean;
     FFabric: TRiderFabric;
+    FSelfOcclusion: TRiderOcclusion;
+    FOcclusionJointQuery: TRiderJointQuery;
     FSurfaceSkin: TRiderSkin;
     FFace:TRiderFace;
     FAppearancePhase,FAppearanceEffort,FAppearanceBreathLoad:Single;
@@ -348,6 +354,7 @@ type
     FHelmetMatsCached: Boolean;
     FHelmetMats: array of TX3DNode;        { TPhysicalMaterialNode / TUnlitMaterialNode }
     FHelmetOrigColor: array of TVector3;   { authored base/emissive color factors }
+    FHeadwearColor: TVector3;             { one tint for helmet, cap and bandana }
 
     { Sky irradiance and the rider's scoped key/fill lights. }
     FEnvLight: TEnvironmentLightNode;      { 'RiderEnv' — живёт в сцене райдера }
@@ -490,6 +497,9 @@ type
       const BreathPhase:Double=0;const BreathLoad:Single=0);
     procedure SetFaceTime(const Value:Double);
     procedure HairDebugJson(Result: TJSONObject);
+    procedure SetHeadAppearance(Headwear:TRiderHeadwear;Beard:TRiderBeard;Mustache:TRiderMustache);
+    procedure SetHeadwearColor(const Color:TVector3);
+    function HeadWorldFrame:TMatrix4;
   public
     constructor Create;
     destructor Destroy; override;
@@ -592,6 +602,8 @@ type
     function BodyShapeRevision: Cardinal;
     function BodyMeasurements:TJSONObject;
     property BodyParameters: TRiderBodyParameters read FBodyParameters;
+    property SelfOcclusion: TRiderOcclusion read FSelfOcclusion;
+    property OcclusionJointQuery: TRiderJointQuery read FOcclusionJointQuery write FOcclusionJointQuery;
 
     { Change limb LENGTH on the SKELETON: scale the thigh+shin bones (legs),
       upperarm+forearm bones (arms), clavicle bones (shoulder width), the
@@ -765,6 +777,9 @@ type
     function LegReach: Single;
     function PedallingSupport(const SeatedSupport, BottomBracket, Offset: TVector3;
       CrankRadius, ParentBikeLean, Standing: Single): TVector3;
+    function PedallingSupportAtTransform(const SeatedSupport, BottomBracket, Offset: TVector3;
+      CrankRadius, ParentBikeLean, Standing, Scale: Single;
+      const PoseTransform: TMatrix4): TVector3;
 
     { ── Rig-based orientation (position the model BY THE RIG, not by the mesh) ──
       LoadGlb detects FILE space (Mixamo +Z-forward vs already bike-aligned) and
@@ -1230,9 +1245,25 @@ end;
 
 procedure TTripoRiderScene.UpdateAppearance(const Dt, Speed, Effort, PedalPhase: Single;
   const BreathPhase:Double;const BreathLoad:Single);
-var FaceDetail,FaceStrain: Single;FaceTime:Double;
+var FaceDetail,FaceStrain: Single;FaceTime:Double;TorsoA,TorsoB:TVector3;
+  Query:TRiderJointQuery;
 begin
+  CountRiderWork(rwAppearance);
   FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
+  if (FSelfOcclusion<>nil) and (FEnvLight<>nil) and FEnvLight.FdOn.Value and
+    FScene.RenderOptions.Lighting and FScene.RenderOptions.ReceiveSceneLights then
+  begin
+    { Face rendering already measures camera distance even from behind, where
+      facial animation is asleep. Do not solve lighting joints for far
+      riders; 36 m leaves a margin beyond the shader's 35 m fade-out. }
+    if (FFace<>nil) and FFace.Valid and FFace.RecentlyRenderedFar(36) then
+      FSelfOcclusion.Invalidate
+    else
+    if Assigned(FOcclusionJointQuery) then
+      FSelfOcclusion.Update(FOcclusionJointQuery,FScene.InverseTransform,FBodyParameters,Dt)
+    else
+      FSelfOcclusion.Update(@PosedJointParent,FScene.InverseTransform,FBodyParameters,Dt);
+  end;
   FAppearanceBreathPhase:=BreathPhase;FAppearanceBreathLoad:=BreathLoad;
   if (FCorrectives<>nil)and(FCorrectives.Body<>nil)then FCorrectives.Body.Update(Effort,PedalPhase);
   if FFabric<>nil then FFabric.Update(BreathPhase,BreathLoad,
@@ -1241,10 +1272,19 @@ begin
   FaceTime:=0;if FSurfaceSkin<>nil then FaceTime:=FSurfaceSkin.Time+EnsureRange(Dt,0.0,0.25);
   if FFace<>nil then begin
     FFace.Update(Dt,Effort,BreathPhase,BreathLoad,FaceTime);
+    if FCorrectives<>nil then FCorrectives.SetFaceControls(FFace.Controls,FFace.EyeControls.X);
     if FFace.Valid then begin FaceDetail:=FFace.Visibility;FaceStrain:=FFace.Controls.Z end;
   end;
   if FSurfaceSkin<>nil then FSurfaceSkin.Update(Dt,FaceStrain,BreathPhase,BreathLoad,FaceDetail);
-  if FHair<>nil then FHair.Update(FScene,Dt,Speed);
+  if FHair<>nil then begin
+    if FHairStyle in [rhsLongBraid,rhsDoubleBraids,rhsDreadlocks]then begin
+      Query:=FOcclusionJointQuery;if not Assigned(Query)then Query:=@PosedJointParent;
+      if Query('Spine02',TorsoA)and Query('Waist',TorsoB)then
+        FHair.SetTorso(FScene,TorsoA,TorsoB,0.19*FBodyParameters.HeightCm/180);
+    end;
+    FHair.Update(FScene,Dt,Speed);
+  end;
+  if (FHeadAppearance<>nil)and(FFace<>nil)then FHeadAppearance.UpdateFace(FFace);
 end;
 
 procedure TTripoRiderScene.SetFaceTime(const Value:Double);
@@ -1257,6 +1297,8 @@ begin
   else begin Result.Add('style',RiderHairStyleId(FHairStyle));Result.Add('triangles',0) end;
   Result.Add('mask_path',FHairMaskPath);
   Result.Add('helmet_pitch_x',FHelmetPitchXDeg);
+  if FHeadAppearance<>nil then FHeadAppearance.DebugJson(Result);
+  Result.Add('helmet_visible',(FHelmetNode<>nil)and FHelmetNode.Visible);
   if FHair<>nil then begin
     A:=TJSONArray.Create;
     for C:=0 to 3 do for R:=0 to 3 do A.Add(FHair.Root.Matrix.Data[C,R]);
@@ -1290,6 +1332,8 @@ begin
   FTorsoLeanDeg := -30;   { forward lean; flip sign if it leans backward }
   FFileClipBlendDur := 0.30;
   FHairStyle := rhsShort;
+  FHeadwear:=rhwHelmet;FBeard:=rbNone;FMustache:=rmNone;
+  FHeadwearColor:=Vector3(1,1,1);
   FHelmetPitchXDeg := 0;
   FHelmetParented := False;
   FBodyHeightF := 0;
@@ -1317,8 +1361,10 @@ var i: Integer;
 begin
   { Filters are chained hair -> face. Remove them in reverse order. }
   FreeAndNil(FFace);
+  FreeAndNil(FHeadAppearance);
   FreeAndNil(FHair);
   FreeAndNil(FFabric);
+  FreeAndNil(FSelfOcclusion);
   FreeAndNil(FSurfaceSkin);
   FreeAndNil(FCorrectives);
   FreeAndNil(FBodyMorph);
@@ -1775,6 +1821,7 @@ begin
   if (FBodyMorph.Revision>0) and SameRiderBody(P,FBodyParameters) then Exit;
   CacheBones;
   FBodyMorph.Apply(P,FRig);
+  if FHeadAppearance<>nil then FHeadAppearance.FitToRig(FRig);
   FBodyParameters:=P;
   if FCorrectives<>nil then FCorrectives.SetBodyParameters(P);
   RestH:=RestHeight;
@@ -4931,6 +4978,7 @@ end;
 procedure TTripoRiderScene.SetClothColor(Slot: TClothSlot; const C: TVector3);
 begin
   if (Slot=csHair) and (FHair<>nil) then FHair.Color:=C;
+  if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(C);
   FDyeColor[Slot] := C;
   FDyeActive[Slot] := True;
   { Live-запечка запрещена (глушит рендер живой GL-сцены) — только при
@@ -4953,6 +5001,7 @@ procedure TTripoRiderScene.ClearClothColor(Slot: TClothSlot);
 begin
   if not FDyeActive[Slot] then Exit;
   if (Slot=csHair) and (FHair<>nil) then FHair.Color:=Vector3(0.26,0.17,0.105);
+  if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(Vector3(0.26,0.17,0.105));
   FDyeActive[Slot] := False;
   if FDyeInLoad then
     BakeClothDye
@@ -4963,6 +5012,7 @@ end;
 procedure TTripoRiderScene.StageClothColor(Slot: TClothSlot; const C: TVector3);
 begin
   if (Slot=csHair) and (FHair<>nil) then FHair.Color:=C;
+  if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(C);
   FDyeColor[Slot] := C;
   FDyeActive[Slot] := True;   { запечётся при следующей загрузке }
 end;
@@ -4970,6 +5020,7 @@ end;
 procedure TTripoRiderScene.StageClearClothColor(Slot: TClothSlot);
 begin
   if (Slot=csHair) and (FHair<>nil) then FHair.Color:=Vector3(0.26,0.17,0.105);
+  if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(Vector3(0.26,0.17,0.105));
   FDyeActive[Slot] := False;
 end;
 
@@ -5083,6 +5134,9 @@ begin
   if (Slot=csHair) and (FHair<>nil) then
     if FDyeActive[csHair] then FHair.Color:=FDyeColor[csHair]
     else FHair.Color:=Vector3(0.26,0.17,0.105);
+  if (Slot=csHair) and (FHeadAppearance<>nil) then
+    if FDyeActive[csHair]then FHeadAppearance.SetHairColor(FDyeColor[csHair])
+    else FHeadAppearance.SetHairColor(Vector3(0.26,0.17,0.105));
   if FDyeActive[Slot] then Amt := 1.0 else Amt := 0.0;
   for I := 0 to High(FDyeShColor[Slot]) do
     if FDyeShColor[Slot][I] <> nil then
@@ -5829,6 +5883,7 @@ var
   Path: string;
 begin
   FreeAndNil(FFace);
+  FreeAndNil(FHeadAppearance);
   FreeAndNil(FHair);
   FreeAndNil(FFabric);
   FreeAndNil(FSurfaceSkin);
@@ -5929,6 +5984,7 @@ begin
   try
     TD0 := GetTickCount64;
     FreeAndNil(FFace);
+    FreeAndNil(FHeadAppearance);
     FreeAndNil(FHair);
     FreeAndNil(FFabric);
     FreeAndNil(FSurfaceSkin);
@@ -6070,7 +6126,7 @@ function TTripoRiderScene.BuildRiderEnvLight: TEnvironmentLightNode;
 const
   White: TVector3Byte = (X: 255; Y: 255; Z: 255);
   Black: TVector3Byte = (X: 0; Y: 0; Z: 0);
-var Effect: TEffectNode; Part: TEffectPartNode;
+var Effect: TEffectNode; Part,PartV: TEffectPartNode; OcclusionEnabled: Boolean;
 begin
   Result := TEnvironmentLightNode.Create;
   Result.X3DName := 'RiderEnv';
@@ -6086,7 +6142,10 @@ begin
   Effect.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
   Part := TEffectPartNode.Create;
   Part.ShaderType := stFragment;
-  Part.Contents :=
+  OcclusionEnabled:=GetEnvironmentVariable('REZVIVO_RIDER_SELF_OCCLUSION')<>'0';
+  if OcclusionEnabled then Part.Contents:=RiderOcclusionFS
+  else Part.Contents:='float riderIndirectVisibility(vec3 n){return 1.0;}' + #10;
+  Part.Contents := Part.Contents +
     'vec3 direction_eye_to_world_space(vec3 direction_eye);' + #10 +
     'void PLUG_physical_environment(inout vec3 light,const vec3 N,const vec3 V,const vec3 diffuseColor,const vec3 f0,const float roughness) {' + #10 +
     '  vec3 worldN=normalize(direction_eye_to_world_space(N));' + #10 +
@@ -6097,7 +6156,14 @@ begin
     '  vec3 irradiance=mix(vec3(0.20,0.185,0.165),vec3(0.76,0.86,1.0),up);' + #10 +
     '  float width=0.06+0.90*roughness*roughness;' + #10 +
     '  float sky=smoothstep(-width,width,R.y);' + #10 +
-    '  vec3 radiance=mix(vec3(0.10,0.09,0.075),vec3(0.31,0.40,0.55),sky);' + #10 +
+    // A constant upper hemisphere erased normal changes whenever the whole
+    // reflection stayed above the horizon. A broad horizon-to-zenith gradient
+    // preserves those changes without painted body shading or extra lights.
+    // Rough surfaces progressively integrate this low-frequency sky field.
+    '  float horizon=exp2(-3.0*max(R.y,0.0));' + #10 +
+    '  vec3 skyRadiance=mix(vec3(0.18,0.29,0.46),vec3(0.50,0.57,0.66),horizon);' + #10 +
+    '  skyRadiance=mix(skyRadiance,vec3(0.31,0.40,0.55),roughness*roughness);' + #10 +
+    '  vec3 radiance=mix(vec3(0.10,0.09,0.075),skyRadiance,sky);' + #10 +
     '  radiance=mix(radiance,vec3(0.235,0.275,0.335),roughness*roughness*0.40);' + #10 +
     // Split-sum GGX environment BRDF approximation (Karis/Lazarov).
     '  float nv=clamp(dot(N,V),0.0,1.0);' + #10 +
@@ -6105,9 +6171,15 @@ begin
     '  float a004=min(r.x*r.x,exp2(-9.28*nv))*r.x+r.y;' + #10 +
     '  vec2 ab=vec2(-1.04,1.04)*a004+r.zw;' + #10 +
     '  vec3 spec=max(f0*ab.x+ab.y,vec3(0.0))*radiance;' + #10 +
-    '  light=diffuseColor*irradiance/3.14159265+spec;' + #10 +
+    '  light=(diffuseColor*irradiance/3.14159265+spec)*riderIndirectVisibility(N);' + #10 +
     '}';
-  Effect.SetParts([Part]);
+  FreeAndNil(FSelfOcclusion);
+  if OcclusionEnabled then
+  begin
+    PartV:=TEffectPartNode.Create;PartV.ShaderType:=stVertex;PartV.Contents:=RiderOcclusionVS;
+    Effect.SetParts([PartV,Part]);
+    FSelfOcclusion:=TRiderOcclusion.Create(Effect);
+  end else Effect.SetParts([Part]);
   Result.FdEffects.Add(Effect);
 end;
 
@@ -6294,7 +6366,7 @@ begin
     FRiderFillLight := L;
 
     { One smooth sky hemisphere instead of multiple directional fills.
-      It provides diffuse irradiance, not occlusion or self-shadowing.
+      Pose-driven body capsules attenuate only its indirect contribution.
       After mounting it remains scoped to rider visuals, not the catcher. }
     if RiderUseIbl then
     begin
@@ -6764,6 +6836,8 @@ var
   I: Integer;
   V: TVector3;
 begin
+  if Enable then FHeadwearColor:=C else FHeadwearColor:=Vector3(1,1,1);
+  if FHeadAppearance<>nil then FHeadAppearance.SetClothColor(FHeadwearColor);
   if FHelmetNode = nil then Exit;   { model has no helmet — nothing to tint }
   CacheHelmetMaterials;
   for I := 0 to High(FHelmetMats) do
@@ -6810,7 +6884,7 @@ begin
 end;
 
 procedure TTripoRiderScene.CreateHair;
-var Head:TVector3; Scale:Single;
+var Head:TVector3; Scale:Single;Parts:String;
 begin
   if (FHair<>nil)or(FScene=nil)or(FScene.RootNode=nil)or
      (FHelmetHeadJ<0)or not FBaldHead or not FileExists(FHairMaskPath)then Exit;
@@ -6824,13 +6898,55 @@ begin
   FHair.BindScene(FScene);
   FHair.Style:=FHairStyle;
   if FDyeActive[csHair] then FHair.Color:=FDyeColor[csHair];
+  Parts:=StringReplace(FHairMaskPath,'-scalp.png','-head-parts.glb',[]);
+  FHeadAppearance:=TRiderHeadAppearance.Create(FScene.RootNode,Parts,Head,Scale);
+  FHeadAppearance.FitToRig(FRig);
+  if FDyeActive[csHair]then FHeadAppearance.SetHairColor(FDyeColor[csHair]);
+  ApplyHelmetColor(FHeadwearColor,True);
+  SetHeadAppearance(FHeadwear,FBeard,FMustache);
+end;
+
+procedure TTripoRiderScene.SetHeadAppearance(Headwear:TRiderHeadwear;Beard:TRiderBeard;Mustache:TRiderMustache);
+var Changed:Boolean;
+begin
+  Changed:=(FHeadwear<>Headwear)or(FBeard<>Beard)or(FMustache<>Mustache);
+  FHeadwear:=Headwear;FBeard:=Beard;FMustache:=Mustache;
+  if FHelmetNode<>nil then FHelmetNode.Visible:=Headwear=rhwHelmet;
+  if FHair<>nil then FHair.Helmet:=Headwear<>rhwNone;
+  if FHair<>nil then FHair.Covered:=Headwear in [rhwBandana,rhwCap];
+  if FHeadAppearance<>nil then FHeadAppearance.Select(Headwear,Beard,Mustache);
+  if Changed and(FScene<>nil)and Loaded then begin
+    FScene.IncreaseTime(1E-6);
+    EnsureNativeSkinReady;
+  end;
+end;
+
+procedure TTripoRiderScene.SetHeadwearColor(const Color:TVector3);
+begin
+  ApplyHelmetColor(Color,True);
+end;
+
+function TTripoRiderScene.HeadWorldFrame:TMatrix4;
+begin
+  Result:=TMatrix4.Identity;
+  if FHair<>nil then Result:=FHair.Root.Matrix;
+  if FScene<>nil then
+    if FScene.HasWorldTransform then Result:=FScene.WorldTransform*Result
+    else Result:=FScene.Transform*Result;
 end;
 
 procedure TTripoRiderScene.SetHairStyle(Value:TRiderHairStyle);
+var Changed:Boolean;
 begin
+  Value:=CanonicalHairStyle(Value);
+  Changed:=FHairStyle<>Value;
   FHairStyleOverride:=True;
   FHairStyle:=Value;
   if FHair<>nil then FHair.Style:=Value;
+  if Changed and(FScene<>nil)and Loaded then begin
+    FScene.IncreaseTime(1E-6);
+    EnsureNativeSkinReady;
+  end;
 end;
 
 function TTripoRiderScene.HairTriangles:Integer;
@@ -6841,20 +6957,21 @@ end;
 procedure TTripoRiderScene.ApplyHairFollow(const Delta:TTripoMat4;GPU:Boolean);
 var M,RestNow:TTripoMat4; OutM:TMatrix4; C,R:Integer;
 begin
-  if ((FHair=nil)and(FFace=nil))or(FHelmetHeadJ<0)then Exit;
+  if ((FHair=nil)and(FFace=nil)and(FHeadAppearance=nil))or(FHelmetHeadJ<0)then Exit;
   if FFace<>nil then begin
     if GPU then M:=Mat4Mul(Delta,Mat4Mul(FRig.BindWorld[FHelmetHeadJ],FRig.NativeInvBind[FHelmetHeadJ]))
     else M:=Delta;
     for C:=0 to 3 do for R:=0 to 3 do OutM.Data[C,R]:=M[C*4+R];
     FFace.Follow(OutM);
   end;
-  if FHair=nil then Exit;
+  if (FHair=nil)and(FHeadAppearance=nil)then Exit;
   if GPU then begin
     RestNow:=Mat4Mul(FRig.BindWorld[FHelmetHeadJ],FRig.NativeInvBind[FHelmetHeadJ]);
     M:=Mat4Mul(Mat4Mul(Delta,RestNow),FHairRestInv);
   end else M:=Mat4Mul(Delta,FHairRestInv);
   for C:=0 to 3 do for R:=0 to 3 do OutM.Data[C,R]:=M[C*4+R];
-  FHair.Follow(OutM);
+  if FHair<>nil then FHair.Follow(OutM);
+  if FHeadAppearance<>nil then FHeadAppearance.Follow(OutM);
 end;
 
 procedure TTripoRiderScene.CacheHelmet;
@@ -7507,6 +7624,7 @@ var
 begin
   if not FLoaded then Exit;
 
+  CountRiderWork(rwNativePose);
   footYawR := RiderFootYawRotation(FScene.InverseTransform, FFootYawDeg);
 
   { per-side bend hints: base direction (rig frame) + lateral flare along
@@ -8435,15 +8553,23 @@ end;
 function TTripoRiderScene.PedallingSupport(const SeatedSupport, BottomBracket, Offset: TVector3;
   CrankRadius, ParentBikeLean, Standing: Single): TVector3;
 begin
+  Result := PedallingSupportAtTransform(SeatedSupport, BottomBracket, Offset,
+    CrankRadius, ParentBikeLean, Standing, FScene.Scale.Y, FScene.Transform);
+end;
+
+function TTripoRiderScene.PedallingSupportAtTransform(const SeatedSupport, BottomBracket, Offset: TVector3;
+  CrankRadius, ParentBikeLean, Standing, Scale: Single;
+  const PoseTransform: TMatrix4): TVector3;
+begin
   Result := SeatedSupport;
   if (Standing<=0) or (FStandingPedalReach<=0) then Exit;
   { Catalogue standing offsets are relative to its historic +6 cm/+2.5 cm
     stance. The nominal hip is now over the BB, at 94% effective leg reach
     above the lowest pedal. Leave room for ankling and soft knees. }
   Result := BottomBracket + Offset - Vector3(0.06,0.025,0);
-  Result.Y := Result.Y + 0.94 * FStandingPedalReach * Abs(FScene.Scale.Y) - CrankRadius;
+  Result.Y := Result.Y + 0.94 * FStandingPedalReach * Abs(Scale) - CrankRadius;
   RiderSupportInBikeFrame(Result.Y,Result.Z,1,ParentBikeLean);
-  Result := Result - FScene.Transform.MultDirection(FStandingHipFromSeat);
+  Result := Result - PoseTransform.MultDirection(FStandingHipFromSeat);
   Result := SeatedSupport + (Result-SeatedSupport)*EnsureRange(Standing,0.0,1.0);
 end;
 

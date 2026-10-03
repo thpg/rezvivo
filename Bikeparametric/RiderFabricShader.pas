@@ -37,6 +37,7 @@ const
     'varying vec3 rfRestMetric;' + #10 +
     'varying vec2 rfUV;uniform vec2 rfReach;uniform float rfRegion;' + #10 +
     'uniform vec4 rfProfile; // spacing, height, roughness, weave kind' + #10 +
+    'vec3 rfTangent=vec3(0.0);float rfRoughness=0.6;' + #10 +
     'float rfDetail=0.0,rfMeso=0.0,rfBibsPattern=0.0,rfSeam=0.0;' + #10 +
     'float rfBell(float x){return exp2(-1.442695*x*x);}' + #10 +
     'float rfFold(float phase) {' + #10 +
@@ -92,11 +93,23 @@ const
     '    float lower=rfBell((p.y-1.09)/0.064)*(1.0-smoothstep(0.13,0.18,ax))*back;' + #10 +
     // Finite diagonal folds, not repeated horizontal bands over the pockets.
     // Upper cloth follows trunk flexion, not the left/right crank phase.
-    '    float diagonal=p.y+ax*0.45+0.12*p.z+0.004*sin(p.x*27.0);' + #10 +
-    '    float drape=rfRidge(diagonal-1.258,0.010)-0.50*rfRidge(diagonal-1.280,0.015);' + #10 +
-    '    drape+=0.75*rfRidge(diagonal-1.320,0.012)-0.35*rfRidge(diagonal-1.343,0.016);' + #10 +
-    '    fold+=0.00128*flank*drape;compressedFold+=0.00192*flank*drape;' + #10 +
-    '    fold+=0.0013*lower*(rfRidge(p.y+0.20*ax-1.098,0.013)-0.45*rfRidge(p.y+0.20*ax-1.125,0.019));' + #10 +
+    '    float diagonal=p.y+ax*0.45+0.12*p.z+0.006*sin(p.x*27.0);' + #10 +
+    '    float drape=rfRidge(diagonal-1.258,0.0045)-0.42*rfRidge(diagonal-1.269,0.006);' + #10 +
+    '    drape+=0.65*rfRidge(p.y+ax*0.68-1.351,0.006)-0.28*rfRidge(p.y+ax*0.68-1.366,0.009);' + #10 +
+    '    fold+=0.0015*flank*drape;compressedFold+=0.0015*flank*drape;' + #10 +
+    // Irregular gathers start at sewn pocket corners and die inside the
+    // panel. Their slope, length and width differ; no waist-wide accordion.
+    '    float pc=sign(p.x)*0.099*step(0.050,ax);' + #10 +
+    '    float u=(p.x-pc)/0.096+0.5;' + #10 +
+    '    float pv=(p.y-1.025)/mix(0.175,0.162,step(0.050,ax));' + #10 +
+    '    float panel=back*smoothstep(0.0,0.12,u)*(1.0-smoothstep(0.88,1.0,u))*smoothstep(0.0,0.10,pv)*(1.0-smoothstep(0.88,1.02,pv));' + #10 +
+    '    float bias=pc/0.099,curve=0.10*pv*pv;' + #10 +
+    '    float gline=u+(0.48+0.09*bias)*pv+curve-0.31-0.025*bias;' + #10 +
+    '    float gathers=rfRidge(gline*0.096,0.0045)*rfBell((pv-0.25-0.05*bias)/0.28);' + #10 +
+    '    gathers+=(0.66-0.15*bias)*rfRidge((u-(0.32-0.05*bias)*pv-curve-0.67)*0.096,0.0055)*rfBell((pv-0.35+0.04*bias)/0.25);' + #10 +
+    '    gathers-=0.30*rfRidge((gline-0.10)*0.096,0.006)*rfBell((pv-0.23)/0.24);' + #10 +
+    '    fold+=0.00125*panel*gathers;' + #10 +
+    '    fold+=0.0009*lower*rfBell((ax-0.09)/0.060)*(rfRidge(p.y+0.32*ax-1.077,0.005)-0.35*rfRidge(p.y+0.32*ax-1.088,0.008));' + #10 +
     // Cloth tension follows the actual left/right shoulder girdle, including
     // pose changes and standing effort. It is not another crank-driven sway.
     '    float reach=mix(rfReach.y,rfReach.x,smoothstep(-0.02,0.02,p.x));' + #10 +
@@ -133,6 +146,11 @@ const
     '  }' + #10 +
     '  h+=fold+rfProfile.y*0.65*rfMeso;' + #10 +
     '  vec3 dpdx=dFdx(v.xyz), dpdy=dFdy(v.xyz), N=normalize(n);' + #10 +
+    // The yarn direction follows the deformed UV surface, including cached
+    // GPU poses. No new tangent buffer or bone transform is required.
+    '  if(rfRegion>1.5 && rfRegion<2.5){' + #10 +
+    '    vec2 ux=dFdx(rfUV),uy=dFdy(rfUV);rfTangent=dpdx*uy.y-dpdy*ux.y;' + #10 +
+    '  }' + #10 +
     '  vec3 r1=cross(dpdy,N), r2=cross(N,dpdx);' + #10 +
     '  float det=dot(dpdx,r1);' + #10 +
     // Strain is constant on each deformed triangle. Differentiating that
@@ -150,6 +168,7 @@ const
     '}' + #10 +
     'void PLUG_material_metallic_roughness(inout float m,inout float r) {' + #10 +
     '  m=0.0; r=clamp(rfProfile.z+0.025*rfDetail+0.022*rfMeso+0.020*rfBibsPattern+0.025*rfSeam,0.38,0.96);' + #10 +
+    '  rfRoughness=r;' + #10 +
     '}' + #10 +
     // Charlie NDF (Estevez/Kulla 2017), Neubelt visibility; see Filament cloth model.
     // A modest fiber lobe suits cycling synthetics, rather than velvet.
@@ -158,6 +177,24 @@ const
     '  float nl=max(dot(N,L),0.0),nv=max(dot(N,V),0.0);' + #10 +
     '  if(nl<=0.0 || nv<=0.0)return;' + #10 +
     '  vec3 H=L+V;H*=inversesqrt(max(dot(H,H),1e-8));float nh=clamp(dot(N,H),0.0,1.0);' + #10 +
+    // Tight synthetic bibs reflect along the knit, rather than forming one
+    // uniformly blurred highlight. Anisotropic GGX + correlated Smith masking
+    // (equations documented in Filament, section Anisotropic specular BRDF).
+    // Replace the isotropic lobe; adding another would brighten black fabric.
+    '  if(rfRegion>1.5 && rfRegion<2.5){' + #10 +
+    '    vec3 t=rfTangent-N*dot(rfTangent,N);float tt=dot(t,t);' + #10 +
+    '    if(tt>1e-20){' + #10 +
+    '      t*=inversesqrt(tt);vec3 b=cross(N,t);' + #10 +
+    '      float alpha=rfRoughness*rfRoughness,at=alpha*1.35,ab=alpha*0.65;' + #10 +
+    '      vec3 hLocal=vec3(dot(t,H)/at,dot(b,H)/ab,nh);float ellipse=dot(hLocal,hLocal);' + #10 +
+    '      float ndf=1.0/max(3.14159265*at*ab*ellipse*ellipse,1e-6);' + #10 +
+    '      float shadowV=nl*length(vec3(at*dot(t,V),ab*dot(b,V),nv));' + #10 +
+    '      float shadowL=nv*length(vec3(at*dot(t,L),ab*dot(b,L),nl));' + #10 +
+    '      float visibilityAniso=0.5/max(shadowV+shadowL,1e-5);' + #10 +
+    '      float fresnel=0.04+0.96*pow(1.0-clamp(dot(V,H),0.0,1.0),5.0);' + #10 +
+    '      spec=vec3(fresnel*ndf*visibilityAniso);' + #10 +
+    '    }' + #10 +
+    '  }' + #10 +
     '  float invAlpha=1.0/max(rfProfile.z*rfProfile.z,0.25);' + #10 +
     '  float D=(2.0+invAlpha)*pow(max(1.0-nh*nh,1e-5),0.5*invAlpha)/6.2831853;' + #10 +
     '  float visibility=1.0/max(4.0*(nl+nv-nl*nv),1e-4);' + #10 +
@@ -203,15 +240,15 @@ begin
   { The broad reflection remains visible after yarn detail is filtered out.
     Tight synthetic panels, brushed compression fabric and open mesh have
     distinct roughness; increasing the weave amplitude cannot replace this. }
-  if Pos('part_jersey',Nm)>0 then Profile:=Vector4(0.0011,0.000028,0.60,0)
-  else if Pos('part_sleeves',Nm)>0 then Profile:=Vector4(0.0018,0.000035,0.55,2)
-  else if Pos('part_shorts',Nm)>0 then Profile:=Vector4(0.00055,0.000014,0.72,2)
+  if Pos('part_jersey',Nm)>0 then Profile:=Vector4(0.0011,0.000028,0.67,0)
+  else if Pos('part_sleeves',Nm)>0 then Profile:=Vector4(0.0018,0.000035,0.58,2)
+  else if Pos('part_shorts',Nm)>0 then Profile:=Vector4(0.00055,0.000014,0.56,2)
   else if Pos('part_socks',Nm)>0 then Profile:=Vector4(0.0014,0.000040,0.88,2)
   else if Pos('part_gloves',Nm)>0 then Profile:=Vector4(0.0010,0.000025,0.86,3)
   else Exit;
   if Pos('jerseyside',Nm)>0 then Profile:=Vector4(0.0015,0.000040,0.88,1);
   if Pos('jerseybinding',Nm)>0 then Profile:=Vector4(0.0011,0.000020,0.84,0);
-  if Pos('shortssatin',Nm)>0 then Profile:=Vector4(0.00055,0.000012,0.62,2);
+  if Pos('shortssatin',Nm)>0 then Profile:=Vector4(0.00055,0.000012,0.50,2);
   if Pos('glovespalm',Nm)>0 then Profile:=Vector4(0.0010,0.000025,0.94,3);
   Region:=0;
   if Pos('part_sleeves',Nm)>0 then Region:=1;

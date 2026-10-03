@@ -62,6 +62,8 @@ type
     Lat, Lon: Double;    { градусы }
     AltM:     Double;    { сырая высота FIT, м (до датум-коррекции) }
     TimeSec:  Double;    { секунды от первой точки }
+    DistanceM: Double;   { original FIT odometer, same GPS-filtered index }
+    HasAltitude: Boolean;
   end;
   TFitGeoAltArray = array of TFitGeoAltPoint;
 
@@ -1125,6 +1127,8 @@ begin
     else
       Result[N].AltM := 0;
     Result[N].TimeSec := FRelativeTimeSec[I];
+    Result[N].DistanceM := FRawPoints[I].DistanceM;
+    Result[N].HasAltitude := FRawPoints[I].AltRaw <> INVALID_U32;
     Inc(N);
   end;
   SetLength(Result, N);

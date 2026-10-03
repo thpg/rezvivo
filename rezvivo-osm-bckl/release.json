@@ -1,7 +1,7 @@
 {
-  "version": "0.2.2-alpha.1",
-  "build": 4,
-  "file_version": "0.2.2.4",
+  "version": "0.2.3-alpha.1",
+  "build": 5,
+  "file_version": "0.2.3.5",
   "channel": "alpha",
-  "notes": "Update the shared parametric rider, body proportions, joint deformation, clothing, lighting and hair. Add a visual hairstyle picker with front and rear previews and persistent selection."
+  "notes": "Add the visual head editor with headwear, hairstyles, beards and mustaches. Improve head and neck shape, hair attachment and headwear fit. Share helmet color with the bandana and cycling cap, including saved settings. Update rider motion, ride cameras and FIT-based training load."
 }

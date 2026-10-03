@@ -27,6 +27,8 @@ type
     FContactCoefficients: array[0..2, 0..3] of Single;
     FContact: TVector3;
     FBody: TRiderBodyDeformation;
+    FFaceValue: TVector4;
+    FCpuFace, FGpuFace: TSFVec4f;
   public
     NeededJoints: array of Boolean;
     constructor Create;
@@ -39,6 +41,8 @@ type
     procedure SetNativeSkinActive(Enabled: Boolean);
     procedure UpdateCpuPose;
     procedure SetBodyParameters(const Value: TRiderBodyParameters);
+    procedure SetFaceControls(const Controls: TVector3; Blink: Single);
+    procedure DetachGpu;
     property Ready: Boolean read FReady;
     property Body: TRiderBodyDeformation read FBody;
   end;
@@ -302,8 +306,11 @@ begin
 end;
 
 procedure TRiderPoseCorrectives.AddUniforms(Effect: TEffectNode);
-var TextureField: TSFNode;
+var TextureField: TSFNode; FaceField: TSFVec4f;
 begin
+  FaceField:=TSFVec4f.Create(Effect,True,'uRiderFaceShape',FFaceValue);
+  Effect.AddCustomField(FaceField);
+  if Effect=FCpuEffect then FCpuFace:=FaceField else FGpuFace:=FaceField;
   if FBody<>nil then FBody.AddUniforms(Effect,Effect<>FCpuEffect);
   TextureField := TSFNode.Create(Effect, True, 'uRiderPsdAtlas', [TImageTextureNode]);
   TextureField.Value := FTexture;
@@ -311,6 +318,23 @@ begin
   Effect.AddCustomField(TSFVec2f.Create(Effect, True, 'uRiderPsdSize', Vector2(FWidth, FHeight)));
   if FBodyContact then
     Effect.AddCustomField(TSFVec3f.Create(Effect, True, 'uRiderPsdContact', FContact));
+end;
+
+procedure TRiderPoseCorrectives.DetachGpu;
+begin
+  FGpuFace:=nil;
+  if FBody<>nil then FBody.DetachGpu;
+end;
+
+procedure TRiderPoseCorrectives.SetFaceControls(const Controls:TVector3; Blink:Single);
+var Value:TVector4;
+begin
+  Value:=Vector4(Controls.X,Controls.Y,Controls.Z,Blink);
+  if (Value.X=FFaceValue.X)and(Value.Y=FFaceValue.Y)and
+     (Value.Z=FFaceValue.Z)and(Value.W=FFaceValue.W)then Exit;
+  FFaceValue:=Value;
+  if FCpuFace<>nil then FCpuFace.Send(Value);
+  if FGpuFace<>nil then FGpuFace.Send(Value);
 end;
 
 procedure TRiderPoseCorrectives.SetBodyParameters(const Value: TRiderBodyParameters);
@@ -361,7 +385,8 @@ function TRiderPoseCorrectives.ShaderSource: string;
 begin
   Result := '';
   if FBodyContact then Result := 'uniform vec3 uRiderPsdContact;' + LineEnding;
-  Result := Result + 'attribute vec3 riderPsdSpan;' + LineEnding +
+  Result := Result + 'uniform vec4 uRiderFaceShape;' + LineEnding +
+    'attribute vec3 riderPsdSpan;' + LineEnding +
     'uniform sampler2D uRiderPsdAtlas;' + LineEnding +
     'uniform vec2 uRiderPsdSize;' + LineEnding + FWeightsSource +
     'vec4 riderPsdTexel(float id) {' + LineEnding +
@@ -381,6 +406,7 @@ procedure TRiderPoseCorrectives.SetGpuActive(Enabled: Boolean);
 begin
   FGpuActive := Enabled;
   if FCpuEffect <> nil then FCpuEffect.Enabled := FNativeSkinActive and not FGpuActive;
+  if FBody<>nil then FBody.SendActiveFrame;
 end;
 
 procedure TRiderPoseCorrectives.SetNativeSkinActive(Enabled: Boolean);
@@ -389,6 +415,7 @@ begin
     A frozen CPU-baked mesh has no getJointMatrix shader function. }
   FNativeSkinActive := Enabled;
   if FCpuEffect <> nil then FCpuEffect.Enabled := FNativeSkinActive and not FGpuActive;
+  if FBody<>nil then FBody.SendActiveFrame;
 end;
 
 procedure TRiderPoseCorrectives.UpdateCpuPose;

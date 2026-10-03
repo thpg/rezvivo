@@ -18,7 +18,8 @@ function RouteNeedsTurnarounds(const Centers: TRouteLatLonArray): Boolean;
 procedure PrepareBuildingSafeRoute(const Centers: TRouteLatLonArray;
   const Widths: TRouteWidthArray; Projection: TLocalProjection;
   Obstacles: TBuildingObstacleIndex; out Ride: TRouteLatLonArray;
-  out RideWidths: TRouteWidthArray; out Detours: Integer);
+  out RideWidths: TRouteWidthArray; out Detours: Integer;
+  SourceIndices: PRouteSourceArray = nil);
 
 implementation
 
@@ -31,7 +32,8 @@ end;
 procedure PrepareBuildingSafeRoute(const Centers: TRouteLatLonArray;
   const Widths: TRouteWidthArray; Projection: TLocalProjection;
   Obstacles: TBuildingObstacleIndex; out Ride: TRouteLatLonArray;
-  out RideWidths: TRouteWidthArray; out Detours: Integer);
+  out RideWidths: TRouteWidthArray; out Detours: Integer;
+  SourceIndices: PRouteSourceArray);
 var
   I,J,K,N,Count,Steps,WorkCount,LastEdge,LastTarget: Integer;
   OutAndBack: Boolean;
@@ -41,8 +43,11 @@ var
   BaseY,MaxY,W: Single;
   Points: TDetourPoints;
   Status: TDetourResult;
+  WorkSource, RideSource: TRouteSourceArray;
+  SourceA,SourceB,DetourLength,Along: Double;
+  Previous: TVector3;
 
-  procedure Append(const P: TVector3; Width: Single);
+  procedure Append(const P: TVector3; Width: Single; Source: Double);
   var Previous: TVector3;
   begin
     { Stationary FIT samples must not hide an endpoint behind empty edges. }
@@ -58,8 +63,10 @@ var
     if Count=Length(Ride) then
     begin
       SetLength(Ride,Max(64,Count*2)); SetLength(RideWidths,Length(Ride));
+      SetLength(RideSource,Length(Ride));
     end;
     Ride[Count]:=Projection.Unproject(P.X,P.Z);
+    RideSource[Count]:=Source;
     RideWidths[Count]:=Width; Inc(Count);
   end;
 
@@ -71,6 +78,7 @@ var
 
 begin
   Ride:=nil; RideWidths:=nil; Count:=0; Detours:=0; N:=Length(Centers);
+  if SourceIndices<>nil then SourceIndices^:=nil;
   if N<2 then Exit;
   OutAndBack:=RouteNeedsTurnarounds(Centers);
   { Bound each local search even for sparse GPX tracks. A closing edge is
@@ -86,10 +94,12 @@ begin
     begin
       SetLength(Work,Max(WorkCount+Steps,Max(64,Length(Work)*2)));
       SetLength(WorkWidths,Length(Work));
+      SetLength(WorkSource,Length(Work));
     end;
     for J:=0 to Steps-1 do
     begin
       A:=C+(D-C)*(J/Steps); Work[WorkCount]:=Projection.Unproject(A.X,A.Z);
+      WorkSource[WorkCount]:=I+J/Steps;
       if I<Length(Widths) then WorkWidths[WorkCount]:=Widths[I] else WorkWidths[WorkCount]:=0;
       Inc(WorkCount);
     end;
@@ -97,6 +107,7 @@ begin
   if OutAndBack then
   begin
     SetLength(Work,WorkCount+1); SetLength(WorkWidths,WorkCount+1);
+    SetLength(WorkSource,WorkCount+1);WorkSource[WorkCount]:=N-1;
     Work[WorkCount]:=Centers[N-1];
     if N<=Length(Widths) then WorkWidths[WorkCount]:=Widths[N-1];
     Inc(WorkCount);
@@ -106,7 +117,7 @@ begin
   if OutAndBack then Dec(LastTarget);
   A:=Projection.Project(Work[0]); W:=WidthAt(0);
   if Obstacles.TryPushOutXZ(A.X,A.Z,BaseY,MaxY,BUILDING_ROUTE_CLEARANCE_M) then W:=0;
-  Append(A,W); I:=1;
+  Append(A,W,0); I:=1;SourceA:=0;
   while I<=LastTarget do
   begin
     J:=I;
@@ -120,17 +131,26 @@ begin
       if (Status<>drTargetBlocked) or (J=LastTarget) then Break;
       Inc(J);
     until False;
+    if J=N then SourceB:=Length(Centers) else SourceB:=WorkSource[J];
     if Status=drFound then
     begin
       RideWidths[Count-1]:=0;
-      for K:=0 to High(Points) do Append(Points[K],0);
+      DetourLength:=0;Previous:=A;
+      for K:=0 to High(Points) do begin
+        DetourLength:=DetourLength+(Points[K]-Previous).Length;Previous:=Points[K];
+      end;
+      Along:=0;Previous:=A;
+      for K:=0 to High(Points) do begin
+        Along:=Along+(Points[K]-Previous).Length;Previous:=Points[K];
+        Append(Points[K],0,SourceA+(SourceB-SourceA)*Along/Max(DetourLength,0.001));
+      end;
       Inc(Detours);
     end
-    else if Status=drClear then Append(B,WidthAt(J mod N))
+    else if Status=drClear then Append(B,WidthAt(J mod N),SourceB)
     else
       raise Exception.CreateFmt('Building-safe route: cannot connect points %d..%d at (%.1f, %.1f)',
         [I-1,J,A.X,A.Z]);
-    A:=B; I:=J+1;
+    A:=B; I:=J+1;SourceA:=SourceB;
   end;
   if OutAndBack then
   begin
@@ -139,11 +159,13 @@ begin
     N:=Count;
     if N<2 then raise Exception.Create('Building-safe route: no traversable segments');
     SetLength(Ride,2*N-2); SetLength(RideWidths,2*N-2);
+    SetLength(RideSource,2*N-2);
     RideWidths[0]:=0; RideWidths[N-1]:=0; { approach turnarounds on the centerline }
     for I:=1 to N-2 do
     begin
       Ride[N-1+I]:=Ride[N-1-I];
       RideWidths[N-1+I]:=RideWidths[N-1-I];
+      RideSource[N-1+I]:=RideSource[N-1-I];
     end;
     Count:=2*N-2;
   end
@@ -151,5 +173,6 @@ begin
     { Closing point equals the first one; GamePath closes the lap itself. }
     if Count>1 then Dec(Count);
   SetLength(Ride,Count); SetLength(RideWidths,Count);
+  if SourceIndices<>nil then begin SetLength(RideSource,Count);SourceIndices^:=RideSource end;
 end;
 end.

@@ -1,0 +1,9 @@
+Anatomical rider head
+
+The base topology, adult head targets, source skin albedo and facial-unit targets are MakeHuman CC0-1.0 asset data. No MakeHuman application code is included. REZVIVO adapts the neck, dental arches, eyes, skinning, expression fields and shader materials.
+
+https://static.makehumancommunity.org/makehuman/faq/are_makehuman_files_free.html
+https://github.com/makehumancommunity/makehuman
+https://static.makehumancommunity.org/assets/assetpacks/faceunits01.html
+
+Pinned source hashes and authoring inputs: avatareditor/models/head_source/provenance.json.

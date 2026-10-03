@@ -11,7 +11,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
   caption="REZVIVO"
   qualified_name="io.castleengine.third.person.navigation"
 >
-  <version value="0.2.2-alpha.1" code="4" />
+  <version value="0.2.3-alpha.1" code="5" />
   <icons>
     <icon path="data/branding/rezvivo.ico" />
     <icon path="data/branding/rezvivo.png" />
@@ -23,6 +23,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
     <search_paths>
       <path value="code/" />
       <path value="../Bikeparametric/" />
+      <path value="../TerrainGenerator/" />
       <path value="../Osm3d/" />
       <path value="../Mcp/" />
       <path value="../tree-editor/core/" />

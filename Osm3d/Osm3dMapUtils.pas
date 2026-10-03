@@ -28,6 +28,10 @@ type
   { Per-route-point road width in metres: width of the road the point
     was snapped onto, or 0 when the point is off-road (not snapped). }
   TRouteWidthArray   = array of Single;
+  { Fractional original route index for a prepared point. Includes detours,
+    subdivisions and the reversed leg; avoids ambiguous nearest-point maps. }
+  TRouteSourceArray  = array of Double;
+  PRouteSourceArray  = ^TRouteSourceArray;
   { Per-route-point original altitude (m), decoded straight from the FIT track (absolute, before
     terrain sampling). Drives the blue "original height" markers. Parallel to the lat/lon array;
     empty when the source carried no altitude. }

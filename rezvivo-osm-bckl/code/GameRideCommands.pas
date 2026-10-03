@@ -10,6 +10,7 @@ function SetRideCommandKey(Command:TRideCommand;Key:TKey):Boolean;
 function MatchRideCommand(const Event:TInputPressRelease;out Command:TRideCommand):Boolean;
 function ExecuteRideCommand(Command:TRideCommand):Boolean;
 procedure ResetRideCommandKeys;
+function UserInterfaceScale:Single;
 procedure ApplyUserInterfaceScale(Container:TCastleContainer);
 implementation
 uses SysUtils,Math,GameUserData,GameWorkoutPlayer;
@@ -56,11 +57,16 @@ begin
   Result:=True;
 end;
 
+function UserInterfaceScale:Single;
+begin
+  Result:=EnsureRange(UserPreferences.Get('interface_scale',100),100,150)/100;
+end;
+
 procedure ApplyUserInterfaceScale(Container:TCastleContainer);
 var Scale:Single;
 begin
   if Container=nil then Exit;
-  Scale:=EnsureRange(UserPreferences.Get('interface_scale',100),100,150)/100;
+  Scale:=UserInterfaceScale;
   Container.UIScaling:=usEncloseReferenceSize;
   Container.UIReferenceWidth:=1600/Scale;Container.UIReferenceHeight:=900/Scale;
 end;

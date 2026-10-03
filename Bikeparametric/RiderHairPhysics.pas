@@ -23,9 +23,13 @@ type
     FLengths,FCompliance:array[0..HairPointCount-1]of Single;
     FPinned:array[0..HairPointCount-1]of Boolean;
     FProxy:array[0..2,0..HairGuideCount-1]of Integer;
+    FTorsoA,FTorsoB:TVector3;
+    FTorsoRadius:Single;
+    procedure CollideTorso(var P:TVector3);
     procedure Step(const Dt:Single;const Gravity,Wind,Acceleration:TVector3);
   public
     procedure SetGuides(const Guides:THairGuides;Helmet:Boolean);
+    procedure SetTorso(const A,B:TVector3;Radius:Single);
     procedure Reset;
     procedure SetDetail(Level:Integer);
     procedure Advance(Dt:Single;const Frame:TMatrix4;const Gravity,Wind,Travel:TVector3;Speed:Single);
@@ -97,6 +101,17 @@ begin
   if Abs(Interval-FState.StepSeconds)<1e-8 then Exit;
   FState.StepSeconds:=Interval;FState.Remainder:=0;FState.Previous:=FState.Position;
 end;
+procedure TRiderHairPhysics.SetTorso(const A,B:TVector3;Radius:Single);
+begin FTorsoA:=A;FTorsoB:=B;FTorsoRadius:=Radius end;
+procedure TRiderHairPhysics.CollideTorso(var P:TVector3);
+var Axis,Center,D:TVector3;T,L:Single;
+begin
+  if FTorsoRadius<=0 then Exit;
+  Axis:=FTorsoB-FTorsoA;
+  T:=EnsureRange(TVector3.DotProduct(P-FTorsoA,Axis)/Max(Axis.LengthSqr,1e-8),0.0,1.0);
+  Center:=FTorsoA+Axis*T;D:=P-Center;L:=D.Length;
+  if (L<FTorsoRadius)and(L>1e-6)then P:=Center+D*(FTorsoRadius/L);
+end;
 procedure TRiderHairPhysics.Restore(const Value:THairMotionState);
 begin
   FState:=Value;
@@ -162,11 +177,14 @@ begin
       end;
       for J:=Integer(FGuides[I].Pinned)to HairGuidePoints-1 do begin
         K:=A+J;Q:=FState.Position[K];
-        Ellipsoid(Q,Vector3(0,0.060,-0.005),Vector3(0.069,0.097,0.077));
+        { The common anatomical cranial vault. The scanned head's old volume
+          extended 3 cm behind the new occiput and lifted even short locks. }
+        Ellipsoid(Q,Vector3(0,0.068,0.040),Vector3(0.067,0.094,0.093));
         Ellipsoid(Q,Vector3(0,-0.055,-0.010),Vector3(0.035,0.060,0.033));
         { Conservative shoulder envelope; roots on the scalp stay untouched. }
         if FRest[K].Y< -0.12 then
           Ellipsoid(Q,Vector3(0,-0.285,0.035),Vector3(0.20,0.065,0.080));
+        CollideTorso(Q);
         FState.Position[K]:=Q;
       end;
     end;
@@ -177,10 +195,11 @@ begin
       if FPinned[K]then FState.Position[K]:=FRest[K]
       else begin
         Q:=FRest[K]+FState.Position[A]-FRest[A];
-        Ellipsoid(Q,Vector3(0,0.060,-0.005),Vector3(0.069,0.097,0.077));
+        Ellipsoid(Q,Vector3(0,0.068,0.040),Vector3(0.067,0.094,0.093));
         Ellipsoid(Q,Vector3(0,-0.055,-0.010),Vector3(0.035,0.060,0.033));
         if FRest[K].Y< -0.12 then
           Ellipsoid(Q,Vector3(0,-0.285,0.035),Vector3(0.20,0.065,0.080));
+        CollideTorso(Q);
         D:=Q-FState.Position[K-1];L:=D.Length;
         if L>1e-8 then Q:=FState.Position[K-1]+D*(FLengths[K]/L);
         FState.Position[K]:=Q;
@@ -230,6 +249,7 @@ var T:Single;
 begin
   T:=EnsureRange(FState.Remainder/Max(FState.StepSeconds,1/120),0.0,1.0);
   Result:=FState.Previous[Index]*(1-T)+FState.Position[Index]*T;
+  if not FPinned[Index]and(FRest[Index].Y< -0.10)then CollideTorso(Result);
 end;
 function TRiderHairPhysics.MaxDisplacement:Single;
 var I:Integer;

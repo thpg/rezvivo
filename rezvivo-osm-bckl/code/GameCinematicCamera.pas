@@ -12,8 +12,8 @@
                    watching the standing rider (no motion — the restful shot).
 
   Rules:
-    - ALWAYS returns to cmMoto after any other view
-    - cmMoto runs 15-25s, other views 4-8s
+    - Moving shots alternate without immediate repeats or forced moto returns.
+    - cmMoto runs 8-12s, other views 4-9s.
     - STATIONARY rider (feed TargetSpeed each frame): all broadcast modes
       assume motion (spline look-ahead, placement ahead on the path), so when
       the rider stands still for a moment the manager switches to the
@@ -139,7 +139,7 @@ type
     function ModeName(M: TCameraMode): string;
     procedure LogCamTargets(const M: TCameraMode; const TPos, CamP, LookAt,
       RouteLook: TVector3; const LookSrc: string; const HasRoute: Boolean);
-    function PickCutaway: TCameraMode;
+    function PickMovingShot: TCameraMode;
     { Ground Y under (X,Z): Osm3d height manager first (collider-less
       streaming tiles), then a scene raycast (default map). False if neither
       resolves. Used both to clamp the camera and to pin look-at heights to
@@ -224,11 +224,11 @@ const
   { Moto — the main REAR VIEW: close behind and low, the whole rider+bike
     fills a good part of the frame and fits with margin (at 3 m the model's
     ~1.5 m occupies ~40% of a 60-deg vertical FOV, centered) }
-  MotoBehind = 3.0;        { was 5.0 — closer = larger rider }
-  MotoAbove = 1.3;         { was 2.5 — near eye level, less "drone" look }
+  MotoBehind = 2.35;
+  MotoAbove = 1.20;
   MotoAimHeight = 0.85;    { aim at the model's vertical CENTER, so wheels
                              and head are framed symmetrically }
-  MotoLookAhead = 50.0;
+  MotoLookAhead = 18.0;
 
   { Helicopter — high wide }
   HeliAbove = 24.0;      { m above the rider }
@@ -516,28 +516,31 @@ end;
 function TCinematicCamera.ModeDuration(M: TCameraMode): Single;
 begin
   case M of
-    cmMoto:       Result := 15 + Random * 10;  { 15-25s — main view, longest }
-    cmHelicopter: Result := 5 + Random * 3;    { 5-8s }
-    cmRoadside:   Result := 4 + Random * 3;    { 4-7s }
-    cmReverse:    Result := 4 + Random * 3;    { 4-7s }
-    cmLowTrack:   Result := 3 + Random * 2;    { 3-5s, shortest }
+    cmMoto:       Result := 8 + Random * 4;
+    cmHelicopter: Result := 6 + Random * 3;
+    cmRoadside:   Result := 5 + Random * 3;
+    cmReverse:    Result := 6 + Random * 3;
+    cmLowTrack:   Result := 4 + Random * 2;
     cmOrbit:      Result := 6 + Random * 3;    { 6-9s — a SHORT arc, not a full circle }
     cmStandShot:  Result := 6 + Random * 4;    { 6-10s — restful static view }
     else Result := 15;
   end;
 end;
 
-function TCinematicCamera.PickCutaway: TCameraMode;
-var R: Integer;
+function TCinematicCamera.PickMovingShot: TCameraMode;
+const Weight:array[cmMoto..cmLowTrack]of Integer=(30,15,20,25,10);
+var R,Total: Integer;M:TCameraMode;
 begin
-  { Pick a non-moto view. cmOrbit / cmStandShot are deliberately NOT here —
-    they belong to the stationary-rider scenario only, meaningless alongside
-    a moving target. }
-  R := Random(100);
-  if R < 30 then Result := cmHelicopter
-  else if R < 55 then Result := cmRoadside
-  else if R < 80 then Result := cmReverse
-  else Result := cmLowTrack;
+  { No mandatory return behind the rider. Exclude the current shot so every
+    cut changes the view; stationary orbit modes remain a separate scenario. }
+  Total:=0;
+  for M:=cmMoto to cmLowTrack do if M<>FShot.Mode then Inc(Total,Weight[M]);
+  R:=Random(Total);
+  for M:=cmMoto to cmLowTrack do if M<>FShot.Mode then begin
+    if R<Weight[M] then Exit(M);
+    Dec(R,Weight[M]);
+  end;
+  Result:=cmMoto;
 end;
 
 function TCinematicCamera.GroundYAt(const X, Z: Single; out GY: Single): Boolean;
@@ -783,16 +786,16 @@ begin
           LookAt.Y := TPos.Y + 1.5;
         RouteLook := LookAt;
         HasRoute := True;
-        { 60% rider / 40% road ahead: the rider is the SUBJECT of the rear
+        { 82% rider / 18% road ahead: the rider is the SUBJECT of the rear
           view (whole model centered in frame), the ahead-point only steers
           the framing into upcoming turns }
-        LookAt := LookAt * 0.4 + (TPos + Vector3(0, MotoAimHeight, 0)) * 0.6;
-        LookSrc := 'moto:0.4*route+0.6*rider';
+        LookAt := LookAt * 0.18 + (TPos + Vector3(0, MotoAimHeight, 0)) * 0.82;
+        LookSrc := 'moto:0.18*route+0.82*rider';
       end
       else
       begin
-        LookAt := TPos + Fwd * 20 + Vector3(0, MotoAimHeight, 0);
-        LookSrc := 'moto:fwd20(no-path)';
+        LookAt := TPos + Fwd * 3.2 + Vector3(0, MotoAimHeight, 0);
+        LookSrc := 'moto:fwd3.2(no-path)';
       end;
     end;
 
@@ -1111,10 +1114,8 @@ begin
     assume motion. }
   if FStationary then
     ForceMode(PickStationary)
-  else if FShot.Mode = cmMoto then
-    ForceMode(PickCutaway)
   else
-    ForceMode(cmMoto);
+    ForceMode(PickMovingShot);
 end;
 
 procedure TCinematicCamera.ForceMode(M: TCameraMode);
@@ -1269,10 +1270,8 @@ begin
     begin
       if FStationary then
         ForceMode(PickStationary)
-      else if FShot.Mode = cmMoto then
-        ForceMode(PickCutaway)   { moto expired → pick a cutaway }
       else
-        ForceMode(cmMoto);       { cutaway expired → always back to moto }
+        ForceMode(PickMovingShot);
     end;
   end;
 

@@ -64,6 +64,11 @@ const
     тонули в полотне. }
   DEBUG_LINE_LIFT_M = 0.4;
 
+  { GPU readback / a patch change is not a collision. Retain momentum during
+    a short wait, but do not accelerate in place or carry it through a long
+    missing-tile stall. This is simulated time, including accelerated FIT. }
+  GroundMomentumHoldSeconds = 0.5;
+
 procedure TKinematicActorPhysics.Initialize;
 begin
   inherited;
@@ -76,6 +81,7 @@ end;
 procedure TKinematicActorPhysics.FixedStep(const FixedDelta: Single);
 var
   Accel, MoveDist, TanFull, TanXZ, MoveScale: Single;
+  SpeedBeforeStep, GroundMoveLength: Single;
   Cursor: TPathPosition;
   RoadW, LaneTarget: Single;
   MoveDir, PathTan, WantedMove, SafeMove: TVector3;
@@ -202,6 +208,7 @@ begin
   if Assigned(FProfiler) then FProfiler.Mark('dir');
 
   { 2. Speed — same acceleration formula at all LODs }
+  SpeedBeforeStep := FState.CurrentSpeed;
   Accel := CalculateAcceleration(FixedDelta);
   FState.CurrentSpeed := FState.CurrentSpeed + Accel * FixedDelta;
   if FState.CurrentSpeed < 0 then FState.CurrentSpeed := 0;
@@ -227,19 +234,31 @@ begin
   FState.MovementVelocity := FState.ForwardDir * (FState.CurrentSpeed * TanXZ);
   WantedMove := FState.MovementVelocity * FixedDelta;
   SafeMove := ConstrainGroundMovement(FState.WorldPosition, WantedMove);
+  GroundMoveLength := SafeMove.Length;
   if SafeMove.LengthSqr + 1e-12 < WantedMove.LengthSqr then
   begin
     Inc(FGroundLeaseLimitedSteps);
     FGroundLeaseRejectedMeters := FGroundLeaseRejectedMeters +
       (WantedMove.Length - SafeMove.Length);
-  end;
+    FGroundWaitSec := FGroundWaitSec + FixedDelta;
+    if FGroundWaitSec <= GroundMomentumHoldSeconds then
+      { Reject added propulsion energy while held; real braking and speed
+        limits can still lower speed. Never turn a data delay into friction. }
+      FState.CurrentSpeed := Min(FState.CurrentSpeed, SpeedBeforeStep)
+    else
+      FState.CurrentSpeed := 0;
+  end else
+    FGroundWaitSec := 0;
   if Assigned(FState.TrafficMoveConstraint) then
     SafeMove := FState.TrafficMoveConstraint(FState.TrafficTag,
       FState.WorldPosition, SafeMove, True);
   if WantedMove.Length > 0.000001 then
   begin
     MoveScale := Min(1,SafeMove.Length/WantedMove.Length);
-    FState.CurrentSpeed := FState.CurrentSpeed * MoveScale;
+    { Only a real rider / obstacle constraint dissipates momentum. Ground
+      clipping still bounds position, odometer and render extrapolation. }
+    if GroundMoveLength > 0.000001 then
+      FState.CurrentSpeed := FState.CurrentSpeed * Min(1,SafeMove.Length/GroundMoveLength);
     MoveDist := MoveDist * MoveScale;
     FState.MovementVelocity := SafeMove / FixedDelta;
   end;

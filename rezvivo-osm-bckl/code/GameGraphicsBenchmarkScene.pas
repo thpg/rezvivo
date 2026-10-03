@@ -7,7 +7,7 @@ interface
 uses Classes, SysUtils, CastleViewport, CastleScene, CastleVectors,
   Osm3dGroundComposite, Osm3dGeomMesh, Osm3dTileX3D, Osm3dRenderGrass,
   Osm3dRenderInstanced, Osm3dProceduralVegetation, Osm3dRiderShadow,
-  Osm3dGpuTimer, GameGraphicsOptions;
+  Osm3dGpuTimer, GameGraphicsOptions, GameScreenFX;
 
 const GraphicsBenchmarkViewCount = 3;
 
@@ -28,6 +28,7 @@ type
     FProcedural: TOsmProceduralVegetation;
     FShadow: TRiderShadowAtlas;
     FTimer: TAsyncGpuTimer;
+    FScreenFX: TScreenFX;
     FValues: TGraphicsValues;
     FSun: TVector3;
     FStage: Integer;
@@ -289,7 +290,10 @@ begin
   FShadow.WorldCasters.Add(FTrees);
   FShadow.WorldCasters.Add(FProcedural);
   FTimer := TAsyncGpuTimer.Create;
+  FScreenFX := TScreenFX.Create(Self);
+  FScreenFX.FogEnabled := False;
   FValues := GraphicsDefaults;
+  FScreenFX.SofteningLevel := FValues[goSoftening];
   SetViewIndex(0);
   FWorker := TGraphicsBenchmarkWorker.Create;
   FWorker.Start;
@@ -300,6 +304,7 @@ var Worker: TGraphicsBenchmarkWorker;
 begin
   Worker := FWorker; FWorker := nil;
   if Worker <> nil then Worker.Abandon;
+  FreeAndNil(FScreenFX);
   FreeAndNil(FTimer);
   FreeAndNil(FShadow);
   { Nodes own the atlas's transferred pixel images. Release the scene first. }
@@ -392,6 +397,7 @@ end;
 procedure TGraphicsBenchmarkScene.ApplyProfile(const Values: TGraphicsValues);
 begin
   FValues := Values;
+  FScreenFX.SofteningLevel := Values[goSoftening];
   FShadow.Configure(Values[goShadowSize], Values[goShadowFilter], Values[goShadowDistance]);
   FGrass.Exists := (FStage >= 3) and (Values[goGrass] <> 0);
   FTrees.Exists := FStage >= 3;

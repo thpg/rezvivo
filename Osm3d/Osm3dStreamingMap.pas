@@ -364,6 +364,7 @@ type
     FRouteSnapped: TRouteLatLonArray;
     FRouteRide, FPendingRide: TRouteLatLonArray;
     FRouteRideWidths, FPendingRideWidths: TRouteWidthArray;
+    FRouteRideSource, FPendingRideSource: TRouteSourceArray;
     { Per-snapped-point road width (metres); 0 = off-road. Parallel to
       FRouteSnapped. Produced by the route snapper, consumed by the
       avatar-road INI writer for lane positioning. }
@@ -903,6 +904,7 @@ type
     property SnappedRoute: TRouteLatLonArray read FRouteSnapped;
     property RideRoute: TRouteLatLonArray read FRouteRide;
     property RideRouteWidths: TRouteWidthArray read FRouteRideWidths;
+    property RideRouteSource: TRouteSourceArray read FRouteRideSource;
     { Per-point road width for the snapped route (metres; 0 = off-road).
       Parallel to SnappedRoute. }
     property SnappedRouteWidths: TRouteWidthArray read FRouteWidths;
@@ -7994,6 +7996,7 @@ begin
     resident tile and froze the whole UI for the duration. }
   FRouteRide:=FPendingRide; FPendingRide:=nil;
   FRouteRideWidths:=FPendingRideWidths; FPendingRideWidths:=nil;
+  FRouteRideSource:=FPendingRideSource; FPendingRideSource:=nil;
   FRouteSnapped := FPendingSnapped;
   FRouteWidths  := FPendingWidths;
   FRouteCenters := FPendingCenters;
@@ -8470,6 +8473,7 @@ var
   FootOrigin: TLatLon;
   FootCenter: TVector3;
   Ride: TRouteLatLonArray; RideWidths: TRouteWidthArray;
+  RideSource: TRouteSourceArray;
   DetourCount: Integer; PrepStart: QWord;
   Model:      TTileModel;
   Segs:       TSnapSegmentArray;
@@ -8748,7 +8752,7 @@ begin
         Footprints:=nil;
       end;
       PrepareBuildingSafeRoute(SnapCenters,SnapWidths,FMap.FProj,ObstacleIndex,
-        Ride,RideWidths,DetourCount);
+        Ride,RideWidths,DetourCount,@RideSource);
       if RouteNeedsTurnarounds(SnapCenters) then
         FMap.LogMain(Format('route mode: out-and-back, endpoint gap %.1f m, no closing edge',
           [SnapCenters[0].DistanceTo(SnapCenters[High(SnapCenters)])]));
@@ -8758,6 +8762,7 @@ begin
     if Terminated or FMap.FSnapCancel then Exit;
     FMap.FPendingRide:=Ride;
     FMap.FPendingRideWidths:=RideWidths;
+    FMap.FPendingRideSource:=RideSource;
     FMap.FPendingSnapped := SnapRes;
     FMap.FPendingWidths  := SnapWidths;
     FMap.FPendingCenters := SnapCenters;

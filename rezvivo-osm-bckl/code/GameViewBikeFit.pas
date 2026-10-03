@@ -12,7 +12,7 @@ unit GameViewBikeFit;
 
 interface
 
-uses RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair,
+uses RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
   Classes, SysUtils, Math, fpjson,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
@@ -42,9 +42,25 @@ type
     FHairTitle,FHairPopupTitle:TCastleLabel;
     FHairOverlay,FHairCard,FHairClose:TMenuButton;
     FHairScroll:TMenuScrollView;
-    FHairRows:array[TRiderHairStyle]of TMenuButton;
-    FHairPreviews,FHairRearPreviews:array[TRiderHairStyle]of TCastleImageControl;
-    FHairChecks:array[TRiderHairStyle]of TCastleLabel;
+    FHeadRows:array[0..3,0..8]of TMenuButton;
+    FHeadPreviews,FHeadRearPreviews:array[0..3,0..8]of TCastleImageControl;
+    FHeadChecks:array[0..3,0..8]of TCastleLabel;
+    FHeadTabs:array[0..3]of TMenuButton;
+    FHeadViews:array[0..2]of TMenuButton;
+    FHeadSwatches:array[0..7]of TMenuButton;
+    FHeadColorTitle,FHeadHint:TCastleLabel;
+    FHeadCategory:Integer;
+    FHeadLastCenter:TVector3;
+    FHeadSavedCadence:Single;
+    FHeadSavedAuto:Boolean;
+    FHeadYaw:Single;
+    FHeadCameraReady:Boolean;
+    procedure ClickHeadCategory(Sender:TObject);
+    procedure ClickHeadView(Sender:TObject);
+    procedure ClickHeadColor(Sender:TObject);
+    procedure ScrollHeadSelection;
+    procedure UpdateHeadCamera(Reset:Boolean);
+    procedure ApplyHeadAppearance;
     procedure BuildHairSelector;
     procedure ApplyHairStyle;
     procedure ClickHair(Sender:TObject);
@@ -272,6 +288,7 @@ type
     procedure McpSetColor(const ASlot: string; const C: TVector3; AOn: Boolean);
     procedure McpFillStatus(AResult: TJSONObject);
     procedure McpSetHair(const Id:String);
+    procedure McpHead(AParams:TJSONObject;AResult:TJSONObject);
     function KeyboardRoot:TCastleUserInterface;
     { MCP: свет превью/результата (env = IBL-ambient райдера, key/fill =
       вьюпорт, rkey/rfill = свети сцены райдера). Не указанный аргумент
@@ -286,7 +303,7 @@ var
 implementation
 
 uses CastleApplicationProperties,UiTranslations,GameUserData,
-  jsonparser, CastleKeysMouse,
+  jsonparser, CastleKeysMouse,CastleImages,CastleRectangles,
   GameViewMenu, GameViewPlay, AppSettings, DebugLog;
 
 const
@@ -595,7 +612,7 @@ begin
   FPopupKind := PopupNone;
   FreeAndNil(FUiOwner);FValuePopup:=nil;FValueEdit:=nil;FValueRow:=0;
   FHairOverlay:=nil;FHairCard:=nil;FHairSelect:=nil;
-  FillChar(FHairRows,SizeOf(FHairRows),0);FillChar(FHairChecks,SizeOf(FHairChecks),0);
+  FillChar(FHeadRows,SizeOf(FHeadRows),0);FillChar(FHeadChecks,SizeOf(FHeadChecks),0);
   FillChar(FValueButtons,SizeOf(FValueButtons),0);FillChar(FValueLabels,SizeOf(FValueLabels),0);
   FDyeStrip := nil;
   FDyePop := nil;
@@ -1024,7 +1041,8 @@ procedure TBikeFitPage.BeforeRender;
 begin
   inherited;
   { Follow after the ride update so both views see the same rider position. }
-  UpdateLiveCamera(False);
+  if (FHairOverlay<>nil)and FHairOverlay.Exists then UpdateHeadCamera(False)
+  else UpdateLiveCamera(False);
 end;
 
 procedure TBikeFitPage.PageShown;
@@ -1516,7 +1534,7 @@ begin
     end;
   end;
   if (FResultBike <> nil) and (FResultBike.TripoRider <> nil) then
-    Logger.Info(Format('[BikeFit] LoadTripoRider %s ok=%s restH=%.3f m %d ms',
+    Logger.Info(Format('[BikeFit] LoadTripoRider %s ok=%s restH=%0.3f m %d ms',
       [ExtractFileName(Rider), BoolToStr(Ok, True),
        FResultBike.TripoRider.RestHeight, GetTickCount64 - T0]))
   else
@@ -1595,7 +1613,7 @@ begin
   T0 := GetTickCount64;
   Ok := FResultBike.LoadTripoRiderPrepared(Prep);
   if (FResultBike <> nil) and (FResultBike.TripoRider <> nil) then
-    Logger.Info(Format('[BikeFit] LoadPrepared %s ok=%s restH=%.3f m %d ms',
+    Logger.Info(Format('[BikeFit] LoadPrepared %s ok=%s restH=%0.3f m %d ms',
       [ExtractFileName(Prep.Path), BoolToStr(Ok, True),
        FResultBike.TripoRider.RestHeight, GetTickCount64 - T0]))
   else
@@ -1774,7 +1792,7 @@ begin
   if FLblEffort <> nil then
     FLblEffort.Caption := IntToStr(Round(CurrentEffortPct)) + '%';
   if FLblSeatH <> nil then
-    FLblSeatH.Caption := Format(UiText('%.0f mm'), [FFitSeatExt]);
+    FLblSeatH.Caption := Format(UiText('%0.0f mm'), [FFitSeatExt]);
   if FLblSeatO <> nil then
   begin
     if FFitSaddleOff > 0.5 then
@@ -1783,26 +1801,26 @@ begin
       FLblSeatO.Caption := IntToStr(Round(FFitSaddleOff)) + UiText(' mm');
   end;
   if FLblSpacers <> nil then
-    FLblSpacers.Caption := Format(UiText('%.0f mm'), [FFitSpacers]);
+    FLblSpacers.Caption := Format(UiText('%0.0f mm'), [FFitSpacers]);
   if FLblStem <> nil then
-    FLblStem.Caption := Format(UiText('%.0f mm'), [FFitStem]);
+    FLblStem.Caption := Format(UiText('%0.0f mm'), [FFitStem]);
   if FLblHeight <> nil then
-    FLblHeight.Caption := Format(UiText('%.0f cm'), [FFitHeightCm]);
+    FLblHeight.Caption := Format(UiText('%0.0f cm'), [FFitHeightCm]);
   if FLblInseam <> nil then
-    FLblInseam.Caption := Format(UiText('%.0f cm'), [RiderBodyInseamCm(CurrentBody)]);
-  if FLblBulk<>nil then FLblBulk.Caption:=Format('%.1f',[FFitWeightKg]);
+    FLblInseam.Caption := Format(UiText('%0.0f cm'), [RiderBodyInseamCm(CurrentBody)]);
+  if FLblBulk<>nil then FLblBulk.Caption:=Format('%0.1f',[FFitWeightKg]);
   if FLblBelly<>nil then FLblBelly.Caption:=IntToStr(Round(FFitComposition*100))+'%';
   if FLblSex<>nil then FLblSex.Caption:=IntToStr(Round(FFitSex*100))+'%';
   if FLblHead<>nil then FLblHead.Caption:=IntToStr(Round(FFitHead*100))+'%';
-  if FLblArm<>nil then FLblArm.Caption:=Format(UiText('%.1f cm'),[RiderBodyArmCm(CurrentBody)]);
+  if FLblArm<>nil then FLblArm.Caption:=Format(UiText('%0.1f cm'),[RiderBodyArmCm(CurrentBody)]);
   if FLblKnee <> nil then
   begin
     if Abs(FFitKneeFlare) < 0.005 then
       FLblKnee.Caption := '0'
     else if FFitKneeFlare > 0 then
-      FLblKnee.Caption := '+' + Format('%.2f', [FFitKneeFlare])
+      FLblKnee.Caption := '+' + Format('%0.2f', [FFitKneeFlare])
     else
-      FLblKnee.Caption := Format('%.2f', [FFitKneeFlare]);
+      FLblKnee.Caption := Format('%0.2f', [FFitKneeFlare]);
   end;
   if FLblAnkle <> nil then
     FLblAnkle.Caption := IntToStr(Round(FFitAnkleFlex)) + '°';
@@ -1830,13 +1848,41 @@ const
   DyeIdxRim    = 8;
   DyeIdxHelmet = 9;
 
+const
+  HeadCategories:array[0..3]of String=('Headwear','Hairstyle','Mustache','Beard');
+  HeadKeys:array[0..3]of String=('rider_headwear','rider_hair_style','rider_mustache','rider_beard');
+  HeadDefaults:array[0..3]of String=('helmet','short','none','none');
+  HeadViewNames:array[0..2]of String=('Front view','Side view','Rear view');
+function HeadOptionCount(Category:Integer):Integer;
+begin case Category of 0:Result:=4;1:Result:=Length(SelectableHairStyles);2:Result:=4;else Result:=5 end end;
+function HeadOptionId(Category,Index:Integer):String;
+begin
+  case Category of 0:Result:=HeadwearId(TRiderHeadwear(Index));
+    1:Result:=RiderHairStyleId(SelectableHairStyles[Index]);
+    2:Result:=MustacheId(TRiderMustache(Index));else Result:=BeardId(TRiderBeard(Index)) end;
+end;
+function HeadOptionCaption(Category,Index:Integer):String;
+begin
+  case Category of 0:Result:=HeadwearCaption(TRiderHeadwear(Index));
+    1:Result:=RiderHairStyleCaption(SelectableHairStyles[Index]);
+    2:Result:=MustacheCaption(TRiderMustache(Index));else Result:=BeardCaption(TRiderBeard(Index)) end;
+end;
+function HeadPreviewUrl(Category:Integer;const Id:String;Rear:Boolean):String;
+const Prefix:array[0..3]of String=('headwear','hair','mustache','beard');
+var Name:String;
+begin
+  Name:=Prefix[Category]+'_'+Id;if Rear then Name:=Name+'-rear';
+  Result:=ApplicationData('menu/head/'+Name+'.png');
+  if not FileExists(URIToFilenameSafe(Result))then Result:='';
+end;
+
 procedure TBikeFitPage.BuildHairSelector;
-var Style:TRiderHairStyle;B:TMenuButton;L:TCastleLabel;
+var C,I:Integer;B:TMenuButton;L:TCastleLabel;
 begin
   FHairBox:=TCastleUserInterface.Create(FUiOwner);
   FAppearanceRows.ScrollArea.InsertFront(FHairBox);
   FHairBox.Anchor(hpMiddle);FHairBox.Anchor(vpTop);
-  FHairTitle:=TMenuLabel.Create(FUiOwner);BindUiText(FHairTitle,'Hairstyle');
+  FHairTitle:=TMenuLabel.Create(FUiOwner);BindUiText(FHairTitle,'Head');
   FHairTitle.Color:=MenuText;FHairTitle.Anchor(hpLeft,6);FHairTitle.Anchor(vpTop,-4);
   FHairBox.InsertFront(FHairTitle);
   FHairSelect:=TMenuButton.Create(FUiOwner);FHairSelect.Name:='HairStylePicker';
@@ -1849,7 +1895,7 @@ begin
   FHairPreview.Stretch:=True;
   FHairPreview.Anchor(hpLeft,8);FHairPreview.Anchor(vpMiddle);
   FHairPreview.CapturesEvents:=False;FHairSelect.InsertFront(FHairPreview);
-  L:=TMenuLabel.Create(FUiOwner);L.Caption:='↓';L.Color:=MenuMuted;
+  L:=TMenuLabel.Create(FUiOwner);L.Caption:='›';L.Color:=MenuMuted;
   L.Anchor(hpRight,-10);L.Anchor(vpMiddle);L.CapturesEvents:=False;
   FHairSelect.InsertFront(L);
 
@@ -1857,7 +1903,7 @@ begin
     The transparent outside button closes the list without activating controls
     underneath. The large rider preview remains visible on the right. }
   FHairOverlay:=TMenuButton.Create(FUiOwner);FHairOverlay.AutoIcon:=False;
-  FHairOverlay.AutoSize:=False;FHairOverlay.FullSize:=True;
+  FHairOverlay.AutoSize:=False;FHairOverlay.HeightFraction:=1;FHairOverlay.Anchor(hpLeft);
   FHairOverlay.CustomColorNormal:=Vector4(0,0,0,0.22);
   FHairOverlay.CustomColorFocused:=FHairOverlay.CustomColorNormal;
   FHairOverlay.CustomColorPressed:=FHairOverlay.CustomColorNormal;
@@ -1868,7 +1914,7 @@ begin
   FHairCard.CustomColorFocused:=MenuSurface;FHairCard.CustomColorPressed:=MenuSurface;
   FHairCard.OnClick:=@ClickPopupCard;FHairCard.Anchor(hpLeft);
   FHairOverlay.InsertFront(FHairCard);
-  FHairPopupTitle:=TMenuLabel.Create(FUiOwner);BindUiText(FHairPopupTitle,'Hairstyle');
+  FHairPopupTitle:=TMenuLabel.Create(FUiOwner);BindUiText(FHairPopupTitle,'Head editor');
   FHairPopupTitle.Anchor(hpLeft,12);FHairPopupTitle.Anchor(vpTop,-12);
   FHairPopupTitle.CapturesEvents:=False;FHairCard.InsertFront(FHairPopupTitle);
   FHairClose:=TMenuButton.Create(FUiOwner);FHairClose.AutoIcon:=False;FHairClose.AutoSize:=False;
@@ -1877,44 +1923,73 @@ begin
   FHairScroll:=TMenuScrollView.Create(FUiOwner);FHairScroll.Name:='HairStyleList';
   FHairScroll.ScrollArea.AutoSizeToChildren:=False;FHairScroll.ScrollArea.WidthFraction:=1;
   FHairScroll.FullSize:=True;FHairCard.InsertFront(FHairScroll);
-  for Style:=Low(Style)to High(Style)do begin
-    B:=TMenuButton.Create(FUiOwner);FHairRows[Style]:=B;
-    B.Name:='HairStyle_'+RiderHairStyleId(Style);B.Tag:=Ord(Style);
+  for C:=0 to 3 do begin
+    B:=TMenuButton.Create(FUiOwner);FHeadTabs[C]:=B;
+    B.Name:='HeadCategory'+IntToStr(C);B.Tag:=C;B.AutoIcon:=False;B.AutoSize:=False;
+    BindUiText(B,HeadCategories[C]);B.OnClick:=@ClickHeadCategory;FHairCard.InsertFront(B);
+    for I:=0 to HeadOptionCount(C)-1 do begin
+    B:=TMenuButton.Create(FUiOwner);FHeadRows[C,I]:=B;
+    B.Name:='HeadOption'+IntToStr(C)+'_'+HeadOptionId(C,I);B.Tag:=C*16+I;
     B.AutoIcon:=False;B.AutoSize:=False;B.Alignment:=hpLeft;B.TextAlignment:=hpLeft;
     B.OnClick:=@ClickHair;B.Anchor(hpLeft);FHairScroll.ScrollArea.InsertFront(B);
-    FHairPreviews[Style]:=TCastleImageControl.Create(FUiOwner);
-    with FHairPreviews[Style]do begin
+    FHeadPreviews[C,I]:=TCastleImageControl.Create(FUiOwner);
+    with FHeadPreviews[C,I]do begin
       Stretch:=True;
-      Url:='castle-data:/menu/hair/'+RiderHairStyleId(Style)+'.png';
+      Url:=HeadPreviewUrl(C,HeadOptionId(C,I),False);
       Anchor(hpLeft,8);Anchor(vpMiddle);CapturesEvents:=False;
     end;
-    B.InsertFront(FHairPreviews[Style]);
-    FHairRearPreviews[Style]:=TCastleImageControl.Create(FUiOwner);
-    with FHairRearPreviews[Style]do begin
-      Stretch:=True;Url:='castle-data:/menu/hair/'+RiderHairStyleId(Style)+'-rear.png';
+    B.InsertFront(FHeadPreviews[C,I]);
+    FHeadRearPreviews[C,I]:=TCastleImageControl.Create(FUiOwner);
+    with FHeadRearPreviews[C,I]do begin
+      Stretch:=True;Url:=HeadPreviewUrl(C,HeadOptionId(C,I),True);
       Anchor(vpMiddle);CapturesEvents:=False;
     end;
-    B.InsertFront(FHairRearPreviews[Style]);
-    L:=TMenuLabel.Create(FUiOwner);FHairChecks[Style]:=L;L.Caption:='✓';
+    B.InsertFront(FHeadRearPreviews[C,I]);
+    L:=TMenuLabel.Create(FUiOwner);FHeadChecks[C,I]:=L;L.Caption:='✓';
     L.Color:=MenuAccent;L.Anchor(hpRight,-10);L.Anchor(vpMiddle);
     L.CapturesEvents:=False;B.InsertFront(L);
+    end;
   end;
+  FHeadColorTitle:=TMenuLabel.Create(FUiOwner);FHeadColorTitle.Color:=MenuMuted;FHairCard.InsertFront(FHeadColorTitle);
+  for I:=0 to High(FHeadSwatches)do begin
+    B:=TMenuButton.Create(FUiOwner);FHeadSwatches[I]:=B;B.AutoIcon:=False;B.AutoSize:=False;
+    B.Tag:=I;B.Name:='HeadColor'+IntToStr(I);B.Caption:='';B.OnClick:=@ClickHeadColor;FHairCard.InsertFront(B);
+  end;
+  for I:=0 to High(FHeadViews)do begin
+    B:=TMenuButton.Create(FUiOwner);FHeadViews[I]:=B;B.AutoIcon:=False;B.AutoSize:=False;
+    B.Tag:=I;B.Name:='HeadView'+IntToStr(I);BindUiText(B,HeadViewNames[I]);
+    B.OnClick:=@ClickHeadView;B.Exists:=False;FColResult.InsertFront(B);
+  end;
+  FHeadHint:=TMenuLabel.Create(FUiOwner);BindUiText(FHeadHint,'Drag to rotate · Wheel to zoom');
+  FHeadHint.Color:=MenuMuted;FHeadHint.Exists:=False;FColResult.InsertFront(FHeadHint);
   ApplyHairStyle;
 end;
 
 procedure TBikeFitPage.ApplyHairStyle;
-var Style,S:TRiderHairStyle;
+var Style:TRiderHairStyle;C,I:Integer;Selected:Boolean;Id:String;
 begin
   Style:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
   if FHairSelect<>nil then begin
-    BindUiText(FHairSelect,RiderHairStyleCaption(Style));
-    FHairPreview.Url:='castle-data:/menu/hair/'+RiderHairStyleId(Style)+'.png';
+    BindUiText(FHairSelect,'Head editor');
+    FHairPreview.Url:=HeadPreviewUrl(1,RiderHairStyleId(Style),False);
   end;
-  for S:=Low(S)to High(S)do if FHairRows[S]<>nil then begin
-    SelectMenuButton(FHairRows[S],S=Style);
-    FHairChecks[S].Exists:=S=Style;
+  for C:=0 to 3 do begin
+    Id:=UserPreference(HeadKeys[C],HeadDefaults[C]);
+    if C=1 then Id:=RiderHairStyleId(Style);
+    for I:=0 to HeadOptionCount(C)-1 do if FHeadRows[C,I]<>nil then begin
+      Selected:=HeadOptionId(C,I)=Id;SelectMenuButton(FHeadRows[C,I],Selected);
+      FHeadChecks[C,I].Exists:=Selected;
+    end;
   end;
   if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)then FResultBike.TripoRider.HairStyle:=Style;
+  ApplyHeadAppearance;
+end;
+
+procedure TBikeFitPage.ApplyHeadAppearance;
+begin
+  if (FResultBike=nil)or(FResultBike.TripoRider=nil)then Exit;
+  FResultBike.TripoRider.SetHeadAppearance(ParseHeadwear(UserPreference(HeadKeys[0],HeadDefaults[0])),
+    ParseBeard(UserPreference(HeadKeys[3],HeadDefaults[3])),ParseMustache(UserPreference(HeadKeys[2],HeadDefaults[2])));
 end;
 
 procedure TBikeFitPage.McpSetHair(const Id:String);
@@ -1927,24 +2002,73 @@ begin
 end;
 
 procedure TBikeFitPage.ClickHair(Sender:TObject);
+var C,I:Integer;
 begin
-  McpSetHair(RiderHairStyleId(TRiderHairStyle((Sender as TMenuButton).Tag)));
-  CloseHairList(nil);
+  C:=TMenuButton(Sender).Tag div 16;I:=TMenuButton(Sender).Tag mod 16;
+  SetUserPreference(HeadKeys[C],HeadOptionId(C,I));ApplyHairStyle;LayoutHairList;
+  if C=1 then UpdateHeadCamera(True);
+end;
+
+procedure TBikeFitPage.McpHead(AParams:TJSONObject;AResult:TJSONObject);
+const Params:array[0..3]of String=('headwear','hair','mustache','beard');
+var C,I:Integer;Id,Path:String;Found:Boolean;Img:TRGBImage;R:TFloatRectangle;Side:Single;
+begin
+  for C:=0 to 3 do if AParams.Find(Params[C])<>nil then begin
+    Id:=AParams.Get(Params[C],'');Found:=False;
+    for I:=0 to HeadOptionCount(C)-1 do if Id=HeadOptionId(C,I)then Found:=True;
+    if not Found then raise Exception.Create('Unknown '+Params[C]+': '+Id);
+    SetUserPreference(HeadKeys[C],Id);
+  end;
+  FSection:=2;ApplyHairStyle;LayoutSections;
+  if AParams.Get('open',True)then begin
+    if not FHairOverlay.Exists then OpenHairList(nil);
+    FHeadCategory:=EnsureRange(AParams.Get('category',FHeadCategory),0,3);
+    FHeadYaw:=AParams.Get('yaw',Double(FHeadYaw));LayoutHairList;ScrollHeadSelection;UpdateHeadCamera(True);
+  end else CloseHairList(nil);
+  if ((AParams.Find('jaw')<>nil)or(AParams.Find('smile')<>nil)or
+      (AParams.Find('strain')<>nil)or(AParams.Find('manual_face')<>nil))and
+     (FResultBike<>nil)and(FResultBike.TripoRider<>nil)and
+     (FResultBike.TripoRider.Face<>nil)then
+    FResultBike.TripoRider.Face.SetExpression(AParams.Get('manual_face',True),
+      AParams.Get('jaw',0.0),AParams.Get('smile',0.0),AParams.Get('strain',0.0));
+  Path:=AParams.Get('thumbnail','');
+  if Path<>'' then begin
+    if (FResultBike=nil)or(FResultBike.TripoRider=nil)or not FResultBike.TripoRider.Loaded then
+      raise Exception.Create('Head preview is not ready');
+    R:=FVpResult.RenderRect;Side:=Min(R.Width,R.Height-110);
+    R:=FloatRectangle(R.Left+(R.Width-Side)*0.5,R.Bottom+(R.Height-Side)*0.5,Side,Side);
+    FFitOverlay.Exists:=False;
+    try
+      Img:=Container.SaveScreen(R);
+      try Img.Resize(192,192);SaveImage(Img,FilenameToUriSafe(Path)) finally Img.Free end;
+    finally FFitOverlay.Exists:=not FHairOverlay.Exists end;
+  end;
+  McpFillStatus(AResult);
 end;
 
 procedure TBikeFitPage.OpenHairList(Sender:TObject);
-var Style:TRiderHairStyle;
 begin
   ClosePopup;CloseDyePopup;ApplyHairStyle;
-  FHairOverlay.Exists:=True;LayoutHairList;
-  Style:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
-  FHairScroll.Scroll:=-FHairRows[Style].Translation.Y-
-    (FHairScroll.EffectiveHeight-FHairRows[Style].Height)*0.5;
+  if not FHairOverlay.Exists then begin
+    FHeadSavedCadence:=FCadenceRpm;FHeadSavedAuto:=FPoseAuto;
+    if not FLiveRide then begin FCadenceRpm:=0;FPoseAuto:=False;ApplyPreviewAnimation;UpdateLabels end;
+  end;
+  FHairOverlay.Exists:=True;UpdateLabels;LayoutHairList;
+  FHeadYaw:=30;UpdateHeadCamera(True);ScrollHeadSelection;
 end;
 
 procedure TBikeFitPage.CloseHairList(Sender:TObject);
+var I:Integer;
 begin
-  if FHairOverlay<>nil then FHairOverlay.Exists:=False;
+  if (FHairOverlay=nil)or not FHairOverlay.Exists then Exit;
+  FHairOverlay.Exists:=False;
+  FHeadCameraReady:=False;
+  UpdateLabels;
+  LayoutSections;FFitOverlay.Exists:=True;
+  for I:=0 to High(FHeadViews)do FHeadViews[I].Exists:=False;
+  FHeadHint.Exists:=False;
+  if not FLiveRide then begin FCadenceRpm:=FHeadSavedCadence;FPoseAuto:=FHeadSavedAuto;ApplyPreviewAnimation;UpdateLabels end;
+  FitCameraToItems(FVpResult);
 end;
 
 function TBikeFitPage.KeyboardRoot:TCastleUserInterface;
@@ -1954,32 +2078,108 @@ begin
 end;
 
 procedure TBikeFitPage.LayoutHairList;
-const Order:array[0..9]of TRiderHairStyle=(rhsBald,rhsBuzz,rhsShort,rhsSwept,
-  rhsParted,rhsCurly,rhsCoils,rhsMedium,rhsPonytail,rhsBraid);
-var S:Single;I:Integer;B:TMenuButton;
+const HairColors:array[0..7]of TVector3=((X:0.09;Y:0.065;Z:0.050),(X:0.26;Y:0.17;Z:0.105),
+  (X:0.43;Y:0.26;Z:0.12),(X:0.68;Y:0.36;Z:0.16),(X:0.79;Y:0.66;Z:0.42),
+  (X:0.90;Y:0.83;Z:0.65),(X:0.52;Y:0.52;Z:0.50),(X:0.91;Y:0.91;Z:0.88));
+  HatColors:array[0..7]of TVector3=((X:0.12;Y:0.14;Z:0.17),(X:0.94;Y:0.93;Z:0.88),
+  (X:0.20;Y:0.38;Z:0.53),(X:0.17;Y:0.40;Z:0.32),(X:0.72;Y:0.18;Z:0.17),
+  (X:0.86;Y:0.59;Z:0.23),(X:0.47;Y:0.30;Z:0.53),(X:0.75;Y:0.41;Z:0.50));
+var S,W,ImageW:Single;I,C:Integer;B:TMenuButton;Color:TVector3;
 begin
   if FHairCard=nil then Exit;
+  if FHairOverlay.Exists then begin
+    FPosePrev.Exists:=False;FPoseNext.Exists:=False;FPoseToggle.Exists:=False;
+    FLblPose.Exists:=False;FFitOverlay.Exists:=False;
+  end;
   S:=Max(0.65,Min(1,UIScale));
-  FHairCard.Width:=Min(480/S,FBottomRow.EffectiveWidth-16/S);
-  FHairCard.Height:=Max(160/S,FBottomRow.EffectiveHeight-98/S);
-  FHairCard.Anchor(vpTop,-86/S);
+  W:=FColParams.Width;FHairOverlay.Width:=W;
+  FHairCard.Width:=W-8/S;FHairCard.Height:=FBottomRow.EffectiveHeight-8/S;
+  FHairCard.Anchor(vpTop,-4/S);
   FHairPopupTitle.FontSize:=16/S;
   FHairClose.Width:=32/S;FHairClose.Height:=32/S;FHairClose.FontSize:=20/S;
-  FHairScroll.Border.Top:=48/S;FHairScroll.Border.Bottom:=10/S;
+  FHairScroll.Border.Top:=134/S;FHairScroll.Border.Bottom:=90/S;
   FHairScroll.Border.Left:=8/S;FHairScroll.Border.Right:=8/S;
-  FHairScroll.ScrollArea.Height:=Length(Order)*90/S;
-  for I:=0 to High(Order)do begin
-    B:=FHairRows[Order[I]];B.Width:=FHairCard.Width-26/S;B.Height:=84/S;
-    B.Anchor(vpTop,-I*90/S);B.FontScale:=1;B.FontSize:=15/S;
-    B.PaddingHorizontal:=218/S;B.PaddingVertical:=6/S;
-    FHairPreviews[Order[I]].Width:=96/S;FHairPreviews[Order[I]].Height:=72/S;
-    FHairPreviews[Order[I]].Anchor(hpLeft,8/S);
-    FHairRearPreviews[Order[I]].Width:=96/S;FHairRearPreviews[Order[I]].Height:=72/S;
-    FHairRearPreviews[Order[I]].Anchor(hpLeft,108/S);
-    B.Caption:=MenuSummary(UiText(RiderHairStyleCaption(Order[I])),B.Font,
-      (B.Width-246/S)*UIScale,2);
-    FHairChecks[Order[I]].FontSize:=16/S;
+  FHairScroll.ScrollArea.Height:=HeadOptionCount(FHeadCategory)*94/S;
+  ImageW:=Min(85/S,(W-130/S)*0.5);
+  for C:=0 to 3 do begin
+    B:=FHeadTabs[C];B.Width:=(W-32/S)*0.5;B.Height:=34/S;B.FontSize:=14/S;
+    B.Anchor(hpLeft,8/S+(C mod 2)*(B.Width+6/S));B.Anchor(vpTop,-(48+(C div 2)*40)/S);
+    SelectMenuButton(B,C=FHeadCategory);
+    for I:=0 to HeadOptionCount(C)-1 do begin
+    B:=FHeadRows[C,I];B.Exists:=C=FHeadCategory;B.Width:=FHairCard.Width-26/S;B.Height:=88/S;
+    B.Anchor(vpTop,-I*94/S);B.FontScale:=1;B.FontSize:=14/S;
+    B.PaddingHorizontal:=2*ImageW+16/S;B.PaddingVertical:=6/S;
+    FHeadPreviews[C,I].Width:=ImageW;FHeadPreviews[C,I].Height:=ImageW;
+    FHeadPreviews[C,I].Anchor(hpLeft,4/S);
+    FHeadRearPreviews[C,I].Width:=ImageW;FHeadRearPreviews[C,I].Height:=ImageW;
+    FHeadRearPreviews[C,I].Anchor(hpLeft,8/S+ImageW);
+    B.Caption:=MenuSummary(UiText(HeadOptionCaption(C,I)),B.Font,(B.Width-2*ImageW-44/S)*UIScale,3);
+    FHeadChecks[C,I].FontSize:=16/S;
+    end;
   end;
+  if FHeadCategory=0 then BindUiText(FHeadColorTitle,'Headwear color')else BindUiText(FHeadColorTitle,'Hair and facial hair color');
+  FHeadColorTitle.FontSize:=13/S;FHeadColorTitle.Anchor(hpLeft,12/S);FHeadColorTitle.Anchor(vpBottom,58/S);
+  for I:=0 to High(FHeadSwatches)do begin
+    B:=FHeadSwatches[I];B.Width:=(W-38/S)/8;B.Height:=32/S;
+    B.Anchor(hpLeft,10/S+I*(B.Width+2/S));B.Anchor(vpBottom,16/S);
+    if FHeadCategory=0 then Color:=HatColors[I]else Color:=HairColors[I];
+    B.CustomColorNormal:=Vector4(Color,1);B.CustomColorFocused:=Vector4(Color*0.8+Vector3(0.2,0.2,0.2),1);
+    B.CustomColorPressed:=B.CustomColorFocused;
+  end;
+  for I:=0 to High(FHeadViews)do begin
+    B:=FHeadViews[I];B.Width:=90/S;B.Height:=32/S;B.FontSize:=14/S;
+    B.Anchor(hpMiddle,(I-1)*98/S);B.Anchor(vpBottom,38/S);B.Exists:=FHairOverlay.Exists;
+  end;
+  FHeadHint.FontSize:=12/S;FHeadHint.Anchor(hpMiddle);FHeadHint.Anchor(vpBottom,14/S);FHeadHint.Exists:=FHairOverlay.Exists;
+end;
+
+procedure TBikeFitPage.ClickHeadCategory(Sender:TObject);
+begin
+  FHeadCategory:=TMenuButton(Sender).Tag;LayoutHairList;ScrollHeadSelection;
+  if FHeadCategory=1 then FHeadYaw:=145 else FHeadYaw:=15;
+  UpdateHeadCamera(True);
+end;
+procedure TBikeFitPage.ScrollHeadSelection;
+var I:Integer;Id:String;S:Single;
+begin
+  Id:=UserPreference(HeadKeys[FHeadCategory],HeadDefaults[FHeadCategory]);
+  if FHeadCategory=1 then Id:=RiderHairStyleId(ParseRiderHairStyle(Id));
+  S:=Max(0.65,Min(1,UIScale));FHairScroll.Scroll:=0;
+  for I:=0 to HeadOptionCount(FHeadCategory)-1 do if Id=HeadOptionId(FHeadCategory,I)then begin
+    FHairScroll.Scroll:=Max(0,(I-2)*94/S);Break;
+  end;
+end;
+procedure TBikeFitPage.ClickHeadView(Sender:TObject);
+begin FHeadYaw:=TMenuButton(Sender).Tag*90;UpdateHeadCamera(True) end;
+procedure TBikeFitPage.ClickHeadColor(Sender:TObject);
+var C:TVector4;
+begin
+  C:=TMenuButton(Sender).CustomColorNormal;
+  if FHeadCategory=0 then ApplyHelmetColorLive(Vector3(C.X,C.Y,C.Z),True)
+  else ApplyClothSlot(csHair,Vector3(C.X,C.Y,C.Z),True);
+end;
+procedure TBikeFitPage.UpdateHeadCamera(Reset:Boolean);
+var M:TMatrix4;HeadCenter,P,D,U,Offset:TVector3;Dist,Yaw:Single;
+begin
+  if Reset then FHeadCameraReady:=False;
+  if (FResultBike=nil)or(FResultBike.TripoRider=nil)or not FResultBike.TripoRider.Loaded then Exit;
+  Reset:=Reset or not FHeadCameraReady;
+  M:=FResultBike.TripoRider.HeadWorldFrame;
+  Offset:=Vector3(0,0.055,0);Dist:=0.62;
+  if FHeadCategory=1 then begin Offset.Y:=-0.060;Dist:=0.90 end;
+  if(FHeadCategory=1)and(FResultBike.TripoRider.HairStyle=rhsLongBraid)then begin Offset.Y:=-0.13;Dist:=1.05 end;
+  HeadCenter:=M.MultPoint(Offset);
+  FNavResult.ModelBox:=Box3D(HeadCenter-Vector3(0.30,0.36,0.30),HeadCenter+Vector3(0.30,0.36,0.30));
+  if Reset then begin
+    Yaw:=DegToRad(FHeadYaw);
+    P:=HeadCenter+M.MultDirection(Vector3(Sin(Yaw)*Dist,0.03,Cos(Yaw)*Dist));
+    D:=(HeadCenter-P).Normalize;U:=M.MultDirection(Vector3(0,1,0)).Normalize;
+    FVpResult.Camera.SetWorldView(P,D,U);
+  end else begin
+    FVpResult.Camera.GetWorldView(P,D,U);FVpResult.Camera.SetWorldView(P+HeadCenter-FHeadLastCenter,D,U);
+  end;
+  FHeadLastCenter:=HeadCenter;
+  FHeadCameraReady:=True;
 end;
 
 procedure TBikeFitPage.BuildColorStrip;
@@ -2286,7 +2486,7 @@ procedure TBikeFitPage.ReapplyHelmetColor;
 begin
   if (FResultBike = nil) or (FResultBike.TripoRider = nil) then Exit;
   if FHelmetOn then
-    FResultBike.TripoRider.ApplyHelmetColor(FHelmetC, True)
+    FResultBike.TripoRider.SetHeadwearColor(FHelmetC)
   else
     FResultBike.TripoRider.ApplyHelmetColor(Vector3(1, 1, 1), False);
 end;
@@ -2528,8 +2728,7 @@ begin
   FHairSelect.FontScale:=1;FHairSelect.FontSize:=15/S;
   FHairSelect.PaddingHorizontal:=92/S;
   FHairPreview.Width:=72/S;FHairPreview.Height:=54/S;FHairPreview.Anchor(hpLeft,8/S);
-  FHairSelect.Caption:=MenuSummary(UiText(RiderHairStyleCaption(
-    ParseRiderHairStyle(UserPreference('rider_hair_style','short')))),FHairSelect.Font,
+  FHairSelect.Caption:=MenuSummary(UiText('Head editor'),FHairSelect.Font,
     (FHairSelect.Width-122/S)*UIScale,2);
   FDyeStrip.Width:=W-20;FDyeStrip.Height:=266/S;
   FDyeStrip.Anchor(vpTop,-120/S);
@@ -2564,7 +2763,11 @@ begin
     FFitSaveDelay:=FFitSaveDelay-SecondsPassed;
     if FFitSaveDelay<=0 then begin FFitSaveDelay:=5;ClickApply(nil);end;
   end;
-  if FPosePrev<>nil then begin FPosePrev.Exists:=not FLiveRide;FPoseNext.Exists:=not FLiveRide;FPoseToggle.Exists:=not FLiveRide;end;
+  if FPosePrev<>nil then begin
+    FPosePrev.Exists:=not FLiveRide and not FHairOverlay.Exists;
+    FPoseNext.Exists:=FPosePrev.Exists;FPoseToggle.Exists:=FPosePrev.Exists;
+    FLblPose.Exists:=not FHairOverlay.Exists;
+  end;
   if FLiveRide then
   begin
     if (Round(FCadenceRpm) <> Round(ViewPlay.RideCadence)) or
@@ -2721,14 +2924,14 @@ begin
   if FLblReach <> nil then
   begin
     if ReachMm > 0 then
-      FLblReach.Caption := Format(UiText('Reach  %.0f mm'), [ReachMm])
+      FLblReach.Caption := Format(UiText('Reach  %0.0f mm'), [ReachMm])
     else
       BindUiText(FLblReach, 'Reach  —');
   end;
   if FLblStack <> nil then
   begin
     if StackMm > 0 then
-      FLblStack.Caption := Format(UiText('Stack  %.0f mm'), [StackMm])
+      FLblStack.Caption := Format(UiText('Stack  %0.0f mm'), [StackMm])
     else
       BindUiText(FLblStack, 'Stack  —');
   end;
@@ -2949,6 +3152,8 @@ procedure TBikeFitPage.McpFillStatus(AResult: TJSONObject);
 var FaceState, HairState: TJSONObject;
 begin
   AResult.Add('hair_style',UserPreference('rider_hair_style','short'));
+  AResult.Add('head_editor_open',(FHairOverlay<>nil)and FHairOverlay.Exists);
+  AResult.Add('head_category',FHeadCategory);
   AResult.Add('preview_loading',FLoadingPreview or FDirtyResult or (FWantRiderPath<>''));
   AResult.Add('rider_loaded',(FResultBike<>nil)and(FResultBike.TripoRider<>nil)and FResultBike.TripoRider.Loaded);
   if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)then
@@ -3121,7 +3326,7 @@ begin
     BindUiText(FLabelStatus, 'Saved and applied to the current ride.')
   else
     BindUiText(FLabelStatus, 'Saved — applies to the next ride.');
-  Logger.Info(Format('[BikeFit] apply bike=%s size=%s rider=%s fit seat=%.0f off=%.0f sp=%.0f stem=%.0f h=%.0f in=%.0f bulk=%.2f belly=%.2f knee=%.2f ankle=%.0f',
+  Logger.Info(Format('[BikeFit] apply bike=%s size=%s rider=%s fit seat=%0.0f off=%0.0f sp=%0.0f stem=%0.0f h=%0.0f in=%0.0f bulk=%0.2f belly=%0.2f knee=%0.2f ankle=%0.0f',
     [Settings.SelectedBikeJson, Settings.SelectedBikeSize,
      Settings.SelectedRiderGlb, FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem,
      FFitHeightCm, FFitInseamCm, FFitWeightKg, FFitComposition,

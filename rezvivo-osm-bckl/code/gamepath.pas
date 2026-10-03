@@ -4,7 +4,7 @@ interface
 
 uses
   Classes, SysUtils, Math,
-  CastleVectors, CastleScene;
+  CastleVectors, CastleScene, GameFitLoadProfile;
 
 type
   TPathNarrowPassage = record
@@ -54,6 +54,8 @@ type
     FPointCenters: array of TVector3;
     FWorldPoints: array of TVector3;  { кеш мировых координат }
     FWorldCenters: array of TVector3;
+    FFitLoad: TFitLoadProfile;
+    FFitLoadStations: TFitLoadValues;
     FPassageDistances: array of Single;
     FPassages: array of TPathPassageSpan;
     FSteeringCorners: array of Boolean;
@@ -118,6 +120,12 @@ type
       из пути аватара в путь свежесозданного удалённого райдера) — без
       повторного чтения файла. Целевой путь помечается «не запечён». }
     procedure CopyTo(ADest: TGamePath);
+    procedure SetFitLoadProfile(const Profile: TFitLoadProfile;
+      const SourceIndices: array of Double);
+    function HasFitLoadProfile: Boolean;
+    function FitLoadDatumCorrected: Boolean;
+    function FitLoadAtPosition(const Pos: TPathPosition;
+      out GradePct, SourceM, HeightM: Single): Boolean;
 
     { Заменить только ширины дорог под точками (FPoints не трогаются).
       Нужно, чтобы после снапа к дорогам прикрепить к сырому FIT-пути
@@ -353,6 +361,7 @@ begin
   SetLength(FPointWidths, 0);
   SetLength(FPointCenters, 0);
   SetLength(FWorldPoints, 0);
+  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;
   FSteeringCorners:=nil; FCornerDistance:=nil;
   FPassages:=nil; FPassageDistances:=nil;
   FPreparedBuildingRoute:=False;
@@ -497,8 +506,76 @@ begin
     ADest.FPointCenters[I] := FPointCenters[I];
   ADest.FPreparedBuildingRoute:=FPreparedBuildingRoute;
   ADest.FOutAndBack:=FOutAndBack;
+  ADest.FFitLoad:=FFitLoad;ADest.FFitLoadStations:=FFitLoadStations;
   ADest.FWorldPointsBaked := false;
   Logger.Info('[GamePath] ' + 'CopyTo: ' + IntToStr(Count) + ' points copied');
+end;
+
+procedure TGamePath.SetFitLoadProfile(const Profile: TFitLoadProfile;
+  const SourceIndices: array of Double);
+var
+  I,N,Mid:Integer;
+  PathM,SourceM,Smoothed:TFitLoadValues;
+  Delta:TVector3;
+begin
+  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;
+  if (Length(Profile.HeightM)<2) or (Length(SourceIndices)<>PointCount) then Exit;
+  FFitLoad:=Profile;SetLength(FFitLoadStations,PointCount);
+  for I:=0 to PointCount-1 do
+    FFitLoadStations[I]:=FitLoadStationAtIndex(Profile,SourceIndices[I]);
+  { FIT indices survive detours, but OSM snapping can compress their spacing
+    to centimetres. Prepare a continuous correspondence once, in horizontal
+    path metres. This does not depend on rendered height or frame timing. }
+  N:=PointCount;
+  SetLength(PathM,N+1);SetLength(SourceM,N+1);
+  for I:=0 to N-1 do
+  begin
+    SourceM[I]:=FFitLoadStations[I];
+    Delta:=GetFollowPointWorld(I+1)-GetFollowPointWorld(I);
+    Delta.Y:=0;
+    PathM[I+1]:=PathM[I]+Delta.Length;
+  end;
+  if FOutAndBack then
+  begin
+    SourceM[N]:=SourceM[0];Mid:=N div 2;
+    { Filter each leg separately: the actual turnaround must still reach
+      the last FIT station, with the gradient reversed on the return leg. }
+    Smoothed:=SmoothFitSourceStations(Copy(PathM,0,Mid+1),Copy(SourceM,0,Mid+1),False);
+    for I:=0 to Mid do FFitLoadStations[I]:=Smoothed[I];
+    Smoothed:=SmoothFitSourceStations(Copy(PathM,Mid,N-Mid+1),Copy(SourceM,Mid,N-Mid+1),False);
+    for I:=Mid to N-1 do FFitLoadStations[I]:=Smoothed[I-Mid];
+  end
+  else
+  begin
+    SourceM[N]:=Profile.LengthM;
+    Smoothed:=SmoothFitSourceStations(PathM,SourceM,True);
+    for I:=0 to N-1 do FFitLoadStations[I]:=Smoothed[I];
+  end;
+end;
+
+function TGamePath.HasFitLoadProfile: Boolean;
+begin
+  Result:=(Length(FFitLoad.HeightM)>=2) and (Length(FFitLoadStations)=PointCount) and (PointCount>=2);
+end;
+
+function TGamePath.FitLoadDatumCorrected: Boolean;
+begin Result:=HasFitLoadProfile and FFitLoad.DatumCorrected end;
+
+function TGamePath.FitLoadAtPosition(const Pos: TPathPosition;
+  out GradePct, SourceM, HeightM: Single): Boolean;
+var I,J,N:Integer;A,B,S:Double;Reverse:Boolean;
+begin
+  GradePct:=0;SourceM:=0;HeightM:=0;Result:=False;
+  if not HasFitLoadProfile then Exit;
+  N:=Length(FFitLoadStations);I:=Pos.Segment;
+  if I<0 then I:=0 else if I>=N then I:=N-1;
+  J:=I+1;if J=N then J:=0;
+  A:=FFitLoadStations[I];B:=FFitLoadStations[J];
+  if (J=0) and not FOutAndBack then B:=FFitLoad.LengthM;
+  S:=A+(B-A)*EnsureRange(Pos.T,Single(0),Single(1));SourceM:=S;
+  Reverse:=(B<A) or ((B=A) and FOutAndBack and (I>=N div 2));
+  Result:=FitLoadAt(FFitLoad,S,HeightM,GradePct);
+  if Reverse then GradePct:=-GradePct;
 end;
 
 procedure TGamePath.SetPointWidths(const AWidths: array of Single);

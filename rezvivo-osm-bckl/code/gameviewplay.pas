@@ -27,7 +27,7 @@ uses Classes,fpjson,
   GameOsmStreaming, FitFile, GpxFile, GamePath,
   Osm3dRoadMaterial, Osm3dStudioSettings,   { LoadFogSettings: общий со студией файл настроек тумана }
   GameRiderPoseControl, VeloSiteAPI,
-  FreezeDiagLog, Osm3dRiderShadow, GameZoneWheel, Osm3dDreamWorld, GameDreamWorldScene;
+  FreezeDiagLog, Osm3dRiderShadow, GameRideMetricsHud, Osm3dDreamWorld, GameDreamWorldScene;
 
 type
   { ── Rider card widget: two-line display for one rider ── }
@@ -122,6 +122,7 @@ type
     FPerfTerrain: Boolean;  { False — скрыть землю (streaming map / SceneLevel) }
     FPerfShadows: Boolean;  { False — отключить тени всех райдеров }
     FBLEHud: TBLEHudUpdater;
+    FRideMetricsHud: TRideMetricsHud;
     FWorkoutHud: TWorkoutHud;
     FFocusPanel:TTrainingFocusPanel;
     FFocusButton:TCastleButton;
@@ -136,7 +137,7 @@ type
 
     { Cinematic camera system }
     FCinematicCam: TCinematicCamera;
-    FScreenFX: TScreenFX;   { post-processing: bloom + filmic tonemap (клавиша B) }
+    FScreenFX: TScreenFX;   { optional scene effects; B bypasses all passes }
     FNearbyBuf: array[0..15] of TVector3;
     FNearbyBufCount: Integer;
 
@@ -251,6 +252,7 @@ type
     FProf_Labels: Double;
     FProf_FrameTotal: Double;
     FFrameLastUpdateMs: Double;
+    FFrameLastCoreUpdateMs: Double;
     FProf_Render: Double;
     FProf_AvgCount: Integer;
     FProf_Display: string;
@@ -262,6 +264,7 @@ type
     { Detailed profiling log }
     FProfileLog: TStringList;
     FProfileFrameNum: Integer;
+    FProfileDisplayAt: QWord;
     FProfileLogFile: string;
 
     { FREEZE-DIAG — heart-beat timer. Logged at most every 500 ms from
@@ -478,6 +481,7 @@ type
     property World: TGameWorld read FOfflineWorld;
     property Bike: TBikeInstance read FBikeInstance;
     property MenuButton: TCastleButton read FMenuButton;
+    property ScreenFX: TScreenFX read FScreenFX;
     property Osm: TGameOsmStreaming read FOsmStreaming;
     property Camera: TCameraController read FCamera;
     property CinematicCam: TCinematicCamera read FCinematicCam;
@@ -487,6 +491,7 @@ type
     { Existing smoothed HUD timings, exposed to the MCP performance sampler. }
     property FrameUpdateMs: Double read FProf_FrameTotal;
     property FrameLastUpdateMs: Double read FFrameLastUpdateMs;
+    property FrameLastCoreUpdateMs: Double read FFrameLastCoreUpdateMs;
     property FrameAnimMs: Double read FProf_PoseAnimAv;
 
     { Установить режим камеры (кольцо клавиши C) с полным применением
@@ -587,7 +592,7 @@ function CreateGameFpsControl(AOwner:TComponent):TCastleUserInterface;
 implementation
 
 
-uses UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
+uses RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
   GameActivityAccounting, GameMenuTheme, GameViewMenu, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair;
@@ -744,6 +749,11 @@ begin
   if (Option in [goShadowSize, goShadowFilter, goShadowDistance]) and
      (ViewPlay <> nil) and ViewPlay.HasActiveState then
     ViewPlay.ApplyShadowSettings;
+  if (Option=goSoftening) and (ViewPlay<>nil) and Assigned(ViewPlay.ScreenFX) then
+  begin
+    ViewPlay.ScreenFX.SofteningLevel:=Settings.GetGraphicsOption(Ord(goSoftening));
+    ViewPlay.ScreenFX.Enabled:=True;
+  end;
 end;
 
 procedure TFpsSwapApplier.Render;
@@ -822,7 +832,7 @@ end;
 { Диагностические разделители кадра (FPS-бисекция):
   --noshadow — байк без движковой тени (bsmNone, без volume-прохода);
   --nolabels — не обновлять HUD-лейблы каждый кадр;
-  --nofx     — выключить ScreenFX (bloom/tonemap). }
+  --nofx     — выключить все проходы ScreenFX. }
 var
   GCliNoLabels: Boolean = False;
 
@@ -955,9 +965,10 @@ begin
   end;
 end;
 
-{ Kinematic bicycle: tan(δ) ≈ L · κ. Sign: positive curvature (left yaw)
-  → negative SteerAngleDeg (front wheel toward −Z / rider's left), matching
-  lean (CurrentTurnAngle) visual direction. At near-zero curvature falls
+{ Kinematic bicycle: tan(δ) ≈ L · κ. Positive curvature turns +X toward +Z;
+  the upward steerer axis therefore needs a negative SteerAngleDeg.
+  Positive local +X roll banks toward that same +Z direction.
+  At near-zero curvature falls
   back to a small lean-proportional angle so slow turns still show bar input. }
 procedure ApplySteerFromPhysics(ABike: TBikeInstance; AAgent: TPhysicalAgent);
 const
@@ -973,6 +984,10 @@ begin
   if WB < 0.3 then WB := DefaultWheelbase;
   if Abs(S.CurrentCurvature) > 1e-5 then
     Steer := -RadToDeg(ArcTan(WB * S.CurrentCurvature))
+  else if Assigned(AAgent.Actor)and AAgent.Actor.RiderOwnsLean then
+    { Body roll also contains pedal balance. It is not route curvature and
+      must not feed back into steering on a straight road. }
+    Steer:=0
   else
   begin
     { Low-speed / straight: couple bars lightly to lean so they don't stay
@@ -1268,7 +1283,6 @@ var
 begin
   if not Assigned(FProfileLog) then Exit;
 
-  Inc(FProfileFrameNum);
   if (FProfileFrameNum mod 60 <> 0) and (FProf_FrameTotal < 70) then Exit;
 
   TotalShapes := 0;
@@ -1812,6 +1826,9 @@ begin
       Exit;
     end;
 
+    { Trainer/ride load follows this FIT's distance/elevation independently
+      of OSM surface heights; all riders receive the same prepared profile. }
+    FOsmStreaming.SetFitLoadReference(Fit);
     { Привязка маршрута к дорожной сети OSM — асинхронно (как студия/оверлей). }
     FOsmStreaming.BeginRouteSnap;
 
@@ -1875,6 +1892,13 @@ begin
       ApplySteerFromPhysics(BotBike, Ag);
     end;
     BotBike.AnimateFrame(SecondsPassed);
+    if Assigned(FBotAgents)and(I<FBotAgents.Count)then begin
+      Ag:=TPhysicalAgent(FBotAgents[I]);
+      if Assigned(Ag)and Assigned(Ag.Actor)and Assigned(Ag.State)and Ag.Actor.RiderOwnsLean then begin
+        Ag.State.CurrentTurnAngle:=BotBike.RiderTotalLeanDeg;
+        Ag.State.TargetTurnAngle:=Ag.State.CurrentTurnAngle;
+      end;
+    end;
   end;
 end;
 
@@ -1938,7 +1962,11 @@ begin
     BotBike.SetAnimationSpeed(CrankInterval, CrankInterval);
     BotBike.SetWheelSpeedMps(Ag.State.CurrentSpeed);
     Sit.GradePct := SlopeDegToGradePct(Ag.State.CurrentSlopeAngle);
-    Sit.LateralAccel := Ag.State.CurrentLateralAccel;
+    Sit.LateralAccel := Ag.State.CurrentSpeed*Ag.State.CurrentYawRateRad;
+    if Assigned(Ag.Actor)and Ag.Actor.RiderOwnsLean then
+      BotBike.SetRiderDynamicsSituation(Sit.PowerW,Sit.LateralAccel,0,Ag.State.CurrentModelPitch)
+    else BotBike.SetRiderDynamicsSituation(Sit.PowerW,Sit.LateralAccel,
+      Ag.State.CurrentTurnAngle,Ag.State.CurrentModelPitch);
     Sit.FtpW := 0;
 
     { Support must also be up to date when a bot enters the camera view. }
@@ -2201,7 +2229,7 @@ begin
   if(Value=FFocusMode)or(Value and(FOsmPrepHold or not HasActiveState))then Exit;
   FFocusMode:=Value;FCameraDragging:=False;
   MainViewport.Exists:=not Value;FFocusPanel.Exists:=Value;
-  TCastleUserInterface(DesignedComponent('HorizontalGroup1')).Exists:=not Value;
+  if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=not Value;
   FFocusPanel.SyncWindow(Value and(Container.PendingFrontView=Self));
   if FWorkoutHud<>nil then FWorkoutHud.FocusMode:=Value;
   if Value then BindUiText(FFocusButton,'Return to 3D')
@@ -2348,42 +2376,6 @@ var
   FogDistM: Single;
   FogClearM: Single;
   I: Integer;
-  function AddZoneWheel(const ValueLabel: TCastleLabel; const WheelName: String): TCastleZoneWheel;
-  begin
-    Result:=TCastleZoneWheel.Create(FreeAtStop);
-    Result.Name:=WheelName; Result.Orientation:=woHorizontal;
-    Result.Width:=128; Result.Height:=26; Result.FontSize:=18;
-    ValueLabel.Parent.InsertFront(Result);
-  end;
-  procedure FixMetricWidth(const ValueLabel: TCastleLabel; const AWidth: Single);
-  var Column: TCastleVerticalGroup;
-  begin
-    ValueLabel.AutoSize:=False; ValueLabel.Width:=AWidth; ValueLabel.Height:=58;
-    ValueLabel.Alignment:=hpMiddle; ValueLabel.VerticalAlignment:=vpMiddle;
-    Column:=ValueLabel.Parent as TCastleVerticalGroup;
-    Column.AutoSizeWidth:=False; Column.Width:=AWidth; Column.Spacing:=2;
-  end;
-  procedure PrepareHudLayout;
-  var Top: TCastleHorizontalGroup; K: Integer; C: TCastleUserInterface;
-  begin
-    BindUiText(DesignedComponent('LabelWorkTitle')as TCastleLabel,'Work today, kJ');
-    Top:=DesignedComponent('HorizontalGroup1') as TCastleHorizontalGroup;
-    Top.Alignment:=vpTop;
-    FixMetricWidth(LabelPower,140); FixMetricWidth(LabelSpeed,140);
-    FixMetricWidth(LabelCadence,140); FixMetricWidth(LabelHeart,140);
-    FixMetricWidth(LabelSlope,180); FixMetricWidth(LabelWork,180);
-    LabelWorkTSS.AutoSize:=False;LabelWorkTSS.Width:=180;LabelWorkTSS.Height:=26;
-    LabelWorkTSS.FontSize:=18;LabelWorkTSS.Alignment:=hpMiddle;LabelWorkTSS.VerticalAlignment:=vpMiddle;
-    LabelCorr.AutoSize:=False; LabelCorr.Width:=180; LabelCorr.Height:=26;
-    LabelCorr.FontSize:=18; LabelCorr.Alignment:=hpMiddle; LabelCorr.VerticalAlignment:=vpMiddle;
-    // Reuse the design's spacers, but their width no longer hosts a reel.
-    for K:=0 to Top.ControlsCount-1 do
-    begin
-      C:=Top.Controls[K];
-      if C.ClassType=TCastleUserInterface then begin C.Width:=16; C.Height:=1 end;
-    end;
-    BindUiText(DesignedComponent('Label2') as TCastleLabel, 'Power');
-  end;
 begin
   if AccountChangePending then
     raise EInvalidOperation.Create(UiText('Account change in progress. Please wait.'));
@@ -2450,6 +2442,7 @@ begin
   { Init profiling log }
   FProfileLog := TStringList.Create;
   FProfileFrameNum := 0;
+  FProfileDisplayAt := 0;
   FProfileLogFile := GetLogFileName;
   ProfileLogLine('=== Session started ===');
 
@@ -2568,12 +2561,6 @@ begin
       тик в UI view'а, и GPU-таймеры дублировались с каждым заездом. }
     Logger.Info('[FPS] --cpuprof: CPU/GPU profiler включён (сводка в osm3d-лог)');
   end;
-  if CliFlag('nofx') and Assigned(FScreenFX) then
-  begin
-    FScreenFX.Enabled := False;
-    Logger.Info('[FPS] --nofx: ScreenFX выключен');
-  end;
-
   { FPS-бисекция физики агентов: --nocontrol / --nosteps / --noground. }
   AgentCliNoControl := CliFlag('nocontrol');
   AgentCliNoSteps   := CliFlag('nosteps');
@@ -2607,12 +2594,17 @@ begin
   FFocusPanel:=TTrainingFocusPanel.Create(FreeAtStop);FFocusPanel.Exists:=False;InsertBack(FFocusPanel);
   FKeyboard:=TUiKeyboardNavigation.Create(FreeAtStop);FKeyboard.Exists:=False;InsertFront(FKeyboard);
   BeginActivityRecord;
-  Labels.LabelSpeed := LabelSpeed;
-  Labels.LabelPower := LabelPower;
-  Labels.LabelCorr := LabelCorr;
-  Labels.LabelCadence := LabelCadence;
-  Labels.LabelHeart := LabelHeart;
-  Labels.LabelSlope := LabelSlope;
+  FRideMetricsHud:=TRideMetricsHud.Create(FreeAtStop);
+  InsertFront(FRideMetricsHud);
+  Labels:=FRideMetricsHud.Labels;
+  LabelSpeed:=Labels.LabelSpeed;
+  LabelPower:=Labels.LabelPower;
+  LabelCorr:=Labels.LabelCorr;
+  LabelCadence:=Labels.LabelCadence;
+  LabelHeart:=Labels.LabelHeart;
+  LabelSlope:=Labels.LabelSlope;
+  LabelWork:=Labels.LabelWork;
+  LabelWorkTSS:=Labels.LabelWorkTSS;
   Labels.LabelPitch := LabelPitch;
   Labels.LabelInfo := LabelInfo;
   Labels.LabelRecordingStatus:=TCastleLabel.Create(FreeAtStop);
@@ -2620,13 +2612,6 @@ begin
   Labels.LabelRecordingStatus.Anchor(hpLeft,20);Labels.LabelRecordingStatus.Anchor(vpTop,-160);
   Labels.LabelRecordingStatus.MaxWidth:=700;Labels.LabelRecordingStatus.Exists:=False;
   InsertFront(Labels.LabelRecordingStatus);
-  PrepareHudLayout;
-  Labels.WheelPower:=AddZoneWheel(LabelPower,'PowerZoneWheel');
-  Labels.WheelCadence:=AddZoneWheel(LabelCadence,'CadenceZoneWheel');
-  Labels.WheelHeart:=AddZoneWheel(LabelHeart,'HeartZoneWheel');
-  Labels.LabelWork:=LabelWork;
-  Labels.LabelWorkTSS:=LabelWorkTSS;
-  LabelWork.Caption:='0.0';
   FBLEHud.SetLabels(Labels);
 
   { ── Rider list panel — scrollable card list ── }
@@ -3197,29 +3182,25 @@ begin
   FChaseSide := 0;
   FChaseAimHeight := 0.85;
 
-  { ── Screen post-processing: bloom + filmic tonemap ──
-    Включено по умолчанию; B переключает для сравнения "до/после".
-    Настройки (порог/сила блума, экспозиция) — свойства FScreenFX. }
+  { Optional optical softness. Legacy colour/stylization effects remain off;
+    B bypasses the complete chain for an immediate before/after comparison. }
   FScreenFX := TScreenFX.Create(MainViewport);
-  FScreenFX.Enabled:=False;
+  FScreenFX.FogEnabled:=False;
+  FScreenFX.SofteningLevel:=Settings.GetGraphicsOption(Ord(goSoftening));
 
-  { Настройки тумана — из общего файла, который пишут поля в студии
-    (Osm3dStudioMainForm/FogEditChange). Студия и игра не разделяют память,
-    только диск. 0/файла нет → ничего не меняем, FScreenFX.Enabled остаётся
-    False как строкой выше — прежнее поведение «весь FX выключен, пока
-    игрок не нажмёт кнопку/клавишу». >0 → врубаем ВЕСЬ пост-пайплайн
-    (Enabled — общий выключатель на bloom+tone+fog, раздельно их не
-    развести без правки GameScreenFX): FogEnabled уже True по умолчанию
-    в TScreenFX, тут переопределяем дальность, чистую зону и общий Enabled. }
+  { Retain the studio's explicit fog setting. It never enables bloom/tone. }
   LoadFogSettings(FogDistM, FogClearM);
   if FogDistM > 0 then
   begin
     FScreenFX.FogRange     := FogDistM;
     FScreenFX.FogClearZone := FogClearM;
-    FScreenFX.Enabled      := True;
+    FScreenFX.FogEnabled   := True;
     Logger.Info(Format('[ViewPlay] fog: %.0f m, чистая зона %.0f m (из %s)',
       [FogDistM, FogClearM, FogConfigPath]));
   end;
+
+  { Apply after construction: the old placement ran before FScreenFX existed. }
+  if CliFlag('nofx') then FScreenFX.Enabled:=False;
 
   ApplyShadowSettings;
   UpdateFxButtonColors;   { раскрасить FX-кнопки панели по фактическому состоянию }
@@ -3411,6 +3392,10 @@ begin
   FSimPanel := nil;
   FMenuButton := nil;
   FWorkoutHud := nil;
+  FRideMetricsHud:=nil;
+  LabelSpeed:=nil; LabelPower:=nil; LabelCorr:=nil;
+  LabelCadence:=nil; LabelHeart:=nil; LabelSlope:=nil;
+  LabelWork:=nil; LabelWorkTSS:=nil;
   SceneLifecycleLog('=== TViewPlay.Stop END ===');
   FreezeDiagWrite('TViewPlay.Stop: END (clean exit completed)');
 end;
@@ -3905,6 +3890,7 @@ var
   TmpCard: TRiderCard;
   SelfY, ScrollH, ContentH: Single;
 begin
+  CountRiderWork(rwRiderList);
   if not Assigned(FRiderInner) then Exit;
   if not Assigned(FRemoteRiders) then Exit;
   if not Assigned(FRemoteRiders.RideClient) then Exit;
@@ -4193,8 +4179,20 @@ begin
       SL.Add(Format('  "origin": [%.8f, %.8f],',
         [FOsmStreaming.Origin.Lat, FOsmStreaming.Origin.Lon], FS));
       if (FOsmStreaming.Session <> nil) and (FOsmStreaming.Session.Map <> nil) then
+      begin
         SL.Add(Format('  "snapped_count": %d,',
           [Length(FOsmStreaming.Session.Map.SnappedRoute)], FS));
+        { Original FIT-indexed anchors, before building detours insert points.
+          Diagnostics must not compare a prepared path index with a FIT index. }
+        SL.Add('  "fit_anchors": [');
+        for I := 0 to High(FOsmStreaming.Session.Map.SnappedRouteCenters) do
+        begin
+          P := FOsmStreaming.Session.GeoToLocal(FOsmStreaming.Session.Map.SnappedRouteCenters[I]);
+          if I < High(FOsmStreaming.Session.Map.SnappedRouteCenters) then Sep := ',' else Sep := '';
+          SL.Add(Format('    [%.3f,%.3f,%.3f]%s', [P.X,P.Y,P.Z,Sep], FS));
+        end;
+        SL.Add('  ],');
+      end;
       if FOsmStreaming.RouteStartGroundY(GY) then
         SL.Add(Format('  "start_ground_y": %.3f,', [GY], FS))
       else
@@ -4408,7 +4406,12 @@ var
   WuGroundY: Single;              { высота земли под стартом (RouteStartGroundY) }
   WuPlaceErr: string;             { '' либо текст ошибки постановки на старт }
   FocusRemove:TRemoveType;
+  LeanAgent:TPhysicalAgent;
 begin
+  T0 := Timer;
+  CountRiderWork(rwViewUpdate);
+  if FProfileFrameNum=High(Integer) then FProfileFrameNum:=0;
+  Inc(FProfileFrameNum); { scheduling must advance with logging disabled too }
   TStart := GetTickCount64;
   if TStart>=FRoomCheckAt then begin
     FRoomCheckAt:=TStart+1000;RideRooms.Update;
@@ -4435,7 +4438,6 @@ begin
   FreezeDiagMainBeat;
 
   try
-  T0 := Timer;
   if (not Container.Focused) or (Container.FrontView<>Self) or
      (not (FCameraDragButton in Container.MousePressed)) then FCameraDragging:=False;
   if HasActiveState then begin
@@ -4669,6 +4671,18 @@ begin
   end;
 
   { FIT, physical motion and animation share the same playback delta. }
+  { Exactly one roll owner. The physical trajectory still provides lateral
+    acceleration, but does not also rotate an animated parametric bicycle. }
+  if HasActiveState and Assigned(FActiveAvatarAgent.Actor)then
+    FActiveAvatarAgent.Actor.RiderOwnsLean:=Assigned(FBikeInstance)and
+      FPerfAnim and FBikeInstance.BodyDynamicsEnabled and FBikeInstance.HasTripoRider and not FLeanTestActive;
+  if Assigned(FBotAgents)and Assigned(FBotBikes)then
+    for I:=0 to Min(FBotAgents.Count,FBotBikes.Count)-1 do begin
+      LeanAgent:=TPhysicalAgent(FBotAgents[I]);
+      if Assigned(LeanAgent)and Assigned(LeanAgent.Actor)then
+        LeanAgent.Actor.RiderOwnsLean:=FPerfAnim and TBikeInstance(FBotBikes[I]).BodyDynamicsEnabled
+          and TBikeInstance(FBotBikes[I]).HasTripoRider;
+    end;
   T1 := Timer;
   FreezeDiagSetLocation('TViewPlay.Update: physics');
   if HasActiveState then FActiveAvatarAgent.TracePosition(mtBeforePhysics);
@@ -4845,6 +4859,7 @@ begin
   { 3b. Distance culling — every 15 frames }
   if (FProfileFrameNum mod 15 = 0) then
   begin
+    CountRiderWork(rwDistanceCull);
     FRemoteRiders.UpdateDistanceCulling;
   end;
 
@@ -4895,11 +4910,25 @@ begin
       RiderSit.PowerW := FActiveAvatarAgent.State.AppliedPowerWatts;
       RiderSit.CadenceRpm := LocalCadence;
       RiderSit.GradePct := SlopeDegToGradePct(FActiveAvatarAgent.State.CurrentSlopeAngle);
-      RiderSit.LateralAccel := FActiveAvatarAgent.State.CurrentLateralAccel;
+      { Use continuous speed and yaw rate. A positional correction of the
+        route must not turn a world-coordinate difference into a body shove. }
+      RiderSit.LateralAccel := FActiveAvatarAgent.State.CurrentSpeed*
+        FActiveAvatarAgent.State.CurrentYawRateRad;
+      if FLeanTestActive then
+        RiderSit.LateralAccel:=9.80665*Tan(DegToRad(FLeanTestLastLean));
       RiderSit.FtpW := EffectiveRiderProfile.FtpW;
+      if FActiveAvatarAgent.Actor.RiderOwnsLean then
+        FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,0,
+          FActiveAvatarAgent.State.CurrentModelPitch)
+      else FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,
+        FActiveAvatarAgent.State.CurrentTurnAngle,FActiveAvatarAgent.State.CurrentModelPitch);
       FPoseManager.Update(PhysDt, RiderSit);
     end;
     FBikeInstance.AnimateFrame(PhysDt);
+    if HasActiveState and Assigned(FActiveAvatarAgent.Actor)and FActiveAvatarAgent.Actor.RiderOwnsLean then begin
+      FActiveAvatarAgent.State.CurrentTurnAngle:=FBikeInstance.RiderTotalLeanDeg;
+      FActiveAvatarAgent.State.TargetTurnAngle:=FActiveAvatarAgent.State.CurrentTurnAngle;
+    end;
   end;
 
   { Frozen poses still move with the physical agent. Keep their sun aligned
@@ -4994,7 +5023,7 @@ begin
   DtPose  := TimerSeconds(T5a, T4) * 1000;   { боты + позы + райдеры }
   DtLabels := TimerSeconds(T5, T5a) * 1000;  { только HUD-лейблы }
   DtTotal := TimerSeconds(T5, T0) * 1000;
-  FFrameLastUpdateMs := DtTotal;
+  FFrameLastCoreUpdateMs := DtTotal;
 
   { TEMP-DIAG: этапы секции Pose }
   DtPoseCam      := TimerSeconds(T4a, T4) * 1000;
@@ -5016,7 +5045,6 @@ begin
   FProf_PoseMgr := FProf_PoseMgr * (1 - ProfileBlend) + DtPoseMgr * ProfileBlend;
   FProf_PoseAnimRem := FProf_PoseAnimRem * (1 - ProfileBlend) + DtPoseAnimRem * ProfileBlend;
   FProf_Labels := FProf_Labels * (1 - ProfileBlend) + DtLabels * ProfileBlend;
-  FProf_FrameTotal := FProf_FrameTotal * (1 - ProfileBlend) + DtTotal * ProfileBlend;
 
   { TEMP-DIAG PoseDiag stubbed: same FProfileFrameNum=0 trap as PoseMgr —
     3 lines/frame, ~95% of the Castle log. Restore: change False to True. }
@@ -5039,7 +5067,12 @@ begin
   FProf_LastUpdateEnd := T5;
   FProf_HasLastUpdate := True;
 
-  { Count active rider scenes }
+  { Hidden diagnostics must not traverse scenes or format strings. The FPS
+    label needs a readable refresh rate, independent of the display FPS. }
+  if Assigned(LabelFps) and LabelFps.Exists and (TStart>=FProfileDisplayAt) then
+  begin
+  FProfileDisplayAt:=TStart+250;
+  CountRiderWork(rwProfileDisplay);
   SceneCount := 0;
   TotalShapes := 0;
   if Assigned(FBikeInstance) then
@@ -5078,13 +5111,9 @@ begin
     ProfileLine := ProfileLine + LineEnding +
       Format('VP: %d  (streaming map: road in Osm3d tiles)', [ViewportItems]);
 
-  if GLogEnabled then
-    ProfileLogFrameDetail;
-
-  { FPS-строка — всегда (оверлей отвязан от /log); детальный
-    профильный лог — по-прежнему только под /log. }
-  if Assigned(LabelFps) then
-    LabelFps.Caption := ProfileLine;
+  LabelFps.Caption := ProfileLine;
+  end;
+  if GLogEnabled then ProfileLogFrameDetail;
 
   { FREEZE-DIAG — full-frame timing. If the frame is heavy (>= 250 ms),
     dump the section breakdown straight to trainer.log so we can see WHO
@@ -5097,6 +5126,10 @@ begin
       [FrameMs, InheritedMs, PhysicsMs,
        DtWorld, DtBLE, DtRelay, DtLabels, DtTotal]));
   FreezeDiagSetLocation('TViewPlay.Update: returned (between frames)');
+  { The public raw timer covers the complete Update, including diagnostics;
+    the earlier T5 timestamp remains the logical section breakdown. }
+  FFrameLastUpdateMs:=TimerSeconds(Timer,T0)*1000;
+  FProf_FrameTotal:=FProf_FrameTotal*(1-ProfileBlend)+FFrameLastUpdateMs*ProfileBlend;
   except
     on E: Exception do
     begin
@@ -5471,7 +5504,7 @@ begin
     Exit(true);
   end;
 
-  { B = toggle screen post-processing (bloom + tonemap) — сравнение до/после }
+  { B = bypass/restore screen post-processing for a before/after comparison. }
   if Event.IsKey(keyB) then
   begin
     if Assigned(FScreenFX) then

@@ -185,7 +185,7 @@ type
 
 implementation
 
-uses
+uses RiderRuntimeAudit,
   BikeLog,       { StartupLog — итог Build и путь к дампу GLSL }
   BikeGfxUtil;   { GNum — GLSL-литералы }
 
@@ -274,7 +274,7 @@ end;
 
 destructor TGpuRiderSkin.Destroy;
 begin
-  if(FRider<>nil)and(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then FRider.Correctives.Body.DetachGpu;
+  if(FRider<>nil)and(FRider.Correctives<>nil)then FRider.Correctives.DetachGpu;
   if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
   { FEffect is parented to appearances — it dies with the rider scene.
     Do not Free it here: LoadTripoRider / a live slider can destroy the
@@ -304,7 +304,7 @@ begin
     races the renderer and raises EObjectCheck (often on rider-list click). }
   FReady := False;
   if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
-  if(FRider<>nil)and(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then FRider.Correctives.Body.DetachGpu;
+  if(FRider<>nil)and(FRider.Correctives<>nil)then FRider.Correctives.DetachGpu;
   if FEffect = nil then Exit;
   try
     FEffect.Enabled := False;
@@ -1470,6 +1470,7 @@ begin
   { стартовое заполнение — bind (суставы вне процедурных цепей: таз, пальцы…);
     делается здесь, а не в UpdateShadowLimbs: конечности перезаписывают свои
     слоты при ленивом пересчёте, а bind-заполнение обязано быть свежим кадра }
+  CountRiderWork(rwSpineFK);
   for I := 0 to GPU_SHJ_COUNT - 1 do FShRigPts[I] := FShBind[I];
 
   { ── спина: FK-цепь, зеркало gskSpineRP ── }
@@ -1521,6 +1522,7 @@ var
   pM, pCl, pSh, Pb, HandPos, RequestedAim: TTripoVec3;
   qU, qU0, qM, qE, qMpre, qEnat, qCl, Rb, FootTurn: TTripoVec4;
 begin
+  CountRiderWork(rwLimbIK);
   AngRad := FShInPedalDir * FShInPhase * 2 * Pi;
   Ca := Cos(AngRad);  Sa := Sin(AngRad);
 
@@ -1736,6 +1738,8 @@ begin
     FEffect.Enabled := AOn;   { FdEnabled.Send внутри; ProcessEvents включён в Build }
     if AOn then FLastValid := False;   { перестраховка: после enable дослать uniform'ы }
   end;
+  if (FRider.Correctives<>nil) and (FRider.Correctives.Body<>nil) then
+    FRider.Correctives.Body.SendActiveFrame;
 end;
 
 function TGpuRiderSkin.EffectSceneAssigned: Boolean;
@@ -1759,6 +1763,7 @@ var
 
 begin
   if not FReady then Exit;
+  CountRiderWork(rwGpuFrame);
   { TEMP-DIAG (этап 2 отладка): первые 2 кадра — дамп входов для численной
     сверки GLSL-математики с CPU-путём. }
   if FDiagDumps < 2 then

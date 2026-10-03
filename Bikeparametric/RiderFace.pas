@@ -51,6 +51,7 @@ type
     function CaptureReplay:TRiderFaceReplay;
     procedure RestoreReplay(const Saved:TRiderFaceReplay);
     procedure DebugJson(Result:TJSONObject);
+    function RecentlyRenderedFar(const MinDistance:Single):Boolean;
     property Valid:Boolean read FValid;
     property Visibility:Single read FVisibility;
     property Gpu:Boolean read FGpu write SetGpu;
@@ -64,6 +65,11 @@ function RiderFaceStrain(Effort:Single):Single;
 function RiderFaceBlink(Time:Double):Single;
 implementation
 uses Math,SysUtils,CastleRenderOptions,CastleRenderContext,CastleQuaternions;
+function TRiderFace.RecentlyRenderedFar(const MinDistance:Single):Boolean;
+begin
+  { Uses the existing head draw sample, independent of face orientation/LOD. }
+  Result:=(FLastSeen<>0) and (GetTickCount64-FLastSeen<300) and (FDistance>=MinDistance);
+end;
 function Ramp(A,B,X:Single):Single;
 begin Result:=EnsureRange((X-A)/(B-A),0,1);Result:=Result*Result*(3-2*Result) end;
 function RiderFaceBlink(Time:Double):Single;

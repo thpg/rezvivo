@@ -29,7 +29,7 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion, RiderHandGrip,
+  RiderMotion, RiderDynamics, RiderHandGrip,
   RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
@@ -360,6 +360,9 @@ type
     Supports single-LOD and automatic X3D LODNode-based multi-LOD builds. }
   {$M+}  { generate RTTI for the published section of this plain class }
   TBikePlaybackState = record
+    BodyDynamics: TRiderDynamicsState;
+    BodyDynamicsInput: TRiderDynamicsInput;
+    BodyDynamicsEnabled, BodyDynamicsSituation: Boolean;
     SteerAngleDeg, PedalSteerDeg, PedalLeanDeg: Single;
     Pose: TRiderPose;
     Rider: TRiderPoseReplay;
@@ -455,6 +458,12 @@ type
     FFrameContactsValid: Boolean;
     FFrameHandR,FFrameHandL,FHandAnchorFrameR,FHandAnchorFrameL:TRiderGripFrame;
     FRiderEffort, FRiderEffortTarget, FMotionCadence: Single;
+    FBodyDynamics: TRiderDynamicsState;
+    FBodyDynamicsInput: TRiderDynamicsInput;
+    FBodyDynamicsEnabled, FBodyDynamicsSituation: Boolean;
+    procedure SetBodyDynamicsEnabled(Value:Boolean);
+    function BodyDynamicsDebugJson:TJSONObject;
+  private
     FRiderCrankPhase: Single; { physical right crank angle; derived, not replay state }
     FPedalRate: Single; { actual crank revolutions/s, gated by foot contact }
     FBreathPhase: Double;
@@ -476,6 +485,7 @@ type
     FPedalLeanDeg: Single;
     FSteerAngleApplied: Single;
     FPedalLeanApplied: Single;
+    FRearTrackApplied: Single;
     FSteerNodesValid: Boolean;
     FBuildDepth: Integer;
     FSteerRots: TList;
@@ -700,6 +710,7 @@ type
     procedure SendShadowCapsules(const DynA, DynB: array of TVector3;
       const DynRA, DynRB: array of Single; DynCount: Integer);
     procedure UpdateShadowDynamic(const OBB, PedalR, PedalL: TVector3);
+    function RiderJointPos(const Nm: string; out P: TVector3): Boolean;
     procedure SetGpuAnim(V: Boolean);
     procedure SetAnimationEnabled(V: Boolean);
     procedure InvalidateGpuRiderSkin; { drop GPU plug; next UpdateTripoRider rebuilds }
@@ -736,7 +747,7 @@ type
     procedure DriveSpinNodesCPU(const Phase, WheelPhase: Single);
     procedure EnsureSteerAxisCache;
     function TotalSteerAngleDeg: Single;
-    { Quantized angle written to SteerRot and used by SteerPoint (hands). }
+    { Same angle for SteerRot and SteerPoint (hands); only legacy mode quantizes. }
     function MeshSteerAngleDeg: Single;
     procedure DriveSteerNodes;
     procedure DrivePedalLean;
@@ -775,6 +786,11 @@ type
     function GroundShadowMap: TGeneratedShadowMapNode;
     procedure SetGroundShadowReceiver(const Enabled: Boolean);
     procedure SetRiderEffort(Intensity: Single);
+    procedure SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
+      RoadPitchDeg:Single=0);
+    procedure SampleRiderDynamics;
+    function RiderTotalLeanDeg:Single;
+    property BodyDynamicsEnabled:Boolean read FBodyDynamicsEnabled write SetBodyDynamicsEnabled;
     property RiderEffortTarget: Single read FRiderEffortTarget;
     function RiderCadenceRpm: Single;
     function RiderMotionDebugJson: TJSONObject;
@@ -1175,7 +1191,7 @@ var
 
 implementation
 
-uses
+uses RiderRuntimeAudit,
   CastleRenderOptions, RiderPoseCatalog, TripoRig,
   CastleShapes,
   CastleSceneCore,  { SceneLifecycleLog — сборка/освобождение составной сцены райдера }
@@ -2478,6 +2494,10 @@ const
 
 function TBikeInstance.CaptureReplay: TBikePlaybackState;
 begin
+  Result.BodyDynamics:=FBodyDynamics;
+  Result.BodyDynamicsInput:=FBodyDynamicsInput;
+  Result.BodyDynamicsEnabled:=FBodyDynamicsEnabled;
+  Result.BodyDynamicsSituation:=FBodyDynamicsSituation;
   Result.SteerAngleDeg:=FSteerAngleDeg;
   Result.PedalSteerDeg:=FPedalSteerDeg;
   Result.PedalLeanDeg:=FPedalLeanDeg;
@@ -2563,6 +2583,10 @@ begin
   FHandSlotL0:=Saved.HandSlotL0;
   FHandSlotL1:=Saved.HandSlotL1;
   if FTripoRider<>nil then FTripoRider.RestoreReplay(Saved.Rider);
+  FBodyDynamics:=Saved.BodyDynamics;
+  FBodyDynamicsInput:=Saved.BodyDynamicsInput;
+  FBodyDynamicsEnabled:=Saved.BodyDynamicsEnabled;
+  FBodyDynamicsSituation:=Saved.BodyDynamicsSituation;
   AnimateFrame(FAnimElapsed);
 end;
 
@@ -2571,6 +2595,8 @@ var I: Integer;
 begin
   FBodyParameters:=DefaultRiderBody;
   inherited Create;
+  FBodyDynamicsInput:=DefaultRiderDynamicsInput;
+  FBodyDynamicsEnabled:=GetEnvironmentVariable('REZVIVO_RIDER_DYNAMICS')<>'0';
   FOwner := AOwner;
   FGroup := TCastleTransform.Create(AOwner);
   FOnSubSceneBuilt := nil;
@@ -2917,6 +2943,7 @@ begin
     animate nodes from that temporary graph: they may be freed by the next
     build step. Invalidate-on-entry alone cannot protect such cached nodes. }
   if FBuildDepth > 0 then Exit;
+  CountRiderWork(rwBikeFrame);
   ApplyWorldSunToShadow;   { the agent may have turned since the last frame }
   if not FAnimationEnabled then Exit;
   { ── GPU-анимация, этап 1: фаза крутки на CPU (несколько float-операций
@@ -2959,8 +2986,6 @@ begin
     первого ProcessShadowMapsReceivers) }
   if BikeShadowMapDebugQuad and (FMapDbgScene = nil) then
     EnsureMapDebugQuad;
-  if not BikeDebugDisableSteer then
-    DriveSteerNodes;
   T0c := Timer;   { TEMP-DIAG }
   for I := 0 to High(FComponents) do
     FComponents[I].AnimateFrame(ElapsedSec);
@@ -2974,6 +2999,9 @@ begin
   end;
   T1c := Timer;
   FDiagUtrd := FDiagUtrd * 0.95 + TimerSeconds(T1c, T0c) * 1000 * 0.05;
+  { Body balance has now produced this frame's steering. Hands and the
+    visible steerer must consume it in the same frame. }
+  if not BikeDebugDisableSteer then DriveSteerNodes;
 end;
 
 function TBikeInstance.GetAnimDiag: String;
@@ -3422,6 +3450,9 @@ begin
       FTripoRider.Scene.TimePlayingSpeed := 0;
     end;
     FAnimationEnabled := False;
+    if FBodyDynamicsEnabled then begin
+      FPedalLeanDeg:=0;DrivePedalLean;
+    end;
   end
   else
   begin
@@ -3569,6 +3600,9 @@ begin
   Result.Add('gpu_skin_built', FGpuSkin <> nil);
   Result.Add('gpu_skin_effect_scene', (FGpuSkin <> nil) and FGpuSkin.EffectSceneAssigned);
   Result.Add('diag', GetAnimDiag);
+  Result.Add('timing_ms',TJSONObject.Create(['components',FDiagComps,
+    'rider_total',FDiagUtrd,'pose_apply',FDiagPoseApply,'gpu_send',FDiagGpuSend,
+    'native_ik',FDiagIK,'pedals',FDiagPedals,'contacts',FDiagContacts,'capsule_shadow',FDiagShadowDyn]));
   { Light steer snapshot (no full scene walk). }
   Result.Add('steer_disable', BikeDebugDisableSteer);
   Result.Add('steer_angle_deg', FSteerAngleDeg);
@@ -3856,6 +3890,7 @@ begin
     FMainRoot  := nil;
   end;
   FTripoRider := NewRider;
+  FTripoRider.OcclusionJointQuery:=@RiderJointPos;
   if (not FBodyParametersSet) and NewRider.HasParametricBody then
     FBodyParameters:=NewRider.BodyParameters;
   FTripoFitScale := 0.0;             { new rig → re-fit size once on next placement }
@@ -4175,6 +4210,7 @@ begin
   FBodyParametersSet:=True;
   if SameRiderBody(P,FBodyParameters) then Exit;
   FBodyParameters:=P;
+  ResetRiderDynamics(FBodyDynamics);
   FTripoFitScale:=0;
   ApplyTripoBodyShape;
 end;
@@ -4265,6 +4301,70 @@ begin
   FRiderEffortTarget := EnsureRange(Intensity, 0.0, 3.0);
 end;
 
+procedure TBikeInstance.SetBodyDynamicsEnabled(Value:Boolean);
+begin
+  if FBodyDynamicsEnabled=Value then Exit;
+  FBodyDynamicsEnabled:=Value;ResetRiderDynamics(FBodyDynamics);
+  if (FTripoRider<>nil)and(FTripoRider.Correctives<>nil)and
+    (FTripoRider.Correctives.Body<>nil) then
+    FTripoRider.Correctives.Body.UseDynamics:=Value;
+end;
+
+function TBikeInstance.RiderTotalLeanDeg:Single;
+begin Result:=FBodyDynamics.Frame.TotalLeanDeg end;
+
+procedure TBikeInstance.SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
+  RoadPitchDeg:Single);
+begin
+  FBodyDynamicsSituation:=True;
+  FBodyDynamicsInput.PowerW:=PowerW;
+  FBodyDynamicsInput.LateralAccel:=LateralAccel;
+  FBodyDynamicsInput.ExternalLeanDeg:=ExternalLeanDeg;
+  FBodyDynamicsInput.RoadPitchRad:=DegToRad(RoadPitchDeg);
+end;
+
+procedure TBikeInstance.SampleRiderDynamics;
+var U:TRiderDynamicsInput;I:Integer;
+begin
+  if not FBodyDynamicsEnabled then Exit;
+  { Explicit MCP sample only: reconstruct the preceding two seconds at fixed
+    inputs. Ordinary updates and replay never do this warm-up work. }
+  UpdateTripoRider(FTripoPrevElapsed);
+  U:=FBodyDynamicsInput;ResetRiderDynamics(FBodyDynamics);
+  for I:=1 to 240 do begin
+    U.Phase:=FBodyDynamicsInput.Phase-U.CrankRate*(240-I)*RIDER_DYNAMICS_STEP;
+    AdvanceRiderDynamics(FBodyDynamics,U,RIDER_DYNAMICS_STEP);
+  end;
+  UpdateTripoRider(FTripoPrevElapsed);
+  if FTripoRider<>nil then FTripoRider.UpdateAppearance(0,FForwardSpeedMps,
+    FRiderEffort,FRiderCrankPhase,FBreathPhase,FBreathLoad);
+end;
+
+function TBikeInstance.BodyDynamicsDebugJson:TJSONObject;
+var I:Integer;A:TJSONArray;
+begin
+  Result:=TJSONObject.Create;Result.Add('enabled',FBodyDynamicsEnabled);
+  Result.Add('steps',Int64(FBodyDynamics.Steps));Result.Add('time',FBodyDynamics.Time);
+  Result.Add('remainder',FBodyDynamics.Remainder);
+  Result.Add('total_lean_deg',FBodyDynamics.Frame.TotalLeanDeg);
+  Result.Add('rear_track_m',FBodyDynamics.Frame.RearTrackM);
+  Result.Add('heading_deg',RadToDeg(FBodyDynamics.Frame.HeadingRad));
+  Result.Add('steer_ground_deg',RadToDeg(FBodyDynamics.Frame.SteerRad));
+  Result.Add('yaw_rate',FBodyDynamics.Frame.YawRate);
+  Result.Add('route_lateral_accel',FBodyDynamicsInput.LateralAccel);
+  Result.Add('wheelbase_m',FBodyDynamicsInput.Wheelbase);
+  Result.Add('support',TJSONArray.Create([FBodyDynamics.Frame.Motion.X,
+    FBodyDynamics.Frame.Motion.Y,FBodyDynamics.Frame.Motion.Z]));
+  Result.Add('seat_load_n',TJSONArray.Create([FBodyDynamics.Frame.SeatLoad[0],FBodyDynamics.Frame.SeatLoad[1]]));
+  Result.Add('seat_compression_m',TJSONArray.Create([FBodyDynamics.Frame.SeatCompression[0],FBodyDynamics.Frame.SeatCompression[1]]));
+  Result.Add('pedal_load_n',TJSONArray.Create([FBodyDynamics.Frame.PedalLoad[0],FBodyDynamics.Frame.PedalLoad[1]]));
+  Result.Add('hand_load_n',TJSONArray.Create([FBodyDynamics.Frame.HandLoad[0],FBodyDynamics.Frame.HandLoad[1]]));
+  A:=TJSONArray.Create;Result.Add('muscles',A);
+  for I:=0 to RD_MUSCLES-1 do A.Add(FBodyDynamics.Frame.Muscle[I]);
+  A:=TJSONArray.Create;Result.Add('tissue_m',A);
+  for I:=0 to 3 do A.Add(FBodyDynamics.Frame.Tissue[I]);
+end;
+
 function TBikeInstance.RiderCadenceRpm: Single;
 var Interval: Single;
 begin
@@ -4295,6 +4395,7 @@ var I: Integer; V: TVector3; Ok: Boolean; Bones: TJSONObject; Errors,Targets: TJ
 begin
   Result := TJSONObject.Create;
   Result.Add('phase', FPhase); Result.Add('breath_phase', FBreathPhase);
+  Result.Add('dynamics',BodyDynamicsDebugJson);
   Result.Add('crank_phase', FRiderCrankPhase);
   Result.Add('breaths_per_minute',RiderBreathsPerMinute(FBreathLoad)); Result.Add('effort', FRiderEffort); Result.Add('cadence', FMotionCadence);
   Result.Add('gpu', FGpuAnim); Result.Add('last_error', FUtrLastError);
@@ -4314,6 +4415,14 @@ begin
     FFrameContacts[I].X,FFrameContacts[I].Y,FFrameContacts[I].Z]));
   if FTripoRider = nil then Exit;
   Result.Add('bike_lean_deg', FPedalLeanApplied);
+  Result.Add('steer_mesh_deg',MeshSteerAngleDeg);
+  Result.Add('steer_applied_deg',FSteerAngleApplied);
+  if FGroup<>nil then begin
+    V:=FGroup.Transform.MultPoint(Vector3(-GetAxleHalfSpanM,0,0));
+    Result.Add('rear_track_contact',TJSONArray.Create([V.X,V.Y,V.Z]));
+    V:=FGroup.Transform.MultPoint(SteerPoint(Vector3(GetAxleHalfSpanM,0,0)));
+    Result.Add('front_track_contact',TJSONArray.Create([V.X,V.Y,V.Z]));
+  end;
   HF := TJSONArray.Create;
   Result.Add('authored_spine_deg', HF);
   for I := 0 to 4 do HF.Add(P.SpineAngles[I]);
@@ -4466,7 +4575,8 @@ var
   AnkleR, AnkleL, Pelvis, PelvisRot, LiveOffset, Support: TVector3;
   BoneA, BoneB: TVector3;   { scratch для TryGetBone-резолвов }
   Rot4: TVector4;                          { rider orientation (axis+angle), for P^-1 }
-  LivePose: TRiderPose;
+  LivePose, GoalPose: TRiderPose;
+  GoalTransform: TMatrix4;
   Dt, progHR, progHL, twistDeg, freeR, freeL: Single;
   FromFrameR,FromFrameL:TRiderGripFrame;
 
@@ -4607,7 +4717,13 @@ begin
        ApplyRiderPose, which also writes the Tripo* fields so the post-animation
        instant-sync lands on the same values. ── }
   Dt := ElapsedSec - FTripoPrevElapsed;
-  if (Dt < 0) or (Dt > 0.5) then Dt := 0;           { guard resets / long stalls }
+  if (Dt < 0) or (Dt > 0.5) then begin
+    ResetRiderDynamics(FBodyDynamics);
+    FBodyDynamicsInput.ForwardAccel:=0;
+    FBodyDynamicsInput.RoadNormalAccel:=0;
+    FBodyDynamicsInput.SpeedMps:=FForwardSpeedMps;
+    Dt:=0;
+  end;
   FTripoPrevElapsed := ElapsedSec;
   T0u := Timer;   { TEMP-DIAG: pose apply/advance }
   if FTripoRider.PoseAnimating then FTripoRider.AdvancePose(Dt)
@@ -4622,8 +4738,87 @@ begin
   AdvanceRiderBreathing(FBreathLoad,FBreathPhase,Dt,FRiderEffort);
   Ang := FTripoPedalDir * Phase * 2 * Pi;
   FRiderCrankPhase := (ArcTan2(CrankR.Y, CrankR.X) + Ang) / (2 * Pi);
-  Motion := EvaluateRiderMotion(LivePose.Motion, FRiderCrankPhase, FBreathPhase,
-    FMotionCadence, FRiderEffort, LivePose.PedalSway, LivePose.TorsoBobAmp);
+  if FBodyDynamicsEnabled then begin
+    FBodyDynamicsInput.Profile:=LivePose.Motion;
+    FBodyDynamicsInput.Phase:=FRiderCrankPhase;
+    FBodyDynamicsInput.CrankRate:=FTripoPedalDir*FPedalRate;
+    FBodyDynamicsInput.BreathPhase:=FBreathPhase;
+    FBodyDynamicsInput.Cadence:=FMotionCadence;
+    FBodyDynamicsInput.Effort:=FRiderEffort;
+    if not FBodyDynamicsSituation then FBodyDynamicsInput.PowerW:=FRiderEffort*220;
+    FBodyDynamicsInput.MassKg:=FBodyParameters.WeightKg;
+    FBodyDynamicsInput.HeightM:=FBodyParameters.HeightCm*0.01;
+    FBodyDynamicsInput.Composition:=FBodyParameters.Composition;
+    if (Dt>0)and FBodyDynamicsSituation then
+      FBodyDynamicsInput.ForwardAccel:=FBodyDynamicsInput.ForwardAccel+
+        (EnsureRange((FForwardSpeedMps-FBodyDynamicsInput.SpeedMps)/Dt,-8.0,8.0)-
+        FBodyDynamicsInput.ForwardAccel)*(1-Exp(-Dt/0.12));
+    FBodyDynamicsInput.SpeedMps:=FForwardSpeedMps;
+    { Standalone previews have cadence but no physical route input. }
+    if not FBodyDynamicsSituation then begin
+      FBodyDynamicsInput.SpeedMps:=Max(FForwardSpeedMps,6*SmoothUnit(FMotionCadence/35));
+      FBodyDynamicsInput.ForwardAccel:=0;
+    end;
+    FBodyDynamicsInput.Wheelbase:=Max(0.65,2*GetAxleHalfSpanM);
+    EnsureSteerAxisCache;
+    FBodyDynamicsInput.SteerAxisUp:=Abs(FSteerAxis.Y);
+    FBodyDynamicsInput.SeatHeight:=Saddle.Y;
+    { Curvature of the support direction, not differences of large world
+      coordinates. Discontinuous route corrections cannot act as impacts. }
+    if (Dt>0)and FBodyDynamics.Initialized then begin
+      Alpha:=FBodyDynamicsInput.RoadPitchRad-FBodyDynamics.LastInput.RoadPitchRad;
+      if Abs(Alpha)>0.15 then FBodyDynamicsInput.RoadNormalAccel:=0
+      else FBodyDynamicsInput.RoadNormalAccel:=FBodyDynamicsInput.RoadNormalAccel+
+        (EnsureRange(FForwardSpeedMps*Alpha/Dt,-8.0,8.0)-FBodyDynamicsInput.RoadNormalAccel)*
+        (1-Exp(-Dt/0.08));
+    end;
+    FBodyDynamicsInput.SeatX:=-LiveOffset.X;
+    FBodyDynamicsInput.SeatY:=-LiveOffset.Y;
+    FBodyDynamicsInput.SeatZ:=-LiveOffset.Z;
+    FBodyDynamicsInput.TorsoLength:=FBodyParameters.HeightCm*0.00292;
+    BoneA:=GripPlace('r',LivePose.HandPosR,LivePose.HandFreeRPos,LivePose.HandFreeRWave);
+    BoneB:=GripPlace('l',LivePose.HandPosL,LivePose.HandFreeLPos,LivePose.HandFreeLWave);
+    FBodyDynamicsInput.BarReach:=(BoneA.X+BoneB.X)*0.5-O(Saddle).X;
+    FBodyDynamicsInput.BarWidth:=Abs(BoneA.Z-BoneB.Z);
+    FBodyDynamicsInput.CrankRadius:=Sqrt(Sqr(CrankR.X)+Sqr(CrankR.Y));
+    FBodyDynamicsInput.CrankX:=BB.X-Saddle.X-LiveOffset.X;
+    FBodyDynamicsInput.CrankY:=BB.Y-Saddle.Y-LiveOffset.Y;
+    FBodyDynamicsInput.StanceHalf:=GetRiderStanceHalf*FBikeSkeleton.MM;
+    FBodyDynamicsInput.FootR:=1-LivePose.LegFreeR;
+    FBodyDynamicsInput.FootL:=1-LivePose.LegFreeL;
+    FBodyDynamicsInput.HandR:=Ord(LivePose.HandPosR>0);
+    FBodyDynamicsInput.HandL:=Ord(LivePose.HandPosL>0);
+    if FHandAnimating and(FHandAnimDur>0)then begin
+      Alpha:=Min(1.0,(FHandAnimElapsed+Dt)/FHandAnimDur);
+      if (FHandFromR<>FTripoHandPosR)or FHandAnchorRValid then
+        FBodyDynamicsInput.HandR:=FBodyDynamicsInput.HandR*
+          Sqr(Cos(Pi*SlotProg(Alpha,FHandSlotR0,FHandSlotR1)));
+      if (FHandFromL<>FTripoHandPosL)or FHandAnchorLValid then
+        FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*
+          Sqr(Cos(Pi*SlotProg(Alpha,FHandSlotL0,FHandSlotL1)));
+    end;
+    FBodyDynamicsInput.Grounded:=LivePose.Grounded;
+    { The desired support uses the current authored posture. Reading the scene
+      transform here would feed last frame's solved motion back into its goal. }
+    Support:=TVector3.Zero;
+    if LivePose.Motion.Standing>0 then begin
+      GoalPose:=FTripoRider.MotionPose(LivePose,Default(TRiderMotionFrame));
+      PelvicPitch:=FTripoRider.SplitHipHinge(GoalPose);
+      RootQ:=RiderSpineDelta(Vector3(0,0,1),PelvicPitch,0,0);
+      Rot4:=FTripoRider.OrientedRotationVec4(YawRad);
+      BodyQ:=QuatNormalize(QuatMul(RootQ,QuatFromAxisAngle(Rot4.X,Rot4.Y,Rot4.Z,Rot4.W)));
+      GoalTransform:=RotationMatrixRad(2*ArcCos(EnsureRange(BodyQ.W,-1.0,1.0)),
+        BodyQ.X,BodyQ.Y,BodyQ.Z)*ScalingMatrix(Vector3(S,S,S));
+      Support:=FTripoRider.PedallingSupportAtTransform(O(Saddle)+LiveOffset,O(BB),LiveOffset,
+        FBodyDynamicsInput.CrankRadius,0,LivePose.Motion.Standing,S,GoalTransform)-(O(Saddle)+LiveOffset);
+    end;
+    FBodyDynamicsInput.GoalX:=Support.X;FBodyDynamicsInput.GoalY:=Support.Y;
+    FBodyDynamicsInput.GoalZ:=Support.Z;
+    AdvanceRiderDynamics(FBodyDynamics,FBodyDynamicsInput,Dt);
+    Motion:=FBodyDynamics.Frame.Motion;
+  end else
+    Motion := EvaluateRiderMotion(LivePose.Motion, FRiderCrankPhase, FBreathPhase,
+      FMotionCadence, FRiderEffort, LivePose.PedalSway, LivePose.TorsoBobAmp);
   if BikeDebugDisableSteer then
   begin
     Motion.Roll := Motion.Roll + Motion.BikeLean;
@@ -4658,9 +4853,15 @@ begin
   FTripoRider.Scene.Scale := Vector3(S, S, S);
   FTripoRider.Scene.Rotation := Rot4;
   Support := O(Saddle) + LiveOffset + Vector3(0, Bob, Sway);
-  Support:=FTripoRider.PedallingSupport(Support,O(BB),LiveOffset+Vector3(0,Bob,Sway),
-    Sqrt(Sqr(CrankR.X)+Sqr(CrankR.Y)),FPedalLeanApplied,LivePose.Motion.Standing);
+  if not FBodyDynamicsEnabled then
+    Support:=FTripoRider.PedallingSupport(Support,O(BB),LiveOffset+Vector3(0,Bob,Sway),
+      Sqrt(Sqr(CrankR.X)+Sqr(CrankR.Y)),FPedalLeanApplied,LivePose.Motion.Standing);
   FTripoRider.Scene.Translation := Support - PelvisRot;
+  if (FTripoRider.Correctives<>nil)and(FTripoRider.Correctives.Body<>nil)then begin
+    FTripoRider.Correctives.Body.UseDynamics:=FBodyDynamicsEnabled;
+    if FBodyDynamicsEnabled then FTripoRider.Correctives.Body.SetDynamicsFrame(
+      FBodyDynamics.Frame,FTripoRider.Scene.Transform,O(Saddle));
+  end;
   if FBikeContainer <> nil then
   begin
     { P = T · R · S  =>  P^-1 = S^-1 · R^-1 · T^-1 }
@@ -5064,20 +5265,20 @@ end;
 
 function TBikeInstance.TotalSteerAngleDeg: Single;
 begin
-  { Shared by SteerRot mesh and on-bar hands (SteerPoint). Path only —
-    continuous PedalSteer on hands alone made grips slide off a fixed bar;
-    putting PedalSteer on mesh every frame thrashes CGE shape caches.
-    Pedal body rock stays on DrivePedalLean (FGroup roll), not the steerer. }
+  { One angle for SteerRot and both on-bar hands. The route provides the
+    mean curvature; body dynamics supplies the small balance correction. }
   if BikeDebugDisableSteer then Exit(0);
   Result := FSteerAngleDeg;
+  if FBodyDynamicsEnabled then Result:=Result+FPedalSteerDeg;
   if Result > 45 then Result := 45
   else if Result < -45 then Result := -45;
 end;
 
 function TBikeInstance.MeshSteerAngleDeg: Single;
 begin
-  { Quantized shared angle for SteerRot.Send and grip SteerPoint. }
-  Result := Round(TotalSteerAngleDeg * 4) * 0.25;   { 0.25° — path noise only }
+  { Continuous dynamics steering; the legacy path retains its quantization. }
+  if FBodyDynamicsEnabled then Result:=TotalSteerAngleDeg
+  else Result := Round(TotalSteerAngleDeg * 4) * 0.25;
 end;
 
 procedure TBikeInstance.DriveSteerNodes;
@@ -5121,7 +5322,8 @@ begin
   MeshDeg := MeshSteerAngleDeg;
   Ang := DegToRad(MeshDeg);
   Ax := FSteerAxis;
-  NeedWrite := Abs(MeshDeg - FSteerAngleApplied) >= 0.12;
+  if FBodyDynamicsEnabled then NeedWrite:=Abs(MeshDeg-FSteerAngleApplied)>=0.002
+  else NeedWrite := Abs(MeshDeg - FSteerAngleApplied) >= 0.12;
   for I := 0 to FSteerRots.Count - 1 do
   begin
     TN := TTransformNode(FSteerRots[I]);
@@ -5149,20 +5351,34 @@ end;
 
 procedure TBikeInstance.DrivePedalLean;
 var
-  Ang: Single;
+  Ang,Yaw,RearShift: Single;
+  Q:TTripoVec4;
 begin
   if FGroup = nil then Exit;
+  Yaw:=0;RearShift:=0;
+  if FBodyDynamicsEnabled and FAnimationEnabled and not BikeDebugDisableSteer then begin
+    Yaw:=FBodyDynamics.Frame.HeadingRad;
+    RearShift:=FBodyDynamics.Frame.RearTrackM;
+  end;
+  { Public Group.Translation is also used to place editor comparison bikes.
+    Change only our own previous displacement, preserving their base position. }
+  if Abs(RearShift-FRearTrackApplied)>1e-7 then begin
+    FGroup.Translation:=FGroup.Translation+Vector3(0,0,RearShift-FRearTrackApplied);
+    FRearTrackApplied:=RearShift;
+  end;
+  FGroup.Center:=Vector3(-GetAxleHalfSpanM,0,0);
   if BikeDebugDisableSteer then
   begin
-    if Abs(FPedalLeanApplied) < 1e-4 then Exit;
     FPedalLeanApplied := 0;
     FGroup.Rotation := Vector4(1, 0, 0, 0);
     Exit;
   end;
-  if Abs(FPedalLeanDeg - FPedalLeanApplied) < 0.002 then Exit;
   FPedalLeanApplied := FPedalLeanDeg;
   Ang := DegToRad(FPedalLeanDeg);
-  FGroup.Rotation := Vector4(1, 0, 0, Ang);
+  Q:=QuatNormalize(QuatMul(QuatFromAxisAngle(0,1,0,-Yaw),QuatFromAxisAngle(1,0,0,Ang)));
+  Ang:=2*ArcCos(EnsureRange(Q.W,-1.0,1.0));
+  if Abs(Ang)<1e-7 then FGroup.Rotation:=Vector4(1,0,0,0)
+  else FGroup.Rotation:=Vector4(Q.X,Q.Y,Q.Z,Ang);
 end;
 
 function TBikeInstance.SteerPoint(const P: TVector3): TVector3;
@@ -6309,6 +6525,14 @@ begin
   FShadowCapN.Send(Total);
 end;
 
+function TBikeInstance.RiderJointPos(const Nm: string; out P: TVector3): Boolean;
+begin
+  if not FTripoShowRider then begin P:=TVector3.Zero;Exit(False) end;
+  if FGpuAnim and (FGpuSkin<>nil) and FGpuSkin.Ready then
+    Result:=FGpuSkin.ShadowJoint(Nm,P)
+  else Result:=FTripoRider.PosedJointParent(Nm,P);
+end;
+
 procedure TBikeInstance.UpdateShadowDynamic(const OBB, PedalR, PedalL: TVector3);
 var
   DynA, DynB: array[0..High(SHADOW_RIDER_BONES) + 5] of TVector3;
@@ -6319,16 +6543,6 @@ var
   procedure AddDyn(const A, B: TVector3; RA, RB: Single);
   begin
     DynA[N] := A; DynB[N] := B; DynRA[N] := RA; DynRB[N] := RB; Inc(N);
-  end;
-
-  function RiderJointPos(const Nm: string; out P: TVector3): Boolean;
-  begin
-    { этап 5: на GPU-пути posed-рига на CPU нет — точки считает TGpuRiderSkin
-      той же математикой, что шейдер; на CPU-пути — posed-риг, как раньше. }
-    if FGpuAnim and (FGpuSkin <> nil) and FGpuSkin.Ready then
-      Result := FGpuSkin.ShadowJoint(Nm, P)
-    else
-      Result := FTripoRider.PosedJointParent(Nm, P);
   end;
 
 begin

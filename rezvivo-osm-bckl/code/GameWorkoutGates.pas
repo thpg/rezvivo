@@ -9,7 +9,7 @@ type
     FOwner:TComponent;
     FParent:TCastleTransform;
     FScene:TCastleScene;
-    FFrame,FFilm,FDetail:TUnlitMaterialNode;
+    FFrame,FFilm,FDetail,FBanner:TUnlitMaterialNode;
     FFrameColors:TColorNode;
     FFrameShade:array of Single;
     FLabel:TTextNode;
@@ -29,7 +29,7 @@ type
   TWorkoutGates=class(TComponent)
   private
     FGuide:TWorkoutGateGuide;
-    FUpcoming,FPassed:TWorkoutGateVisual;
+    FUpcoming:TWorkoutGateVisual;
   public
     constructor Create(AOwner:TComponent;AParent:TCastleTransform);reintroduce;
     destructor Destroy;override;
@@ -80,7 +80,8 @@ var Root:TX3DRootNode;Path:array[0..7]of TVector3;
   end;
 begin
   Root:=TX3DRootNode.Create;
-  FFrame:=Material;FFilm:=Material;FDetail:=Material;
+  FFrame:=Material;FFilm:=Material;FDetail:=Material;FBanner:=Material;
+  FBanner.EmissiveColor:=Vector3(0.025,0.045,0.065);
   Path[0]:=Vector3(-3,-0.45,0);Path[1]:=Vector3(-3,2.9,0);
   Path[2]:=Vector3(-2.9,3.5,0);Path[3]:=Vector3(-2.55,3.85,0);
   Path[4]:=Vector3(2.55,3.85,0);Path[5]:=Vector3(2.9,3.5,0);
@@ -93,7 +94,7 @@ begin
     Normal:=Vector3(-D.Y,D.X,0);
     for J:=0 to Sides-1 do begin
       N:=I*Sides+J;Angle:=J*2*Pi/Sides;
-      P[N]:=Path[I]+Normal*(0.20*Cos(Angle))+Vector3(0,0,0.20*Sin(Angle));
+      P[N]:=Path[I]+Normal*(0.15*Cos(Angle))+Vector3(0,0,0.15*Sin(Angle));
       Shade:=0.72+0.28*Sin(Angle);C[N]:=Vector3(Shade,Shade,Shade);
       FFrameShade[N]:=Shade;
       if I<High(Path)then begin
@@ -114,6 +115,12 @@ begin
     Vector3(-2.65,3.40,0),Vector3(-2.80,2.95,0)]);
   Mesh:=TIndexedTriangleSetNode.Create;Mesh.Coord:=Coords;Mesh.Solid:=False;
   Mesh.SetIndex([0,1,2,0,2,3,0,3,4,0,4,5,0,5,6,0,6,7]);AddShape(Mesh,FFilm);
+  { A dark translucent header gives the countdown a readable home in the arch. }
+  Coords:=TCoordinateNode.Create;Coords.SetPoint([
+    Vector3(-2.53,3.08,0.16),Vector3(2.53,3.08,0.16),
+    Vector3(2.53,3.65,0.16),Vector3(-2.53,3.65,0.16)]);
+  Mesh:=TIndexedTriangleSetNode.Create;Mesh.Coord:=Coords;Mesh.Solid:=False;
+  Mesh.SetIndex([0,1,2,0,2,3]);AddShape(Mesh,FBanner);
   { Small chequered shoulders make the marker read as a race arch. One batch. }
   SetLength(P,16*4);SetLength(Index,16*6);
   for I:=0 to 15 do begin
@@ -126,8 +133,8 @@ begin
   Coords:=TCoordinateNode.Create;Coords.SetPoint(P);
   Mesh:=TIndexedTriangleSetNode.Create;Mesh.Coord:=Coords;Mesh.Solid:=False;Mesh.SetIndex(Index);
   AddShape(Mesh,FDetail);
-  Brand:=LabelAt(4.15,0.20);Brand.FdString.Send(['REZVIVO']);
-  FLabel:=LabelAt(3.16,0.28);
+  Brand:=LabelAt(3.54,0.12);Brand.FdString.Send(['REZVIVO']);
+  FLabel:=LabelAt(3.23,0.23);
   FScene.Load(Root,True);
 end;
 
@@ -155,12 +162,13 @@ begin
     FFilm.FdEmissiveColor.Send(C);FLastColor:=C;
   end;
   if Pose.Opacity<>FLastOpacity then begin
-    FFrame.FdTransparency.Send(1-0.60*Pose.Opacity);
-    FDetail.FdTransparency.Send(1-0.78*Pose.Opacity);FLastOpacity:=Pose.Opacity;
+    FFrame.FdTransparency.Send(1-0.82*Pose.Opacity);
+    FBanner.FdTransparency.Send(1-0.78*Pose.Opacity);
+    FDetail.FdTransparency.Send(1-0.94*Pose.Opacity);FLastOpacity:=Pose.Opacity;
   end;
   FilmOpacity:=Pose.Opacity*Pose.FilmOpacity;
   if FilmOpacity<>FLastFilmOpacity then begin
-    FFilm.FdTransparency.Send(1-0.13*FilmOpacity);FLastFilmOpacity:=FilmOpacity;
+    FFilm.FdTransparency.Send(1-0.075*FilmOpacity);FLastFilmOpacity:=FilmOpacity;
   end;
   if FCaption<>Caption then begin FCaption:=Caption;FLabel.FdString.Send([Caption]);end;
   FScene.Exists:=True;
@@ -170,12 +178,11 @@ constructor TWorkoutGates.Create(AOwner:TComponent;AParent:TCastleTransform);
 begin
   inherited Create(AOwner);FGuide:=TWorkoutGateGuide.Create;
   FUpcoming:=TWorkoutGateVisual.Create(Self,AParent,'WorkoutGateUpcoming');
-  FPassed:=TWorkoutGateVisual.Create(Self,AParent,'WorkoutGatePassed');
 end;
 destructor TWorkoutGates.Destroy;
-begin FUpcoming.Free;FPassed.Free;FGuide.Free;inherited;end;
+begin FUpcoming.Free;FGuide.Free;inherited;end;
 procedure TWorkoutGates.Reset;
-begin FGuide.Reset;FUpcoming.Hide;FPassed.Hide;end;
+begin FGuide.Reset;FUpcoming.Hide;end;
 
 procedure TWorkoutGates.Step(Player:TWorkoutPlayer;Agent:TPhysicalAgent;Seconds:Single;WorldReady:Boolean);
 var P:TVector3;Caption:String;Pose:TWorkoutGatePose;Target:Integer;Next:TWorkoutSegment;
@@ -187,25 +194,24 @@ begin
   FGuide.Update(Player,Agent.Path,P,Agent.State.ForwardDir,Agent.State.CurrentSpeed,Seconds,WorldReady);
   Pose:=FGuide.Upcoming;Caption:='';
   if Pose.Visible then begin
-    Caption:=Format(UiText('Interval %d'),[Pose.NextIndex+1])+' · '+Format(UiText('%ds'),[Ceil(Pose.Remaining)]);
-    Next:=Player.Plan.Segments[Pose.NextIndex];
-    if (Player.ReferenceWatts>0) and (Next.Kind<>wskFreeRide)then begin
+    if Pose.Finish then Caption:=UiText('Finish')
+    else Caption:=Format(UiText('Interval %d'),[Pose.NextIndex+1]);
+    Caption:=Caption+' · '+Format(UiText('%ds'),[Ceil(Pose.Remaining)]);
+    Next:=nil;if not Pose.Finish then Next:=Player.Plan.Segments[Pose.NextIndex];
+    if (Next<>nil) and (Player.ReferenceWatts>0) and (Next.Kind<>wskFreeRide)then begin
       Target:=Round(Next.PowerLow*Player.ReferenceWatts*Player.Intensity);
       Caption:=Caption+' · '+IntToStr(Target)+UiText(' W');
     end;
   end;
   FUpcoming.Apply(Pose,Caption,Agent.State.GroundQuery,Seconds);
-  Pose:=FGuide.Passed;Caption:='';
-  if Pose.Visible then Caption:=Format(UiText('Interval %d'),[Pose.NextIndex+1]);
-  FPassed.Apply(Pose,Caption,nil,Seconds);
 end;
 
 function TWorkoutGates.Diagnostics:TJSONObject;
-  function PoseJson(const P:TWorkoutGatePose;V:TWorkoutGateVisual):TJSONObject;
+  function PoseJson(const P:TWorkoutGatePose):TJSONObject;
   begin
-    Result:=TJSONObject.Create(['visible',P.Visible,'rendered',V.Scene.Exists,
+    Result:=TJSONObject.Create(['visible',P.Visible,'finish',P.Finish,
       'next_index',P.NextIndex,'remaining',P.Remaining,'ahead_m',P.DistanceAhead,
-      'width',P.Width,'opacity',P.Opacity,'collides',V.Scene.Collides,'pickable',V.Scene.Pickable]);
+      'width',P.Width,'opacity',P.Opacity,'collides',False,'pickable',False]);
     Result.Add('position',TJSONArray.Create([P.Position.X,P.Position.Y,P.Position.Z]));
     Result.Add('forward',TJSONArray.Create([P.Forward.X,P.Forward.Y,P.Forward.Z]));
     Result.Add('color',TJSONArray.Create([P.Color.X,P.Color.Y,P.Color.Z]));
@@ -213,8 +219,10 @@ function TWorkoutGates.Diagnostics:TJSONObject;
 begin
   Result:=TJSONObject.Create(['lead_seconds',WorkoutGateLeadSeconds,'crossings',FGuide.Crossings,
     'crossing_elapsed',FGuide.CrossingElapsed,'crossing_plane_error_m',FGuide.CrossingPlaneError]);
-  Result.Add('upcoming',PoseJson(FGuide.Upcoming,FUpcoming));
-  Result.Add('passed',PoseJson(FGuide.Passed,FPassed));
+  Result.Add('upcoming',PoseJson(FGuide.Upcoming));
+  Result.Objects['upcoming'].Add('rendered',FUpcoming.Scene.Exists);
+  Result.Add('passed',PoseJson(FGuide.Passed));
+  Result.Objects['passed'].Add('rendered',False);
   Result.Add('crossing_point',TJSONArray.Create([FGuide.CrossingPoint.X,FGuide.CrossingPoint.Y,FGuide.CrossingPoint.Z]));
 end;
 end.

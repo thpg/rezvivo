@@ -41,6 +41,7 @@ type
     RigidBody: TCastleRigidBody;
     Viewport: TCastleViewport;
     Navigation: TCastleThirdPersonNavigation;
+    RiderOwnsLean: Boolean; { visual body solver owns the complete bicycle roll }
   end;
 
   { Опциональный провайдер высоты земли. Заполняется AY мировым Y

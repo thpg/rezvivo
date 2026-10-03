@@ -14,11 +14,16 @@ type
     SmoothedGroundYValid: Boolean;
     GroundProbePosition: TVector3;
     GroundGradient: TVector3;
+    GroundWaitSec: Single;
     PrevYawRad: Single;
     SmoothedYawRateRad: Single;
     YawRateValid: Boolean;
     SlopeCorrSmooth: Single;
     ElevDebtM: Single;
+    RoadSlopeGrade: Single;
+    RoadSlopeValid: Boolean;
+    RoadSlopeMissSec, RoadSlopeMissM: Single;
+    FitSlopeMissSec, FitSlopeMissM: Single;
   end;
 
   PAgentControlInput = ^TAgentControlInput;
@@ -42,6 +47,7 @@ type
     FGroundProbePosition, FGroundGradient: TVector3;
     FGroundLeaseLimitedSteps: QWord;
     FGroundLeaseRejectedMeters: Double;
+    FGroundWaitSec: Single;
 
     { Состояние оценки кривизны траектории (см. UpdateTrajectoryFromRealVelocity).
       Кривизна берётся из приращения рысканья, а не из разности мировых
@@ -58,6 +64,13 @@ type
       меньший спуск). Учитываем фактически применённую поправку после
       сглаживания и ограничения знаком уклона меша. }
     FElevDebtM: Single;
+    { Road-scale gravity is separate from the metre-long wheel contact plane.
+      Missing asynchronous samples retain the last estimate for a bounded lease. }
+    FRoadSlopeGrade: Single;
+    FRoadSlopeValid: Boolean;
+    FRoadSlopeMissSec, FRoadSlopeMissM: Single;
+    FFitSlopeMissSec, FFitSlopeMissM: Single;
+    procedure ResetSlopeTracking;
 
     function GroundHeightAtPosition(const Pos: TVector3): Single;
     procedure CaptureCameraRelativeState;
@@ -87,13 +100,10 @@ type
       (mesh query / hold / raycast) for ground-log diagnostics. }
     function FindGroundHeightAt(const X, Z: Single;
       out ASrc: TGroundHitSource; out AHit: Boolean): Single; overload;
-    function SlopeAngleAt(const CenterXZ, Dir: TVector3;
-      const AFallbackDeg: Single): Single;
-    { FIT-поправка уклона: разница FIT−меш на ОДНОМ отрезке пути,
-      добавленная к уклону под колёсами. Совпадающие профили (в том
-      числе при выключенном FIT-слое) дают строго нулевую поправку.
-      Замок знака/×2 — от меша; невыплаченное отдаётся дальше. }
+    { Gravity/trainer grade on a centred road segment. Mesh and FIT are
+      sampled at the same endpoints; wheel pitch remains visual only. }
     procedure ApplySmoothedFitSlope(const PitchDeg, DeltaTime: Single);
+    function ApplyRouteLoadProfile: Boolean;
     procedure UpdateDebugSpheres(const FrontWheelPos, RearWheelPos,
       FrontGroundPos, RearGroundPos: TVector3);
     function PlaceActorByWheels(const CenterXZ: TVector3; const Dir: TVector3; const FixedDelta: Single): Single;
@@ -149,6 +159,7 @@ type
       Initial waiting without a plane is excluded (no requested move yet). }
     property GroundLeaseLimitedSteps: QWord read FGroundLeaseLimitedSteps;
     property GroundLeaseRejectedMeters: Double read FGroundLeaseRejectedMeters;
+    property GroundWaitSeconds: Single read FGroundWaitSec;
 
     { Точная геометрия колёсных проб: WheelOffset := AHalfSpanM
       (ModelHalfLength := AHalfSpanM + ScaledWheelInset). Вызывать из кода,
@@ -174,11 +185,18 @@ begin
   Result.SmoothedGroundYValid:=FSmoothedGroundYValid;
   Result.GroundProbePosition:=FGroundProbePosition;
   Result.GroundGradient:=FGroundGradient;
+  Result.GroundWaitSec:=FGroundWaitSec;
   Result.PrevYawRad:=FPrevYawRad;
   Result.SmoothedYawRateRad:=FSmoothedYawRateRad;
   Result.YawRateValid:=FYawRateValid;
   Result.SlopeCorrSmooth:=FSlopeCorrSmooth;
   Result.ElevDebtM:=FElevDebtM;
+  Result.RoadSlopeGrade:=FRoadSlopeGrade;
+  Result.RoadSlopeValid:=FRoadSlopeValid;
+  Result.RoadSlopeMissSec:=FRoadSlopeMissSec;
+  Result.RoadSlopeMissM:=FRoadSlopeMissM;
+  Result.FitSlopeMissSec:=FFitSlopeMissSec;
+  Result.FitSlopeMissM:=FFitSlopeMissM;
 end;
 
 procedure TCustomActorPhysics.RestoreReplay(const Saved: TGroundTrackingReplay);
@@ -187,11 +205,28 @@ begin
   FSmoothedGroundYValid:=Saved.SmoothedGroundYValid;
   FGroundProbePosition:=Saved.GroundProbePosition;
   FGroundGradient:=Saved.GroundGradient;
+  FGroundWaitSec:=Saved.GroundWaitSec;
   FPrevYawRad:=Saved.PrevYawRad;
   FSmoothedYawRateRad:=Saved.SmoothedYawRateRad;
   FYawRateValid:=Saved.YawRateValid;
   FSlopeCorrSmooth:=Saved.SlopeCorrSmooth;
   FElevDebtM:=Saved.ElevDebtM;
+  FRoadSlopeGrade:=Saved.RoadSlopeGrade;
+  FRoadSlopeValid:=Saved.RoadSlopeValid;
+  FRoadSlopeMissSec:=Saved.RoadSlopeMissSec;
+  FRoadSlopeMissM:=Saved.RoadSlopeMissM;
+  FFitSlopeMissSec:=Saved.FitSlopeMissSec;
+  FFitSlopeMissM:=Saved.FitSlopeMissM;
+end;
+
+procedure TCustomActorPhysics.ResetSlopeTracking;
+begin
+  FSlopeCorrSmooth:=0;
+  FElevDebtM:=0;
+  FRoadSlopeGrade:=0;
+  FRoadSlopeValid:=False;
+  FRoadSlopeMissSec:=0; FRoadSlopeMissM:=0;
+  FFitSlopeMissSec:=0; FFitSlopeMissM:=0;
 end;
 
 constructor TCustomActorPhysics.Create(const AActor: TPhysicsActor; const AState: TPhysicsState;
@@ -210,11 +245,11 @@ begin
   FGroundGradient := Vector3(0, 0, 0);
   FGroundLeaseLimitedSteps := 0;
   FGroundLeaseRejectedMeters := 0;
+  FGroundWaitSec := 0;
   FPrevYawRad := 0;
   FSmoothedYawRateRad := 0;
   FYawRateValid := false;
-  FSlopeCorrSmooth := 0;
-  FElevDebtM := 0;
+  ResetSlopeTracking;
 end;
 
 procedure TCustomActorPhysics.Initialize;
@@ -276,8 +311,7 @@ begin
   FActor.Transform.Direction := FState.ForwardDir;
   FActor.Transform.Up := Vector3(0, 1, 0);
 
-  FSlopeCorrSmooth := 0;
-  FElevDebtM := 0;
+  ResetSlopeTracking;
   FState.CurrentGroundPitch := PlaceActorByWheels(FState.WorldPosition, FState.ForwardDir, 1.0);
   FState.CurrentSlopeAngle := FState.CurrentGroundPitch;
   FState.CurrentSlopeCorrDeg := 0;
@@ -893,173 +927,177 @@ begin
   AHit := False;
 end;
 
-function TCustomActorPhysics.SlopeAngleAt(const CenterXZ, Dir: TVector3;
-  const AFallbackDeg: Single): Single;
-var
-  WheelOffset: Single;
-  FrontX, FrontZ, RearX, RearZ: Single;
-  FrontY, RearY, Wheelbase, DeltaY: Single;
+function TCustomActorPhysics.ApplyRouteLoadProfile: Boolean;
+var Grade,Station,Height:Single;
 begin
-  { Уклон для физики ускорений по ОТДЕЛЬНОМУ провайдеру (SlopeQuery —
-    земля с поправкой FIT-слоя). Колёса при этом стоят на GroundQuery
-    (видимый меш). Без провайдера или при его промахе (тайл не загружен) —
-    откат на уклон колёс AFallbackDeg. Половинчатый ответ (одно колесо из
-    старого значения) недопустим: дал бы фиктивный уклон до ±бесконечности
-    на базе 1 м — поэтому оба запроса обязаны ответить. }
-  Result := AFallbackDeg;
-  if not Assigned(FState) then Exit;
-  if not Assigned(FState.SlopeQuery) then Exit;
-
-  WheelOffset := FState.ModelHalfLength - FState.ScaledWheelInset;
-  if WheelOffset < 0.1 then
-    WheelOffset := 0.1;
-  FrontX := CenterXZ.X + Dir.X * WheelOffset;
-  FrontZ := CenterXZ.Z + Dir.Z * WheelOffset;
-  RearX  := CenterXZ.X - Dir.X * WheelOffset;
-  RearZ  := CenterXZ.Z - Dir.Z * WheelOffset;
-
-  if not FState.SlopeQuery(FrontX, FrontZ, FState.LastGroundY, FrontY) then Exit;
-  if not FState.SlopeQuery(RearX, RearZ, FState.LastGroundY, RearY) then Exit;
-
-  Wheelbase := WheelOffset * 2;
-  DeltaY := (FrontY - FState.FrontWheelContactOffset)
-          - (RearY  - FState.RearWheelContactOffset);
-  if Wheelbase > 0.01 then
-    Result := RadToDeg(ArcTan2(DeltaY, Wheelbase));
-  if Result > 30 then Result := 30;
-  if Result < -30 then Result := -30;
+  Result:=(FState<>nil) and (FPath<>nil) and
+    FPath.FitLoadAtPosition(FPath.Position,Grade,Station,Height);
+  if not Result then Exit;
+  { This is the complete load, not a correction clamped to the sign or
+    amplitude of a rendered road facet. No GPU availability or elevation debt. }
+  ResetSlopeTracking;
+  FState.CurrentSlopeAngle:=RadToDeg(ArcTan(Grade*0.01));
+  FState.CurrentSlopeCorrDeg:=0;
+  FState.CurrentSlopeCorrValid:=False;
 end;
 
 procedure TCustomActorPhysics.ApplySmoothedFitSlope(const PitchDeg, DeltaTime: Single);
 const
-  LookSec      = 4.0;
-  LookMinM     = 18.0;
-  LookMaxM     = 48.0;
-  CorrTauSec   = 2.2;
-  FlatG        = 1.0;    { на ровном месте допускаем уклон до ±1 % }
-  AmpMaxK      = 2.0;    { усиление не больше чем ×2 от уклона меша }
-  PayHorizonM  = 50.0;   { за сколько метров выплачиваем долг }
-  DebtMaxM     = 8.0;    { потолок накопленных метров }
+  RoadHalfSpanM = 6.0;
+  CorrTauSec = 2.2;
+  PendingHoldSec = 1.0;
+  PendingHoldM = 6.0;
+  FlatG = 1.0;
+  AmpMaxK = 2.0;
+  PayHorizonM = 50.0;
+  DebtMaxM = 8.0;
 var
-  L, Alpha, Ym0, Ym1, Yf0, Yf1: Single;
-  MeshG, TargetG, DebtG, DesiredG, AppliedG, PaidG, OutG, Ds: Single;
-  Ahead: TPathPosition;
-  P0, P1: TVector3;
-
-  function SampleHeights(const X, Z: Single; out AYm, AYf: Single): Boolean;
-  begin
-    Result := FState.GroundQuery(X, Z, FState.LastGroundY, AYm) and FState.SlopeQuery(X, Z, AYm, AYf);
-  end;
-
-  function DegToGrade(D: Single): Single;
-  begin
-    Result := Tan(DegToRad(D)) * 100.0;
-  end;
+  Dt, Ds, Alpha, Span, BackSpan, FrontSpan: Single;
+  Ym0, Ym1, Yf0, Yf1: Single;
+  WheelG, MeshG, TargetG, DesiredG, OutG: Single;
+  Back, Ahead: TPathPosition;
+  Center, P0, P1, Dir: TVector3;
+  MeshHit0, MeshHit1, FitHit0, FitHit1: Boolean;
 
   function GradeToDeg(G: Single): Single;
   begin
     Result := RadToDeg(ArcTan(G * 0.01));
   end;
 
-  { Непрерывные границы: на ровном ±FlatG; по мере появления уклона
-    разрешение на противоположный знак плавно сходит к нулю.
-    При |меш| >= FlatG/AmpMaxK знак уже заперт, усиление <= AmpMaxK.
-    Прежнее if |меш|<=1 переключало потолок с 1% сразу на 2%:
-    погрешность колёсной пробы в миллиметры дёргала уклон и долг. }
-  function SignLockedGrade(const AMeshG, ADesiredG: Single): Single;
-  var
-    MeshLimit, FlatAllowance, MinG, MaxG: Single;
+  function SignLockedGrade(const BaseG, Desired: Single): Single;
+  var Limit, FlatAllowance: Single;
   begin
-    MeshLimit := AMeshG * AmpMaxK;
-    FlatAllowance := Max(0.0, FlatG - Abs(MeshLimit));
-    MinG := Min(0.0, MeshLimit) - FlatAllowance;
-    MaxG := Max(0.0, MeshLimit) + FlatAllowance;
-    Result := EnsureRange(ADesiredG, MinG, MaxG);
+    Limit := BaseG * AmpMaxK;
+    FlatAllowance := Max(0.0, FlatG - Abs(Limit));
+    Result := EnsureRange(Desired, Min(0.0, Limit) - FlatAllowance,
+      Max(0.0, Limit) + FlatAllowance);
   end;
 
-  procedure PublishLocked(const AOutG: Single);
+  procedure Publish(const FitValid: Boolean);
   begin
-    OutG := AOutG;
-    FState.CurrentSlopeAngle := GradeToDeg(OutG);
-    if FState.CurrentSlopeAngle >  30 then FState.CurrentSlopeAngle :=  30;
-    if FState.CurrentSlopeAngle < -30 then FState.CurrentSlopeAngle := -30;
-    OutG := DegToGrade(FState.CurrentSlopeAngle);
-    FState.CurrentSlopeCorrDeg := FState.CurrentSlopeAngle - PitchDeg;
-    FState.CurrentSlopeCorrValid := True;
+    OutG := SignLockedGrade(MeshG, MeshG + FSlopeCorrSmooth);
+    FState.CurrentSlopeAngle := EnsureRange(GradeToDeg(OutG), -30.0, 30.0);
+    OutG := Tan(DegToRad(FState.CurrentSlopeAngle)) * 100.0;
+    { HUD correction is FIT versus road, not wheel jitter. }
+    FState.CurrentSlopeCorrDeg := FState.CurrentSlopeAngle - GradeToDeg(MeshG);
+    FState.CurrentSlopeCorrValid := FitValid;
   end;
 
-  procedure UseMeshSlope;
+  procedure PendingCorrection;
   begin
-    FState.CurrentSlopeAngle := PitchDeg;
-    FState.CurrentSlopeCorrDeg := 0;
-    FState.CurrentSlopeCorrValid := False;
-    FElevDebtM := 0;
-    FSlopeCorrSmooth := 0;
-  end;
-
-  { ADeltaG — разница уклонов FIT и меша на одной базе, %. Нельзя
-    подставлять абсолютный уклон впереди вместо уклона под колёсами:
-    даже без FIT это облегчало подъём перед вершиной и гасило спуск
-    перед низиной, а затем переносило ошибку дальше как «долг». }
-  procedure ApplyFitDeltaAndDebt(const ADeltaG: Single);
-  begin
-    TargetG := MeshG + ADeltaG;
-    DebtG := (FElevDebtM / PayHorizonM) * 100.0;
-    DesiredG := TargetG + DebtG;
-    AppliedG := SignLockedGrade(MeshG, DesiredG);
-
-    PaidG := AppliedG - MeshG;
-    Alpha := 1.0 - Exp(-Min(DeltaTime, 0.25) / CorrTauSec);
-    FSlopeCorrSmooth := FSlopeCorrSmooth + (PaidG - FSlopeCorrSmooth) * Alpha;
-    PublishLocked(SignLockedGrade(MeshG, MeshG + FSlopeCorrSmooth));
-
-    Ds := FState.CurrentSpeed * Min(DeltaTime, 0.25);
-    if Ds < 0 then Ds := 0;
-    { Долг считаем по выходу: сглаживание тоже задерживает поправку. }
-    FElevDebtM := FElevDebtM + (TargetG - OutG) * 0.01 * Ds;
-    if FElevDebtM >  DebtMaxM then FElevDebtM :=  DebtMaxM;
-    if FElevDebtM < -DebtMaxM then FElevDebtM := -DebtMaxM;
+    FFitSlopeMissSec := FFitSlopeMissSec + Dt;
+    FFitSlopeMissM := FFitSlopeMissM + Ds;
+    { A pending GPU patch is not an absent FIT layer. Neither restart the
+      correction ramp nor forgive/add elevation debt on an unknown sample. }
+    if (FFitSlopeMissSec > PendingHoldSec) or
+       (FFitSlopeMissM > PendingHoldM) then
+    begin
+      FSlopeCorrSmooth := FSlopeCorrSmooth * (1.0 - Alpha);
+      FElevDebtM := FElevDebtM * (1.0 - Alpha);
+    end;
+    Publish(Abs(FSlopeCorrSmooth) > 0.001);
   end;
 
 begin
   if not Assigned(FState) then Exit;
-  MeshG := DegToGrade(PitchDeg);
-  if not Assigned(FState.SlopeQuery) or not Assigned(FState.GroundQuery) then
+  if ApplyRouteLoadProfile then Exit;
+  Dt := EnsureRange(DeltaTime, 0.0, 0.25);
+  if Dt <= 0 then Exit;
+  Ds := Max(0.0, FState.CurrentSpeed) * Dt;
+  Alpha := 1.0 - Exp(-Dt / CorrTauSec);
+  WheelG := Tan(DegToRad(PitchDeg)) * 100.0;
+  MeshG := WheelG;
+  if not Assigned(FState.GroundQuery) then
   begin
-    UseMeshSlope;
-    Exit;
-  end;
-  if (FPath = nil) or (FPath.PointCount < 2) then
-  begin
-    ApplyFitDeltaAndDebt(DegToGrade(SlopeAngleAt(FState.WorldPosition,
-      FState.ForwardDir, PitchDeg)) - MeshG);
-    Exit;
-  end;
-
-  L := FState.CurrentSpeed * LookSec;
-  if L < LookMinM then L := LookMinM;
-  if L > LookMaxM then L := LookMaxM;
-
-  { E0/E1 по осевой пути — тот же фрейм, что look-ahead (не WorldPosition
-    с lane offset). }
-  P0 := FPath.RoadCenterAt(FPath.Position);
-  Ahead := FPath.Position;
-  FPath.AdvanceFollow(Ahead, L);
-  P1 := FPath.RoadCenterAt(Ahead);
-
-  if not SampleHeights(P0.X, P0.Z, Ym0, Yf0) or
-     not SampleHeights(P1.X, P1.Z, Ym1, Yf1) then
-  begin
-    { Нет обоих концов — нет поправки. Подмена отсутствующей высоты
-      текущей создавала фиктивную ровную цель и убирала подъём/спуск. }
-    UseMeshSlope;
+    ResetSlopeTracking;
+    FState.CurrentSlopeAngle := PitchDeg;
+    FState.CurrentSlopeCorrDeg := 0;
+    FState.CurrentSlopeCorrValid := False;
     Exit;
   end;
 
-  { Одинаковые точки и база для ОБОИХ профилей. Постоянный датум и
-    уклон самой дороги сокращаются; остаётся только поправка FIT. }
-  ApplyFitDeltaAndDebt(((Yf1 - Ym1) - (Yf0 - Ym0)) / L * 100.0);
+  { Fixed CENTRED baseline: a 7 cm road seam over the wheelbase used to
+    change trainer grade by seven percentage points. A forward-only or
+    speed-dependent baseline shifts crests and modulates load with speed. }
+  { Two points define a straight road, not a cyclic out-and-back corner. }
+  if (FPath <> nil) and (FPath.PointCount >= 3) then
+  begin
+    Center := FPath.RoadCenterAt(FPath.Position);
+    Back := FPath.Position; Ahead := FPath.Position;
+    FPath.AdvanceFollow(Back, -RoadHalfSpanM);
+    FPath.AdvanceFollow(Ahead, RoadHalfSpanM);
+    P0 := FPath.RoadCenterAt(Back); P1 := FPath.RoadCenterAt(Ahead);
+    { Legacy open paths still wrap their cursor. Never sample a fictitious
+      closing segment kilometres from an endpoint; use a one-sided span. }
+    if DistanceXZ(Center, P0) > RoadHalfSpanM * 1.25 then P0 := Center;
+    if DistanceXZ(Center, P1) > RoadHalfSpanM * 1.25 then P1 := Center;
+  end
+  else
+  begin
+    Center := FState.WorldPosition;
+    Dir := NormalizeXZ(FState.ForwardDir);
+    P0 := Center - Dir * RoadHalfSpanM;
+    P1 := Center + Dir * RoadHalfSpanM;
+  end;
+  BackSpan := DistanceXZ(Center, P0);
+  FrontSpan := DistanceXZ(Center, P1);
+  Span := BackSpan + FrontSpan;
+  MeshHit0 := False; MeshHit1 := False;
+  if Span > 0.1 then
+  begin
+    { Queue BOTH endpoints. Predict Y to keep the same bridge/tunnel floor. }
+    MeshHit0 := FState.GroundQuery(P0.X, P0.Z,
+      FState.LastGroundY - WheelG * BackSpan * 0.01, Ym0);
+    MeshHit1 := FState.GroundQuery(P1.X, P1.Z,
+      FState.LastGroundY + WheelG * FrontSpan * 0.01, Ym1);
+  end;
+  if MeshHit0 and MeshHit1 then
+  begin
+    MeshG := (Ym1 - Ym0) / Span * 100.0;
+    FRoadSlopeGrade := MeshG;
+    FRoadSlopeValid := True;
+    FRoadSlopeMissSec := 0; FRoadSlopeMissM := 0;
+  end
+  else
+  begin
+    FRoadSlopeMissSec := FRoadSlopeMissSec + Dt;
+    FRoadSlopeMissM := FRoadSlopeMissM + Ds;
+    if FRoadSlopeValid then
+    begin
+      if (FRoadSlopeMissSec > PendingHoldSec) or
+         (FRoadSlopeMissM > PendingHoldM) then
+        FRoadSlopeGrade := FRoadSlopeGrade + (WheelG - FRoadSlopeGrade) * Alpha;
+      MeshG := FRoadSlopeGrade;
+    end;
+    if Assigned(FState.SlopeQuery) then PendingCorrection
+    else begin FSlopeCorrSmooth := 0; FElevDebtM := 0; Publish(False) end;
+    Exit;
+  end;
+
+  if not Assigned(FState.SlopeQuery) then
+  begin
+    FSlopeCorrSmooth := 0; FElevDebtM := 0;
+    FFitSlopeMissSec := 0; FFitSlopeMissM := 0;
+    Publish(False);
+    Exit;
+  end;
+  FitHit0 := FState.SlopeQuery(P0.X, P0.Z, Ym0, Yf0);
+  FitHit1 := FState.SlopeQuery(P1.X, P1.Z, Ym1, Yf1);
+  if not (FitHit0 and FitHit1) then
+  begin
+    PendingCorrection;
+    Exit;
+  end;
+  FFitSlopeMissSec := 0; FFitSlopeMissM := 0;
+  TargetG := (Yf1 - Yf0) / Span * 100.0;
+  DesiredG := SignLockedGrade(MeshG, TargetG + FElevDebtM / PayHorizonM * 100.0);
+  FSlopeCorrSmooth := FSlopeCorrSmooth +
+    (DesiredG - MeshG - FSlopeCorrSmooth) * Alpha;
+  Publish(True);
+  FElevDebtM := EnsureRange(FElevDebtM + (TargetG - OutG) * 0.01 * Ds,
+    -DebtMaxM, DebtMaxM);
 end;
+
 
 procedure TCustomActorPhysics.UpdateDebugSpheres(const FrontWheelPos, RearWheelPos,
   FrontGroundPos, RearGroundPos: TVector3);
@@ -1348,7 +1386,7 @@ begin
   if Pitch > 30 then Pitch := 30;
   if Pitch < -30 then Pitch := -30;
   FState.CurrentGroundPitch := Pitch;
-  { Уклон для ускорения/FTMS: меш под колёсами + разница FIT−меш. }
+  { Keep contact pitch for the bicycle. Gravity/trainer use the road profile. }
   ApplySmoothedFitSlope(Pitch, DeltaTime);
 end;
 
@@ -1396,6 +1434,7 @@ procedure TCustomActorPhysics.InvalidateGroundPlacement;
 begin
   FSmoothedGroundYValid := False;
   FGroundGradient := Vector3(0, 0, 0);
+  FGroundWaitSec := 0;
 end;
 
 procedure TCustomActorPhysics.ResetTrackingAfterTeleport;
@@ -1404,8 +1443,7 @@ begin
   InvalidateGroundPlacement;
   FYawRateValid := False;
   FSmoothedYawRateRad := 0;
-  FSlopeCorrSmooth := 0;
-  FElevDebtM := 0;
+  ResetSlopeTracking;
   FState.CurrentCurvature := 0;
   FState.CurrentYawRateRad := 0;
   FState.CurrentLateralAccel := 0;
@@ -1498,6 +1536,7 @@ var
   Diff, MaxChange: Single;
 begin
   if not Assigned(FState) then Exit;
+  if Assigned(FActor) and FActor.RiderOwnsLean then Exit;
   FState.TargetTurnAngle := CalculateTurnLeanAngle;
   MaxChange := RollSmoothness * DeltaTime;
   Diff := FState.TargetTurnAngle - FState.CurrentTurnAngle;
@@ -1522,6 +1561,7 @@ begin
   BaseRotation := QuatFromAxisAngle(Vector3(0, 1, 0), ModelBaseYRotation);
   PitchRad := DegToRad(-FState.CurrentModelPitch);
   RollRad := DegToRad(FState.CurrentTurnAngle);
+  if FActor.RiderOwnsLean then RollRad:=0;
 
   PitchRotation := QuatFromAxisAngle(Vector3(1, 0, 0), PitchRad);
   RollRotation := QuatFromAxisAngle(Vector3(0, 0, 1), RollRad);
@@ -1538,10 +1578,9 @@ var
   BrakeForceN: Single;
 begin
   if not Assigned(FState) then begin Result := 0; Exit; end;
-  { Уклон уже посчитан в UpdateVisualGroundPlacement (со SlopeQuery, если
-    назначен). Здесь обновляем его из визуального pitch только когда
-    отдельного провайдера нет — иначе затрём скорректированный уклон. }
-  if not Assigned(FState.SlopeQuery) then
+  { Preserve the road-scale grade with or without FIT. Contact pitch is
+    only a fallback until a separate road profile has become available. }
+  if not ApplyRouteLoadProfile and not Assigned(FState.SlopeQuery) and not FRoadSlopeValid then
     FState.CurrentSlopeAngle := FState.CurrentGroundPitch;
 
   { At plFull LOD: include turn forces; at plReduced/plMinimal: straight line }

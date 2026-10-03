@@ -18,11 +18,12 @@ type
   private
     FTimer: TAsyncGpuTimer;
     FMemory: TGLMemoryInfo;
-    FWall, FCPU, FSubmit, FGPU: TFrameSamples;
+    FWall, FCPU, FCore, FSubmit, FGPU: TFrameSamples;
     FLast, FBegin: TTimerResult;
     FHaveLast, FReset: Boolean;
     FStarted, FMemoryTick: QWord;
     FFreeKiB, FTotalKiB: Int64;
+    FStartCaptures,FStartCacheDraws:QWord;
     procedure ReadMemory;
   public
     constructor Create(AOwner:TComponent);override;
@@ -34,7 +35,7 @@ type
 
 implementation
 
-uses SysUtils, Math, CastleGL, GameViewPlay;
+uses SysUtils, Math, CastleGL, GameViewPlay, RiderRuntimeAudit, CastleRendererInternalShader;
 
 constructor TGamePerformanceProbe.Create(AOwner:TComponent);
 begin
@@ -42,14 +43,18 @@ begin
   Name:='PerformanceProbe';
   FTimer:=TAsyncGpuTimer.Create;
   FWall:=TFrameSamples.Create;FCPU:=TFrameSamples.Create;
+  FCore:=TFrameSamples.Create;
   FSubmit:=TFrameSamples.Create;FGPU:=TFrameSamples.Create;
   FFreeKiB:=-1;FTotalKiB:=-1;FReset:=True;
+  ResetRiderRuntimeAudit;RiderRuntimeAuditActive:=True;
+  FStartCaptures:=CachedMeshCaptures;FStartCacheDraws:=CachedMeshDraws;
 end;
 
 destructor TGamePerformanceProbe.Destroy;
 begin
+  RiderRuntimeAuditActive:=False;
   FTimer.Free;FMemory.Free;
-  FWall.Free;FCPU.Free;FSubmit.Free;FGPU.Free;
+  FWall.Free;FCPU.Free;FCore.Free;FSubmit.Free;FGPU.Free;
   inherited;
 end;
 
@@ -86,7 +91,10 @@ begin
   if FHaveLast then FWall.Add(TimerSeconds(Now,FLast)*1000);
   FLast:=Now;FHaveLast:=True;
   if (ViewPlay<>nil) and ViewPlay.SessionAlive then
+  begin
     FCPU.Add(ViewPlay.FrameLastUpdateMs);
+    FCore.Add(ViewPlay.FrameLastCoreUpdateMs);
+  end;
 end;
 
 procedure AddSummary(Dest:TJSONObject;const Key:string;S:TFrameSamples);
@@ -103,10 +111,17 @@ begin
 end;
 
 procedure TGamePerformanceProbe.Snapshot(Dest:TJSONObject;Reset:Boolean);
+var Work:TJSONObject;
 begin
+  Work:=TJSONObject.Create;Dest.Add('runtime_work',Work);
+  SnapshotRiderRuntimeAudit(Work,Reset);
+  Work.Add('cached_pose_captures',Int64(CachedMeshCaptures-FStartCaptures));
+  Work.Add('cached_pose_draws',Int64(CachedMeshDraws-FStartCacheDraws));
+  if Reset then begin FStartCaptures:=CachedMeshCaptures;FStartCacheDraws:=CachedMeshDraws end;
   Dest.Add('window_ms',Int64(GetTickCount64-FStarted));
   Dest.Add('capacity',FrameSampleCapacity);
   AddSummary(Dest,'frame',FWall);AddSummary(Dest,'update',FCPU);
+  AddSummary(Dest,'update_core',FCore);
   AddSummary(Dest,'render_submit',FSubmit);AddSummary(Dest,'gpu',FGPU);
   Dest.Add('vram_free_kib',FFreeKiB);Dest.Add('vram_total_kib',FTotalKiB);
   Dest.Add('width',Container.PixelsWidth);Dest.Add('height',Container.PixelsHeight);
@@ -114,7 +129,7 @@ begin
     { A reporting boundary must not discard the previous frame end or pending
       GPU queries. In particular, the first slow frame after each boundary
       still belongs to the new wall-time sample window. }
-    FWall.Clear;FCPU.Clear;FSubmit.Clear;FGPU.Clear;
+    FWall.Clear;FCPU.Clear;FCore.Clear;FSubmit.Clear;FGPU.Clear;
     FStarted:=GetTickCount64;
   end;
 end;

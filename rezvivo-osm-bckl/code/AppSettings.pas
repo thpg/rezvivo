@@ -213,6 +213,7 @@ type
     property GraphicsVegetationAdaptive: Integer index Ord(goVegetationAdaptive) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsTextures: Integer index Ord(goTextures) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsHair: Integer index Ord(goHair) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsSoftening: Integer index Ord(goSoftening) read GetGraphicsOption write SetGraphicsOption;
     { Доступ через RTTI (MCP property_get/property_set). Запись идёт через
       существующие сеттеры — они же сохраняют settings.json на диск, так
       что RTTI-set не обходит персистентность. }
