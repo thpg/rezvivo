@@ -41,6 +41,7 @@ type
                                   // (USB-стик может отдать несколько ANT-фреймов
                                   //  в одном transfer — ANTDecodeMessage режет
                                   //  буфер по одному, остаток ждёт в FRxBuffer).
+    FLastReadWarningTick: QWord;
     function ResetAndInitialize: Boolean;
     function TryDecodeFromBuffer(out AMsg: TANTMessage): Boolean;
     function RawBulkWrite(const ABytes: TBytes; ATimeoutMs: Cardinal): Boolean;
@@ -153,6 +154,7 @@ type
 var
   GLibUsb: TLibHandle = NilHandle;
   GLoadAttempted: Boolean = False;
+  GLastLoadAttempt: QWord = 0;
   Gusb_init: Tusb_init = nil;
   Gusb_find_busses: Tusb_find_busses = nil;
   Gusb_find_devices: Tusb_find_devices = nil;
@@ -183,8 +185,8 @@ function LoadLibusb0: Boolean;
 begin
   Result := False;
   if GLibUsb <> NilHandle then Exit(True);
-  if GLoadAttempted then Exit;  // не пытаемся повторно если уже не получилось
-  GLoadAttempted := True;
+  if GLoadAttempted and (GetTickCount64-GLastLoadAttempt<30000) then Exit;
+  GLoadAttempted := True; GLastLoadAttempt:=GetTickCount64;
 
   GLibUsb := LoadLibrary(LIBUSB_DLL);
   if GLibUsb = NilHandle then
@@ -603,9 +605,13 @@ begin
     // возвращает 0 в этом случае, а libusb-win32 — POSIX-style errno).
     // Все остальные негативные коды (-9 EPIPE/halted, -110 EIO и т.п.) —
     // настоящие проблемы, их логируем.
-    if Got <> -116 then
+    if (Got <> -116) and (GetTickCount64-FLastReadWarningTick>=5000) then
+    begin
+      FLastReadWarningTick:=GetTickCount64;
       Logger.Warning(Format('[ANTPlus/libusb0] bulk_read returned %d: %s',
         [Got, LastErrorText]));
+    end;
+    if Got<>-116 then Sleep(10); { A removed USB stick must not busy-loop. }
     Exit;
   end;
   if Got = 0 then Exit;  // timeout — без шума в лог

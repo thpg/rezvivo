@@ -381,6 +381,7 @@ type
       ride the deck instead of the terrain (river) underneath. }
     FRouteWays: TRouteWayIdArray;
     FSnappedReady: Boolean;
+    FBotCrossings,FPendingBotCrossings:TBotCrossingArray;
     { Результаты снапа ДО публикации: воркер складывает сюда свои локальные
       массивы (каждый — одним присваиванием уже после возврата Snap), а
       главный поток забирает их в OnRouteSnapDone (Queue даёт границу
@@ -796,7 +797,7 @@ type
     function GpuGroundInfo:string;
     function GrassDiagnostics:string;
     procedure ProbeGpuGround(X,Z,ReferenceY:Single; out CpuY,GpuY:Single;
-      out CpuHit,GpuHit:Boolean);
+      out CpuHit,GpuHit:Boolean;QueueGpu:Boolean=True);
     procedure SetSunDirection(const ADir: TVector3; AShadowsAllowed: Boolean = True);
     property SunDirection: TVector3 read FSunDir;
     { Same map direction and route-time policy for game and Studio atlases. }
@@ -902,6 +903,7 @@ type
     { The snapped route (route pulled onto the road network). Valid only
       when SnappedReady is True; empty otherwise. }
     property SnappedRoute: TRouteLatLonArray read FRouteSnapped;
+    property BotCrossings:TBotCrossingArray read FBotCrossings;
     property RideRoute: TRouteLatLonArray read FRouteRide;
     property RideRouteWidths: TRouteWidthArray read FRouteRideWidths;
     property RideRouteSource: TRouteSourceArray read FRouteRideSource;
@@ -1400,7 +1402,7 @@ begin
   FLog        := ALog;
   FMainLog    := AMainLog;
   FDestroying := False;
-  FSnappedReady := False;
+  FSnappedReady := False;FBotCrossings:=nil;FPendingBotCrossings:=nil;
   FGreenRetrofit := False;
   FBridgeDeckYMax := SPHERE_Y_NONE;
   FSnapWorker   := nil;
@@ -3819,7 +3821,7 @@ begin
 end;
 
 procedure TOsm3dStreamingMap.ProbeGpuGround(X,Z,ReferenceY:Single;
-  out CpuY,GpuY:Single;out CpuHit,GpuHit:Boolean);
+  out CpuY,GpuY:Single;out CpuHit,GpuHit:Boolean;QueueGpu:Boolean);
 var Id:TGeoTileId;CT:TCacheTile;
 begin
   CpuHit:=False;GpuHit:=False;CpuY:=0;GpuY:=0;
@@ -3827,9 +3829,11 @@ begin
   Id:=FCache.Grid.TileAt(FProj.Unproject(X,Z));
   if not FTileIndex.TryGetValue(Id.ToKey,CT)then Exit;
   if not CT.GroundHasField then Exit;
-  CpuHit:=CT.SampleGround(X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CpuY);
-  if FGpuGround<>nil then GpuHit:=FGpuGround.Sample(CT.GpuGround,
-    X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CurbContactsEnabled,GpuY);
+  if CT.GpuGround<>nil then
+    CpuHit:=CT.GpuGround.SampleGeometry(X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CurbContactsEnabled,CpuY)
+  else CpuHit:=CT.SampleGround(X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CpuY);
+  if QueueGpu and(FGpuGround<>nil) then GpuHit:=FGpuGround.Sample(CT.GpuGround,
+    X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CurbContactsEnabled,GpuY,False);
 end;
 
 function TOsm3dStreamingMap.GroundSceneReadyAt(WorldX, WorldZ: Single): Boolean;
@@ -3857,7 +3861,7 @@ begin
   if (CT=nil) or not CT.GroundHasField then Exit;
   if (FGpuGround<>nil) and (CT.GpuGround<>nil) then begin
     GHit:=FGpuGround.Sample(CT.GpuGround,WorldX-CT.CenterX,WorldZ-CT.CenterZ,
-      ReferenceY,CurbContactsEnabled,GY);
+      ReferenceY,CurbContactsEnabled,GY,GpuGroundMode=ggGpu);
     if GpuGroundMode=ggGpu then begin AY:=GY;Exit(GHit) end;
   end else GHit:=False;
   Result:=CT.SampleGround(WorldX-CT.CenterX,WorldZ-CT.CenterZ,ReferenceY,AY);
@@ -8005,6 +8009,7 @@ begin
   FPendingWidths  := nil;
   FPendingCenters := nil;
   FPendingWays    := nil;
+  FBotCrossings:=FPendingBotCrossings;FPendingBotCrossings:=nil;
   FSnappedReady := True;
   LogMain(Format('route snap: OnRouteSnapDone — %d snapped points',
     [Length(FRouteSnapped)]));
@@ -8760,6 +8765,19 @@ begin
         [ObstacleIndex.Count,DetourCount,Length(Ride),GetTickCount64-PrepStart]));
     finally ObstacleIndex.Free end;
     if Terminated or FMap.FSnapCancel then Exit;
+    { A snap cache hit skips road harvesting. Read only its small sidecars
+      for cross traffic; never reparse tile geometry or rerun the snapper. }
+    if CacheHit then begin
+      SegCap:=4096;SegN:=0;SetLength(Segs,SegCap);
+      for I:=0 to High(Tiles)do begin
+        if Terminated or FMap.FSnapCancel then Exit;
+        if FMap.FCache.TryLoadRoadSegs(Tiles[I],SideSegs,SideOrigin)then
+          HarvestSegs(SideSegs,SideOrigin,Tiles[I]);
+      end;
+      SetLength(Segs,SegN);
+    end;
+    FMap.FPendingBotCrossings:=TRouteSnapper.BotCrossings(SnapCenters,Segs,FMap.FProj,SnapWays);
+    FMap.LogMain(Format('route cross traffic: %d junction routes',[Length(FMap.FPendingBotCrossings)]));
     FMap.FPendingRide:=Ride;
     FMap.FPendingRideWidths:=RideWidths;
     FMap.FPendingRideSource:=RideSource;

@@ -6,7 +6,7 @@ uses Classes,CastleScene;
   No animation, runtime cloud generation, or camera-position dependence. }
 function CreateCoastalSky(Owner:TComponent):TCastleBackground;
 implementation
-uses CastleVectors,X3DNodes,CastleRenderOptions;
+uses CastleVectors,X3DNodes,CastleRenderOptions,Osm3dSunSky;
 function CreateCoastalSky(Owner:TComponent):TCastleBackground;
 const Base='castle-data:/sky/coastal-clear/';
 var E:TEffectNode;P:TEffectPartNode;
@@ -32,6 +32,6 @@ begin
     '#ifdef CASTLE_GAMMA_CORRECTION'+#10+
     ' c.rgb=pow(max(c.rgb,vec3(0.0)),vec3(1.0/2.2));'+#10+
     '#endif'+#10+'}';
-  E.SetParts([P]);Result.SetEffects([E]);
+  E.SetParts([P]);Result.SetEffects([E,CreateSunSkyEffect]);
 end;
 end.

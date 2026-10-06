@@ -66,6 +66,7 @@ type
     { Прогнать новый пакет данных через все сенсоры И сохранить в LastData.
       Каждый сенсор извлечёт своё и обновит свой стейт. }
     procedure FeedData(const Data: TTrainerDataRecord);
+    function DiscoverMetrics(const Data: TTrainerDataRecord): Boolean;
 
     { Сброс сессионной статистики у всех сенсоров (новая тренировка) }
     procedure ResetAllSensors;
@@ -135,7 +136,7 @@ begin
   Result :=
     DeviceInfo.SupportsFTMS or
     DeviceInfo.SupportsPower or
-    DeviceInfo.SupportsCadence;
+    DeviceInfo.SupportsCadence or DeviceInfo.SupportsSpeed;
 end;
 
 function TGameDeviceEntry.IsControllable: Boolean;
@@ -171,12 +172,29 @@ var
   I: Integer;
 begin
   { Сохраняем сырой пакет для полей, не покрытых сенсорами }
-  LastData := Data;
+  LastData.PresentMetrics := [];
+  MergeTrainerData(LastData, Data);
 
   { Обновляем все сенсоры }
   if not Assigned(FSensors) then Exit;
   for I := 0 to FSensors.Count - 1 do
     FSensors[I].Update(Data);
+end;
+
+function TGameDeviceEntry.DiscoverMetrics(const Data: TTrainerDataRecord): Boolean;
+begin
+  Result := LearnTrainerMetrics(DeviceInfo, Data);
+  if not Result then Exit;
+  if FSensors = nil then FSensors := TDeviceSensorList.Create(True);
+  if DeviceInfo.SupportsPower and (PowerSensor = nil) then
+    FSensors.Add(TPowerSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
+  if DeviceInfo.SupportsCadence and (CadenceSensor = nil) then
+    FSensors.Add(TCadenceSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
+  if DeviceInfo.SupportsSpeed and (SpeedSensor = nil) then
+    FSensors.Add(TSpeedSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
+  if DeviceInfo.SupportsHeartRate and (HRSensor = nil) then
+    FSensors.Add(THRSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
+  TestedNotFitness := False;
 end;
 
 procedure TGameDeviceEntry.ResetAllSensors;

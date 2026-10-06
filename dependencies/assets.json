@@ -1491,8 +1491,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/gameviewplay.castle-user-interface",
-    "bytes": 12935,
-    "sha256": "4ae790d3e25e4efe142e5bee4728b0e3813c0c5e7ef10fb6e45461c8ab84a753",
+    "bytes": 12939,
+    "sha256": "f5b2347e575d0511f270ecd9a60f4c20c8ec3887c587277d4f49b8b13713606c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -1519,6 +1519,38 @@
     "sha256": "4222ebba5f49d59bc3c8a995bbbed5c62cc6b40a190a14fc1012516aaaafab18",
     "license": "LICENSE-TEXT",
     "source": "preserved original notice"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/libusb-win32/COPYING_GPL.txt",
+    "bytes": 35147,
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "license": "LGPL-2.1-or-later / GPL-3.0-or-later (bundled notices)",
+    "source": "libusb-win32 1.4.0.2",
+    "evidence": "data/licenses/libusb-win32/source.json and bundled licenses"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/libusb-win32/COPYING_LGPL.txt",
+    "bytes": 7651,
+    "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+    "license": "LGPL-2.1-or-later / GPL-3.0-or-later (bundled notices)",
+    "source": "libusb-win32 1.4.0.2",
+    "evidence": "data/licenses/libusb-win32/source.json and bundled licenses"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/libusb-win32/README.txt",
+    "bytes": 423,
+    "sha256": "346ead5ae900e9e375a664a59e636fc4bf9dfab466fb8aa28cd79fa96ec71bfd",
+    "license": "LGPL-2.1-or-later / GPL-3.0-or-later (bundled notices)",
+    "source": "libusb-win32 1.4.0.2",
+    "evidence": "data/licenses/libusb-win32/source.json and bundled licenses"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/licenses/libusb-win32/source.json",
+    "bytes": 439,
+    "sha256": "721916285f59b33c2e038685ff06e2b7d97d92308e4d4a748d53da2acb98d933",
+    "license": "LGPL-2.1-or-later / GPL-3.0-or-later (bundled notices)",
+    "source": "libusb-win32 1.4.0.2",
+    "evidence": "data/licenses/libusb-win32/source.json and bundled licenses"
   },
   {
     "path": "rezvivo-osm-bckl/data/licenses/makehuman/NOTICE.txt",
@@ -4262,6 +4294,22 @@
     "evidence": "project-generated model, texture or configuration"
   },
   {
+    "path": "rezvivo-osm-bckl/data/shaders/rtx/reflection.spv",
+    "bytes": 11364,
+    "sha256": "7e0a301439268a7edb32d1378d4e4d140928e652b2bb149e8fd0b328867473a1",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Compiled from Osm3d/rtx/*.comp with Osm3d/rtx/build.ps1"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/shaders/rtx/shadow.spv",
+    "bytes": 6264,
+    "sha256": "67f527895a3a99046688bb3bafed9a987e9c97b0c8cb92b22819dd9718b2bcc4",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Compiled from Osm3d/rtx/*.comp with Osm3d/rtx/build.ps1"
+  },
+  {
     "path": "rezvivo-osm-bckl/data/sky/coastal-clear/back.png",
     "bytes": 118811,
     "sha256": "a2ba507bbc39722b12c1b1460cc8242dbf78582055222055b71d7e5016197342",
@@ -4465,96 +4513,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 26635,
-    "sha256": "9f378cdbf36b6930c656f688302fdf74213ab3f31d3fe8cc919bf9b3c66b2ee3",
+    "bytes": 27287,
+    "sha256": "d6b156c8a69b12f3fe33c6603a50a80d5a58e415223bff03685a32e1036a0e64",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 22135,
-    "sha256": "f6a67e5984e49ec5f24da441b85d7dc8a4a81100e82ead1e0e6aa79bc3c6683c",
+    "bytes": 22693,
+    "sha256": "13870d725b37d3b1e275df6637a05ec9c11c0b8ae7a59ba147c922dd3db2a84e",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 82789,
-    "sha256": "224f6cc4430a790e14c0f6b56fc48dfa184119960661b4bf108cfed5d8c1f263",
+    "bytes": 84413,
+    "sha256": "49be36e78306fd31e1744132494408a3fa46ff1e4281759266dcd70c0d164c16",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 22146,
-    "sha256": "25d644aedd52cf339a2c03e1e60673a3a08d9177ab91bdcc73a993e6716dc420",
+    "bytes": 22714,
+    "sha256": "4c1a96204edd3363f4e0b89a5a685cf97ffe883bfdcafce42d9acae5ac17e5c4",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 22827,
-    "sha256": "2e36530d07fec965064d6dd00af1427dc9830ba16bedbb6e6f3af8a7cf6c1e00",
+    "bytes": 23417,
+    "sha256": "952e71f9e4f547481b8d6186c5a7494abf0aa0c55a33b1e976b91a9b2e5c8d77",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 21897,
-    "sha256": "0ebe31a0505718f09dfbb2801ba8ea17737d6942cecee59a85aa53b09179bca4",
+    "bytes": 22464,
+    "sha256": "b7ccc075c0bb2be7fe80dcd95d061f76d5b99db024a0c2af5273fe4a2912b01b",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 25213,
-    "sha256": "c491fdd71d9c6e922929cc70264f212a58b64c526ee4b8fdaa044107bb6fdfb6",
+    "bytes": 25809,
+    "sha256": "306c518803847a23b70061760a012771faa56582393da7518534a773cc586801",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 23136,
-    "sha256": "4cb82e2301bba94b59b4db337fc0c87f0a588d92572f80552d9e05ce67cb223a",
+    "bytes": 23703,
+    "sha256": "6bdb4f73a512cf01c6c2a3c0df01b0bc180dffdd072d47941f1efe2ac5ae2fb7",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 21768,
-    "sha256": "483f1151b03b1423726d03fc48a1a0e6874076851a7014c943a6c6e11388727f",
+    "bytes": 22326,
+    "sha256": "956770e7f81ed4b58dd8b76c09c008c5b6af61073eee3e1d329b143eb27fd17d",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 117812,
-    "sha256": "e93351f7fbd52c501a564a79714b56e833d61d84e7fb1b04148f455442e43a2d",
+    "bytes": 120547,
+    "sha256": "a262a4f2105177473027544be059ac758999120df26965aeaa76cf21a2a3e8b0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 20522,
-    "sha256": "6ef934ad78a5762c73d18ce278a4998c18931b4cea4628f13386fd9ba8c6375e",
+    "bytes": 21035,
+    "sha256": "71297319083a4d946b6f74c9e62e7bc9b0d4fcc8fde465dcd2312a91ba244d20",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 20318,
-    "sha256": "7fb0ac3e75c8a0b3a1652d289a16dda440c91db058d9a517433008370d420662",
+    "bytes": 20831,
+    "sha256": "be32d69caaf13d5d965b78fa94816a29ec420d075b50d24e8b146311af043242",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

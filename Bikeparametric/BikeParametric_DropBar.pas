@@ -29,6 +29,7 @@ type
     FModelRotX, FModelRotY, FModelRotZ: Single;   { degrees }
     FModelHasStem:    Boolean;                     { glb already contains the stem }
     FSteererBoneName: string;  { armature bone at steerer centre; aligned to stem_base }
+    FModelStemShift, FModelStemReference: TVector3;
     { drop-curve bend: horizontal tops end at FXt; ellipse semi-axes FAell/FBell }
     FXt, FAell, FBell, FHkX, FHkY: Single;
     procedure ComputeArc(M: Single);
@@ -80,7 +81,7 @@ type
 implementation
 
 uses
-  CastleURIUtils, SyncObjs;
+  CastleURIUtils, SyncObjs, X3DFields;
 
 const
   { defaults — единый источник для Create и fallback'ов ComputeBones }
@@ -106,7 +107,7 @@ type
     SteererBone: string;
     Loaded: Boolean;      { glb распарсился (иначе вход не кэшируем — retry) }
     BonesOK: Boolean;     { нашлись оба placer'а PlaceR1/PlaceL1 }
-    ForkStock, PlaceR, PlaceL: TVector3;
+    ForkStock, PlaceR, PlaceL, BarClamp: TVector3;
     PRs, PLs: TBarPlaceArray;
   end;
 
@@ -149,6 +150,17 @@ begin
     if NR = nil then StartupLog('[DropBar] hand bone not found: PlaceR1');
     if NL = nil then StartupLog('[DropBar] hand bone not found: PlaceL1');
     Data.BonesOK := (NR <> nil) and (NL <> nil);
+    { PlaceL7 marks the centre top of the integrated bar. Older models can
+      use the midpoint of the two narrow-top grips. The clamp axis is one
+      tape radius below the contact surface. }
+    NF:=Root.FindNode(TTransformNode,'PlaceL7',[fnNilOnMissing]) as TTransformNode;
+    if NF<>nil then Data.BarClamp:=NF.Translation else begin
+      NR:=Root.FindNode(TTransformNode,'PlaceR5',[fnNilOnMissing]) as TTransformNode;
+      NL:=Root.FindNode(TTransformNode,'PlaceL5',[fnNilOnMissing]) as TTransformNode;
+      if(NR<>nil)and(NL<>nil)then Data.BarClamp:=(NR.Translation+NL.Translation)*0.5
+      else Data.BarClamp:=Data.ForkStock+Vector3(0.1,0.014,0);
+    end;
+    Data.BarClamp.Y:=Data.BarClamp.Y-0.014;
 
     n := 1;
     while n <= 32 do
@@ -203,6 +215,50 @@ begin
 end;
 
 { PackRGB, RotateXYZ and ResolveModelURL now live in the shared BikeGfxUtil unit. }
+
+type
+  { Fit only the integrated stem. The steerer stays fixed and the complete
+    bar/shifters translate rigidly, preserving their dimensions. This is a
+    one-time build operation on an instance copy, never the cached model. }
+  TModelStemFit=class
+    ModelMatrix, InverseModelMatrix:TMatrix4;
+    Origin, Delta:TVector3;
+    StemX:Single;
+    Seen:TList;
+    function Visit(Node:TX3DNode;Stack:TX3DGraphTraverseStateStack;
+      ParentInfo:PTraversingInfo;var IntoChildren:Boolean):Pointer;
+  end;
+
+function TModelStemFit.Visit(Node:TX3DNode;Stack:TX3DGraphTraverseStateStack;
+  ParentInfo:PTraversingInfo;var IntoChildren:Boolean):Pointer;
+var G:TAbstractGeometryNode;C:TMFVec3f;Normals:TVector3List;
+  M,Inv,NM,BackNM:TMatrix4;I:Integer;P,N,Gradient:TVector3;
+  X,Z,DX,DZ,T,Span:Single;
+begin
+  Result:=nil;G:=TAbstractGeometryNode(Node);
+  if not G.InternalCoord(Stack.Top,C)or(C=nil)or(Seen.IndexOf(C)>=0)then Exit;
+  Seen.Add(C);Normals:=G.InternalNormal;
+  M:=ModelMatrix*Stack.Top.Transformation.Transform;
+  Inv:=Stack.Top.Transformation.InverseTransform*InverseModelMatrix;
+  NM:=Inv.Transpose;BackNM:=M.Transpose;
+  Span:=Max(0.025,StemX-0.04);
+  for I:=0 to C.Items.Count-1 do begin
+    P:=M.MultPoint(C.Items[I])-Origin;
+    X:=EnsureRange((P.X-0.02)/Span,0,1);
+    Z:=EnsureRange((Abs(P.Z)-0.025)/0.035,0,1);
+    DX:=0;if(X>0)and(X<1)then DX:=1/Span;
+    DZ:=0;if(Z>0)and(Z<1)then DZ:=6*Z*(1-Z)/0.035*Sign(P.Z);
+    Z:=Z*Z*(3-2*Z);
+    T:=1-(1-X)*(1-Z);Gradient:=Vector3(DX*(1-Z),0,DZ*(1-X));
+    if(Normals<>nil)and(Normals.Count=C.Items.Count)then begin
+      N:=NM.MultDirection(Normals[I]);
+      N:=N-Gradient*(TVector3.DotProduct(Delta,N)/
+        Max(0.05,1+TVector3.DotProduct(Gradient,Delta)));
+      Normals[I]:=BackNM.MultDirection(N).Normalize;
+    end;
+    C.Items[I]:=Inv.MultPoint(P+Origin+Delta*T);
+  end;
+end;
 
 { -- Generic swept-section mesh ------------------------------------------
   Sweeps a K-vertex cross-section along a planar (XY) spine. At each
@@ -399,7 +455,7 @@ var M, HW, BZ, HoodC, HoodS: Single;
     HandsOK: Boolean;
     Signs: array[0..1] of Single;
     Names: array[0..1] of string; I: Integer;
-    PRs, PLs: TBarPlaceArray; J, NP: Integer;
+    PRs, PLs: TBarPlaceArray; J, NP: Integer;Data:TDropBarModelData;
 begin
   M := Skel.MM;
 
@@ -420,10 +476,15 @@ begin
     as the model geometry so the rider's hands land on the loaded bar }
   HandsOK := FUseModel and Skel.HasBone('stem_base')
              and ReadModelBones(FS, PR, PL);
+  FModelStemShift:=TVector3.Zero;FModelStemReference:=TVector3.Zero;
   if HandsOK then begin
     StemBase := Skel['stem_base'];
     OffMM    := Vector3(FModelOffX * M, FModelOffY * M, FModelOffZ * M);
     RFork    := RotateXYZ(FS, FModelRotX, FModelRotY, FModelRotZ);
+    if FModelHasStem and GetDropBarModelData(FModelURL,FSteererBoneName,Data)then
+      FModelStemReference:=(RotateXYZ(Data.BarClamp,FModelRotX,FModelRotY,FModelRotZ)-RFork)*FModelScale;
+    FModelStemShift:=StemEnd-StemBase-FModelStemReference;
+    OffMM:=OffMM+FModelStemShift;
   end;
 
   Skel.AddBone('bar_left',  Vector3(StemEnd.X, StemEnd.Y, -HW));
@@ -549,8 +610,8 @@ var Data: TDropBarModelData;
 begin
   Result := 0; SetLength(PR, 0); SetLength(PL, 0);
   if not GetDropBarModelData(FModelURL, FSteererBoneName, Data) then Exit;
-  PR := Data.PRs;
-  PL := Data.PLs;
+  PR := Copy(Data.PRs);
+  PL := Copy(Data.PLs);
   Result := Length(PR);
 end;
 
@@ -587,6 +648,7 @@ var S: TBikeSkeleton; M: Single; DL, NArc, I, Si: Integer;
     BoneNode: TTransformNode;
     BoneLocal: TVector3;
     TPos, RxNode, RyNode, RzNode: TTransformNode;
+    Fit:TModelStemFit;
 begin
   S := Ctx.Skeleton; M := S.MM; DL := Ctx.DetailLevel;
   BarR := 0.0105; TapeR := 0.012;
@@ -616,6 +678,21 @@ begin
         if BoneNode <> nil then BoneLocal := BoneNode.Translation
         else StartupLog('[DropBar] steerer bone not found: ' + FSteererBoneName);
       end;
+      if FModelHasStem and(FModelStemReference.X>0.04)and(FModelScale>0)then begin
+        Fit:=TModelStemFit.Create;Fit.Seen:=TList.Create;
+        try
+          Fit.ModelMatrix:=RotationMatrixRad(DegToRad(FModelRotZ),0,0,1)*
+            RotationMatrixRad(DegToRad(FModelRotY),0,1,0)*
+            RotationMatrixRad(DegToRad(FModelRotX),1,0,0)*
+            ScalingMatrix(Vector3(FModelScale,FModelScale,FModelScale));
+          Fit.InverseModelMatrix:=ScalingMatrix(Vector3(1/FModelScale,1/FModelScale,1/FModelScale))*
+            RotationMatrixRad(-DegToRad(FModelRotX),1,0,0)*
+            RotationMatrixRad(-DegToRad(FModelRotY),0,1,0)*RotationMatrixRad(-DegToRad(FModelRotZ),0,0,1);
+          Fit.Origin:=RotateXYZ(BoneLocal,FModelRotX,FModelRotY,FModelRotZ)*FModelScale;
+          Fit.StemX:=FModelStemReference.X;Fit.Delta:=FModelStemShift;
+          ModelRoot.Traverse(TAbstractGeometryNode,@Fit.Visit);
+        finally Fit.Seen.Free;Fit.Free end;
+      end;
       { orient (X then Y then Z) via nested transforms }
       RxNode := TTransformNode.Create; RxNode.Rotation := Vector4(1, 0, 0, DegToRad(FModelRotX));
       RyNode := TTransformNode.Create; RyNode.Rotation := Vector4(0, 1, 0, DegToRad(FModelRotY));
@@ -628,6 +705,7 @@ begin
       TPos.Translation := Ctx.O(S['stem_base'])
         + Vector3(FModelOffX * M, FModelOffY * M, FModelOffZ * M)
         - RotateXYZ(BoneLocal, FModelRotX, FModelRotY, FModelRotZ) * FModelScale;
+      if not FModelHasStem then TPos.Translation:=TPos.Translation+FModelStemShift;
       TPos.AddChildren(RzNode);
       Ctx.AddSteered(TPos);
       Exit;   { glb geometry used; skip the parametric bar }

@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "Steigungsempfindlichkeit des Trainers",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: volle Steigung. Unter 100%: steile Strecken auf 8% begrenzen, dann proportional verringern. 0%: flach. Fahrphysik und Trainingsleistung bleiben unverändert.",
   "Hairstyle": "Frisur",
   "No hair": "Ohne Haare",
   "Short crop": "Kurzhaar",
@@ -346,5 +348,9 @@
   "Front view": "Vorn",
   "Side view": "Seite",
   "Rear view": "Hinten",
-  "Drag to rotate · Wheel to zoom": "Ziehen zum Drehen · Mausrad zum Zoomen"
+  "Drag to rotate · Wheel to zoom": "Ziehen zum Drehen · Mausrad zum Zoomen",
+  "Wheel circumference (mm)": "Radumfang (mm)",
+  "Preparing riders": "Fahrer werden vorbereitet",
+  "Companion": "Mitfahrer",
+  "Passing cyclist": "Vorbeifahrender Radfahrer"
 }

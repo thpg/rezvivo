@@ -1,0 +1,42 @@
+#version 460
+#extension GL_EXT_ray_query : require
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0,binding=0) uniform accelerationStructureEXT world;
+layout(set=0,binding=1,r32f) uniform writeonly image2D depthAtlas;
+layout(set=0,binding=2) uniform sampler2DArray silhouettes;
+// One card = origin/layer, horizontal edge, vertical edge, reserved.
+struct Card { vec4 origin; vec4 u; vec4 v; vec4 spare; };
+layout(std430,set=0,binding=3) readonly buffer Cards { Card cards[]; };
+// Four orthographic light views, in coordinates relative to the BVH origin.
+struct Zone { vec4 origin; vec4 du; vec4 dv; vec4 ray; };
+layout(std430,set=0,binding=4) readonly buffer Views { Zone zones[4]; };
+void main() {
+    ivec2 at=ivec2(gl_GlobalInvocationID.xy), size=imageSize(depthAtlas);
+    if(any(greaterThanEqual(at,size))) return;
+    int tile=size.x/2, zone=(at.x/tile)+2*(at.y/tile);
+    vec2 uv=(vec2(at%tile)+0.5)/float(tile);
+    Zone z=zones[zone];
+    vec3 origin=z.origin.xyz+uv.x*z.du.xyz+uv.y*z.dv.xyz;
+    rayQueryEXT q;
+    // Nearest ACCEPTED hit is required for an atlas depth, not the first hit.
+    rayQueryInitializeEXT(q,world,gl_RayFlagsNoneEXT,1,origin,0.0,z.ray.xyz,z.ray.w);
+    while(rayQueryProceedEXT(q)) {
+        if(rayQueryGetIntersectionTypeEXT(q,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
+            // Ground is reflection-only. Never interpret its primitive index
+            // as a foliage card or make it cast a blanket terrain shadow.
+            if(rayQueryGetIntersectionGeometryIndexEXT(q,false)!=1u)continue;
+            uint p=rayQueryGetIntersectionPrimitiveIndexEXT(q,false);
+            Card c=cards[p/2u];
+            vec2 b=rayQueryGetIntersectionBarycentricsEXT(q,false);
+            vec2 st=(p&1u)==0u ? vec2(b.x+b.y,b.y) : vec2(b.x,b.x+b.y);
+            float alpha=textureLod(silhouettes,vec3(st,c.origin.w),0.0).r;
+            vec2 cell=floor(st*256.0)+c.spare.x*vec2(971,613);
+            float threshold=max(.003,fract(sin(dot(cell,vec2(12.9898,78.233)))*43758.5453));
+            if(alpha>=threshold) rayQueryConfirmIntersectionEXT(q);
+        }
+    }
+    float d=1.0;
+    if(rayQueryGetIntersectionTypeEXT(q,true)!=gl_RayQueryCommittedIntersectionNoneEXT)
+        d=clamp(rayQueryGetIntersectionTEXT(q,true)/z.ray.w,0.0,1.0);
+    imageStore(depthAtlas,at,vec4(d));
+}

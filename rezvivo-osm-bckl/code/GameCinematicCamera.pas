@@ -35,11 +35,11 @@ interface
 uses
   Classes, SysUtils, Math,
   CastleVectors, CastleTransform, CastleViewport, CastleCameras, CastleLog,
-  GamePath, DebugLog;
+  GamePath, DebugLog, Osm3dRoadPuddles;
 
 type
   TCameraMode = (cmMoto, cmHelicopter, cmRoadside, cmReverse, cmLowTrack,
-    cmOrbit, cmStandShot);
+    cmOrbit, cmStandShot, cmPuddle);
 
   { Optional terrain-height provider. Filled AY with the world Y of the
     terrain mesh at (X, Z); returns True on success, False when the query
@@ -62,6 +62,8 @@ type
     CameraGround, LookGround, FrameGround: TCameraGroundSample;
     RoadsideAnchor, StandAnchor: TVector3;
     OrbitAngle, OrbitDir, OrbitRadius, StandHeight: Single;
+    Puddle: TRoadPuddleSite;
+    PuddleDuration: Single;
   end;
 
   TCameraReplayState = record
@@ -86,6 +88,9 @@ type
     StillTime: Single;
     Stationary: Boolean;
     PathPos: TPathPosition;
+    PuddleCooldown, PuddleScan, BlendAge: Single;
+    LastPuddleGroup: QWord;
+    BlendPosition, BlendDirection: TVector3;
   end;
 
   {$M+}
@@ -105,6 +110,10 @@ type
     FHeightReady: Boolean;
     FHeightOffset, FFrameDT: Single;
     FModeTimer: Single;
+    FPuddleReflections: Boolean;
+    FPuddleCooldown, FPuddleScan, FBlendAge: Single;
+    FLastPuddleGroup: QWord;
+    FBlendPosition, FBlendDirection: TVector3;
 
     FCamPos, FCamDir, FCamUp: TVector3;
 
@@ -168,6 +177,7 @@ type
       an occasional short orbit) and place the static stand-shot camera. }
     function PickStationary: TCameraMode;
     procedure PlaceStandShot;
+    procedure TryPuddleShot;
   public
     function CaptureReplay: TCameraReplayState;
     procedure RestoreReplay(const Saved: TCameraReplayState);
@@ -213,6 +223,7 @@ type
       so owners that want broadcast-only behaviour should feed real speed. }
     property TargetSpeed: Single read FTargetSpeed write FTargetSpeed;
     property TargetPitchDeg: Single read FTargetPitchDeg write FTargetPitchDeg;
+    property PuddleReflections: Boolean read FPuddleReflections write FPuddleReflections;
   end;
   {$M-}
 
@@ -320,6 +331,9 @@ begin
   Result.StillTime:=FStillTime;
   Result.Stationary:=FStationary;
   Result.PathPos:=FPathPos;
+  Result.PuddleCooldown:=FPuddleCooldown;Result.PuddleScan:=FPuddleScan;
+  Result.LastPuddleGroup:=FLastPuddleGroup;Result.BlendAge:=FBlendAge;
+  Result.BlendPosition:=FBlendPosition;Result.BlendDirection:=FBlendDirection;
 end;
 
 procedure TCinematicCamera.RestoreReplay(const Saved: TCameraReplayState);
@@ -345,6 +359,9 @@ begin
   FStillTime:=Saved.StillTime;
   FStationary:=Saved.Stationary;
   FPathPos:=Saved.PathPos;
+  FPuddleCooldown:=Saved.PuddleCooldown;FPuddleScan:=Saved.PuddleScan;
+  FLastPuddleGroup:=Saved.LastPuddleGroup;FBlendAge:=Saved.BlendAge;
+  FBlendPosition:=Saved.BlendPosition;FBlendDirection:=Saved.BlendDirection;
   if (FViewport<>nil) and (FViewport.Camera<>nil) then FViewport.Camera.SetView(FCamPos,FCamDir,FCamUp);
 end;
 
@@ -392,6 +409,7 @@ begin
     cmLowTrack:   Result := 'lowtrack';
     cmOrbit:      Result := 'orbit';
     cmStandShot:  Result := 'standshot';
+    cmPuddle:     Result := 'puddle';
   else
     Result := '?';
   end;
@@ -478,6 +496,7 @@ begin
   FHaveTargetPosition := False;
   FHeightReady := False;
   FModeTimer := ModeDuration(cmMoto);
+  FPuddleCooldown:=0;FPuddleScan:=0;FLastPuddleGroup:=0;FBlendAge:=2;
 end;
 
 procedure TCinematicCamera.SetEnabled(const Value: Boolean);
@@ -523,6 +542,7 @@ begin
     cmLowTrack:   Result := 4 + Random * 2;
     cmOrbit:      Result := 6 + Random * 3;    { 6-9s — a SHORT arc, not a full circle }
     cmStandShot:  Result := 6 + Random * 4;    { 6-10s — restful static view }
+    cmPuddle:     Result := FShot.PuddleDuration;
     else Result := 15;
   end;
 end;
@@ -744,6 +764,34 @@ end;
 
 { ── Camera computations ── }
 
+procedure TCinematicCamera.TryPuddleShot;
+var S:TRoadPuddleSite;Fwd,Side,Outward,Delta:TVector3;Ahead:Single;
+begin
+  if not FPuddleReflections or not FAutoSwitch or FStationary or FPending or
+    (FTargetSpeed<1.5) or (FPuddleCooldown>0) or
+    not(FShot.Mode in [cmMoto,cmReverse,cmLowTrack]) then Exit;
+  if FPuddleScan>0 then Exit;
+  FPuddleScan:=0.35;
+  Fwd:=FTarget.Direction;Fwd.Y:=0;if Fwd.LengthSqr<0.01 then Exit;Fwd:=Fwd.Normalize;
+  if not FindRoadPuddle(FTarget.Translation,Fwd,Max(4.0,FTargetSpeed*0.9),
+    EnsureRange(FTargetSpeed*3.0,12.0,32.0),7.5,FLastPuddleGroup,S)then Exit;
+  Side:=TVector3.CrossProduct(Fwd,Vector3(0,1,0));Delta:=S.Position-FTarget.Translation;
+  Ahead:=TVector3.DotProduct(Delta,Fwd);
+  Outward:=S.Outward;
+  if Outward.LengthSqr<0.1 then begin
+    Outward:=Side;if TVector3.DotProduct(Delta,Side)<0 then Outward:=-Outward;
+  end;
+  FPendingShot:=Default(TCameraShotState);FPendingShot.Mode:=cmPuddle;
+  FPendingShot.Puddle:=S;
+  FPendingShot.PuddleDuration:=EnsureRange(Ahead/FTargetSpeed+1.8,4.2,6.0);
+  { Look from the carriageway, across the wet surface toward its surroundings.
+    Never place the lens beyond the curb inside buildings or vegetation. }
+  FPendingShot.RoadsideAnchor:=S.Position-Outward*1.35-Fwd*1.8+Vector3(0,0.55,0);
+  { A failed terrain probe must not enqueue the same shot every frame. }
+  FPuddleCooldown:=3;
+  FPending:=True;FPendingAge:=0;TryPendingShot;
+end;
+
 procedure TCinematicCamera.ComputeMode(M: TCameraMode; out P, D, U: TVector3);
 var
   TPos, Fwd, Side, LookAt, RouteLook: TVector3;
@@ -855,6 +903,18 @@ begin
       P := FShot.RoadsideAnchor;
       LookAt := TPos + Vector3(0, 1.0, 0);
       LookSrc := 'roadside:rider';
+    end;
+
+    cmPuddle:
+    begin
+      P:=FShot.RoadsideAnchor;
+      if FPreparingShot and GroundYRemembered(P.X,P.Z,False,FShot.CameraGround,GY) then begin
+        { Another level, embankment or obstruction is not a usable low shot. }
+        if Abs(GY-FShot.Puddle.Position.Y)>0.6 then FProbeReady:=False;
+        P.Y:=GY+0.55;FShot.RoadsideAnchor:=P;
+      end;
+      LookAt:=FShot.Puddle.Position;
+      LookSrc:='puddle:reflection';
     end;
 
     cmReverse:
@@ -1124,6 +1184,7 @@ var
   P: TVector3;
 begin
   if not Assigned(FTarget) or not Assigned(FViewport) then Exit;
+  if M=cmPuddle then Exit; { requires a real, visible water-film landmark }
   SyncPathPosition;
   Active := FShot;
   try
@@ -1167,12 +1228,18 @@ begin
   end;
   if FProbeReady then
   begin
+    if (FShot.Mode=cmPuddle)or(FPendingShot.Mode=cmPuddle)then begin
+      FBlendPosition:=FCamPos;FBlendDirection:=FCamDir;FBlendAge:=0;
+    end else FBlendAge:=2;
     Inc(FShotSerial);
     FShot := FPendingShot;
     FPending := False;
     FHeightReady := False;
     FModeTimer := ModeDuration(FShot.Mode);
-    FCamPos := P; FCamDir := D; FCamUp := U;
+    if FShot.Mode=cmPuddle then begin
+      FLastPuddleGroup:=FShot.Puddle.Group;FPuddleCooldown:=35;
+    end;
+    if FBlendAge>=1.2 then begin FCamPos := P; FCamDir := D; FCamUp := U end;
     if Assigned(Logger) then
       Logger.Info('[CineCam] cut=' + ModeName(FShot.Mode) + ' terrain=ready');
   end else if FPendingAge >= 2.0 then
@@ -1190,7 +1257,7 @@ begin
   { Static shots hold their anchor. Moving shots follow the rider without
     motion lag; only the terrain-relative correction is damped. This absorbs
     short GPU holds followed by a fresh slope sample. }
-  if FShot.Mode in [cmRoadside, cmStandShot] then Exit;
+  if FShot.Mode in [cmRoadside, cmStandShot,cmPuddle] then Exit;
   Offset := P.Y - FTarget.Translation.Y;
   if FHeightReady then
   begin
@@ -1205,6 +1272,7 @@ end;
 
 procedure TCinematicCamera.FrameShot(var P, D: TVector3);
 begin
+  if FShot.Mode=cmPuddle then Exit; { water and reflected scenery are the subject }
   AdjustForGroup(P, D);
   if FShot.Mode = cmHelicopter then ClampDownPitch(D, HeliMaxDownSin)
   else ClampDownPitch(D, MaxLookDownSin);
@@ -1216,17 +1284,21 @@ end;
 procedure TCinematicCamera.Update(const DT: Single);
 var
   TP, TD, TU: TVector3;
+  Blend:Single;
+  FirstFrame:Boolean;
 begin
   if not FEnabled then Exit;
   if not Assigned(FViewport) or not Assigned(FTarget) or (FViewport.Camera = nil) then Exit;
   if IsNan(DT) or IsInfinite(DT) or (DT < 0) then Exit;
   FFrameDT := DT;
+  FPuddleCooldown:=Max(0,FPuddleCooldown-DT);FPuddleScan:=Max(0,FPuddleScan-DT);
 
   { Scene preparation/teleport may move the rider onto a completely different
     level. A static anchor or a floor from before that move is no longer valid. }
   if FHaveTargetPosition and
     ((FTarget.Translation - FLastTargetPosition).Length > Max(20.0, Abs(FTargetSpeed) * DT * 3 + 3)) then
     ResetTracking;
+  FirstFrame:=not FHaveTargetPosition;
   FLastTargetPosition := FTarget.Translation;
   FHaveTargetPosition := True;
 
@@ -1260,6 +1332,10 @@ begin
 
   SyncPathPosition;
 
+  if(FShot.Mode=cmPuddle)and not FPuddleReflections then ForceMode(cmMoto);
+  if FPending and(FPendingShot.Mode=cmPuddle)and not FPuddleReflections then FPending:=False;
+  if not FirstFrame and(DT>0)then TryPuddleShot;
+
   { Auto-switch: Moto → cutaway → Moto → ... While the rider stands, the
     scenario alternates its own shots: mostly static angles, an occasional
     SHORT orbit arc, never two orbits in a row — no prolonged rotation. }
@@ -1268,7 +1344,9 @@ begin
     FModeTimer := FModeTimer - DT;
     if FModeTimer <= 0 then
     begin
-      if FStationary then
+      if FShot.Mode=cmPuddle then
+        ForceMode(cmMoto)
+      else if FStationary then
         ForceMode(PickStationary)
       else
         ForceMode(PickMovingShot);
@@ -1284,6 +1362,17 @@ begin
   { Compute camera for current mode }
   ComputeMode(FShot.Mode, TP, TD, TU);
   FrameShot(TP, TD);
+
+  { Only reflection cutaways blend. Other broadcast cuts retain their existing
+    behavior. The state is recorded so simulation rewind reproduces the view. }
+  if FBlendAge<1.2 then begin
+    FBlendAge:=Min(1.2,FBlendAge+DT);Blend:=FBlendAge/1.2;
+    Blend:=Blend*Blend*(3-2*Blend);
+    TP:=FBlendPosition+(TP-FBlendPosition)*Blend;
+    TD:=FBlendDirection+(TD-FBlendDirection)*Blend;
+    if TD.LengthSqr>0.000001 then TD:=TD.Normalize;
+    ClampAboveGround(TP);
+  end;
 
   { Rigid follow — instant, like broadcast }
   FCamPos := TP;

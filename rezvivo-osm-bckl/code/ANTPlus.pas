@@ -15,7 +15,7 @@
     TTransportProvider. Полная FE-C логика поверх backend-абстракции.
 
   Юнит сам по себе кроссплатформенный — зависит только от Classes,
-  SysUtils, syncobjs, TrainerData, GameTransportBase, DebugLog. Реальная
+  SysUtils, syncobjs, TrainerData, CyclingANTProtocol, GameTransportBase, DebugLog. Реальная
   работа возможна там, где есть TANTUsbBackend-реализация (как правило
   Windows: Garmin USB-m / USB-2 стик). Без зарегистрированного backend
   ANTPlusAvailable=False, провайдер scan'a не находит устройств.
@@ -42,7 +42,7 @@ interface
 
 uses
   Classes, SysUtils, syncobjs,
-  TrainerData, GameTransportBase, DebugLog, GameThreadWatch;
+  TrainerData, CyclingANTProtocol, GameTransportBase, GameTrainerControl, DebugLog, GameThreadWatch;
 
 const
   // ─── ANT+ Device Types (профили) ───
@@ -175,18 +175,6 @@ type
     Name: string;         // человекочитаемое имя для логов ('FE-C', 'HR')
   end;
 
-const
-  // Слоты для параллельного pairing-скана. Сейчас FE-C тренажёр и HR-ремень.
-  // Можно добавить Power Meter (devType=11, period=8182), Speed/Cadence
-  // (devType=121, period=8086), и т.д. — для них нужно ещё каналы и
-  // соответствующее увеличение ANT_PAIRING_SLOT_COUNT/ANT_FIRST_SESSION_CHANNEL.
-  ANT_PAIRING_SLOTS: array[0..ANT_PAIRING_SLOT_COUNT - 1] of TANTPairingSlotDef = (
-    (Channel: ANT_PAIRING_FEC; DeviceType: ANT_DEVICE_TYPE_FEC;
-     Period: 8192; Name: 'FE-C'),
-    (Channel: ANT_PAIRING_HRM; DeviceType: ANT_DEVICE_TYPE_HEART_RATE;
-     Period: 8070; Name: 'HR')
-  );
-
 type
   // forward declarations — нужны для cross-references между классами
   TANTUsbBackend = class;
@@ -250,6 +238,10 @@ type
   //   channel 1..7 → соответствующая TANTSession.HandleMessage
   TANTProvider = class(TTransportProvider)
   private
+    FConfigLock: TCriticalSection;
+    FPairingProfile: array[0..ANT_PAIRING_SLOT_COUNT-1] of Integer;
+    FNextRotation: QWord;
+    FPairingClosing: array[0..ANT_PAIRING_SLOT_COUNT-1] of Boolean;
     FBackend: TANTUsbBackend;
     FBackendOwned: Boolean;
     FLock: TCriticalSection;
@@ -273,6 +265,8 @@ type
     FChannelOwners: array[0..ANT_MAX_CHANNELS - 1] of TANTSession;
     FFoundDevices: array of TANTDeviceId;
     FFoundCount: Integer;
+    function PairingDefinition(Index: Integer): TANTPairingSlotDef;
+    procedure RotatePairingChannels;
     function EnsureBackend: Boolean;
     function EnsureDispatcher: Boolean;
     procedure StopDispatcher;
@@ -281,7 +275,7 @@ type
     function PairingSlotByChannel(AChannel: Byte; out ASlotIndex: Integer): Boolean;
     procedure PauseDispatcher;
     procedure ResumeDispatcher;
-    function AlreadyFound(ADeviceNumber: Word): Boolean;
+    function AlreadyFound(const Id: TANTDeviceId): Boolean;
     procedure RecordFoundDevice(const ADevId: TANTDeviceId);
     procedure DispatchMessage(const AMsg: TANTMessage);
     procedure OnPairingMessage(const AMsg: TANTMessage);
@@ -320,6 +314,11 @@ type
   // HandleMessage.
   TANTSession = class(TTransportSession)
   private
+    FCallbackGate: TTrainerCallbackGate;
+    FConnectedTick: QWord;
+    FProtocol: TCyclingANTParser;
+    FUserConfigured, FWindConfigured: Boolean;
+    FUserKg, FBikeKg, FWind: Single;
     FProvider: TANTProvider;
     FDeviceId: TANTDeviceId;
     FChannel: Integer;
@@ -330,18 +329,14 @@ type
     // эти ветви взаимно блокирующими: Disconnect ждёт пока Connect
     // закончит свой configure-цикл, и наоборот.
     FOpLock: TCriticalSection;
-    FAccumDistance: Cardinal;
-    FLastDistanceRaw: Byte;
-    FLastDistanceValid: Boolean;
     FFirstPacketLogged: Boolean;
-    procedure ParseFECPage16(const APayload: array of Byte);
-    procedure ParseFECPage25(const APayload: array of Byte);
-    procedure ParseHRPage(const APayload: array of Byte);
+    function WriteFEC(const Page: TBytes): Boolean;
     function ConfigureFECChannel: Boolean;
     function CloseFECChannel: Boolean;
     function LogPrefix: string;
   public
     property DeviceId: TANTDeviceId read FDeviceId;
+    function IsConnectionAlive: Boolean; override;
 
     constructor Create(const AAddress: string; const AFriendlyName: string = ''); override;
     destructor Destroy; override;
@@ -397,6 +392,10 @@ type
       DraftingFactor: Byte): Boolean;
   end;
 
+function ANTDeviceAddress(const Id: TANTDeviceId): string;
+function ParseANTDeviceAddress(const Address: string; out Id: TANTDeviceId): Boolean;
+function ANTProfilePeriod(DeviceType: Byte): Word;
+
 // ─── ANT framing (pure, testable) ───
 
 // Упаковать TANTMessage в полный пакет [SYNC, LEN, MSG_ID, payload..., XOR_CHECKSUM].
@@ -446,6 +445,8 @@ function ANTPlusAvailable: Boolean;
 
 implementation
 
+uses Math;
+
 // ═══════════════════════════════════════════════════════════════
 // Глобальное состояние модуля
 // ═══════════════════════════════════════════════════════════════
@@ -461,6 +462,39 @@ var
 // ═══════════════════════════════════════════════════════════════
 // ANT framing — pure functions, тестируемые без backend
 // ═══════════════════════════════════════════════════════════════
+
+function ANTDeviceAddress(const Id: TANTDeviceId): string;
+begin
+  Result:=Format('ANT:%d:%d:%d',[Id.DeviceNumber,Id.DeviceType,Id.TransmissionType]);
+end;
+
+function ParseANTDeviceAddress(const Address: string; out Id: TANTDeviceId): Boolean;
+var Parts: TStringList; N,T,X: Integer;
+begin
+  Id:=Default(TANTDeviceId); Result:=False;
+  Parts:=TStringList.Create;
+  try
+    Parts.StrictDelimiter:=True; Parts.Delimiter:=':'; Parts.DelimitedText:=Address;
+    if not (Parts.Count in [2,4]) or not SameText(Parts[0],'ANT') then Exit;
+    N:=StrToIntDef(Parts[1],-1); T:=17; X:=0;
+    if Parts.Count=4 then begin T:=StrToIntDef(Parts[2],-1); X:=StrToIntDef(Parts[3],-1) end;
+    if (N<1) or (N>65535) or (T<1) or (T>127) or (X<0) or (X>255) then Exit;
+    Id.DeviceNumber:=N; Id.DeviceType:=T; Id.TransmissionType:=X;
+    Result:=True;
+  finally Parts.Free end;
+end;
+
+function ANTProfilePeriod(DeviceType: Byte): Word;
+begin
+  case DeviceType of
+    120: Result:=8070;
+    11: Result:=8182;
+    121: Result:=8086;
+    122: Result:=8102;
+    123: Result:=8118;
+    else Result:=8192;
+  end;
+end;
 
 function ANTEncodeMessage(const AMsg: TANTMessage): TBytes;
 var
@@ -713,6 +747,8 @@ begin
     // и responsiveness write-стороны.
     if FProvider.FBackend.ReadMessage(Msg, 10) then
       FProvider.DispatchMessage(Msg);
+    if FProvider.FScanActive and (GetTickCount64>=FProvider.FNextRotation) then
+      FProvider.RotatePairingChannels;
   end;
 end;
 
@@ -722,6 +758,8 @@ var
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
+  FConfigLock := TCriticalSection.Create;
+  FPairingProfile[0]:=0; FPairingProfile[1]:=1;
   FBackend := nil;
   FBackendOwned := False;
   FDispatchThread := nil;
@@ -750,6 +788,7 @@ begin
   FBackend := nil;
 
   FreeAndNil(FLock);
+  FreeAndNil(FConfigLock);
   Logger.Info('[ANTPlus] Provider destroyed');
   inherited;
 end;
@@ -841,35 +880,52 @@ begin
 end;
 
 procedure TANTProvider.PauseDispatcher;
-var
-  WasFirst: Boolean;
+var WasFirst: Boolean;
 begin
-  // Re-entrant: каждый вызов Inc-ит counter под FLock. Только первый
-  // вызов в цепочке делает Sleep(15) — даёт текущему bulk_read (timeout
-  // 10мс) вернуться без данных и попасть в следующую iteration где
-  // увидит counter > 0 и заснёт. Вложенные Pause просто increment'ят.
-  if not FDispatchRunning then Exit;
+  FConfigLock.Enter;
   FLock.Enter;
   try
     Inc(FDispatcherPauseCount);
-    WasFirst := FDispatcherPauseCount = 1;
-  finally
-    FLock.Leave;
-  end;
-  if WasFirst then Sleep(15);
+    WasFirst:=FDispatcherPauseCount=1;
+  finally FLock.Leave end;
+  if WasFirst and FDispatchRunning then Sleep(15);
 end;
 
 procedure TANTProvider.ResumeDispatcher;
 begin
-  // Dec counter; диспетчер просыпается только когда counter возвращается
-  // в 0 — т.е. все вложенные Pause были закрыты соответствующими Resume.
   FLock.Enter;
   try
-    if FDispatcherPauseCount > 0 then
-      Dec(FDispatcherPauseCount);
-  finally
-    FLock.Leave;
-  end;
+    if FDispatcherPauseCount>0 then Dec(FDispatcherPauseCount);
+  finally FLock.Leave end;
+  FConfigLock.Leave;
+end;
+
+function TANTProvider.PairingDefinition(Index: Integer): TANTPairingSlotDef;
+const Types: array[0..5] of Byte = (17,120,11,121,122,123);
+begin
+  Result.Channel:=Index;
+  Result.DeviceType:=Types[FPairingProfile[Index]];
+  Result.Period:=ANTProfilePeriod(Result.DeviceType);
+  Result.Name:='profile '+IntToStr(Result.DeviceType);
+end;
+
+procedure TANTProvider.RotatePairingChannels;
+var I: Integer; Msg: TANTMessage;
+begin
+  { Close is asynchronous. Reassign only after EVENT_CHANNEL_CLOSED, while
+    continuing to dispatch telemetry on the six connected-device channels. }
+  PauseDispatcher;
+  try
+    if not FScanActive then Exit;
+    for I:=0 to ANT_PAIRING_SLOT_COUNT-1 do
+      { Retry if a close response was lost: already closed returns wrong-state. }
+      begin
+        Msg:=Default(TANTMessage); Msg.MessageID:=ANT_MSG_CLOSE_CHANNEL;
+        Msg.PayloadLen:=1; Msg.Data[0]:=I;
+        FPairingClosing[I]:=FBackend.WriteMessage(Msg);
+      end;
+    FNextRotation:=GetTickCount64+8000;
+  finally ResumeDispatcher end;
 end;
 
 function TANTProvider.ConfigurePairingChannel(ASlotIndex: Integer): Boolean;
@@ -880,19 +936,20 @@ begin
   Result := False;
   if not Assigned(FBackend) then Exit;
   if (ASlotIndex < 0) or (ASlotIndex >= ANT_PAIRING_SLOT_COUNT) then Exit;
-  Slot := ANT_PAIRING_SLOTS[ASlotIndex];
+  Slot := PairingDefinition(ASlotIndex);
 
   // Pause/Resume — нужны если configure вызывается с активным dispatcher
   // (например после Disconnect session'а: переоткрываем pairing slot).
   // В StartScan — dispatcher ещё не запущен, Pause просто early-return'ит.
   PauseDispatcher;
   try
-    Logger.Info(Format('[ANTPlus] >>> ConfigurePairingChannel ch=%d (%s wildcard scan)',
+    Logger.Debug(Format('[ANTPlus] >>> ConfigurePairingChannel ch=%d (%s wildcard scan)',
       [Slot.Channel, Slot.Name]));
 
     // Сбрасываем флаг этого слота: новая сессия скана — снова разрешено
     // отправить REQUEST_MESSAGE при первом broadcast'е.
     FPairingIdRequested[ASlotIndex] := False;
+    FPairingClosing[ASlotIndex] := False;
 
   // Между командами — короткая пауза (20мс). Старые/слабые ANT-стики
   // (ANT USBStick2) часто не успевают переварить burst команд и могут
@@ -912,7 +969,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: ASSIGN_CHANNEL write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: ASSIGN_CHANNEL ok', [Slot.Name]));
+  Logger.Debug(Format('[ANTPlus] %s pairing: ASSIGN_CHANNEL ok', [Slot.Name]));
   Sleep(20);
 
   // Шаг 2: SET_CHANNEL_ID — wildcard (devNum=0, devType=Slot.DeviceType, transType=0)
@@ -929,7 +986,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: CHANNEL_ID write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: CHANNEL_ID wildcard devType=%d ok',
+  Logger.Debug(Format('[ANTPlus] %s pairing: CHANNEL_ID wildcard devType=%d ok',
     [Slot.Name, Slot.DeviceType]));
   Sleep(20);
 
@@ -944,7 +1001,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: RF_FREQ write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: RF_FREQ=%d (2400+%dMHz) ok',
+  Logger.Debug(Format('[ANTPlus] %s pairing: RF_FREQ=%d (2400+%dMHz) ok',
     [Slot.Name, ANT_FEC_RF_FREQ, ANT_FEC_RF_FREQ]));
   Sleep(20);
 
@@ -960,7 +1017,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: CHANNEL_PERIOD write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: PERIOD=%d (%.2fHz) ok',
+  Logger.Debug(Format('[ANTPlus] %s pairing: PERIOD=%d (%.2fHz) ok',
     [Slot.Name, Slot.Period, 32768 / Slot.Period]));
   Sleep(20);
 
@@ -975,7 +1032,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: SEARCH_TIMEOUT write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: SEARCH_TIMEOUT=infinite ok', [Slot.Name]));
+  Logger.Debug(Format('[ANTPlus] %s pairing: SEARCH_TIMEOUT=infinite ok', [Slot.Name]));
   Sleep(20);
 
   // Шаг 6: OPEN_CHANNEL
@@ -988,7 +1045,7 @@ begin
     Logger.Warning(Format('[ANTPlus] %s pairing: OPEN_CHANNEL write failed', [Slot.Name]));
     Exit;
   end;
-  Logger.Info(Format('[ANTPlus] %s pairing: OPEN_CHANNEL ok — channel listening', [Slot.Name]));
+  Logger.Debug(Format('[ANTPlus] %s pairing: OPEN_CHANNEL ok — channel listening', [Slot.Name]));
 
   Result := True;
   finally
@@ -1004,16 +1061,17 @@ begin
   if not Assigned(FBackend) then Exit;
   if not FBackend.Opened then Exit;
   if (ASlotIndex < 0) or (ASlotIndex >= ANT_PAIRING_SLOT_COUNT) then Exit;
-  Slot := ANT_PAIRING_SLOTS[ASlotIndex];
+  Slot := PairingDefinition(ASlotIndex);
 
   // См. комментарий в ConfigurePairingChannel — Pause/Resume для случая
   // когда close вызывается с активным dispatcher'ом (Connect session
   // закрывает свой pairing slot чтобы освободить эфир от двойного slave).
   PauseDispatcher;
   try
-    Logger.Info(Format('[ANTPlus] ClosePairingChannel ch=%d (%s)', [Slot.Channel, Slot.Name]));
+    Logger.Debug(Format('[ANTPlus] ClosePairingChannel ch=%d (%s)', [Slot.Channel, Slot.Name]));
 
     FPairingIdRequested[ASlotIndex] := False;
+    FPairingClosing[ASlotIndex] := True;
 
     FillChar(Msg, SizeOf(Msg), 0);
     Msg.MessageID := ANT_MSG_CLOSE_CHANNEL;
@@ -1022,12 +1080,6 @@ begin
     if not FBackend.WriteMessage(Msg) then
       Logger.Warning(Format('[ANTPlus] %s ClosePairingChannel: CLOSE write failed', [Slot.Name]));
 
-    FillChar(Msg, SizeOf(Msg), 0);
-    Msg.MessageID := ANT_MSG_UNASSIGN_CHANNEL;
-    Msg.PayloadLen := 1;
-    Msg.Data[0] := Slot.Channel;
-    if not FBackend.WriteMessage(Msg) then
-      Logger.Warning(Format('[ANTPlus] %s ClosePairingChannel: UNASSIGN write failed', [Slot.Name]));
   finally
     ResumeDispatcher;
   end;
@@ -1040,7 +1092,7 @@ begin
   Result := False;
   ASlotIndex := -1;
   for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-    if ANT_PAIRING_SLOTS[I].Channel = AChannel then
+    if PairingDefinition(I).Channel = AChannel then
     begin
       ASlotIndex := I;
       Exit(True);
@@ -1048,72 +1100,46 @@ begin
 end;
 
 procedure TANTProvider.StartScan;
-var
-  I: Integer;
-  AnyOk: Boolean;
+var I:Integer; AnyOk:Boolean;
 begin
   if FScanActive then Exit;
-
-  if not EnsureBackend then
-  begin
-    if Assigned(Logger) then
-      Logger.Info('[ANTPlus] StartScan: backend unavailable, no devices will be reported');
-    Exit;
-  end;
-
-  // ВАЖНО: dispatch thread стартует ПОСЛЕ всех ConfigurePairingChannel.
-  // Если стартовать его раньше, на старом USB Stick2 (libusb-win32) bulk_write
-  // следующей команды конфига зависает: видимо driver/firmware не любит
-  // одновременного активного pending bulk_read на IN-endpoint и быстрого
-  // bulk_write последовательно на OUT-endpoint. Поэтому конфиг делаем
-  // sequential-only без активного reader'а: ~6 write'ов на slot, ответы
-  // (RESPONSE_EVENT на каждый) накапливаются в pipe-буфере. До OPEN_CHANNEL
-  // никаких broadcast'ов не идёт. После всех OPEN_CHANNEL запускаем dispatch
-  // thread, и он зачитывает накопленные ответы + дальнейшие broadcast'ы.
-  AnyOk := False;
-  for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-    if ConfigurePairingChannel(I) then
-      AnyOk := True
-    else if Assigned(Logger) then
-      Logger.Warning(Format('[ANTPlus] StartScan: failed to open %s pairing slot',
-        [ANT_PAIRING_SLOTS[I].Name]));
-
-  if not AnyOk then
-  begin
-    if Assigned(Logger) then
-      Logger.Warning('[ANTPlus] StartScan: no pairing slot opened — scan aborted');
-    Exit;
-  end;
-
-  if not EnsureDispatcher then Exit;
-
-  FFoundCount := 0;
-  FScanActive := True;
-  if Assigned(Logger) then
-    Logger.Info(Format('[ANTPlus] StartScan: %d pairing slot(s) open, listening for masters',
-      [ANT_PAIRING_SLOT_COUNT]));
+  if not EnsureBackend then Exit;
+  PauseDispatcher;
+  try
+    if FScanActive then Exit;
+    FScanActive:=True;
+    AnyOk:=False;
+    for I:=0 to ANT_PAIRING_SLOT_COUNT-1 do
+      if FPairingClosing[I] then AnyOk:=True
+      else if ConfigurePairingChannel(I) then AnyOk:=True;
+    if not AnyOk then begin FScanActive:=False; Exit end;
+    if not EnsureDispatcher then begin FScanActive:=False; Exit end;
+    FLock.Enter;
+    try FFoundCount:=0 finally FLock.Leave end;
+    FNextRotation:=GetTickCount64+8000;
+    Logger.Debug('[ANTPlus] Discovery running');
+  finally ResumeDispatcher end;
 end;
 
 procedure TANTProvider.StopScan;
-var
-  I: Integer;
+var I:Integer;
 begin
-  if not FScanActive then Exit;
-  for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-    ClosePairingChannel(I);
-  FScanActive := False;
-  if Assigned(Logger) then
-    Logger.Info('[ANTPlus] StopScan');
+  PauseDispatcher;
+  try
+    if not FScanActive then Exit;
+    FScanActive:=False;
+    for I:=0 to ANT_PAIRING_SLOT_COUNT-1 do ClosePairingChannel(I);
+  finally ResumeDispatcher end;
 end;
 
-function TANTProvider.AlreadyFound(ADeviceNumber: Word): Boolean;
-var
-  I: Integer;
+function TANTProvider.AlreadyFound(const Id: TANTDeviceId): Boolean;
+var I: Integer;
 begin
-  Result := False;
-  for I := 0 to FFoundCount - 1 do
-    if FFoundDevices[I].DeviceNumber = ADeviceNumber then
-      Exit(True);
+  Result:=False;
+  for I:=0 to FFoundCount-1 do
+    if (FFoundDevices[I].DeviceNumber=Id.DeviceNumber) and
+      (FFoundDevices[I].DeviceType=Id.DeviceType) and
+      (FFoundDevices[I].TransmissionType=Id.TransmissionType) then Exit(True);
 end;
 
 procedure TANTProvider.RecordFoundDevice(const ADevId: TANTDeviceId);
@@ -1126,40 +1152,24 @@ end;
 
 procedure TANTProvider.FillDeviceInfoForType(var AInfo: TDeviceInfo;
   const ADevId: TANTDeviceId);
+var LabelText: string;
 begin
-  // По device-type определяем человекочитаемое имя и какие сенсорные
-  // колонки на UI будет занимать карточка. Без правильных Supports*-
-  // флагов Service.RebuildSensors при connected даст 0 сенсоров и
-  // плашка пропадёт из любой колонки.
-  AInfo.SupportsFTMS := False;
-  AInfo.SupportsControl := ADevId.DeviceType = ANT_DEVICE_TYPE_FEC;
+  AInfo.SupportsFTMS:=False;
+  AInfo.SupportsControl:=ADevId.DeviceType=17;
+  AInfo.SupportsPower:=ADevId.DeviceType in [17,11];
+  AInfo.SupportsCadence:=ADevId.DeviceType in [17,11,121,122];
+  AInfo.SupportsSpeed:=ADevId.DeviceType in [17,121,123];
+  AInfo.SupportsHeartRate:=ADevId.DeviceType=120;
   case ADevId.DeviceType of
-    ANT_DEVICE_TYPE_FEC:
-      begin
-        AInfo.Name := Format('ANT+ FE-C Trainer %d', [ADevId.DeviceNumber]);
-        AInfo.SupportsPower := True;
-        AInfo.SupportsCadence := True;
-        // HR в FE-C broadcast — передаётся отдельно через page 16 byte[6].
-        // Большинство тренажёров не имеют встроенного HR-датчика и пишут
-        // туда $FF (invalid). Не выставляем HeartRate cap по умолчанию.
-        AInfo.SupportsHeartRate := False;
-      end;
-    ANT_DEVICE_TYPE_HEART_RATE:
-      begin
-        AInfo.Name := Format('ANT+ HR %d', [ADevId.DeviceNumber]);
-        AInfo.SupportsPower := False;
-        AInfo.SupportsCadence := False;
-        AInfo.SupportsHeartRate := True;
-      end;
-  else
-    begin
-      AInfo.Name := Format('ANT+ device %d (type=%d)',
-        [ADevId.DeviceNumber, ADevId.DeviceType]);
-      AInfo.SupportsPower := False;
-      AInfo.SupportsCadence := False;
-      AInfo.SupportsHeartRate := False;
-    end;
+    17: LabelText:='FE-C Trainer';
+    11: LabelText:='Power';
+    120: LabelText:='HR';
+    121: LabelText:='Speed/Cadence';
+    122: LabelText:='Cadence';
+    123: LabelText:='Speed';
+    else LabelText:='Device';
   end;
+  AInfo.Name:=Format('ANT+ %s %d',[LabelText,ADevId.DeviceNumber]);
 end;
 
 procedure TANTProvider.NotifyDeviceFound(const ADevId: TANTDeviceId);
@@ -1169,7 +1179,7 @@ begin
   // (этот блок — это та сигнатура которую ожидает TOnDeviceFound,
   //  см. TrainerData.pas — proc(const Device: TDeviceInfo))
   Info := Default(TDeviceInfo);
-  Info.Address := ANT_ADDRESS_PREFIX + IntToStr(ADevId.DeviceNumber);
+  Info.Address := ANTDeviceAddress(ADevId);
   Info.TransportType := ttANTPlus;
   Info.ProviderName := 'ANTPlus';
   Info.RSSI := 0;
@@ -1187,6 +1197,25 @@ var
   SlotIndex: Integer;
   Slot: TANTPairingSlotDef;
 begin
+  if (AMsg.MessageID=ANT_MSG_RESPONSE_EVENT) and (AMsg.PayloadLen>=3) and
+    PairingSlotByChannel(AMsg.Data[0],SlotIndex) and FPairingClosing[SlotIndex] then
+  begin
+    if (AMsg.Data[2]=7) or
+      ((AMsg.Data[1]=ANT_MSG_CLOSE_CHANNEL) and (AMsg.Data[2]=$15)) then
+    begin
+      PauseDispatcher;
+      try
+        FPairingClosing[SlotIndex]:=False;
+        ReqMsg:=Default(TANTMessage); ReqMsg.MessageID:=ANT_MSG_UNASSIGN_CHANNEL;
+        ReqMsg.PayloadLen:=1; ReqMsg.Data[0]:=SlotIndex;
+        if not FBackend.WriteMessage(ReqMsg) then Exit;
+        if not FScanActive then Exit;
+        FPairingProfile[SlotIndex]:=(FPairingProfile[SlotIndex]+2) mod 6;
+        ConfigurePairingChannel(SlotIndex);
+      finally ResumeDispatcher end;
+    end;
+    Exit;
+  end;
   // ─── Случай 1: BROADCAST_DATA / ACK_DATA ─────────────────────────
   // Когда ANT-стик с wildcard-настройками (devNum=0/devType=Slot.DeviceType/
   // transType=0) получает первый broadcast от мастера, стик САМ перезаписывает
@@ -1204,7 +1233,7 @@ begin
     if FPairingIdRequested[SlotIndex] then Exit;  // уже запросили, ждём ответа
     if FBackend = nil then Exit;
 
-    Slot := ANT_PAIRING_SLOTS[SlotIndex];
+    Slot := PairingDefinition(SlotIndex);
     Logger.Info(Format('[ANTPlus] First broadcast on %s pairing slot — requesting CHANNEL_ID',
       [Slot.Name]));
     FPairingIdRequested[SlotIndex] := True;
@@ -1230,7 +1259,7 @@ begin
     if AMsg.PayloadLen < 5 then Exit;
     Channel := AMsg.Data[0];
     if not PairingSlotByChannel(Channel, SlotIndex) then Exit;
-    Slot := ANT_PAIRING_SLOTS[SlotIndex];
+    Slot := PairingDefinition(SlotIndex);
 
     DevId.DeviceNumber := Word(AMsg.Data[1]) or (Word(AMsg.Data[2]) shl 8);
     DevId.DeviceType := AMsg.Data[3];
@@ -1251,9 +1280,14 @@ begin
     // в логе и трафик на стике). Чтобы найти новый — нужен полный
     // re-config slot'а.
     if DevId.DeviceType <> Slot.DeviceType then Exit;
-    if AlreadyFound(DevId.DeviceNumber) then Exit;
+    if AlreadyFound(DevId) then
+    begin
+      NotifyDeviceFound(DevId); { permit reconnect after rediscovery }
+      Exit;
+    end;
 
-    RecordFoundDevice(DevId);
+    FLock.Enter;
+    try RecordFoundDevice(DevId) finally FLock.Leave end;
     if Assigned(Logger) then
       Logger.Info(Format('[ANTPlus] Found %s device #%d (transType=%d)',
         [Slot.Name, DevId.DeviceNumber, DevId.TransmissionType]));
@@ -1265,6 +1299,7 @@ procedure TANTProvider.DispatchMessage(const AMsg: TANTMessage);
 var
   Channel: Byte;
   Owner: TANTSession;
+  Gate: TTrainerCallbackGate; Target: TObject;
 begin
   // BROADCAST_DATA / ACK_DATA: первый байт payload — channel.
   // CHANNEL_ID response: тоже [Channel][...].
@@ -1278,7 +1313,7 @@ begin
   // {ANT_FIRST_SESSION_CHANNEL..ANT_MAX_CHANNELS-1} → handler сессии.
   if Channel < ANT_FIRST_SESSION_CHANNEL then
   begin
-    if FScanActive then OnPairingMessage(AMsg);
+    if FScanActive or (AMsg.MessageID=ANT_MSG_RESPONSE_EVENT) then OnPairingMessage(AMsg);
     Exit;
   end;
 
@@ -1287,11 +1322,17 @@ begin
     FLock.Enter;
     try
       Owner := FChannelOwners[Channel];
+      Gate:=nil; Target:=nil;
+      if Owner<>nil then
+      begin
+        Gate:=Owner.FCallbackGate;
+        if not Gate.Acquire(Target) then Gate:=nil;
+      end;
     finally
       FLock.Leave;
     end;
-    if Assigned(Owner) then
-      Owner.HandleMessage(AMsg);
+    if Gate<>nil then
+      try TANTSession(Target).HandleMessage(AMsg) finally Gate.Release end;
   end;
 end;
 
@@ -1360,16 +1401,14 @@ begin
   Sess := TANTSession.Create(AAddress, AFriendlyName);
   Sess.FProvider := Self;
 
-  // Constructor сессии парсит только DeviceNumber из address-строки и
-  // дефолтит DeviceType=FE-C, потому что в адресе самой информации о
-  // типе нет. Здесь подменяем на реальный TANTDeviceId, который был
-  // запомнён на этапе scan'а в FFoundDevices — иначе HR-сессия пыталась
-  // бы открыться с FE-C параметрами. После этого сама сессия в Connect
-  // применит capabilities в FDeviceInfo через ApplyCapabilities.
+  { Upgrade legacy number-only addresses using the last discovery result. }
   FLock.Enter;
   try
     for I := 0 to FFoundCount - 1 do
-      if FFoundDevices[I].DeviceNumber = Sess.FDeviceId.DeviceNumber then
+      if (FFoundDevices[I].DeviceNumber = Sess.FDeviceId.DeviceNumber) and
+        ((Pos(':',Copy(AAddress,5,MaxInt))=0) or
+         ((FFoundDevices[I].DeviceType=Sess.FDeviceId.DeviceType) and
+          (FFoundDevices[I].TransmissionType=Sess.FDeviceId.TransmissionType))) then
       begin
         Sess.FDeviceId := FFoundDevices[I];
         Break;
@@ -1394,39 +1433,17 @@ end;
 // ═══════════════════════════════════════════════════════════════
 
 constructor TANTSession.Create(const AAddress: string; const AFriendlyName: string);
-var
-  NumStr: string;
-  Code: Integer;
-  Num: Integer;
 begin
-  inherited Create(AAddress, AFriendlyName);
-  FOpLock := TCriticalSection.Create;
-  FProvider := nil;
-  FChannel := -1;
-  FAccumDistance := 0;
-  FLastDistanceRaw := 0;
-  FLastDistanceValid := False;
-  FFirstPacketLogged := False;
-
-  // Парсинг адреса 'ANT:<DeviceNumber>'.
-  FDeviceId.DeviceNumber := 0;
-  FDeviceId.DeviceType := ANT_DEVICE_TYPE_FEC;
-  FDeviceId.TransmissionType := ANT_FEC_TRANS_TYPE;
-  if Pos(ANT_ADDRESS_PREFIX, AAddress) = 1 then
-  begin
-    NumStr := Copy(AAddress, Length(ANT_ADDRESS_PREFIX) + 1, MaxInt);
-    Val(NumStr, Num, Code);
-    if (Code = 0) and (Num > 0) and (Num < 65536) then
-      FDeviceId.DeviceNumber := Num;
-  end;
-
-  FTrainerFeatures.SupportsResistanceControl := True;
-  FTrainerFeatures.SupportsPowerControl := True;
-  FTrainerFeatures.SupportsInclineControl := True;
-  FTrainerFeatures.SupportsSimulation := True;
-
-  Logger.Info(Format('%s session created (address=%s, friendlyName="%s")',
-    [LogPrefix, AAddress, AFriendlyName]));
+  inherited Create(AAddress,AFriendlyName);
+  FCallbackGate:=TTrainerCallbackGate.Create(Self);
+  FOpLock:=TCriticalSection.Create;
+  FProtocol:=TCyclingANTParser.Create;
+  FProvider:=nil; FChannel:=-1;
+  ParseANTDeviceAddress(AAddress,FDeviceId);
+  FTrainerFeatures.SupportsResistanceControl:=FDeviceId.DeviceType=17;
+  FTrainerFeatures.SupportsPowerControl:=FDeviceId.DeviceType=17;
+  FTrainerFeatures.SupportsInclineControl:=FDeviceId.DeviceType=17;
+  FTrainerFeatures.SupportsSimulation:=FDeviceId.DeviceType=17;
 end;
 
 destructor TANTSession.Destroy;
@@ -1434,13 +1451,26 @@ begin
   ShutdownControl;
   Logger.Info(Format('%s session destroying', [LogPrefix]));
   Disconnect;
+  FCallbackGate.Detach; FCallbackGate.WaitForIdle;
+  FreeAndNil(FCallbackGate);
   FreeAndNil(FOpLock);
+  FreeAndNil(FProtocol);
   inherited;
 end;
 
 class function TANTSession.TransportType: TTransportType;
 begin
   Result := ttANTPlus;
+end;
+
+function TANTSession.IsConnectionAlive: Boolean;
+var LastTick: QWord;
+begin
+  Result:=(FConnectionState=csConnected) and (FProvider<>nil) and
+    (FProvider.FBackend<>nil) and FProvider.FBackend.Opened;
+  if not Result then Exit;
+  LastTick:=Max(FConnectedTick,LastTelemetryTick);
+  Result:=GetTickCount64-LastTick<30000;
 end;
 
 function TANTSession.LogPrefix: string;
@@ -1544,13 +1574,7 @@ begin
   // Period подбираем по DeviceType (FE-C=8192, HR=8070, ...). Берём из
   // ANT_PAIRING_SLOTS — там уже описаны параметры для каждого типа.
   // Если устройство не в наших известных — fallback на FE-C period.
-  Period := ANT_FEC_CHANNEL_PERIOD;
-  for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-    if ANT_PAIRING_SLOTS[I].DeviceType = FDeviceId.DeviceType then
-    begin
-      Period := ANT_PAIRING_SLOTS[I].Period;
-      Break;
-    end;
+  Period:=ANTProfilePeriod(FDeviceId.DeviceType);
   Msg.Data[1] := Lo(Period);
   Msg.Data[2] := Hi(Period);
   if not FProvider.FBackend.WriteMessage(Msg) then
@@ -1686,22 +1710,10 @@ begin
     // pairing slot, не доходя до session-канала. Симптом — наш канал
     // получает EVENT_RX_SEARCH_TIMEOUT через 30 секунд несмотря на то
     // что мастер в эфире. Pairing slot будет переоткрыт в Disconnect.
-    for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-      if ANT_PAIRING_SLOTS[I].DeviceType = FDeviceId.DeviceType then
-      begin
-        FProvider.ClosePairingChannel(I);
-        Break;
-      end;
-
-    // ANT — асинхронный протокол: реальное «подключено» подтверждается
-    // приходом первого BROADCAST_DATA от мастера в HandleMessage.
-    // До этого — csConnecting. Чтобы клиентский UI не висел вечно,
-    // ставим csConnected сразу после успешного OPEN_CHANNEL — это
-    // соответствует «канал открыт, ждём данные». Если master не
-    // отвечает 8+ сек, ANT сам сгенерирует EVENT_RX_SEARCH_TIMEOUT
-    // (обработка которого — см. HandleMessage).
     SetConnectionState(csConnected);
-    FHasControl := True;
+    FHasControl := FDeviceId.DeviceType=17;
+    FProtocol.Reset; FUserConfigured:=False; FWindConfigured:=False;
+    FConnectedTick:=GetTickCount64;
     FFirstPacketLogged := False;  // ждём первый пакет
     Logger.Info(Format('%s Connect: channel %d configured, marked csConnected (awaiting first broadcast)',
       [LogPrefix, FChannel]));
@@ -1727,17 +1739,6 @@ begin
       if Assigned(FProvider) then
         FProvider.ReleaseChannel(FChannel);
       FChannel := -1;
-      // Переоткрываем pairing slot для этого DeviceType — он был
-      // закрыт в Connect, чтобы освободить эфир для session канала.
-      // Теперь, когда session закрыт, scan может снова искать
-      // устройства этого типа.
-      if Assigned(FProvider) then
-        for I := 0 to ANT_PAIRING_SLOT_COUNT - 1 do
-          if ANT_PAIRING_SLOTS[I].DeviceType = FDeviceId.DeviceType then
-          begin
-            FProvider.ConfigurePairingChannel(I);
-            Break;
-          end;
     end;
     FHasControl := False;
     SetConnectionState(csDisconnected);
@@ -1750,6 +1751,9 @@ end;
 procedure TANTSession.HandleMessage(const AMsg: TANTMessage);
 var
   EventCode: Byte;
+  Valid: Boolean;
+  Page: TBytes;
+  Parsed: TTrainerDataRecord;
 begin
   // Все приходящие на этот канал сообщения от провайдера.
   case AMsg.MessageID of
@@ -1768,26 +1772,17 @@ begin
             [LogPrefix, AMsg.Data[1]]));
         end;
 
-        // Парсим payload в зависимости от типа устройства, к которому
-        // привязана сессия. FE-C тренажёр шлёт pages 16/25 (+другие),
-        // HR-ремень шлёт pages 0..4 — у всех HR-pages в byte[7] лежит
-        // computed heart rate в bpm.
-        case FDeviceId.DeviceType of
-          ANT_DEVICE_TYPE_FEC:
-            case AMsg.Data[1] of
-              FEC_PAGE_GENERAL_FE_DATA:
-                ParseFECPage16([AMsg.Data[1], AMsg.Data[2], AMsg.Data[3],
-                  AMsg.Data[4], AMsg.Data[5], AMsg.Data[6], AMsg.Data[7], AMsg.Data[8]]);
-              FEC_PAGE_SPECIFIC_TRAINER:
-                ParseFECPage25([AMsg.Data[1], AMsg.Data[2], AMsg.Data[3],
-                  AMsg.Data[4], AMsg.Data[5], AMsg.Data[6], AMsg.Data[7], AMsg.Data[8]]);
-            end;
-          ANT_DEVICE_TYPE_HEART_RATE:
-            // Все HR pages (0..4) имеют HR в byte[7]; не разбираем
-            // под-тип pages — остальное только informational/cumulative.
-            ParseHRPage([AMsg.Data[1], AMsg.Data[2], AMsg.Data[3],
-              AMsg.Data[4], AMsg.Data[5], AMsg.Data[6], AMsg.Data[7], AMsg.Data[8]]);
-        end;
+        SetLength(Page,8); Move(AMsg.Data[1],Page[0],8);
+        if (FDeviceId.DeviceType=17) and (Page[0]=71) then
+        begin ReceiveFECStatus(Page); Exit end;
+        FLock.Enter;
+        try
+          FProtocol.WheelCircumferenceM:=WheelCircumferenceMm/1000.0;
+          Parsed:=Default(TTrainerDataRecord);
+          Valid:=FProtocol.Parse(FDeviceId.DeviceType,Page,Parsed);
+          if FProtocol.Features.Known then FTrainerFeatures:=FProtocol.Features;
+        finally FLock.Leave end;
+        if Valid then PublishMeasurement(Parsed);
       end;
     ANT_MSG_RESPONSE_EVENT:
       begin
@@ -1804,7 +1799,7 @@ begin
               SetConnectionState(csError, 'RX search timeout (no master response)');
             end;
           2:
-            Logger.Warning(Format('%s EVENT_RX_FAIL', [LogPrefix]));
+            Logger.Debug(Format('%s EVENT_RX_FAIL', [LogPrefix]));
           7:
             Logger.Info(Format('%s EVENT_CHANNEL_CLOSED', [LogPrefix]));
           8:
@@ -1818,106 +1813,18 @@ begin
   end;
 end;
 
-procedure TANTSession.ParseFECPage16(const APayload: array of Byte);
-var
-  DistRaw: Byte;
-  DistDelta: Byte;
-  SpeedRaw: Word;
-  ElapsedRaw: Byte;
+function TANTSession.WriteFEC(const Page: TBytes): Boolean;
 begin
-  // Page 16 — General FE Data:
-  //   [0] = page number (16)
-  //   [1] = equipment type
-  //   [2] = elapsed time, 0.25s/unit (rolls over at 64s)
-  //   [3] = distance travelled, 1m/unit (rolls over at 256m)
-  //   [4..5] = speed, 0.001 m/s (LE)
-  //   [6] = heart rate, bpm (255 = invalid)
-  //   [7] = capabilities + state
-  if Length(APayload) < 8 then Exit;
-
-  ElapsedRaw := APayload[2];
-  // FLastData.ElapsedTime приходит как сумма приращений; при первом
-  // вызове просто пишем raw*0.25, дальше можно усреднять — для нашего
-  // UI достаточно текущего «грубого» значения.
-  FLastData.ElapsedTime := (Cardinal(ElapsedRaw) * 250) div 1000;
-
-  DistRaw := APayload[3];
-  if FLastDistanceValid then
-  begin
-    DistDelta := DistRaw - FLastDistanceRaw;  // wrap-safe
-    FAccumDistance := FAccumDistance + DistDelta;
-  end;
-  FLastDistanceRaw := DistRaw;
-  FLastDistanceValid := True;
-  FLastData.Distance := FAccumDistance;
-
-  SpeedRaw := Word(APayload[4]) or (Word(APayload[5]) shl 8);
-  // 0.001 m/s → km/h: × 3.6 / 1000 = × 0.0036
-  FLastData.InstantSpeed := SpeedRaw * 0.0036;
-
-  if APayload[6] <> 255 then
-    FLastData.HeartRate := APayload[6]
-  else
-    FLastData.HeartRate := 0;
-
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
-end;
-
-procedure TANTSession.ParseFECPage25(const APayload: array of Byte);
-var
-  PowerRaw: Word;
-  CadenceRaw: Byte;
-begin
-  // Page 25 — Specific Trainer Data:
-  //   [0] = page number (25)
-  //   [1] = update event count
-  //   [2] = instantaneous cadence, rpm (255 = invalid)
-  //   [3..4] = accumulated power, watts (LE) — дельта-counter
-  //   [5..6] = instantaneous power LSB + nibble (12-bit value)
-  //   [7] = trainer status (lo nibble) + flags
-  if Length(APayload) < 8 then Exit;
-
-  CadenceRaw := APayload[2];
-  if CadenceRaw <> 255 then
-    FLastData.InstantCadence := CadenceRaw
-  else
-    FLastData.InstantCadence := 0;
-
-  // Instant power: 12 bits — APayload[5] = LSB, APayload[6] low nibble = MSB
-  PowerRaw := Word(APayload[5]) or ((Word(APayload[6]) and $0F) shl 8);
-  if PowerRaw <> $0FFF then
-    FLastData.InstantPower := PowerRaw
-  else
-    FLastData.InstantPower := 0;
-
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
-end;
-
-procedure TANTSession.ParseHRPage(const APayload: array of Byte);
-begin
-  // ANT+ Heart Rate Profile — pages 0..4. Все pages общие в byte[7]:
-  //   [0] = page number (high bit = toggle bit)
-  //   [1..4] = page-specific (manufacturer ID, serial #, battery, etc.)
-  //   [5..6] = Heart Beat Event Time (1024 Hz LE-counter, для R-R интервалов)
-  //   [7] = Computed Heart Rate, bpm
-  // 0 в byte[7] означает «нет данных» (например, ремень не на теле).
-  if Length(APayload) < 8 then Exit;
-  if APayload[7] = 0 then Exit;
-
-  FLastData.HeartRate := APayload[7];
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
+  Result:=(FProvider<>nil) and (FChannel>=0) and
+    (FDeviceId.DeviceType=17) and (FConnectionState=csConnected);
+  if Result then Result:=FProvider.SendAcknowledged(FChannel,Page);
 end;
 
 function TANTSession.RequestControl: Boolean;
 begin
-  // FE-C не имеет явной операции «запросить управление» — отправка
-  // любой command page (48/49/50/51) работает как имплицитный
-  // request-control. Возвращаем True.
-  FHasControl := True;
-  Result := True;
+  Result:=(FConnectionState=csConnected) and (FDeviceId.DeviceType=17);
+  FHasControl:=Result;
+  if Result then WriteFEC(FECRequestPage(54));
 end;
 
 function TANTSession.SetTargetPower(Watts: Word): Boolean;
@@ -1933,10 +1840,10 @@ begin
   end;
   if FProvider = nil then Exit;
   ANTBuildPageTargetPower(Watts, Page);
-  Result := FProvider.SendAcknowledged(FChannel, Page);
+  Result := SendFECCommand(Page,@WriteFEC);
   if Result then
     FLastData.TargetPower := Watts;
-  Logger.Info(Format('%s SetTargetPower(%dW) -> Page 49 -> %s',
+  Logger.Debug(Format('%s SetTargetPower(%dW) -> Page 49 -> %s',
     [LogPrefix, Watts, BoolToStr(Result, True)]));
 end;
 
@@ -1955,10 +1862,10 @@ begin
   // FE-C Page 48: 0..200, 0.5%/unit. Мапим Level (0..100) → 0..200.
   if Level > 100 then Level := 100;
   ANTBuildPageBasicResistance(Level * 2, Page);
-  Result := FProvider.SendAcknowledged(FChannel, Page);
+  Result := SendFECCommand(Page,@WriteFEC);
   if Result then
     FLastData.ResistanceLevel := Level;
-  Logger.Info(Format('%s SetResistanceLevel(%d%%) -> Page 48 raw=%d -> %s',
+  Logger.Debug(Format('%s SetResistanceLevel(%d%%) -> Page 48 raw=%d -> %s',
     [LogPrefix, Level, Level * 2, BoolToStr(Result, True)]));
 end;
 
@@ -1982,10 +1889,10 @@ begin
   // максимум; фактически на трейнерах часто остаётся trainer-default.
   // Передаём 80 (~0.004 — асфальт) как разумный default.
   ANTBuildPageTrackResistance(GradeHundredths, 80, Page);
-  Result := FProvider.SendAcknowledged(FChannel, Page);
+  Result := SendFECCommand(Page,@WriteFEC);
   if Result then
     FLastData.Incline := Round(InclinePercent * 10);
-  Logger.Info(Format('%s SetIncline(%.2f%%) -> Page 51 grade=%d -> %s',
+  Logger.Debug(Format('%s SetIncline(%.2f%%) -> Page 51 grade=%d -> %s',
     [LogPrefix, InclinePercent, GradeHundredths, BoolToStr(Result, True)]));
 end;
 
@@ -2009,18 +1916,25 @@ begin
   //  Page 50 (Wind Resistance) — WindCoeff, WindSpeed
   //  Page 51 (Track Resistance) — Grade, RollingResistance
   //
-  // Здесь упрощённая версия: только Page 51 (grade). Wind/User-config —
-  // TODO по необходимости, в большинстве сценариев trainer применяет
-  // дефолты (75 кг райдер, 10 кг байк, drag коэффициент 0.51) и
-  // результат субъективно адекватен. Параметры WindSpeed/RiderWeight/
-  // BikeWeight приняты для совместимости с TTransportSession и пока
-  // игнорируются — FPC выдаст лишь note про unused params.
-  GradeHundredths := Round(Grade * 100);
-  ANTBuildPageTrackResistance(GradeHundredths, 80, Page);
-  Result := FProvider.SendAcknowledged(FChannel, Page);
+  if not FUserConfigured or (Abs(FUserKg-RiderWeight)>0.01) or
+    (Abs(FBikeKg-BikeWeight)>0.01) then
+  begin
+    Page:=FECUserConfiguration(RiderWeight,BikeWeight,WheelCircumferenceMm/1000.0);
+    if not FProvider.SendAcknowledged(FChannel,Page) then Exit;
+    FUserKg:=RiderWeight; FBikeKg:=BikeWeight; FUserConfigured:=True;
+  end;
+  if not FWindConfigured or (Abs(FWind-WindSpeed)>0.01) then
+  begin
+    Page:=FECWindParameters(WindSpeed,0.51);
+    if not FProvider.SendAcknowledged(FChannel,Page) then Exit;
+    FWind:=WindSpeed; FWindConfigured:=True;
+  end;
+  GradeHundredths := Round(EnsureRange(Grade,-200.0,200.0)*100);
+  ANTBuildPageTrackResistance(GradeHundredths, 100, Page);
+  Result := SendFECCommand(Page,@WriteFEC);
   if Result then
     FLastData.Incline := Round(Grade * 10);
-  Logger.Info(Format('%s SetSimulation(grade=%.2f%% wind=%.1fm/s rider=%.0fkg bike=%.0fkg) -> Page 51 -> %s',
+  Logger.Debug(Format('%s SetSimulation(grade=%.2f%% wind=%.1fm/s rider=%.0fkg bike=%.0fkg) -> Page 51 -> %s',
     [LogPrefix, Grade, WindSpeed, RiderWeight, BikeWeight, BoolToStr(Result, True)]));
 end;
 
@@ -2034,20 +1948,21 @@ end;
 
 function TANTSession.Stop: Boolean;
 begin
-  Result := FConnectionState = csConnected;
+  if FTrainerFeatures.Known and not FTrainerFeatures.SupportsResistanceControl then
+    Result:=SetTargetPower(0)
+  else Result:=SetResistanceLevel(0);
 end;
 
 function TANTSession.Pause: Boolean;
 begin
-  Result := FConnectionState = csConnected;
+  Result:=Stop;
 end;
 
 function TANTSession.Reset: Boolean;
 begin
-  // Reset accumulated distance — это локальное состояние сессии.
-  FAccumDistance := 0;
-  FLastDistanceValid := False;
-  Result := True;
+  FLock.Enter;
+  try FProtocol.Reset finally FLock.Leave end;
+  Result:=True;
 end;
 
 // ═══════════════════════════════════════════════════════════════

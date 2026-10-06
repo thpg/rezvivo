@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Math, CastleUtils, CastleVectors,
-  X3DNodes, BikeParametric, BikeLog, BikeGfxUtil;
+  X3DNodes, BikeParametric, BikeLog, BikeGfxUtil, BikeSeatSurface;
 
 type
   TSeatComponent = class(TBikeComponent)
@@ -29,10 +29,12 @@ type
     FContactModelReady: Boolean;
     FModelRodPoint, FModelSeatPoint: TVector3;
     FModelRodAngle: Single;
+    FModelSurface, FSurface: TSeatSurface;
     function TryLoadModel: TX3DRootNode;
     function ReadModelContact: Boolean;
     function ModelRotationZ(Skel: TBikeSkeleton; BoneAngZ: Single): Single;
   public
+    property ContactSurface:TSeatSurface read FSurface;
     constructor Create; override;
     class function ComponentName: string; override;
     procedure ApplyPreset(const APreset: string); override;
@@ -119,7 +121,7 @@ begin
 end;
 
 procedure TSeatComponent.ComputeBones(Skel: TBikeSkeleton);
-var SA, SPLen: Single; STTop, Clamp, Contact: TVector3;
+var SA, SPLen, T, W, X: Single; STTop, Clamp, Contact, P: TVector3; I,J:Integer; Source:TSeatSurface;
 begin
   if SeatpostExtension < 10 then SeatpostExtension := DEF_SEATPOST_EXTENSION;
   if SeatpostDia < 10 then SeatpostDia := DEF_SEATPOST_DIA;
@@ -139,6 +141,26 @@ begin
       + RotateXYZ(FModelSeatPoint - FModelRodPoint, FModelRotX, FModelRotY,
           ModelRotationZ(Skel, FModelRodAngle)) * FModelScale;
   Skel.AddBone('saddle_contact', Contact);
+  for I:=0 to SeatSurfaceCount-1 do begin
+    if FUseModel and FContactModelReady then begin
+      P:=RotateXYZ(Vector3(FModelSurface[I].X,FModelSurface[I].Y,0)-FModelSeatPoint,
+        FModelRotX,FModelRotY,ModelRotationZ(Skel,FModelRodAngle))*FModelScale;
+      FSurface[I]:=Vector4(P.X,P.Y,FModelSurface[I].Z*FModelScale,FModelSurface[I].W*FModelScale);
+    end else begin
+      T:=I/(SeatSurfaceCount-1); W:=(0.5-0.36*T)*SaddleWidth*Skel.MM;
+      FSurface[I]:=Vector4((T-0.5)*SaddleLength*Skel.MM,0,W,0.006);
+    end;
+  end;
+  { Equidistant bike-space sections allow two uniform reads on the GPU,
+    independent of the saddle's authored tilt and cushion curvature. }
+  Source:=FSurface; J:=1;
+  for I:=0 to SeatSurfaceCount-1 do begin
+    X:=Source[0].X+(Source[SeatSurfaceCount-1].X-Source[0].X)*I/(SeatSurfaceCount-1);
+    while (J<SeatSurfaceCount-1) and (Source[J].X<X) do Inc(J);
+    T:=EnsureRange((X-Source[J-1].X)/Max(0.00001,Source[J].X-Source[J-1].X),0.0,1.0);
+    FSurface[I]:=Source[J-1]*(1-T)+Source[J]*T;
+    FSurface[I].X:=X;
+  end;
 end;
 
 function TSeatComponent.ModelRotationZ(Skel: TBikeSkeleton; BoneAngZ: Single): Single;
@@ -155,7 +177,7 @@ end;
 function TSeatComponent.ReadModelContact: Boolean;
 var Root: TX3DRootNode; Node: TTransformNode; Scene: TCastleScene;
     Hit: TRayCollision; Box: TBox3D; Key: string; I: Integer;
-    Width, Top: Single; Origin: TVector3; Found: Boolean;
+    Width, Top, X, Z, Y, EdgeY, HalfWidth: Single; Origin: TVector3; Found: Boolean; Section,J:Integer;
 begin
   Key := ResolveModelURL(FModelURL) + '|' + FRodBoneName;
   if FContactModelReady and (Key = FContactModelKey) then Exit(True);
@@ -163,7 +185,10 @@ begin
   Result := False;
   Root := TryLoadModel;
   if Root = nil then Exit;
+  Scene:=TCastleScene.Create(nil);
   try
+    Scene.PreciseCollisions:=True; Scene.Load(Root,False); Box:=Scene.BoundingBox;
+    if Box.IsEmpty then Exit;
     FModelRodPoint := TVector3.Zero; FModelRodAngle := 0;
     Node := nil;
     if FRodBoneName <> '' then
@@ -180,12 +205,6 @@ begin
         model space. The centre may be a relief hole: probe both supporting
         sides too, then use their top surface at the centre of the saddle.
         This scene never renders and is freed before the bike build continues. }
-      Scene := TCastleScene.Create(nil);
-      try
-        Scene.PreciseCollisions := True;
-        Scene.Load(Root, False);
-        Box := Scene.BoundingBox;
-        if Box.IsEmpty then Exit;
         Width := (Box.Data[1].Z - Box.Data[0].Z) * 0.2;
         Found := False; Top := -Infinity;
         for I := -1 to 1 do begin
@@ -200,10 +219,30 @@ begin
         end;
         if not Found then Exit;
         FModelSeatPoint := Vector3(FModelRodPoint.X, Top, FModelRodPoint.Z);
-      finally Scene.Free; end;
     end;
+    { Capture the actual curved cushion, including the raised rear lip.
+      Contact sampling is build-time only, shared by all animation frames. }
+      for Section:=0 to SeatSurfaceCount-1 do begin
+        X:=Box.Data[0].X+(Box.Data[1].X-Box.Data[0].X)*(0.025+0.95*Section/(SeatSurfaceCount-1));
+        Top:=-Infinity; EdgeY:=0; HalfWidth:=0;
+        for J:=-12 to 12 do begin
+          Z:=J/12*Max(Abs(Box.Data[0].Z),Abs(Box.Data[1].Z));
+          Hit:=Scene.InternalRayCollision(Vector3(X,Box.Data[1].Y+0.01,Z),Vector3(0,-1,0));
+          try
+            if (Hit<>nil) and (Hit.Count>0) and (Hit.First.Triangle<>nil) then begin
+              Y:=Hit.First.Point.Y;
+              { Rails are well below the cushion. Ignore them. }
+              if Y<FModelSeatPoint.Y-0.028 then Continue;
+              Top:=Max(Top,Y);
+              if Abs(Z)>=HalfWidth then begin HalfWidth:=Abs(Z); EdgeY:=Y end;
+            end;
+          finally Hit.Free end;
+        end;
+        if IsInfinite(Top) then begin Top:=FModelSeatPoint.Y; HalfWidth:=0.005; EdgeY:=Top end;
+        FModelSurface[Section]:=Vector4(X,Top,Max(0.009,HalfWidth+0.002),Max(0,Top-EdgeY));
+      end;
     FContactModelKey := Key; FContactModelReady := True; Result := True;
-  finally Root.Free; end;
+  finally Scene.Free; Root.Free; end;
 end;
 
 function TSeatComponent.TryLoadModel: TX3DRootNode;

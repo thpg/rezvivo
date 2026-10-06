@@ -54,6 +54,7 @@ type
 
   TGameDeviceService = class
   private
+    FLastHealthCheck: QWord;
     FManager: TDeviceManager;
     FDevices: TGameDeviceList;
     { Discovery and the selected FIT player. Sessions belong to the manager. }
@@ -555,6 +556,11 @@ begin
       Exit;
     end;
 
+    if Entry.DiscoverMetrics(Data) then
+    begin
+      if FAutoAssign then DoAutoAssign;
+      if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
+    end;
     Entry.FeedData(Data);
 
     if Assigned(FOnSensorDataChanged) and Assigned(Entry.Sensors) then
@@ -636,10 +642,9 @@ begin
       end;
       Log(Format('  RebuildSensors → %d sensors',
         [Entry.Sensors.Count]));
-      if Entry.Sensors.Count = 0 then
-        Entry.TestedNotFitness := True
-      else
-        Entry.TestedNotFitness := False;
+      { A recognized fitness service may not have published optional fields
+        yet. The provider explicitly rejects non-fitness peripherals. }
+      Entry.TestedNotFitness := False;
       if FAutoAssign then
         DoAutoAssign;
     end;
@@ -658,8 +663,12 @@ begin
         Entry.TestedNotFitness := True;
     end;
     gdcsError:
+    begin
+      ClearSensorsOfDevice(Entry);
+      if FControlDevice=Entry then FControlDevice:=nil;
       Log(TRANSPORT_TYPE_NAMES[Device.TransportType] +
         ' error: ' + Entry.DisplayName + ' / ' + Message);
+    end;
   end;
 
   Log(Format('  Firing callbacks: OnConnChanged=%s OnDevicesChanged=%s',
@@ -944,7 +953,11 @@ procedure TGameDeviceService.OnApplicationUpdate(Sender: TObject);
 begin
   RefreshAssignmentsProfile;
   if Assigned(FManager) then
+  begin
     FManager.Tick;
+    if GetTickCount64-FLastHealthCheck>=1000 then
+    begin FLastHealthCheck:=GetTickCount64; CheckStaleConnections end;
+  end;
 end;
 
 procedure TGameDeviceService.EnableContinuousScan;
@@ -965,14 +978,9 @@ end;
 
 procedure TGameDeviceService.CheckStaleConnections;
 const
-  { Сколько секунд позволяем сидеть в gdcsConnecting прежде чем
-    форсированно сбросить в Disconnected. Реальный BLE-коннект на
-    Windows обычно укладывается в 3-5 с (DiscoverServices самое
-    долгое), 15 с — щедрый запас на всё про всё. }
-  CONNECTING_TIMEOUT_SEC = 15.0;
-
-  { gdcsError держим ещё чуть дольше — даём провайдеру шанс прислать
-    нормальный disconnect, а если уж не пришёл — сами разрешаем. }
+  { GATT discovery may contain several sequential 30-second operations.
+    Never race the connect worker or destroy a COM handle it still owns. }
+  CONNECTING_TIMEOUT_SEC = 90.0;
   ERROR_TIMEOUT_SEC = 30.0;
 var
   I: Integer;
@@ -1009,7 +1017,8 @@ begin
           ForceDisconnect('Connection lost (health check)');
 
       gdcsConnecting:
-        if AgeSec > CONNECTING_TIMEOUT_SEC then
+        if (AgeSec > CONNECTING_TIMEOUT_SEC) and
+          not FManager.IsConnecting(Entry.DeviceInfo.Address) then
           ForceDisconnect('Connect timeout');
 
       gdcsError:

@@ -1,4 +1,4 @@
-﻿unit Osm3dSceneAssembler;
+unit Osm3dSceneAssembler;
 
 { overflow/range-проверки выключены намеренно: хеши/упаковка битов рассчитывают на заворот }
 {$Q-}{$R-}
@@ -725,7 +725,7 @@ procedure AddSceneLights(Root: TX3DRootNode; const SunDirection: TVector3;
 
 implementation
 
-uses Osm3dShadowSample, Osm3dStaticGeometry, Osm3dGeoTileBlock,
+uses Osm3dShadowSample, Osm3dStaticGeometry, Osm3dGeoTileBlock, Osm3dRtxMaterials,
   Osm3dGenerationProgress;
 
 { Off by default: per-texture load tracing (see TCachedAssemblyResources.LogTex)
@@ -2201,6 +2201,7 @@ var
   AvgR,AvgG,AvgB:  Byte;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(752);{$ENDIF}
+  AttachRtxGroundCaptureFlag(Effect);
   UVArr  := nil;
   ColArr := nil;
   RArr   := nil;
@@ -4909,6 +4910,7 @@ procedure WrapTileLOD(Root: TX3DRootNode; const ACenter: TVector3;
   AKx: Double;
   AGround: TAbstractChildNode;
   const ABld: array of TShapeNode; const AWater: array of TAbstractChildNode;
+  ANearBuildingDetails: TAbstractChildNode;
   APbrM, AFullM: Single; APrev: TTilePreviewData);
 var
   LOD: TLODNode;
@@ -4984,6 +4986,7 @@ begin
   for I := 0 to High(Kids) do
   begin
     Ch := Kids[I];
+    if Ch = ANearBuildingDetails then Continue;
     if (APrev <> nil) and (Ch = AGround) then Continue;  { землю-композит заменило превью }
     { Шейдерная вода — только на уровне A (вблизи). На B/C воду рисует
       запечённая prev-текстура, поэтому водные ноды сюда не кладём. }
@@ -5766,7 +5769,8 @@ var
       URL-ready. nil builder → legacy per-palette emission below. }
     BldBuilder:    TGroundCompositeBuilder;
     BldComp:       TGroundCompositeMesh;
-    BldShape:      TShapeNode;
+    BldShape: TShapeNode;
+    BldDetailCollision: TCollisionNode;
     UseBldComp:    Boolean;
     BVRef:         TMeshVertexArray;
     Bvi:           Integer;
@@ -5819,6 +5823,7 @@ var
     RoofPhaseZ:=Frac(Mdl.Origin.Lat*Proj.MetersPerDegreeLat/4.0);
     LodGround := nil;
     SetLength(LodBld, 64);  LodBldN := 0;
+    BldDetailCollision := nil;
     SetLength(LodWater, 16); LodWaterN := 0;
     {$IFDEF IAM_LIVE}IamLiveTrack(809);{$ENDIF}
     Result := TX3DRootNode.Create;
@@ -5916,7 +5921,7 @@ var
             SharedAtlasTex, SharedAtlasNormTex, SharedAtlasMaskTex, SharedRoadHaloTex,
             GROUND_COMPOSITE_VS, GROUND_COMPOSITE_FS,
             True, True, nil, SharedGroundEffect);
-          if GpuGroundMode<>ggCpu then begin
+          if (GpuGroundMode<>ggCpu) or RenderBuildingsActive then begin
             if GpuGround=nil then GpuGround:=TGpuGroundTile.Create;
             GpuGround.Add(CompShape.Geometry as TIndexedFaceSetNode,CurbStart);
           end;
@@ -6179,13 +6184,18 @@ var
         if (BldComp <> nil) and (BldComp.TriangleCount > 0) then
         begin
           BldShape := BuildBuildingCompositeShape(BldComp,
-            ACache.BuildAtlas, -ASunDir, nil);
+            ACache.BuildAtlas, -ASunDir, BldDetailCollision, nil, GpuGround, Delta.X, Delta.Z);
           if BldShape <> nil then
           begin
             BldShape.X3DName := 'AtlasBuildingComposite';
             Result.AddChildren(BldShape);
-          end;
             PushLod(LodBld, LodBldN, BldShape);
+          end;
+          if BldDetailCollision <> nil then
+          begin
+            { Visual trims never enter CPU collision/rider contact geometry. }
+            Result.AddChildren(BldDetailCollision);
+          end;
         end;
       finally
         BldComp.Free;
@@ -6334,8 +6344,10 @@ var
 
     SetLength(LodBld, LodBldN);
     SetLength(LodWater, LodWaterN);
-    WrapTileLOD(Result, Delta, AKx, LodGround, LodBld, LodWater,
+    WrapTileLOD(Result, Delta, AKx, LodGround, LodBld, LodWater, BldDetailCollision,
       GlobalLODConfig.LodPbrM, GlobalLODConfig.LodFullM, APrev);
+    { CPU contact mode only borrows this assembly-time index for entrances. }
+    if GpuGroundMode=ggCpu then FreeAndNil(GpuGround);
   end;
 
 begin

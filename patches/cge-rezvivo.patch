@@ -1,3 +1,19 @@
+diff --git a/src/base/castlerenderoptions_renderoptions.inc b/src/base/castlerenderoptions_renderoptions.inc
+--- a/src/base/castlerenderoptions_renderoptions.inc
++++ b/src/base/castlerenderoptions_renderoptions.inc
+@@ -24,6 +24,12 @@
+   { Options that control rendering,
+     available at every scene through @link(TCastleScene.RenderOptions). }
+   TCastleRenderOptions = class(TCastleComponent)
++  public
++    { Opt-in revision of object-space cached vertex deformation. Zero retains
++      per-frame behaviour. Increment after changing animation uniforms; world
++      transforms and camera changes do not invalidate an object-space pose.
++      Not part of the material hash: this never rebuilds shaders. }
++    CachedAnimationRevision: QWord;
+   strict private
+     type
+       TRenderOptionsHash = Int32;
 diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleglshaders.pas
 --- a/src/base_rendering/castleglshaders.pas
 +++ b/src/base_rendering/castleglshaders.pas
@@ -46,7 +62,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      { Set attribute variable value.
        The used type must match the type of this variable in GLSL program.
  
-@@ -619,6 +629,9 @@
+@@ -619,12 +629,22 @@
        calls. }
      class property Current: TGLSLProgram read GetCurrent write SetCurrent; deprecated 'use RenderContext.CurrentProgram';
      {$endif}
@@ -56,7 +72,20 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
    end;
  
    TGLSLProgramList = {$ifdef FPC}specialize{$endif} TObjectList<TGLSLProgram>;
-@@ -659,10 +672,257 @@
+ 
+ var
+   LogShaders: boolean;
++  { Diagnostic switch. GLSL identifiers and shader fingerprints are compared
++    exactly, not with the user's language-dependent collation rules. }
++  UseBinaryShaderNames: Boolean = True;
++
++{ Configure internal shader-name lists; changing the diagnostic mode also
++  restores the correct sort order before binary search. }
++procedure ConfigureShaderNameList(const Names: TStringList);
+ 
+ {$ifdef FPC}
+ function GetCurrentProgram: TGLSLProgram;
+@@ -659,10 +679,257 @@
      @exclude }
    InternalUpgradeGlslVersion: Boolean = true;
  
@@ -315,7 +344,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
  { Wrapper around glGetShaderInfoLog. }
  function GetShaderInfoLog(const ShaderId: TGLShader): String;
-@@ -1355,6 +1615,7 @@
+@@ -1355,6 +1622,7 @@
    FreeAndNil(FUniformLocations);
    FreeAndNil(FAttributeLocations);
    FreeAndNil(FUniformReportedMissing);
@@ -323,7 +352,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
    inherited;
  end;
-@@ -1633,6 +1894,10 @@
+@@ -1633,6 +1901,10 @@
      CompiledInt: TGLint;
      {$endif not CASTLE_WEBGL}
      Compiled: Boolean;
@@ -334,7 +363,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
    begin
      Result := glCreateShader(AType);
  
-@@ -1654,6 +1919,12 @@
+@@ -1654,6 +1926,12 @@
      glShaderSource(Result, 1, @SrcPtr, @SrcLength);
      {$endif}
  
@@ -347,7 +376,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      try
        glCompileShader(Result);
      except
-@@ -1665,6 +1936,14 @@
+@@ -1665,6 +1943,14 @@
      {$else}
      glGetShaderiv(Result, GL_COMPILE_STATUS, @CompiledInt);
      Compiled := CompiledInt = Ord(GL_TRUE);
@@ -362,7 +391,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      {$endif}
  
      { Although we generally avoid creating multiline exception messages,
-@@ -1675,81 +1954,6 @@
+@@ -1675,81 +1961,6 @@
        ReportCompileError(GetShaderInfoLog(Result));
    end;
  
@@ -444,7 +473,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
  
    { Does shader code Text has a line starting with LinePrefix. }
    function HasLine(const LinePrefix: String; const Text: String): Boolean;
-@@ -2019,9 +2223,22 @@
+@@ -2019,9 +2230,22 @@
    LinkedInt: TGLuint;
    {$endif}
    Linked: Boolean;
@@ -470,7 +499,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      { Produce clear error messages, without waiting for OpenGL errors,
        if required shaders are not attached. }
      if not HasStage[stVertex] then
-@@ -2029,6 +2246,15 @@
+@@ -2029,6 +2253,15 @@
      if FragmentShaderRequired and (not HasStage[stFragment]) then
        raise EGLSLProgramLinkError.Create('Fragment shader not attached');
  
@@ -486,7 +515,7 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      glLinkProgram(ProgramId);
  
      {$ifdef CASTLE_WEBGL}
-@@ -2036,6 +2262,14 @@
+@@ -2036,6 +2269,14 @@
      {$else}
      glGetProgramiv(ProgramId, GL_LINK_STATUS, @LinkedInt);
      Linked := LinkedInt = Ord(GL_TRUE);
@@ -501,7 +530,39 @@ diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleg
      {$endif}
  
      if not Linked then
-@@ -2340,6 +2574,19 @@
+@@ -2073,6 +2314,22 @@
+   RenderContext.CurrentProgram := Self;
+ end;
+ 
++procedure ConfigureShaderNameList(const Names: TStringList);
++{$ifdef FPC}
++var WasSorted: Boolean;
++{$endif}
++begin
++  {$ifdef FPC}
++  if Names.UseLocale = UseBinaryShaderNames then
++  begin
++    WasSorted := Names.Sorted;
++    Names.Sorted := False;
++    Names.UseLocale := not UseBinaryShaderNames;
++    Names.Sorted := WasSorted;
++  end;
++  {$endif}
++end;
++
+ class procedure TGLSLProgram.Disable;
+ begin
+   RenderContext.CurrentProgram := nil;
+@@ -2103,6 +2360,8 @@
+       FUniformReportedMissing := TStringList.Create;
+       FUniformReportedMissing.CaseSensitive := true; // GLSL uniform names are case-sensitive
+     end;
++    ConfigureShaderNameList(FUniformReportedMissing);
++    FUniformReportedMissing.Sorted := UseBinaryShaderNames;
+     // don't spam the log with warning "Uniform variable "%s" not found (or not used)"... every frame
+     if FUniformReportedMissing.IndexOf(AName) <> -1 then
+       Exit;
+@@ -2340,6 +2599,19 @@
    SetUniform(AName, Value, UniformMissing);
  end;
  
@@ -670,6 +731,27 @@ diff --git a/src/scene/castleinternalbackgroundrenderer.pas b/src/scene/castlein
  
  constructor TBackgroundScene.Create;
  begin
+@@ -406,6 +431,7 @@
+     Color: TColorNode;
+     Geometry: TIndexedFaceSetNode;
+     Shape: TShapeNode;
++    Appearance: TAppearanceNode;
+   begin
+     { add a mesh for sphere, if not present already }
+     if not SphereCreated then
+@@ -426,6 +452,12 @@
+ 
+       Shape := TShapeNode.Create('', Node.BaseUrl);
+       Shape.FdGeometry.Value := Geometry;
++      { Background effects apply to the colour hemisphere as well as the
++        optional texture cube (e.g. a sun aligned with the scene lighting). }
++      Appearance := TAppearanceNode.Create('', Node.BaseUrl);
++      Appearance.FdShaders.AssignValue(Node.FdShaders);
++      Appearance.FdEffects.AssignValue(Node.FdEffects);
++      Shape.Appearance := Appearance;
+ 
+       Transform.AddChildren(Shape);
+     end;
 diff --git a/src/scene/castleinternalbatchshapes.pas b/src/scene/castleinternalbatchshapes.pas
 --- a/src/scene/castleinternalbatchshapes.pas
 +++ b/src/scene/castleinternalbatchshapes.pas
@@ -1018,7 +1100,7 @@ diff --git a/src/scene/castleinternalrenderer_cache_types.inc b/src/scene/castle
      { What VBOs do we need to reload at next LoadArraysToVbo call.
        This also implies that content for this VBOs needs to be created,
        which may mean we need to change Arrays.
-@@ -122,6 +130,14 @@
+@@ -122,6 +130,15 @@
      VboCoordinatePreserveGeometryOrder: Boolean; //< copied from TGeometryArrays.CoordinatePreserveGeometryOrder
  
      Vao: TVertexArrayObject;
@@ -1026,6 +1108,7 @@ diff --git a/src/scene/castleinternalrenderer_cache_types.inc b/src/scene/castle
 +    { GPU-only object-space deformation, shared by colour and shadow draws. }
 +    PoseVbo: array[0..1] of TGLBuffer;
 +    PoseFrame: QWord;
++    PoseRevision: QWord;
 +    PoseSize: Cardinal;
 +    PoseRead: Integer;
 +    PoseValid, PosePending: Boolean;
@@ -1033,7 +1116,7 @@ diff --git a/src/scene/castleinternalrenderer_cache_types.inc b/src/scene/castle
  
      { Like TX3DRendererShape.LoadArraysToVbo,
        but takes explicit DynamicGeometry. }
-@@ -178,6 +194,7 @@
+@@ -178,6 +195,7 @@
  var
    I: TVboType;
  begin
@@ -1041,7 +1124,7 @@ diff --git a/src/scene/castleinternalrenderer_cache_types.inc b/src/scene/castle
    if Vbo[vtCoordinate] <> GLObjectNone then
    begin
      for I := Low(I) to High(I) do
-@@ -191,8 +208,21 @@
+@@ -191,8 +209,21 @@
    FreeAndNil(Vao);
  end;
  
@@ -1063,6 +1146,23 @@ diff --git a/src/scene/castleinternalrenderer_cache_types.inc b/src/scene/castle
    VboToReload := VboToReload + Changed;
  end;
  
+diff --git a/src/scene/castleinternalrenderer_glsl.inc b/src/scene/castleinternalrenderer_glsl.inc
+--- a/src/scene/castleinternalrenderer_glsl.inc
++++ b/src/scene/castleinternalrenderer_glsl.inc
+@@ -116,6 +116,13 @@
+     else
+       UniformsTextures.Delete(I);
+   end;
++  try
++    for I := 0 to SharedUniformsTextures.Count - 1 do
++      BindTextureUniform(SharedUniformsTextures[I]);
++  finally
++    { These fields belong to the current draw only, not to this program. }
++    SharedUniformsTextures.Clear;
++  end;
+ end;
+ 
+ {$endif read_implementation}
 diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castleinternalrenderer_meshrenderer.inc
 --- a/src/scene/castleinternalrenderer_meshrenderer.inc
 +++ b/src/scene/castleinternalrenderer_meshrenderer.inc
@@ -1080,12 +1180,10 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
          Continue;
        end;
        case Arrays.Attribs[I].AType of
-@@ -352,6 +355,93 @@
-     else
-       { Unlit white is used when material = nil. }
+@@ -354,6 +357,106 @@
        MaterialUnlitExplicit(White);
-+  end;
-+
+   end;
+ 
 +  procedure PrepareCachedPose;
 +  {$ifndef OpenGLES}
 +  const PoseStride = 10 * SizeOf(Single);
@@ -1093,6 +1191,8 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +    C: TShapeCache;
 +    P: TX3DShaderProgram;
 +    Frame: QWord;
++    Revision: QWord;
++    RevisionDriven, CaptureNeeded: Boolean;
 +    WriteIndex: Integer;
 +  {$endif}
 +  begin
@@ -1101,19 +1201,22 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +    if C = nil then Exit;
 +    { Generated shadow textures run during Update, before Render begins. }
 +    Frame := TFramesPerSecond.FrameId;
++    Revision := RenderOptions.CachedAnimationRevision;
++    RevisionDriven := Revision <> 0;
 +    if not (CurrentMeshShader is TX3DShaderProgram) then Exit;
 +    P := TX3DShaderProgram(CurrentMeshShader);
 +    if P.CachedDeformation then P.SetUniform('castle_DeformationMode', 0);
 +    if not (UseCachedRiderMeshes and P.CachedDeformation and
 +      (Vbo[vtCoordinate] <> GLObjectNone) and (C.References = 1) and
-+      ((Renderer.RenderingCamera.Target = rtShadowMap) or (C.PoseFrame = Frame))) then
++      (RevisionDriven or (Renderer.RenderingCamera.Target = rtShadowMap) or
++        (C.PoseFrame = Frame))) then
 +    begin
 +      if C.PoseSize <> 0 then C.ClearPose;
 +      Exit;
 +    end;
 +
 +    if (not C.PoseValid) or (C.PoseSize <> Arrays.Count * PoseStride) or
-+      ((C.PoseFrame <> Frame) and (C.PoseFrame + 1 <> Frame)) then
++      ((not RevisionDriven) and (C.PoseFrame <> Frame) and (C.PoseFrame + 1 <> Frame)) then
 +    begin
 +      C.ClearPose;
 +      C.PoseSize := Arrays.Count * PoseStride;
@@ -1128,6 +1231,10 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +      end;
 +    end;
 +
++    if RevisionDriven then
++      CaptureNeeded := (not C.PoseValid) or (C.PoseRevision <> Revision)
++    else
++      CaptureNeeded := C.PoseFrame <> Frame;
 +    if C.PoseFrame <> Frame then
 +    begin
 +      C.PoseFrame := Frame;
@@ -1136,6 +1243,10 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +        C.PoseRead := 1 - C.PoseRead;
 +        C.PosePending := false;
 +      end;
++    end;
++    if CaptureNeeded then
++    begin
++      C.PoseRevision := Revision;
 +      WriteIndex := 1 - C.PoseRead;
 +      P.SetUniform('castle_DeformationMode', 1);
 +      glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, C.PoseVbo[WriteIndex]);
@@ -1171,38 +1282,71 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +    P.SetUniform('castle_DeformationMode', 2);
 +    Inc(CachedMeshDraws);
 +    {$endif}
-   end;
- 
++  end;
++
  const
-@@ -369,6 +459,9 @@
+   ToMode: array [TGeometryPrimitive] of TGLenum = (
+     GL_TRIANGLES,
+@@ -369,10 +472,19 @@
    First: Cardinal;
    Mode: TGLenum;
    TexCoordAttrib: TGLSLAttribute;
++  ProfileStarted: TTimerResult;
 +  {$ifdef REZVIVO_STARTUP_TIMING}
 +  TimingStart: QWord;
 +  {$endif}
  begin
    Attribs := nil;
  
-@@ -528,6 +621,17 @@
++  if ProfileSharedEffects then ProfileStarted := Timer;
+   RenderCoordinateBegin;
++  if ProfileSharedEffects then begin
++    MeshBeginSeconds := MeshBeginSeconds + TimerSeconds(Timer, ProfileStarted);
++    ProfileStarted := Timer;
++  end;
+   try
+     if not PrepareRenderShape then
+     begin
+@@ -390,6 +502,12 @@
+       if CurrentMeshShader <> nil then
+       begin
+         CurrentMeshShader.UniformCastle_ModelViewMatrix.SetValue(ShapeModelView);
++        { Effects that need stable world positions must not reconstruct them
++          from a rounded, camera-rotated eye position. No work for shaders
++          that do not use this optional uniform. }
++        if CurrentMeshShader.UniformCastle_ModelMatrix.Location <> GLUniformLocationNone then
++          CurrentMeshShader.UniformCastle_ModelMatrix.SetValue(
++            Shader.SceneTransform * Shape.State.Transformation.Transform);
+         CurrentMeshShader.UniformCastle_ProjectionMatrix.SetValue(RenderContext.ProjectionMatrix);
+         if Shader.NeedsNormals then
+           CurrentMeshShader.UniformCastle_NormalMatrix.SetValue(ModelViewToNormalMatrix(ShapeModelView));
+@@ -527,6 +645,25 @@
+         TShaderCoordinateRenderer.RenderCoordinateBegin }
        if (Arrays.Attribs.Count <> 0) and (CurrentMeshShader <> nil) then
          EnableVertexAttrib(CurrentMeshShader);
- 
++
 +      {$ifdef REZVIVO_STARTUP_TIMING}
 +      TimingStart := GetTickCount64;
 +      {$endif}
++      if ProfileSharedEffects then begin
++        MeshAttributesSeconds := MeshAttributesSeconds + TimerSeconds(Timer, ProfileStarted);
++        ProfileStarted := Timer;
++      end;
 +      PrepareCachedPose;
++      if ProfileSharedEffects then begin
++        MeshPoseSeconds := MeshPoseSeconds + TimerSeconds(Timer, ProfileStarted);
++        ProfileStarted := Timer;
++      end;
 +      {$ifdef REZVIVO_STARTUP_TIMING}
 +      if GetTickCount64 - TimingStart >= 100 then
 +        WritelnLog('StartupTiming', 'capture ms=%d name=%s',
 +          [GetTickCount64 - TimingStart, CurrentMeshShader.Name]);
 +      TimingStart := GetTickCount64;
 +      {$endif}
-+
+ 
        Mode := ToMode[Arrays.Primitive];
        First := 0;
-       if Arrays.HasIndexes then
-@@ -560,6 +664,11 @@
+@@ -560,6 +697,15 @@
            end;
        end;
  
@@ -1211,10 +1355,27 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
 +        WritelnLog('StartupTiming', 'draw ms=%d name=%s',
 +          [GetTickCount64 - TimingStart, CurrentMeshShader.Name]);
 +      {$endif}
++      if ProfileSharedEffects then begin
++        MeshDrawSeconds := MeshDrawSeconds + TimerSeconds(Timer, ProfileStarted);
++        ProfileStarted := Timer;
++      end;
        { update Renderer.Statistics.DrawCalls }
        if Arrays.Counts = nil then
          Inc(Renderer.Statistics^.DrawCalls)
-@@ -1026,6 +1135,19 @@
+@@ -573,7 +719,11 @@
+         3. It is not available on OpenGLES. }
+       DisableArrays;
+     end;
+-  finally RenderCoordinateEnd end;
++  finally
++    RenderCoordinateEnd;
++    if ProfileSharedEffects then
++      MeshEndSeconds := MeshEndSeconds + TimerSeconds(Timer, ProfileStarted);
++  end;
+ end;
+ 
+ procedure TBaseCoordinateRenderer.RenderCoordinateBegin;
+@@ -1026,6 +1176,19 @@
  
  procedure TShaderCoordinateRenderer.RenderCoordinateBegin;
  
@@ -1234,9 +1395,15 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
    { Initialize Shader.LightingModel.
      Must be done before linking the shader.
      Logic must follow *exactly* FinalizeLightingModel (which must be done after
-@@ -1063,6 +1185,17 @@
+@@ -1059,10 +1222,23 @@
+ var
+   CurrentX3DProgram: TX3DShaderProgram;
+   Pass: TTotalRenderingPass;
++  ProfileStarted: TTimerResult;
+ begin
    inherited;
  
++  if ProfileSharedEffects then ProfileStarted := Timer;
    InitializeLightingModel;
 +
 +  Shader.DepthOnly := UseFastShadowShaders and
@@ -1252,6 +1419,26 @@ diff --git a/src/scene/castleinternalrenderer_meshrenderer.inc b/src/scene/castl
  
    if CustomShaders <> nil then
    begin
+@@ -1117,14 +1293,19 @@
+       CurrentMeshShader := CurrentX3DProgram;
+       if not GLFeatures.EnableFixedFunction then
+         Assert(CurrentX3DProgram <> nil, 'Shader is not initialized, but it has to be (creation of fallback shaders failed?)');
++      if ProfileSharedEffects then
++        MeshShaderSeconds := MeshShaderSeconds + TimerSeconds(Timer, ProfileStarted);
+       if CurrentX3DProgram <> nil then // may be nil on desktops
+         Shader.SetDynamicUniforms(CurrentX3DProgram);
+     end else
+       CurrentMeshShader := nil;
+   end;
+ 
++  if ProfileSharedEffects then ProfileStarted := Timer;
+   RenderContext.CurrentProgram := CurrentMeshShader; // enable the CurrentMeshShader for OpenGL
+ 
+   if CurrentMeshShader <> nil then
+     CurrentMeshShader.SetupUniforms(BoundTextureUnits);
++  if ProfileSharedEffects then
++    MeshTextureSeconds := MeshTextureSeconds + TimerSeconds(Timer, ProfileStarted);
+ end;
 diff --git a/src/scene/castleinternalrenderer_pass.inc b/src/scene/castleinternalrenderer_pass.inc
 --- a/src/scene/castleinternalrenderer_pass.inc
 +++ b/src/scene/castleinternalrenderer_pass.inc
@@ -1292,15 +1479,19 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
  end;
  
  function TRenderer.BumpMapping(const RenderOptions: TCastleRenderOptions): TBumpMapping;
-@@ -687,6 +694,7 @@
+@@ -687,7 +694,10 @@
  
  var
    Shader: TShader;
+-begin
 +  UseCoverage, RestoreCoverage: Boolean;
- begin
++  ProfileStarted: TTimerResult;
++begin
++  if ProfileSharedEffects then ProfileStarted := Timer;
    InitializeFromRenderOptions;
  
-@@ -695,7 +703,20 @@
+   RenderContext.DepthRange := DepthRange;
+@@ -695,9 +705,24 @@
    Shader := InitializeShader;
    FixedFunctionBegin(Shader.SceneModelView);
  
@@ -1321,8 +1512,12 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
 +  end;
  
    FixedFunctionEnd;
++  if ProfileSharedEffects then
++    RenderShapeSeconds := RenderShapeSeconds + TimerSeconds(Timer, ProfileStarted);
  end;
-@@ -1553,6 +1574,22 @@
+ 
+ procedure TRenderer.RenderShapeLineProperties(const Shape: TX3DRendererShape;
+@@ -1553,6 +1578,22 @@
    const GeneratorClass: TArraysGeneratorClass;
    const ExposedMeshRenderer: TObject);
  
@@ -1345,7 +1540,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
    procedure SetupShadowMapsGenerationShaders(const MeshRenderer: TMeshRenderer);
    begin
      case RenderingCamera.Target of
-@@ -1571,21 +1608,18 @@
+@@ -1571,21 +1612,18 @@
          end;
        rtShadowMap:
          begin
@@ -1378,7 +1573,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
            ) then
            begin
              if ShadowMapsShaders = nil then
-@@ -1605,6 +1639,8 @@
+@@ -1605,6 +1643,8 @@
  var
    Generator: TArraysGenerator;
    CoordinateRenderer: TBaseCoordinateRenderer;
@@ -1387,7 +1582,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
  begin
    { No point preparing VBO for clones, clones will need own VBOs anyway. }
    if RenderMode = rmPrepareRenderClones then
-@@ -1621,11 +1657,16 @@
+@@ -1621,11 +1661,16 @@
        Shape.Cache := RendererCache.Shape_IncReference(Shape, RenderOptions);
  
      { calculate Shape.Cache.Arrays }
@@ -1406,7 +1601,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
          FreeAndNil(Shape.Cache.Arrays); // we just need to create new Arrays
          Generator := GeneratorClass.Create(Shape);
          try
-@@ -1637,10 +1678,25 @@
+@@ -1637,10 +1682,25 @@
            Generator.ShapeBumpMappingTextureCoordinatesId := Shape.BumpMappingTextureCoordinatesId;
            Shape.Cache.Arrays := Generator.GenerateArrays;
          finally FreeAndNil(Generator) end;
@@ -1432,7 +1627,7 @@ diff --git a/src/scene/castleinternalrenderer_renderer.inc b/src/scene/castleint
        end;
      end;
  
-@@ -1733,14 +1789,17 @@
+@@ -1733,14 +1793,17 @@
      for I := 0 to Length(Digits) - 1 do
      begin
        Result := Result + Digits[I] * Multiplier;
@@ -1996,9 +2191,67 @@ diff --git a/src/scene/castleinternalshapesrenderer.pas b/src/scene/castleintern
 diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerendererinternalshader.pas
 --- a/src/scene/castlerendererinternalshader.pas
 +++ b/src/scene/castlerendererinternalshader.pas
-@@ -144,6 +144,9 @@
+@@ -20,7 +20,7 @@
+ 
+ interface
+ 
+-uses Generics.Collections, Math,
++uses Classes, Generics.Collections, Math,
+   CastleVectors, CastleGLShaders, CastleColors,
+   X3DTime, X3DFields, X3DNodes, CastleUtils, CastleBoxes,
+   CastleRendererInternalTextureEnv, CastleStringUtils, CastleRenderOptions,
+@@ -55,6 +55,7 @@
+     { Uniforms initialized after linking.
+       Initializing them only once after linking allows the mesh renderer to go fast. }
+     UniformCastle_ModelViewMatrix,
++    UniformCastle_ModelMatrix,
+     UniformCastle_ProjectionMatrix,
+     UniformCastle_NormalMatrix,
+     UniformCastle_MaterialDiffuseAlpha,
+@@ -97,6 +98,16 @@
+     and to observe VRML/X3D events and automatically update uniform values.
+     Also allows to initialize and check program by TShader.LinkProgram,
+     and get a hash of it by TShader.CodeHash. }
++  TSharedEffectBinding = record
++    DeclarationIndex: Integer;
++    Uniform: TGLSLUniform;
++    CachedValue: TX3DField; { owned by the program, not the source scene }
++    Initialized: Boolean;
++  end;
++  TSharedEffectBindings = class
++    Items: array of TSharedEffectBinding;
++  end;
++
+   TX3DShaderProgram = class(TX3DShaderProgramBase)
+   private
+     { Events where we registered our EventReceive method. }
+@@ -104,6 +115,12 @@
+ 
+     { Current state of lights uniforms for this shader. }
+     FLightUniformsList: TLightUniformsList;
++    { Value copies, never scene/field pointers: safe after an instance is freed. }
++    SharedUniformValues: TStringList;
++    SharedEffectLayouts: TStringList;
++    procedure ApplySharedEffectCached(const Node: TEffectNode);
++    procedure ApplySharedEffect(const Node: TX3DNode);
++    procedure ApplySharedEffects(const Nodes: TMFNode);
+ 
+     { Set uniform variable from VRML/X3D field value.
+       Uniform name is contained in UniformName. UniformValue indicates
+@@ -129,6 +146,8 @@
+       const UniformValue: TX3DField;
+       const AUniformMissing: TUniformMissing;
+       const EnableDisable: boolean);
++
++    procedure SetUniformFromFieldAt(const U:TGLSLUniform; const UniformValue:TX3DField);
+ 
+     procedure EventReceive(const Event: TX3DEvent; const Value: TX3DField;
+       const Time: TX3DTime);
+@@ -143,7 +162,11 @@
+   protected
      { Nodes that have interface declarations with textures for this shader. }
      UniformsTextures: TX3DFieldList;
++    SharedUniformsTextures: TX3DFieldList;
    public
 +    { Depth variants only observe uniforms that survived shader linking. }
 +    ActiveUniformsOnly: Boolean;
@@ -2006,7 +2259,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
      constructor Create;
      destructor Destroy; override;
  
-@@ -314,6 +317,8 @@
+@@ -314,6 +337,8 @@
      FPhongShading: boolean;
      FLightingModel: TLightingModel;
      FAlphaTest: Boolean;
@@ -2015,7 +2268,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
      UsesShadowMaps: Boolean;
  
      { We have to optimize the most often case of TShader usage,
-@@ -625,6 +630,9 @@
+@@ -625,6 +650,9 @@
  
      { Is alpha testing enabled by EnableAlphaTest. }
      property AlphaTest: Boolean read FAlphaTest;
@@ -2025,22 +2278,37 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  
      { Enable doing skinned animation on GPU.
        Give the jointMatrix uniform value. }
-@@ -648,6 +656,13 @@
+@@ -648,14 +676,36 @@
  function FindPlugName(const PlugValue: String;
    out DeclaredParameters: String): String;
  
++{ Exact numeric uniform-cache comparison; FastEqualsValue deliberately gives
++  up for multi-valued fields, including unchanged skeleton/pose arrays. }
++function SharedUniformValuesEqual(const A, B: TX3DField): Boolean;
++
 +var
 +  UseFastShadowShaders: Boolean = True;
 +  UseSeparateShadowProgramCache: Boolean = True;
 +  UseCachedRiderMeshes: Boolean = True;
 +  UseDelayedRiderMeshes: Boolean = False;
++  UseSharedUniformArrayCache: Boolean = True;
++  UseSharedEffectBindings: Boolean = True;
 +  CachedMeshCaptures, CachedMeshDraws: QWord;
++  ProfileSharedEffects: Boolean = False;
++  SharedEffectCalls, SharedEffectFields, SharedEffectUploads: QWord;
++  SharedEffectSeconds, DynamicUniformSeconds: Double;
++  RenderShapeSeconds, MeshBeginSeconds, MeshAttributesSeconds,
++    MeshPoseSeconds, MeshDrawSeconds, MeshEndSeconds,
++    MeshShaderSeconds, MeshTextureSeconds: Double;
++  NativeSkinUniformSeconds, LightUniformSeconds, OtherUniformSeconds,
++    SharedUploadSeconds: Double;
 +
  {$undef read_interface}
  
  implementation
-@@ -655,7 +670,8 @@
- uses SysUtils, StrUtils,
+ 
+-uses SysUtils, StrUtils,
++uses SysUtils, StrUtils, CastleTimeUtils,
    {$ifdef OpenGLES} CastleGLES, {$else} CastleGL, {$endif}
    CastleGLUtils, CastleLog, CastleGLVersion, CastleInternalScreenEffects,
 -  CastleScreenEffects, CastleInternalX3DLexer, CastleInternalGLUtils;
@@ -2049,7 +2317,244 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  
  {$define read_implementation}
  {$I castlerendererinternalshader_hash.inc}
-@@ -1159,6 +1175,8 @@
+@@ -869,6 +919,7 @@
+   inherited;
+ 
+   UniformCastle_ModelViewMatrix       := Uniform('castle_ModelViewMatrix'      , umIgnore);
++  UniformCastle_ModelMatrix           := Uniform('castle_ModelMatrix'          , umIgnore);
+   UniformCastle_ProjectionMatrix      := Uniform('castle_ProjectionMatrix'     , umIgnore);
+   UniformCastle_NormalMatrix          := Uniform('castle_NormalMatrix'         , umIgnore);
+   UniformCastle_MaterialDiffuseAlpha  := Uniform('castle_MaterialDiffuseAlpha' , umIgnore);
+@@ -899,6 +950,15 @@
+   inherited;
+   EventsObserved := TX3DEventList.Create(false);
+   UniformsTextures := TX3DFieldList.Create(false);
++  SharedUniformsTextures := TX3DFieldList.Create(false);
++  SharedUniformValues := TStringList.Create;
++  SharedUniformValues.CaseSensitive := True;
++  ConfigureShaderNameList(SharedUniformValues);
++  SharedUniformValues.Sorted := True;
++  SharedEffectLayouts := TStringList.Create;
++  SharedEffectLayouts.CaseSensitive := True;
++  ConfigureShaderNameList(SharedEffectLayouts);
++  SharedEffectLayouts.Sorted := True;
+   FLightUniformsList := TLightUniformsList.Create(true);
+ end;
+ 
+@@ -913,6 +973,13 @@
+     FreeAndNil(EventsObserved);
+   end;
+   FreeAndNil(UniformsTextures);
++  FreeAndNil(SharedUniformsTextures);
++  for I := 0 to SharedEffectLayouts.Count - 1 do
++    SharedEffectLayouts.Objects[I].Free;
++  FreeAndNil(SharedEffectLayouts);
++  for I := 0 to SharedUniformValues.Count - 1 do
++    SharedUniformValues.Objects[I].Free;
++  FreeAndNil(SharedUniformValues);
+   FreeAndNil(FLightUniformsList);
+   inherited;
+ end;
+@@ -956,8 +1023,15 @@
+ 
+ procedure TX3DShaderProgram.SetUniformFromField(
+   const UniformName: String; const UniformValue: TX3DField;
+-  const AUniformMissing: TUniformMissing;
+-  const EnableDisable: Boolean);
++  const AUniformMissing: TUniformMissing; const EnableDisable: Boolean);
++begin
++  if EnableDisable then Enable;
++  SetUniformFromFieldAt(Uniform(UniformName,AUniformMissing),UniformValue);
++  if EnableDisable then Disable;
++end;
++
++procedure TX3DShaderProgram.SetUniformFromFieldAt(const U:TGLSLUniform;
++  const UniformValue:TX3DField);
+ var
+   TempF: TSingleList;
+   TempVec2f: TVector2List;
+@@ -966,17 +1040,15 @@
+   TempMat3f: TMatrix3List;
+   TempMat4f: TMatrix4List;
+ begin
+-  { program must be active to set uniform values. }
+-  if EnableDisable then
+-    Enable;
++  if U.Location<0 then Exit;
+ 
+   if UniformValue is TSFBool then
+-    SetUniform(UniformName, TSFBool(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFBool(UniformValue).Value) else
+   if UniformValue is TSFLong then
+     { Handling of SFLong also takes care of SFInt32. }
+-    SetUniform(UniformName, TSFLong(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFLong(UniformValue).Value) else
+   if UniformValue is TSFVec2f then
+-    SetUniform(UniformName, TSFVec2f(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFVec2f(UniformValue).Value) else
+ 
+   (*
+   { Old approach: Check TSFColor first, otherwise TSFVec3f would also catch and handle
+@@ -988,24 +1060,24 @@
+     We now pass SFColor as vec3, it can fallback TSFVec3f clause. }
+ 
+   // if UniformValue is TSFColor then
+-  //   SetUniform(UniformName, Vector4(TSFColor(UniformValue).Value, 1.0), AUniformMissing) else
++  //   U.SetValue(Vector4(TSFColor(UniformValue).Value, 1.0)) else
+   *)
+ 
+   if UniformValue is TSFVec3f then
+-    SetUniform(UniformName, TSFVec3f(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFVec3f(UniformValue).Value) else
+   if UniformValue is TSFVec4f then
+-    SetUniform(UniformName, TSFVec4f(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFVec4f(UniformValue).Value) else
+   if UniformValue is TSFRotation then
+-    SetUniform(UniformName, TSFRotation(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFRotation(UniformValue).Value) else
+   if UniformValue is TSFMatrix3f then
+-    SetUniform(UniformName, TSFMatrix3f(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFMatrix3f(UniformValue).Value) else
+   if UniformValue is TSFMatrix4f then
+-    SetUniform(UniformName, TSFMatrix4f(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFMatrix4f(UniformValue).Value) else
+   if UniformValue is TSFFloat then
+-    SetUniform(UniformName, TSFFloat(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFFloat(UniformValue).Value) else
+   if UniformValue is TSFDouble then
+     { SFDouble also takes care of SFTime }
+-    SetUniform(UniformName, TSFDouble(UniformValue).Value, AUniformMissing) else
++    U.SetValue(TSFDouble(UniformValue).Value) else
+ 
+   { Double-precision vector and matrix types.
+ 
+@@ -1018,23 +1090,23 @@
+     the reasonable approach: support all double-precision vectors and matrices,
+     just like single-precision. }
+   if UniformValue is TSFVec2d then
+-    SetUniform(UniformName, Vector2(TSFVec2d(UniformValue).Value), AUniformMissing) else
++    U.SetValue(Vector2(TSFVec2d(UniformValue).Value)) else
+   if UniformValue is TSFVec3d then
+-    SetUniform(UniformName, Vector3(TSFVec3d(UniformValue).Value), AUniformMissing) else
++    U.SetValue(Vector3(TSFVec3d(UniformValue).Value)) else
+   if UniformValue is TSFVec4d then
+-    SetUniform(UniformName, Vector4(TSFVec4d(UniformValue).Value), AUniformMissing) else
++    U.SetValue(Vector4(TSFVec4d(UniformValue).Value)) else
+   if UniformValue is TSFMatrix3d then
+-    SetUniform(UniformName, Matrix3(TSFMatrix3d(UniformValue).Value), AUniformMissing) else
++    U.SetValue(Matrix3(TSFMatrix3d(UniformValue).Value)) else
+   if UniformValue is TSFMatrix4d then
+-    SetUniform(UniformName, Matrix4(TSFMatrix4d(UniformValue).Value), AUniformMissing) else
++    U.SetValue(Matrix4(TSFMatrix4d(UniformValue).Value)) else
+ 
+   { Now repeat this for array types }
+   if UniformValue is TMFBool then
+-    SetUniform(UniformName, TMFBool(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFBool(UniformValue).Items) else
+   if UniformValue is TMFLong then
+-    SetUniform(UniformName, TMFLong(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFLong(UniformValue).Items) else
+   if UniformValue is TMFVec2f then
+-    SetUniform(UniformName, TMFVec2f(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFVec2f(UniformValue).Items) else
+   (* Old approach: follow X3D spec, and map MFColor to vec4[].
+      New approach: ignore nonsense X3D spec, and map MFColor to vec3[].
+      Just allow TMFColor to fallback to TMFVec3f.
+@@ -1042,62 +1114,62 @@
+   begin
+     TempVec4f := TMFColor(UniformValue).Items.ToVector4(1.0);
+     try
+-      SetUniform(UniformName, TempVec4f, AUniformMissing);
++      U.SetValue(TempVec4f);
+     finally FreeAndNil(TempVec4f) end;
+   end else
+   *)
+   if UniformValue is TMFVec3f then
+-    SetUniform(UniformName, TMFVec3f(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFVec3f(UniformValue).Items) else
+   if UniformValue is TMFVec4f then
+-    SetUniform(UniformName, TMFVec4f(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFVec4f(UniformValue).Items) else
+   if UniformValue is TMFRotation then
+-    SetUniform(UniformName, TMFRotation(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFRotation(UniformValue).Items) else
+   if UniformValue is TMFMatrix3f then
+-    SetUniform(UniformName, TMFMatrix3f(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFMatrix3f(UniformValue).Items) else
+   if UniformValue is TMFMatrix4f then
+-    SetUniform(UniformName, TMFMatrix4f(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFMatrix4f(UniformValue).Items) else
+   if UniformValue is TMFFloat then
+-    SetUniform(UniformName, TMFFloat(UniformValue).Items, AUniformMissing) else
++    U.SetValue(TMFFloat(UniformValue).Items) else
+   if UniformValue is TMFDouble then
+   begin
+     TempF := TMFDouble(UniformValue).Items.ToSingle;
+     try
+-      SetUniform(UniformName, TempF, AUniformMissing);
++      U.SetValue(TempF);
+     finally FreeAndNil(TempF) end;
+   end else
+   if UniformValue is TMFVec2d then
+   begin
+     TempVec2f := TMFVec2d(UniformValue).Items.ToVector2;
+     try
+-      SetUniform(UniformName, TempVec2f, AUniformMissing);
++      U.SetValue(TempVec2f);
+     finally FreeAndNil(TempVec2f) end;
+   end else
+   if UniformValue is TMFVec3d then
+   begin
+     TempVec3f := TMFVec3d(UniformValue).Items.ToVector3;
+     try
+-      SetUniform(UniformName, TempVec3f, AUniformMissing);
++      U.SetValue(TempVec3f);
+     finally FreeAndNil(TempVec3f) end;
+   end else
+   if UniformValue is TMFVec4d then
+   begin
+     TempVec4f := TMFVec4d(UniformValue).Items.ToVector4;
+     try
+-      SetUniform(UniformName, TempVec4f, AUniformMissing);
++      U.SetValue(TempVec4f);
+     finally FreeAndNil(TempVec4f) end;
+   end else
+   if UniformValue is TMFMatrix3d then
+   begin
+     TempMat3f := TMFMatrix3d(UniformValue).Items.ToMatrix3;
+     try
+-      SetUniform(UniformName, TempMat3f, AUniformMissing);
++      U.SetValue(TempMat3f);
+     finally FreeAndNil(TempMat3f) end;
+   end else
+   if UniformValue is TMFMatrix4d then
+   begin
+     TempMat4f := TMFMatrix4d(UniformValue).Items.ToMatrix4;
+     try
+-      SetUniform(UniformName, TempMat4f, AUniformMissing);
++      U.SetValue(TempMat4f);
+     finally FreeAndNil(TempMat4f) end;
+   end else
+ 
+@@ -1116,9 +1188,7 @@
+       SF/MFImage }
+     WritelnWarning('Shader', 'Setting uniform GLSL variable from X3D field type "' + UniformValue.X3DType + '" not supported');
+ 
+-  if EnableDisable then
+-    { TODO: this should restore previously bound program }
+-    Disable;
++
+ end;
+ 
+ procedure TX3DShaderProgram.EventReceive(
+@@ -1154,11 +1224,15 @@
+   I: Integer;
+   IDecl: TX3DInterfaceDeclaration;
+ begin
++  if (Node is TEffectNode) and
++     (TEffectNode(Node).InternalSharedCodeKey <> '') then Exit;
+   Assert(Node.HasInterfaceDeclarations <> []);
+   Assert(Node.InterfaceDeclarations <> nil);
    for I := 0 to Node.InterfaceDeclarations.Count - 1 do
    begin
      IDecl := Node.InterfaceDeclarations[I];
@@ -2058,7 +2563,164 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
      if (IDecl.Field <> nil) and
         ((IDecl.Field is TSFNode) or
          (IDecl.Field is TMFNode)) then
-@@ -1336,6 +1354,9 @@
+@@ -1175,6 +1249,156 @@
+ begin
+   for I := 0 to Nodes.Count - 1 do
+     BindUniforms(Nodes[I], EnableDisable);
++end;
++
++function SharedUniformValuesEqual(const A, B: TX3DField): Boolean;
++  function SameBytes(const PA, PB: Pointer; const NA, NB, ItemSize: SizeInt): Boolean;
++  begin
++    if NA<>NB then Exit(False);
++    if NA=0 then Exit(True);
++    Result:=CompareMem(PA,PB,NA*ItemSize);
++  end;
++begin
++  if (A=nil) or (B=nil) then Exit(A=B);
++  if A.ClassType<>B.ClassType then Exit(False);
++  if A.FastEqualsValue(B) then Exit(True);
++  if A is TMFFloat then
++    Exit(SameBytes(TMFFloat(A).Items.L,TMFFloat(B).Items.L,
++      TMFFloat(A).Items.Count,TMFFloat(B).Items.Count,SizeOf(Single)));
++  if A is TMFLong then
++    Exit(SameBytes(TMFLong(A).Items.L,TMFLong(B).Items.L,
++      TMFLong(A).Items.Count,TMFLong(B).Items.Count,SizeOf(Int32)));
++  if A is TMFBool then
++    Exit(SameBytes(TMFBool(A).Items.L,TMFBool(B).Items.L,
++      TMFBool(A).Items.Count,TMFBool(B).Items.Count,SizeOf(Boolean)));
++  if A is TMFVec2f then
++    Exit(SameBytes(TMFVec2f(A).Items.L,TMFVec2f(B).Items.L,
++      TMFVec2f(A).Items.Count,TMFVec2f(B).Items.Count,SizeOf(TVector2)));
++  if A is TMFVec3f then
++    Exit(SameBytes(TMFVec3f(A).Items.L,TMFVec3f(B).Items.L,
++      TMFVec3f(A).Items.Count,TMFVec3f(B).Items.Count,SizeOf(TVector3)));
++  if A is TMFVec4f then
++    Exit(SameBytes(TMFVec4f(A).Items.L,TMFVec4f(B).Items.L,
++      TMFVec4f(A).Items.Count,TMFVec4f(B).Items.Count,SizeOf(TVector4)));
++  if A is TMFRotation then
++    Exit(SameBytes(TMFRotation(A).Items.L,TMFRotation(B).Items.L,
++      TMFRotation(A).Items.Count,TMFRotation(B).Items.Count,SizeOf(TVector4)));
++  if A is TMFMatrix3f then
++    Exit(SameBytes(TMFMatrix3f(A).Items.L,TMFMatrix3f(B).Items.L,
++      TMFMatrix3f(A).Items.Count,TMFMatrix3f(B).Items.Count,SizeOf(TMatrix3)));
++  if A is TMFMatrix4f then
++    Exit(SameBytes(TMFMatrix4f(A).Items.L,TMFMatrix4f(B).Items.L,
++      TMFMatrix4f(A).Items.Count,TMFMatrix4f(B).Items.Count,SizeOf(TMatrix4)));
++  Result:=False;
++end;
++
++procedure TX3DShaderProgram.ApplySharedEffectCached(const Node:TEffectNode);
++var Layout:TSharedEffectBindings;I,J,N:Integer;Field:TX3DField;U:TGLSLUniform;
++  Started: TTimerResult;
++begin
++  { The opt-in key fingerprints immutable source and field declarations.
++    Keep only declaration indices and copies owned by this GL program:
++    no dangling node/field pointers when a bot or its scene is unloaded. }
++  ConfigureShaderNameList(SharedEffectLayouts);
++  ConfigureShaderNameList(SharedUniformValues);
++  I:=SharedEffectLayouts.IndexOf(Node.InternalSharedCodeKey);
++  if I>=0 then Layout:=TSharedEffectBindings(SharedEffectLayouts.Objects[I])
++  else begin
++    Layout:=TSharedEffectBindings.Create;
++    try
++      SetLength(Layout.Items,Node.InterfaceDeclarations.Count);N:=0;
++      for I:=0 to Node.InterfaceDeclarations.Count-1 do begin
++        Field:=Node.InterfaceDeclarations[I].Field;
++        if Field=nil then Continue;
++        U:=Uniform(Field.X3DName,umIgnore);
++        if U.Location<0 then Continue;
++        Layout.Items[N].DeclarationIndex:=I;
++        Layout.Items[N].Uniform:=U;
++        if not((Field is TSFNode)or(Field is TMFNode))then begin
++          J:=SharedUniformValues.IndexOf(Field.X3DName);
++          if J<0 then J:=SharedUniformValues.AddObject(Field.X3DName,
++            TX3DFieldClass(Field.ClassType).CreateUndefined(nil,False,Field.X3DName));
++          Layout.Items[N].CachedValue:=TX3DField(SharedUniformValues.Objects[J]);
++        end;
++        Inc(N);
++      end;
++      SetLength(Layout.Items,N);
++      SharedEffectLayouts.AddObject(Node.InternalSharedCodeKey,Layout);
++    except Layout.Free;raise end;
++  end;
++  for I:=0 to High(Layout.Items)do begin
++    if ProfileSharedEffects then Inc(SharedEffectFields);
++    Field:=Node.InterfaceDeclarations[Layout.Items[I].DeclarationIndex].Field;
++    if Layout.Items[I].CachedValue=nil then begin
++      if SharedUniformsTextures.IndexOf(Field)<0 then SharedUniformsTextures.Add(Field);
++      Continue;
++    end;
++    if Layout.Items[I].Initialized then begin
++      if UseSharedUniformArrayCache then begin
++        if SharedUniformValuesEqual(Layout.Items[I].CachedValue,Field)then Continue;
++      end else if Layout.Items[I].CachedValue.FastEqualsValue(Field)then Continue;
++    end;
++    if ProfileSharedEffects then Inc(SharedEffectUploads);
++    if ProfileSharedEffects then Started := Timer;
++    SetUniformFromFieldAt(Layout.Items[I].Uniform,Field);
++    Layout.Items[I].CachedValue.AssignValue(Field);
++    if ProfileSharedEffects then
++      SharedUploadSeconds := SharedUploadSeconds + TimerSeconds(Timer, Started);
++    Layout.Items[I].Initialized:=True;
++  end;
++end;
++
++procedure TX3DShaderProgram.ApplySharedEffect(const Node: TX3DNode);
++var I, Index: Integer; Field, Cached: TX3DField; Key: String; Started: TTimerResult;
++begin
++  if not (Node is TEffectNode) or
++     (TEffectNode(Node).InternalSharedCodeKey = '') or
++     not TEffectNode(Node).Enabled or (Node.InterfaceDeclarations = nil) then Exit;
++  if ProfileSharedEffects then begin Started:=Timer; Inc(SharedEffectCalls) end;
++  try
++  if UseSharedEffectBindings then begin
++    ApplySharedEffectCached(TEffectNode(Node));
++    Exit;
++  end;
++  ConfigureShaderNameList(SharedUniformValues);
++  for I := 0 to Node.InterfaceDeclarations.Count - 1 do
++  begin
++    if ProfileSharedEffects then Inc(SharedEffectFields);
++    Field := Node.InterfaceDeclarations[I].Field;
++    if Field = nil then Continue;
++    Key := Field.X3DName;
++    if Uniform(Key, umIgnore).Location < 0 then Continue;
++    if (Field is TSFNode) or (Field is TMFNode) then
++    begin
++      if SharedUniformsTextures.IndexOf(Field) < 0 then SharedUniformsTextures.Add(Field);
++      Continue;
++    end;
++    Index := SharedUniformValues.IndexOf(Key);
++    if Index >= 0 then
++    begin
++      Cached := TX3DField(SharedUniformValues.Objects[Index]);
++      if UseSharedUniformArrayCache then begin
++        if SharedUniformValuesEqual(Cached,Field) then Continue;
++      end else if Cached.FastEqualsValue(Field) then Continue;
++    end else begin
++      Cached := TX3DFieldClass(Field.ClassType).CreateUndefined(nil, False, Key);
++      SharedUniformValues.AddObject(Key, Cached);
++    end;
++    Enable;
++    if ProfileSharedEffects then Inc(SharedEffectUploads);
++    SetUniformFromField(Key, Field, umIgnore, False);
++    Cached.AssignValue(Field);
++  end;
++  finally
++    if ProfileSharedEffects then SharedEffectSeconds:=SharedEffectSeconds+TimerSeconds(Timer,Started);
++  end;
++end;
++
++procedure TX3DShaderProgram.ApplySharedEffects(const Nodes: TMFNode);
++var I: Integer;
++begin
++  if Nodes <> nil then
++    for I := 0 to Nodes.Count - 1 do ApplySharedEffect(Nodes[I]);
+ end;
+ 
+ { TDynamicUniformSingle ------------------------------------------------------ }
+@@ -1336,6 +1560,9 @@
    MultiTextureColor := White;
    SkinJointTextureUnit := -1;
    FAlphaTest := false;
@@ -2068,7 +2730,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
    UsesShadowMaps := false;
  end;
  
-@@ -1551,6 +1572,11 @@
+@@ -1551,6 +1778,11 @@
        Contents: String;
      begin
        Contents := Part.Contents;
@@ -2080,7 +2742,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
        if Contents <> '' then
        begin
          Plug(Part.ShaderType, Contents, Code, ForwardDeclareInFinalShader);
-@@ -2119,6 +2145,13 @@
+@@ -2119,6 +2351,13 @@
  
  var
    ShaderType: TShaderType;
@@ -2094,7 +2756,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  begin
    EnableLightingModel; // do this early, as later EnableLights may assume it's done
    ShadowMapShaders.GenerateCode(Self);
-@@ -2175,21 +2208,103 @@
+@@ -2175,21 +2414,103 @@
        end;
    end;
  
@@ -2204,7 +2866,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  
      {$ifdef CASTLE_CANNOT_CATCH_EXCEPTIONS}
      if AProgram.ErrorOnCompileLink then Exit;
-@@ -2216,7 +2331,12 @@
+@@ -2216,7 +2537,12 @@
    AProgram.UniformMissing := umIgnore;
  
    { set uniforms that will not need to be updated at each SetupUniforms call }
@@ -2217,7 +2879,7 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  end;
  
  procedure TShader.LinkFallbackProgram(AProgram: TX3DShaderProgram);
-@@ -2239,6 +2359,12 @@
+@@ -2239,6 +2565,12 @@
      lifetime. }
    procedure CodeHashFinalize;
    begin
@@ -2230,7 +2892,59 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
      FCodeHash.AddInteger(Ord(ShadowSampling) * 1009);
      FCodeHash.AddInteger(Ord(LightingModel) * 503);
      FCodeHash.AddInteger(Ord(ColorSpaceLinear) * 347);
-@@ -2872,7 +2998,7 @@
+@@ -2643,6 +2975,8 @@
+     ShapeRequiresShaders := true;
+ 
+   LightShader.Prepare(FCodeHash, LightShaders.Count - 1);
++  { Light effects also have instance fields and affect generated source. }
++  FCodeHash.AddEffects(Light^.Node.FdEffects);
+ end;
+ 
+ procedure TShader.EnableFog(const FogType: TFogType;
+@@ -2816,9 +3150,26 @@
+ procedure TShader.SetDynamicUniforms(AProgram: TX3DShaderProgram);
+ var
+   I: Integer;
+-begin
++  Started, PartStarted: TTimerResult;
++begin
++  if ProfileSharedEffects then Started:=Timer;
++  AProgram.SharedUniformsTextures.Clear;
++  AProgram.ApplySharedEffects(AppearanceEffects);
++  if GroupEffects <> nil then
++    for I := 0 to GroupEffects.Count - 1 do AProgram.ApplySharedEffect(GroupEffects[I]);
++  for I := 0 to TextureShaders.Count - 1 do
++    if TextureShaders[I] is TTextureShader then
++      AProgram.ApplySharedEffects(TTextureShader(TextureShaders[I]).Node.FdEffects);
++  if ProfileSharedEffects then PartStarted := Timer;
+   for I := 0 to LightShaders.Count - 1 do
++  begin
++    AProgram.ApplySharedEffects(LightShaders[I].Node.FdEffects);
+     LightShaders[I].SetDynamicUniforms(AProgram);
++  end;
++  if ProfileSharedEffects then begin
++    LightUniformSeconds := LightUniformSeconds + TimerSeconds(Timer, PartStarted);
++    PartStarted := Timer;
++  end;
+   for I := 0 to DynamicUniforms.Count - 1 do
+     DynamicUniforms[I].SetUniform(AProgram);
+ 
+@@ -2835,7 +3186,14 @@
+     MirrorPlaneUniforms.SetDynamicUniforms(AProgram);
+ 
+   ShadowMapShaders.SetDynamicUniforms(AProgram, RenderingCamera);
++  if ProfileSharedEffects then begin
++    OtherUniformSeconds := OtherUniformSeconds + TimerSeconds(Timer, PartStarted);
++    PartStarted := Timer;
++  end;
+   FSkinShader.SetDynamicUniforms(AProgram);
++  if ProfileSharedEffects then
++    NativeSkinUniformSeconds := NativeSkinUniformSeconds + TimerSeconds(Timer, PartStarted);
++  if ProfileSharedEffects then DynamicUniformSeconds:=DynamicUniformSeconds+TimerSeconds(Timer,Started);
+ end;
+ 
+ procedure TShader.AddScreenEffectCode(const Depth: boolean);
+@@ -2872,7 +3230,7 @@
  function TShader.NeedsNormals: Boolean;
  begin
    // optimize lmUnlit: no need for normals data
@@ -2239,6 +2953,43 @@ diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerender
  end;
  
  function TShader.ShapeBoundingBoxInWorld: TBox3D;
+diff --git a/src/scene/castlerendererinternalshader_hash.inc b/src/scene/castlerendererinternalshader_hash.inc
+--- a/src/scene/castlerendererinternalshader_hash.inc
++++ b/src/scene/castlerendererinternalshader_hash.inc
+@@ -96,26 +96,20 @@
+ var
+   I: Integer;
+ begin
+-  { We add to hash actual Effect node references (pointers), this way ensuring
+-    that to share the same shader, effect nodes must be the same.
+-    Merely equal GLSL source code is not enough (because effects with equal
+-    source code may still have different uniform values, and sharing them
+-    would not be handled correctly here --- we set uniform values on change,
+-    not every time before rendering shape). }
++  { Opt-in effects refresh uniforms before each draw. Other effects retain
++    their node identity because their uniforms are updated on events. }
+   for I := 0 to Nodes.Count - 1 do
+     if (Nodes[I] is TEffectNode) and
+        TEffectNode(Nodes[I]).FdEnabled.Value then
+-      AddPointer(Nodes[I]);
++      if TEffectNode(Nodes[I]).InternalSharedCodeKey <> '' then
++        AddString(IntToStr(I) + ':' + TEffectNode(Nodes[I]).InternalSharedCodeKey, 104729)
++      else
++        AddPointer(Nodes[I]);
+ end;
+ 
+ procedure TShaderCodeHash.AddEffects(Nodes: TMFNode);
+-var
+-  I: Integer;
+ begin
+-  for I := 0 to Nodes.Count - 1 do
+-    if (Nodes[I] is TEffectNode) and
+-       TEffectNode(Nodes[I]).FdEnabled.Value then
+-      AddPointer(Nodes[I]);
++  AddEffects(Nodes.InternalItems);
+ end;
+ 
+ function TShaderCodeHash.ToString: String;
 diff --git a/src/scene/castlescene.pas b/src/scene/castlescene.pas
 --- a/src/scene/castlescene.pas
 +++ b/src/scene/castlescene.pas
@@ -2526,7 +3277,7 @@ diff --git a/src/scene/castlescenecore.pas b/src/scene/castlescenecore.pas
 +    при повторном заезде): единая точка перехвата — TCastleSceneCore.Create /
 +    LoadCore / FreeRootNode / Destroy. Пишет в <exedir>\scene_lifecycle.log,
 +    независимо от CastleLog (файл перезаписывается при старте процесса). }
-+  SceneLifecycleLogEnabled: Boolean = true;
++  SceneLifecycleLogEnabled: Boolean = false;
 +
 +{ Одна строка в scene_lifecycle.log (потокобезопасно, flush каждую запись).
 +  Вызывается из движка (LOAD/UNLOAD/FREE/CREATE) и из прикладного кода
@@ -2812,11 +3563,11 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
        FUpdateSoundListener: Boolean;
  
 +    FShadowCasterClearDepth: Boolean;
-+    FShadowCasterSubset: TCastleTransformList; { borrowed during an explicit depth pass }
++    FShadowCasterSubset: TCastleTransformList; { borrowed during an explicit subset pass }
        AllShapesCollector, FilteredShapesCollector: TShapesCollector;
        ShapesRenderer: TShapesRenderer;
  
-@@ -465,6 +467,13 @@
+@@ -465,6 +467,18 @@
          You can set this field manually. }
        CustomRenderingPass: TUserRenderingPass;
  
@@ -2825,12 +3576,17 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
 +    procedure InternalRenderShadowCasters(const Camera: TRenderingCamera;
 +      const Casters: TCastleTransformList; const Filter: TCollectedShapeFilter = nil;
 +      const ClearDepthBuffer: Boolean = True);
++    { Also supports a color pass, with the viewport's normal global lights.
++      Used to warm driver shader variants without displaying loading models. }
++    procedure InternalRenderSubset(const Camera: TRenderingCamera;
++      const Items: TCastleTransformList; const Filter: TCollectedShapeFilter = nil;
++      const ClearDepthBuffer: Boolean = True);
 +
 +    var
        { Set these to non-1 to deliberately distort field of view / aspect ratio.
          This is useful for special effects when you want to create unrealistic
          projection.
-@@ -1407,7 +1416,7 @@
+@@ -1407,7 +1421,7 @@
  
  implementation
  
@@ -2839,7 +3595,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
    CastleGLUtils, CastleLog, CastleStringUtils,
    CastleSoundEngine, CastleGLVersion, CastleTextureImages, X3DFields,
    CastleInternalSettings, CastleXmlUtils, CastleUriUtils, CastleInternalRenderer,
-@@ -2600,7 +2609,8 @@
+@@ -2600,7 +2614,8 @@
  begin
    FilteredShapesCollector.Clear;
    FilteredShapesCollector.AddFiltered(AllShapesCollector,
@@ -2849,7 +3605,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  
    ShapesRenderer.OcclusionSort := EffectiveOcclusionSort;
    ShapesRenderer.BlendingSort := EffectiveBlendingSort;
-@@ -2783,6 +2793,11 @@
+@@ -2783,6 +2798,11 @@
  
  var
    MainLightPosition: TVector4;
@@ -2861,7 +3617,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  begin
    { Calculate contents of AllShapesCollector.
      This way Items.Render, with all transformation calcuations,
-@@ -2791,17 +2806,61 @@
+@@ -2791,17 +2811,68 @@
    AllShapesCollector.Clear;
    Assert(Params.Collector = AllShapesCollector);
    Params.Frustum := @Params.RenderingCamera.Frustum;
@@ -2905,16 +3661,23 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
 +procedure TCastleViewport.InternalRenderShadowCasters(const Camera: TRenderingCamera;
 +  const Casters: TCastleTransformList; const Filter: TCollectedShapeFilter;
 +  const ClearDepthBuffer: Boolean);
-+var SavedClearDepth: Boolean; SavedSubset: TCastleTransformList; SavedFilter: TCollectedShapeFilter;
 +begin
 +  Assert(Camera.Target = rtShadowMap);
-+  Assert(Casters <> nil);
++  InternalRenderSubset(Camera, Casters, Filter, ClearDepthBuffer);
++end;
++
++procedure TCastleViewport.InternalRenderSubset(const Camera: TRenderingCamera;
++  const Items: TCastleTransformList; const Filter: TCollectedShapeFilter;
++  const ClearDepthBuffer: Boolean);
++var SavedClearDepth: Boolean; SavedSubset: TCastleTransformList; SavedFilter: TCollectedShapeFilter;
++begin
++  Assert(Items <> nil);
 +  SavedClearDepth := FShadowCasterClearDepth;
 +  FShadowCasterClearDepth := ClearDepthBuffer;
 +  SavedSubset := FShadowCasterSubset;
 +  SavedFilter := AllShapesCollector.ShapeFilter;
 +  AllShapesCollector.ShapeFilter := Filter;
-+  FShadowCasterSubset := Casters;
++  FShadowCasterSubset := Items;
 +  try
 +    RenderFromViewEverything(Camera);
 +  finally
@@ -2925,7 +3688,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  end;
  
  function TCastleViewport.GetBackgroundRenderer: TBackgroundRenderer;
-@@ -2832,6 +2891,11 @@
+@@ -2832,6 +2903,11 @@
      { Make ClearColor anything defined.
        If we will include cbColor in ClearBuffers, it will actually always
        be adjusted to something appropriate. }
@@ -2937,7 +3700,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
      ClearColor := Black;
      ClearBuffers := [];
  
-@@ -2922,7 +2986,7 @@
+@@ -2922,7 +2998,7 @@
    SceneCastingLights: TCastleScene;
  begin
    RenderClear;
@@ -2946,16 +3709,17 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  
    if GLFeatures.EnableFixedFunction then
    begin
-@@ -2949,6 +3013,8 @@
+@@ -2949,6 +3025,9 @@
  
    { calculate FRenderParams.FGlobalLights }
    FRenderParams.FGlobalLights.Clear;
-+  if FShadowCasterSubset = nil then
++  if (FShadowCasterSubset = nil) or
++     not (RenderingCamera.Target in [rtShadowMap, rtVarianceShadowMap]) then
 +  begin
    { Add headlight }
    InitializeGlobalLights(FRenderParams.FGlobalLights);
    { Add lights from MainScene  }
-@@ -2961,6 +3027,8 @@
+@@ -2961,6 +3040,8 @@
        if Items.MainScene <> SceneCastingLights then // MainScene is already accounted for above
          AddGlobalLightsFromScene(SceneCastingLights);
    {$warnings on}
@@ -2964,7 +3728,7 @@ diff --git a/src/scene/castleviewport.pas b/src/scene/castleviewport.pas
  
    { calculate FRenderParams.GlobalFog }
    if Fog <> nil then
-@@ -3711,7 +3779,10 @@
+@@ -3711,7 +3792,10 @@
        So display it by default. }
      TimeStart := Profiler.Start(Format('TCastleViewport(%s).PrepareResources', [Name]));
      try
@@ -8257,7 +9021,7 @@ diff --git a/src/scene/glsl/source/lighting_model_physical/add_light.glsl b/src/
 diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.inc
 --- a/src/scene/x3d/x3dnodes_castle.inc
 +++ b/src/scene/x3d/x3dnodes_castle.inc
-@@ -150,6 +150,10 @@
+@@ -150,6 +150,14 @@
    protected
      procedure GroupBeforeTraverse(const State: TX3DGraphTraverseState; var WasPointingDeviceSensor: Boolean); override;
    public
@@ -8265,10 +9029,14 @@ diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.i
 +      camera/pass and may be captured once for all passes of a frame.
 +      Runtime-only; do not set for effects with other vertex side effects. }
 +    InternalCacheVertexAnimation: Boolean;
++    { Optional immutable source/interface fingerprint, assigned before prepare.
++      Equal keys share a program, but receive this instance's fields per draw.
++      Empty preserves the standard event-bound private-program behaviour. }
++    InternalSharedCodeKey: String;
      constructor Create(const AX3DName: String = ''; const ABaseUrl: String = ''); override;
    {$I auto_generated_node_helpers/x3dnodes_effect.inc}
    end;
-@@ -340,8 +344,10 @@
+@@ -340,8 +348,10 @@
  
      { Update meshes in @link(FdShapes) to reflect the current joints transformation.
        This does the core of "skinned animation" logic.
@@ -8280,7 +9048,7 @@ diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.i
  
      { How is mesh updated from joints, in particular do we use shaders.
        This takes into account InternalFeatures (is current rendering
-@@ -652,9 +658,10 @@
+@@ -652,9 +662,10 @@
    inherited;
  end;
  
@@ -8292,7 +9060,7 @@ diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.i
  
    function SceneName: String;
    begin
-@@ -676,7 +683,7 @@
+@@ -676,7 +687,7 @@
      function JointParentTransform(const Joint: TX3DNode): PTransformation;
      var
        ShapeTransform: TShapeTreeTransform;
@@ -8301,7 +9069,7 @@ diff --git a/src/scene/x3d/x3dnodes_castle.inc b/src/scene/x3d/x3dnodes_castle.i
      begin
        C := TShapeTree.AssociatedShapesCount(Joint);
  
-@@ -697,7 +704,30 @@
+@@ -697,7 +708,30 @@
          ]);
        end;
  

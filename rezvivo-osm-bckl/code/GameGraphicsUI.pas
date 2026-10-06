@@ -60,6 +60,7 @@ begin
   InsertFront(FAutoHint);
   FAutoResult := TMenuLabel.Create(Self); FAutoResult.FontSize := 15;
   FAutoResult.Name := 'GraphicsAutoResult'; FAutoResult.Color := MenuMuted;
+  FAutoResult.Caption := '';
   InsertFront(FAutoResult);
   for O := Low(TGraphicsOption) to High(TGraphicsOption) do
   begin
@@ -130,7 +131,9 @@ begin
     for I := 0 to High(FButtons[O]) do
     begin
       SelectMenuButton(FButtons[O][I], V = GraphicsChoiceValue(O,I));
-      FButtons[O][I].Enabled := Shadows or not (O in [goShadowFilter, goShadowDistance]);
+      FButtons[O][I].Enabled := Shadows or not (O in [goShadowFilter, goShadowDistance,goWorldShadows,goRtxReflections]);
+      if O=goRtxReflections then FButtons[O][I].Enabled:=Shadows and
+        (Settings.GetGraphicsOption(Ord(goWorldShadows))=2);
     end;
   end;
   Detail:=VegetationPreset(Settings.GetGraphicsOption(Ord(goTrees)));
@@ -165,7 +168,7 @@ begin
   FAutoResult.MaxWidth := W;
   FAutoResult.Anchor(hpLeft); FAutoResult.Anchor(vpTop, -Y);
   if FAutoResult.Caption <> '' then Y := Y + FAutoResult.EffectiveHeight + 14;
-  for O := Low(TGraphicsOption) to High(TGraphicsOption) do
+  for O in GraphicsDisplayOrder do
   begin
     FRows[O].Width := W;
     FRows[O].Anchor(hpLeft); FRows[O].Anchor(vpTop, -Y);

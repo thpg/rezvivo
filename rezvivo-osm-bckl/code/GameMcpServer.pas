@@ -39,19 +39,19 @@ procedure McpUnregisterPlayObjects;
 implementation
 
 uses
-  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX,
-  Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap,
+  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
+  Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, fpjson, base64,
   CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages,
-  CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog,
+  CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog, CastleRendererInternalShader,
   CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
   McpRegistry, McpStdio,
-  AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace,
-  BikeParametric, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
+  AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
+  BikeParametric, RiderPoseCatalog, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, TreeSeason, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
-  GameWorld, GamePhysicalAgent,
+  GameWorld, GamePhysicalAgent, GameBikeShaderDiagnostics,
   GameViewWorkoutEditor,
   GameViewMapEditor, GameViewLogin,
   GameViewBikeFit;
@@ -277,7 +277,9 @@ var Items: TJSONArray;RootIndex:Integer;
     if C is TCastleButton then Caption := TCastleButton(C).Caption
     else if C is TCastleLabel then Caption := TCastleLabel(C).Caption
     else if C is TCastleCheckbox then Caption:=TCastleCheckbox(C).Caption;
-    if (C is TCastleButton)or(C is TCastleCheckbox)or(C is TCastleEdit)or ((C is TCastleLabel) and AParams.Get('labels', False)) then
+    if (C is TCastleButton)or(C is TCastleCheckbox)or(C is TCastleEdit)or
+       (C is TCastleIntegerSlider)or(C is TCastleFloatSlider)or
+       ((C is TCastleLabel) and AParams.Get('labels', False)) then
     begin
       O := TJSONObject.Create(['path', Path, 'name', C.Name, 'class', C.ClassName,
         'caption', Caption]);
@@ -331,6 +333,9 @@ begin
   AResult.Add('watts',WorkoutPlayer.TargetWatts);AResult.Add('intensity',WorkoutPlayer.Intensity);
   AResult.Add('reference_watts',WorkoutPlayer.ReferenceWatts);
   AResult.Add('signal_lost',WorkoutPlayer.SignalLost);
+  AResult.Add('auto_paused',WorkoutPlayer.AutoPaused);
+  AResult.Add('no_pedal_seconds',WorkoutPlayer.NoPedalingTime);
+  AResult.Add('auto_pause_delay',WorkoutPlayer.AutoPauseDelay);
   AResult.Add('trainer_control',WorkoutPlayer.NeedsTrainerControl);
   if Assigned(ViewPlay) and Assigned(ViewPlay.WorkoutGates)then
     AResult.Add('gates',ViewPlay.WorkoutGates.Diagnostics);
@@ -435,6 +440,7 @@ end;
 procedure McpUnregisterPlayObjects;
 begin
   if not McpActive then Exit;
+  ClearFarFieldProbe;
   UnregisterMcpObject('world');
   UnregisterMcpObject('bike');
   UnregisterMcpObject('osm');
@@ -654,6 +660,8 @@ var
   ModeStr: String;
   Ag: TPhysicalAgent;
   Recorded: TSimCameraFrame;
+  Cine:TCameraReplayState;
+  Puddle:TRoadPuddleSite;
   R: TJSONObject;
 begin
   if not Assigned(ViewPlay) then
@@ -718,6 +726,18 @@ begin
   begin
     AResult.Add('cinematic_mode', Ord(ViewPlay.CinematicCam.Mode));
     AResult.Add('cinematic_pending', ViewPlay.CinematicCam.PendingMode);
+    Cine:=ViewPlay.CinematicCam.CaptureReplay;
+    AResult.Add('puddle_active',Cine.Shot.Mode=cmPuddle);
+    AResult.Add('puddle_sites',RoadPuddleSiteCount);
+    AResult.Add('puddle_reflections',ViewPlay.CinematicCam.PuddleReflections);
+    AResult.Add('puddle_cooldown',Cine.PuddleCooldown);
+    AResult.Add('puddle_blend_sec',Cine.BlendAge);
+    if Cine.Shot.Mode=cmPuddle then
+      AResult.Add('puddle_position',TJSONArray.Create([Cine.Shot.Puddle.Position.X,
+        Cine.Shot.Puddle.Position.Y,Cine.Shot.Puddle.Position.Z]));
+    if Assigned(ViewPlay.AvatarTransform) and FindRoadPuddle(ViewPlay.AvatarTransform.Translation,
+      ViewPlay.AvatarTransform.Direction,0,120,8,0,Puddle) then
+      AResult.Add('puddle_next',TJSONArray.Create([Puddle.Position.X,Puddle.Position.Y,Puddle.Position.Z]));
   end;
 
   Ag := nil;
@@ -746,6 +766,22 @@ var
   TrafficSnapshot:TLaneReplayState;
   TrafficIndex:Integer;
   LoadGrade,LoadStation,LoadHeight:Single;
+  ContactBike:TBikeInstance;BikeIndex:Integer;
+  WheelPoint,ContactNormal:TVector3;ContactY,UnusedY:Single;ContactHit,UnusedHit:Boolean;
+  procedure Wheel(const Key:string;Front:Boolean);
+  begin
+    if not ContactBike.WheelSupportPoint(Front,ContactNormal,WheelPoint)then Exit;
+    O.Add(Key+'_wheel',TJSONArray.Create([WheelPoint.X,WheelPoint.Y,WheelPoint.Z]));
+    ContactHit:=False;
+    if (ViewPlay.Osm<>nil)and(ViewPlay.Osm.Session<>nil)then
+      ViewPlay.Osm.Session.Map.ProbeGpuGround(WheelPoint.X,WheelPoint.Z,
+        TrafficAgent.State.LastGroundY,ContactY,UnusedY,ContactHit,UnusedHit,False)
+    else if Assigned(TrafficAgent.State.GroundQuery)then
+      ContactHit:=TrafficAgent.State.GroundQuery(WheelPoint.X,WheelPoint.Z,
+        TrafficAgent.State.LastGroundY,ContactY);
+    O.Add(Key+'_wheel_surface_valid',ContactHit);
+    if ContactHit then O.Add(Key+'_wheel_clearance_m',WheelPoint.Y-ContactY);
+  end;
   procedure Vec(const Name: String; const V: TVector3);
   var A: TJSONArray;
   begin A:=TJSONArray.Create; A.Add(V.X); A.Add(V.Y); A.Add(V.Z); AResult.Add(Name,A) end;
@@ -821,6 +857,17 @@ begin
         end;
       O.Add('power',TrafficAgent.State.AppliedPowerWatts);
       O.Add('ground_pitch_deg',TrafficAgent.State.CurrentGroundPitch);
+      O.Add('model_pitch_deg',TrafficAgent.State.CurrentModelPitch);
+      O.Add('physics_time_sec',TrafficAgent.State.SimulationTime);
+      O.Add('visual_time_sec',Double(TrafficAgent.State.SimulationTime)+TrafficAgent.State.AccumulatedTime);
+      O.Add('physics_lod',Ord(TrafficAgent.State.PhysicsLOD));
+      if Assigned(TrafficAgent.Actor.Transform) then
+        O.Add('visual_position',TJSONArray.Create([TrafficAgent.Actor.Transform.Translation.X,
+          TrafficAgent.Actor.Transform.Translation.Y,TrafficAgent.Actor.Transform.Translation.Z]));
+      O.Add('front_ground',TJSONArray.Create([TrafficAgent.State.FrontGroundPoint.X,
+        TrafficAgent.State.FrontGroundPoint.Y,TrafficAgent.State.FrontGroundPoint.Z]));
+      O.Add('rear_ground',TJSONArray.Create([TrafficAgent.State.RearGroundPoint.X,
+        TrafficAgent.State.RearGroundPoint.Y,TrafficAgent.State.RearGroundPoint.Z]));
       O.Add('slope_deg',TrafficAgent.State.CurrentSlopeAngle);
       O.Add('fit_load_valid',TrafficAgent.Path.FitLoadAtPosition(
         TrafficAgent.Path.Position,LoadGrade,LoadStation,LoadHeight));
@@ -850,6 +897,19 @@ begin
         O.Add('ground_probe_distance_m',Sqrt(
           Sqr(TrafficAgent.State.WorldPosition.X-GroundTracking.GroundProbePosition.X)+
           Sqr(TrafficAgent.State.WorldPosition.Z-GroundTracking.GroundProbePosition.Z)));
+        if AParams.Get('wheels',False)and(TrafficAgent.State.PhysicsLOD<>plMinimal)then begin
+          ContactBike:=nil;
+          if I=0 then ContactBike:=ViewPlay.Bike
+          else if ViewPlay.LocalBots<>nil then begin
+            BikeIndex:=ViewPlay.LocalBots.Agents.IndexOf(TrafficAgent);
+            if BikeIndex>=0 then ContactBike:=TBikeInstance(ViewPlay.LocalBots.Bikes[BikeIndex]);
+          end;
+          if ContactBike<>nil then begin
+            O.Add('animation_time_sec',ContactBike.AnimElapsed);
+            ContactNormal:=Vector3(-GroundTracking.GroundGradient.X,1,-GroundTracking.GroundGradient.Z);
+            Wheel('front',True);Wheel('rear',False);
+          end;
+        end;
       end;
       O.Add('traffic_speed_limit',TrafficAgent.State.TrafficSpeedLimit);
       O.Add('steering_speed_limit',TrafficAgent.Path.SteeringSpeedLimit);
@@ -1035,6 +1095,8 @@ end;
 
 procedure CmdBikeMotionSample(const AParams: TJSONObject; AResult: TJSONObject);
 var
+  Bike: TBikeInstance;
+  BotIndex, PoseIndex: Integer;
   State: TBikePlaybackState;
   Anchor, Facing: TJSONArray;
   Paused: Boolean;
@@ -1046,9 +1108,28 @@ begin
   if (not Assigned(DeviceService)) or
      (not DeviceService.SimPlayerInfo(Paused, CurSec, TotalSec)) or not Paused then
     raise Exception.Create('Pause the FIT simulation before sampling its rider');
+  BotIndex:=AParams.Get('bot_index',-1);
+  Bike:=ViewPlay.Bike;
+  if BotIndex>=0 then
+  begin
+    if (ViewPlay.LocalBots=nil) or (BotIndex>=ViewPlay.LocalBots.Bikes.Count) then
+      raise Exception.Create('Bot index outside the current roster');
+    Bike:=TBikeInstance(ViewPlay.LocalBots.Bikes[BotIndex]);
+    if (Bike=nil) or not Bike.HasTripoRider then
+      raise Exception.Create('Bot is not prepared');
+    if (AParams.Find('anchor')<>nil) or (AParams.Find('facing')<>nil) then
+      raise Exception.Create('Bot motion sampling does not reposition the agent');
+  end;
+  if AParams.Find('pose_index')<>nil then
+  begin
+    PoseIndex:=AParams.Get('pose_index',0);
+    if (PoseIndex<0) or (PoseIndex>=BuiltinRiderPoseCount) then
+      raise Exception.Create('Pose index outside the rider catalogue');
+    Bike.ApplyRiderPose(BuiltinRiderPose(PoseIndex),0);
+  end;
   { Explicit MCP diagnostic only. Keep the live GPU animation/deformation
     path; a paused simulation already prevents the normal clock advancing. }
-  State := ViewPlay.Bike.CaptureReplay;
+  State := Bike.CaptureReplay;
   State.Phase := Frac(AParams.Get('phase', Double(State.Phase)));
   State.BreathPhase := Frac(AParams.Get('breath', Double(State.BreathPhase)));
   State.BreathLoad := EnsureRange(AParams.Get('breath_load', Double(State.BreathLoad)),0.0,2.0);
@@ -1089,10 +1170,16 @@ begin
     if Assigned(ViewPlay.Bike.Group.Parent) then
       ViewPlay.Bike.Group.Parent.Rotation := Vector4(0,1,0,ModelBaseYRotation);
   end;
-  ViewPlay.Bike.RestoreReplay(State);
-  ViewPlay.Bike.SampleRiderDynamics;
-  AResult.Add('sample', ViewPlay.Bike.RiderMotionDebugJson);
-  AResult.Add('gpu', ViewPlay.Bike.GpuAnim);
+  Bike.RestoreReplay(State);
+  Bike.SampleRiderDynamics;
+  if BotIndex>=0 then
+  begin
+    Bike.RiderScene.RenderOptions.CachedAnimationRevision:=
+      Bike.RiderScene.RenderOptions.CachedAnimationRevision+1;
+    ViewPlay.LocalBots.InvalidateShadowPose(BotIndex);
+  end;
+  AResult.Add('sample', Bike.RiderMotionDebugJson);
+  AResult.Add('gpu', Bike.GpuAnim);
 end;
 
 procedure CmdBikeSetGpuAnim(const AParams: TJSONObject; AResult: TJSONObject);
@@ -1523,6 +1610,13 @@ end;
 
 { ── perf.set / perf.state ────────────────────────────────────────────── }
 
+procedure CmdRenderStability(const AParams:TJSONObject; AResult:TJSONObject);
+begin
+  if (ViewPlay=nil) or not ViewPlay.SessionAlive then
+    raise Exception.Create('Active ride required');
+  (ViewPlay.MainViewport as TOsmImpostorViewport).ProbeStability(AParams,AResult);
+end;
+
 procedure CmdGroundLevels(const AParams:TJSONObject; AResult:TJSONObject);
 var P:TVector3; RefY,TopY,LowY,Y:Single; Hit:Boolean; Ag:TPhysicalAgent;
 begin
@@ -1613,6 +1707,14 @@ begin
   AResult.Add('path', PerformanceRiderModel);
 end;
 
+procedure CmdFarFieldProbe(const AParams:TJSONObject; AResult:TJSONObject);
+begin
+  if (ViewPlay=nil) or not ViewPlay.SessionAlive or (ViewPlay.Osm=nil) or
+     (ViewPlay.Osm.Session=nil) then raise Exception.Create('Active OSM ride required');
+  RunFarFieldProbe(ViewPlay.Osm.Session.Map,
+    ViewPlay.MainViewport.Camera.Translation, AParams, AResult);
+end;
+
 procedure CmdPerfObjects(const AParams:TJSONObject; AResult:TJSONObject);
 var Target:TCastleTransform;Node:TX3DNode;Parts:TStringList;I,N:Integer;
   Path,NodePath:string;Rows:TJSONArray;WithNodes:Boolean;
@@ -1675,6 +1777,12 @@ begin
       else if Node is TAbstractShapeNode then TAbstractShapeNode(Node).Visible:=AParams.Get('visible',True)
       else if Node is TAbstractGroupingNode then TAbstractGroupingNode(Node).Visible:=AParams.Get('visible',True)
       else raise Exception.Create('Only drawable groups/shapes can be hidden');
+      if AParams.Get('brief',False) then
+      begin
+        AResult.Add('transform',Path); AResult.Add('node',NodePath);
+        AResult.Add('visible',AParams.Get('visible',True));
+        Exit;
+      end;
     end;
     Rows:=TJSONArray.Create;AResult.Add('objects',Rows);WithNodes:=AParams.Get('nodes',False);
     if Node<>nil then ListNode(Node,Path,NodePath,0) else ListTransform(Target,Path,0);
@@ -1748,7 +1856,22 @@ begin
     ViewPlay.SetOcclusionCulling(AParams.Get('occlusion', True), AParams.Get('persist', False));
   if AParams.Find('dynamic_batching') <> nil then
     ViewPlay.MainViewport.DynamicBatching := AParams.Get('dynamic_batching', False);
+  if AParams.Find('shared_uniform_arrays')<>nil then
+    UseSharedUniformArrayCache:=AParams.Get('shared_uniform_arrays',True);
+  if AParams.Find('shared_effect_bindings')<>nil then
+    UseSharedEffectBindings:=AParams.Get('shared_effect_bindings',True);
+  if AParams.Find('binary_shader_names')<>nil then
+    UseBinaryShaderNames:=AParams.Get('binary_shader_names',True);
+  if AParams.Find('pose_cache')<>nil then
+    UseCachedRiderMeshes:=AParams.Get('pose_cache',True);
+  if AParams.Find('delayed_pose')<>nil then
+    UseDelayedRiderMeshes:=AParams.Get('delayed_pose',False);
   AResult.Add('ok', True);
+  AResult.Add('shared_uniform_arrays',UseSharedUniformArrayCache);
+  AResult.Add('shared_effect_bindings',UseSharedEffectBindings);
+  AResult.Add('binary_shader_names',UseBinaryShaderNames);
+  AResult.Add('pose_cache',UseCachedRiderMeshes);
+  AResult.Add('delayed_pose',UseDelayedRiderMeshes);
   AResult.Add('anim', ViewPlay.PerfAnim);
   AResult.Add('riders', ViewPlay.PerfRiders);
   AResult.Add('terrain', ViewPlay.PerfTerrain);
@@ -1969,6 +2092,35 @@ begin
   AResult.Add('active',PerformanceProbe<>nil);
 end;
 
+procedure CmdLocalBots(const AParams:TJSONObject;AResult:TJSONObject);
+var D:TJSONObject;Name:string;Rows:TJSONArray;I,Mask:Integer;
+begin
+  if(ViewPlay=nil)or(ViewPlay.LocalBots=nil)then raise Exception.Create('Active ride required');
+  if AParams.Find('limit')<>nil then ViewPlay.LocalBots.SetRenderLimit(AParams.Get('limit',3));
+  if AParams.Find('render')<>nil then ViewPlay.LocalBots.SetRenderEnabled(AParams.Get('render',True));
+  if AParams.Find('probe_animate_paused')<>nil then
+    ViewPlay.PerfAnimatePausedBots:=AParams.Get('probe_animate_paused',False);
+  if AParams.Find('probe_revision_cache')<>nil then
+    ViewPlay.LocalBots.SetPoseCachePolicy(Ord(AParams.Get('probe_revision_cache',True)));
+  if AParams.Find('probe_pose_cache_policy')<>nil then
+    ViewPlay.LocalBots.SetPoseCachePolicy(AParams.Get('probe_pose_cache_policy',-1));
+  if AParams.Find('probe_mask')<>nil then begin
+    Mask:=AParams.Get('probe_mask',-1);
+    for I:=0 to ViewPlay.LocalBots.Bikes.Count-1 do
+      if ViewPlay.LocalBots.Bikes[I]<>nil then
+        TBikeInstance(ViewPlay.LocalBots.Bikes[I]).Group.Exists:=(Mask and (1 shl I))<>0;
+  end;
+  D:=ViewPlay.LocalBots.Diagnostics;
+  try while D.Count>0 do begin Name:=D.Names[0];AResult.Add(Name,D.Extract(0)) end;finally D.Free end;
+  AResult.Add('probe_animate_paused',ViewPlay.PerfAnimatePausedBots);
+  if AParams.Get('shaders',False) then begin
+    AResult.Add('avatar_shaders',BikeShaderDiagnostics(ViewPlay.Bike));
+    Rows:=TJSONArray.Create;AResult.Add('bot_shaders',Rows);
+    for I:=0 to ViewPlay.LocalBots.Bikes.Count-1 do
+      Rows.Add(BikeShaderDiagnostics(TBikeInstance(ViewPlay.LocalBots.Bikes[I])));
+  end;
+end;
+
 procedure CmdPerfState(const AParams: TJSONObject; AResult: TJSONObject);
 var
   Stats: TRenderStatistics;
@@ -2021,6 +2173,7 @@ begin
   AResult.Add('scenes_rendered', Stats.ScenesRendered);
   AResult.Add('occlusion_boxes', Stats.BoxesOcclusionQueriedCount);
   AResult.Add('rider_shadow', ViewPlay.RiderShadowInfo);
+  AResult.Add('rtx',ViewPlay.RtxShadowInfo(AParams.Get('reflection_diagnostics',False)));
   AResult.Add('world_shadows', ViewPlay.AtlasWorldShadows);
   AResult.Add('road_material', RoadMaterialModeName);
   AResult.Add('curb_contacts',CurbContactsEnabled);
@@ -2161,6 +2314,10 @@ end;
 
 procedure CmdBikeFitBody(const AParams:TJSONObject;AResult:TJSONObject);
 begin EnsureBikeFitPage.McpBody(AParams,AResult) end;
+
+procedure CmdBikeFitAutoFit(const AParams:TJSONObject;AResult:TJSONObject);
+var P:TBikeFitPage;
+begin P:=EnsureBikeFitPage;P.McpAutoFit;P.McpFillStatus(AResult) end;
 
 procedure CmdBikeFitNudge(const AParams: TJSONObject; AResult: TJSONObject);
 var
@@ -2351,7 +2508,7 @@ begin
     @CmdPhysicsGroundLog);
   RegisterMcpCommand('path.follow_state',
     'Actual physics position, steering target, lane offset, optional world-agent passage progress, existing ground-probe state and live building footprints.',
-    '{"type":"object","properties":{"traffic":{"type":"boolean"},"footprints":{"type":"boolean"},"radius":{"type":"number"}}}',
+    '{"type":"object","properties":{"traffic":{"type":"boolean"},"wheels":{"type":"boolean"},"footprints":{"type":"boolean"},"radius":{"type":"number"}}}',
     @CmdPathFollowState);
   RegisterMcpCommand('path.dump',
     'Dump rider attraction data to a JSON file: avatar path world ' +
@@ -2471,7 +2628,7 @@ begin
     @CmdBikeAnimDebug);
   RegisterMcpCommand('bike.motion_sample',
     'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation.',
-    '{"type":"object","properties":{"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
+    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
     @CmdBikeMotionSample);
   RegisterMcpCommand('bike.set_gpu_anim',
     'Switch avatar bike/rider animation between the GPU path (true) and ' +
@@ -2502,10 +2659,16 @@ begin
   RegisterMcpCommand('path.surface_layers','Find loaded multi-level surfaces along the rider path. Diagnostic only.','',@CmdPathSurfaceLayers);
   RegisterMcpCommand('ground.curb_probe','Compare ground height with and without the nearest rendered curb.',
     '{"type":"object","properties":{"x":{"type":"number"},"z":{"type":"number"}}}',@CmdCurbProbe);
+  RegisterMcpCommand('perf.farfield',
+    'Reversible OSM distance experiment, no persistence or per-frame work. '+
+    'Cuts composite draw indices outside an XZ radius; keeps physics and buffers. '+
+    'LOD uses existing CGE tile-center ranges. original restores all changes.',
+    '{"type":"object","properties":{"mode":{"type":"string"},"distance_m":{"type":"number"},'+
+    '"pbr_m":{"type":"number"},"full_m":{"type":"number"},"cut_trees":{"type":"boolean"}}}',@CmdFarFieldProbe);
   RegisterMcpCommand('perf.objects',
     'List live transform paths and optional X3D group/shape paths. Temporarily set visible for object-isolation measurements. '+
     'Keeps lights and physics; paths must be obtained again after scene changes. Not persisted.',
-    '{"type":"object","properties":{"transform":{"type":"string"},"node":{"type":"string"},"nodes":{"type":"boolean"},"visible":{"type":"boolean"}}}',@CmdPerfObjects);
+    '{"type":"object","properties":{"transform":{"type":"string"},"node":{"type":"string"},"nodes":{"type":"boolean"},"visible":{"type":"boolean"},"brief":{"type":"boolean"}}}',@CmdPerfObjects);
   RegisterMcpCommand('perf.set',
     'Toggle frame-cost components for isolated perf measurements: ' +
     'anim (all bike AnimateFrame), riders (Tripo rider meshes), ' +
@@ -2514,9 +2677,10 @@ begin
     'world_shadows (buildings/trees in the shared atlas; false leaves rider shadows only), ' +
     'road_material (legacy/direct/cached), procedural_trees (new/legacy trees), tree_season (0 spring, .25 summer, .5 autumn, .75 winter), vegetation (all trees), grass (all grass), grass_lod (adapt blade tessellation to projected size), vegetation_branches (legacy vertex detail), curb_contacts (wheel height only), ' +
     'grass_blades/grass_cards/grass_carpet (diagnostic grass layers), ' +
+    'binary_shader_names (diagnostic comparison with legacy locale-dependent lookups), ' +
     'discard_shadow_shader (diagnostic: remove the disabled ground-shadow shader). Each key optional.',
     '{"type":"object","properties":{"anim":{"type":"boolean"},' +
-    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},' +
+    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
     '"occlusion":{"type":"boolean"},"persist":{"type":"boolean"},"world_shadows":{"type":"boolean"},"dynamic_batching":{"type":"boolean"},"log_shaders":{"type":"boolean"},' +
     '"vegetation_branches":{"type":"boolean"},"procedural_trees":{"type":"boolean"},"tree_season":{"type":"number","minimum":0,"maximum":1},"vegetation":{"type":"boolean"},"grass":{"type":"boolean"},"grass_lod":{"type":"boolean"},"curb_contacts":{"type":"boolean"},"road_material":{"type":"string","enum":["legacy","direct","cached"]},' +
     '"grass_blades":{"type":"boolean"},"grass_cards":{"type":"boolean"},"grass_carpet":{"type":"boolean"},' +
@@ -2527,13 +2691,18 @@ begin
     + 'No relay traffic. count=0 removes them; zones=true spans all atlas zones.',
     '{"type":"object","properties":{"count":{"type":"integer","minimum":0,"maximum":15},"zones":{"type":"boolean"}}}',
     @CmdShadowTestRiders);
+  RegisterMcpCommand('bots.local','Local companion roster and visibility/performance diagnostics; session-only render limit.',
+    '{"type":"object","properties":{"limit":{"type":"integer","minimum":0,"maximum":3},"render":{"type":"boolean"},"shaders":{"type":"boolean"},"probe_animate_paused":{"type":"boolean"},"probe_mask":{"type":"integer"},"probe_revision_cache":{"type":"boolean"},"probe_pose_cache_policy":{"type":"integer","minimum":-1,"maximum":1}}}',@CmdLocalBots);
   RegisterMcpCommand('perf.state',
     'Current perf toggles + fps mode + route prep done + live FPS ' +
     '(real / only-render). geometry=true also counts resident OSM tiles, vertices and triangles.',
-    '{"type":"object","properties":{"geometry":{"type":"boolean"}}}',
+    '{"type":"object","properties":{"geometry":{"type":"boolean"},"reflection_diagnostics":{"type":"boolean"}}}',
     @CmdPerfState);
   RegisterMcpCommand('fx.configure','Inspect or temporarily compare screen effects in the active ride. Does not save settings.',
     '{"type":"object","properties":{"enabled":{"type":"boolean"},"softening":{"type":"integer","minimum":0,"maximum":2},"fog":{"type":"boolean"},"bloom":{"type":"boolean"},"tone":{"type":"boolean"},"kuwahara":{"type":"boolean"},"posterize":{"type":"boolean"},"hatch":{"type":"boolean"}}}',@CmdScreenFX);
+  RegisterMcpCommand('perf.render_stability',
+    'Bounded consecutive viewport frames for flicker diagnostics. Readback affects timing; not an FPS benchmark.',
+    '{"type":"object","properties":{"frames":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"width":{"type":"integer"},"height":{"type":"integer"},"raw_path":{"type":"string"},"shadow_depth":{"type":"boolean"}}}',@CmdRenderStability);
   RegisterMcpCommand('perf.capture',
     'Explicit bounded frame-time capture. start/read/stop; read reset=true drains a window. ' +
     'Reports frame median/p95/p99/1% low, raw update, render submission, asynchronous GPU timestamps and VRAM. ' +
@@ -2570,6 +2739,8 @@ begin
     @CmdScreenshot);
   RegisterMcpCommand('bikefit.body','Read/change shared avatar physical parameters.',
     '{"type":"object"}',@CmdBikeFitBody);
+  RegisterMcpCommand('bikefit.auto_fit','Use the same automatic size and fit button as the game UI.',
+    '{"type":"object"}',@CmdBikeFitAutoFit);
   RegisterMcpCommand('bikefit.status',
     'Open bike-fit and return fit, camera and live ride sharing status.',
     '{"type":"object","properties":{}}',
@@ -2633,6 +2804,7 @@ end;
 procedure ShutdownMcpServer;
 begin
   if not McpActive then Exit;
+  ClearFarFieldProbe;
   FreeAndNil(PerformanceProbe);
   McpActive := False;
   if Glue <> nil then

@@ -53,7 +53,7 @@ unit BikeGpuSkin;
 interface
 
 uses
-  Classes, SysUtils, Math,
+  RiderShaderSharing, Classes, SysUtils, Math,
   CastleUtils, CastleVectors, CastleScene, X3DNodes, X3DFields,
   TripoRig, RiderTripo, RiderHandGrip, RiderMotion;
 
@@ -97,6 +97,7 @@ type
     FURest: TMFMatrix4f;   { NJ: gskRest = BindWorld × NativeIBM; live after HeightK }
     FUBindT: TMFVec3f;     { NJ: BindWorld translations; live after HeightK }
     FUHandRest: TMFMatrix4f;
+    FUHandForward: array[0..1] of TSFVec3f;
     FHandJointIndices: array of Integer;
     FScalarsList: TSingleList;
     FVecsList: TVector3List;
@@ -476,6 +477,10 @@ begin
         L1 := BoneLen(ArmIdx[Side,1], ArmIdx[Side,2]);
         L2 := BoneLen(ArmIdx[Side,2], ArmIdx[Side,3]);
       end;
+  for Side := 0 to 1 do
+    if FUHandForward[Side] <> nil then
+      with FShArms[Side].HandForward do
+        FUHandForward[Side].Send(Vector3(X, Y, Z));
   for I := 0 to GPU_SHJ_COUNT - 1 do
   begin
     J := Rig.JointIndexByName(SHJ_NAMES[I]);
@@ -709,7 +714,7 @@ var
     SL.Add('    qM = qmul(gskQFromTo(gskQRot(qMpre, ' + Pfx + 'AXE), mDir), qMpre);');
     SL.Add('    vec4 qEnat = qmul(qM, qmul(gskQConj(' + Pfx + 'MR), ' + Pfx + 'ER));');
     SL.Add('    pE = pM + mDir * ' + Pfx + 'L2;');
-    SL.Add('    qE = gskGripOrientation(qEnat,uGripQ'+IntToStr(Side)+',mDir,'+GV3(FShArms[Side].HandForward)+',');
+    SL.Add('    qE = gskGripOrientation(qEnat,uGripQ'+IntToStr(Side)+',mDir,uGskHandForward'+IntToStr(Side)+',');
     SL.Add('      uScalars['+IntToStr(43+Side)+'],'+PronU+','+IntToStr(-SideSign)+'.0,uHandLevel);');
     SL.Add('    vec3 newAim = tgt - gskQRot(qE, ' + Pfx + 'CT);');
     SL.Add('    if (length(newAim - requestedAim) < 1e-5) break;');
@@ -894,6 +899,15 @@ begin
   FUHandRest := TMFMatrix4f.Create(FEffect, True, 'uGskHandRest', []);
   for I:=0 to High(FHandJointIndices)do FUHandRest.Items.Add(TMatrix4.Identity);
   FEffect.AddCustomField(FUHandRest);
+  { These axes come from the live bind. Embedding their floating-point
+    values made almost identical avatars compile separate full shaders,
+    and left the GPU axis stale after a body-shape edit. }
+  for Side := 0 to 1 do
+  begin
+    FUHandForward[Side] := TSFVec3f.Create(FEffect, True,
+      'uGskHandForward' + IntToStr(Side), Vector3(0, 1, 0));
+    FEffect.AddCustomField(FUHandForward[Side]);
+  end;
   if FRider.Correctives <> nil then
   begin
     FRider.Correctives.SetGpuActive(True);
@@ -930,6 +944,7 @@ begin
     SL.Add('uniform float uScalars[61];');
     SL.Add('uniform mat4 uGskHandRest[' + IntToStr(Length(FHandJointIndices)) + '];');
     SL.Add('uniform int uGskIterations[3];');
+    SL.Add('uniform vec3 uGskHandForward0, uGskHandForward1;');
     SL.Add('uniform vec3 uVecs[8];');
     SL.Add('uniform mat4 uGskRest[' + IntToStr(NJ) + '];');
     SL.Add('uniform int uGskJointCode[' + IntToStr(NJ) + '];');
@@ -1404,6 +1419,7 @@ begin
     PartV.FdType.Value := 'VERTEX';
     PartV.Contents := SL.Text;
     FEffect.FdParts.Add(PartV);
+    ShareRiderEffect(FEffect);
     { дамп сгенерированного GLSL — отладка compile/link (пурпурный меш =
       шейдер не собрался; текст ошибки идёт в [castle:*] через OnWarning).
       Только при BikeDumpShaders — запись на диск в горячем пути билда. }

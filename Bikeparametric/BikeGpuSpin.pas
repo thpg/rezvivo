@@ -29,7 +29,7 @@ unit BikeGpuSpin;
 interface
 
 uses
-  Classes, SysUtils, Math, fpjson,
+  RiderShaderSharing, Classes, SysUtils, Math, fpjson,
   CastleVectors, CastleScene, X3DNodes, X3DFields;
 
 type
@@ -161,6 +161,7 @@ begin
       '  normal = ' + RotZExpr('a', 'normal') + ';' + LineEnding +
       '}' + LineEnding;
     FSharedWheelEff.FdParts.Add(Part);
+    ShareRiderEffect(FSharedWheelEff);
     FAllEffects.Add(FSharedWheelEff);
   end;
   App.FdEffects.Add(FSharedWheelEff);
@@ -188,6 +189,7 @@ begin
       '  normal = ' + RotZExpr('a', 'normal') + ';' + LineEnding +
       '}' + LineEnding;
     FSharedCrankEff.FdParts.Add(Part);
+    ShareRiderEffect(FSharedCrankEff);
     FAllEffects.Add(FSharedCrankEff);
   end;
   App.FdEffects.Add(FSharedCrankEff);
@@ -258,6 +260,7 @@ begin
     Part.FdType.Value := 'VERTEX';
     Part.Contents := Src;
     Eff.FdParts.Add(Part);
+    ShareRiderEffect(Eff);
   end;
   App.FdEffects.Add(Eff);
 end;

@@ -37,6 +37,9 @@ type
     FLastSentBLESlope: Single;
     FSimulationActive: Boolean;     { True после первой отправки SetSimulation }
     FTrainerGrade: Single;          { инерционный уклон, % — то, что шлём }
+    FTrainerTargetGrade: Single;
+    FTrainerSensitivity:Integer;
+    FTrainerAdjustmentPending:Boolean;
     FTrainerGradeInited: Boolean;
     FLabels: THudLabels;
     FPowerBounds, FHeartBounds, FCadenceBounds: TZoneBounds;
@@ -87,6 +90,8 @@ type
 
     { Query helpers }
     function LastSentBLESlope: Single;
+    property TrainerTargetGrade:Single read FTrainerTargetGrade;
+    property TrainerFilteredGrade:Single read FTrainerGrade;
 
     { Обратная совместимость: собрать TTrainerDataRecord из активных сенсоров.
       Используется SensorLog и RemoteRiders пока они не мигрированы. }
@@ -99,7 +104,8 @@ type
 
 implementation
 
-uses UiTranslations, VeloSiteAPI, CastleColors, CastleVectors, GameDailyTraining, GameUserData,GameSensorLog;
+uses UiTranslations, VeloSiteAPI, CastleColors, CastleVectors, GameDailyTraining, GameUserData,GameSensorLog,
+  AppSettings,GameTrainerGrade;
 
 constructor TBLEHudUpdater.Create;
 begin
@@ -149,6 +155,9 @@ begin
   FLastSentBLESlope := 9999;
   FSimulationActive := False;
   FTrainerGrade := 0;
+  FTrainerTargetGrade := 0;
+  FTrainerSensitivity:=100;
+  FTrainerAdjustmentPending:=False;
   FTrainerGradeInited := False;
   UserWeight := 75.0;
   BikeWeight := 10.0;
@@ -227,7 +236,7 @@ end;
 function TBLEHudUpdater.GetCadence: Double;
 begin
   if Assigned(DeviceService) and Assigned(DeviceService.Cadence) and
-     DeviceService.Cadence.HasData then
+     DeviceService.Cadence.HasData and (DeviceService.Cadence.DataAgeSec<=3) then
     Result := DeviceService.Cadence.Instant
   else
     Result := 0;
@@ -236,7 +245,7 @@ end;
 function TBLEHudUpdater.GetSpeedKmh: Double;
 begin
   if Assigned(DeviceService) and Assigned(DeviceService.Speed) and
-     DeviceService.Speed.HasData then
+     DeviceService.Speed.HasData and (DeviceService.Speed.DataAgeSec<=3) then
     Result := DeviceService.Speed.Instant
   else
     Result := 0;
@@ -245,7 +254,7 @@ end;
 function TBLEHudUpdater.GetHeartRate: Double;
 begin
   if Assigned(DeviceService) and Assigned(DeviceService.HR) and
-     DeviceService.HR.HasData then
+     DeviceService.HR.HasData and (DeviceService.HR.DataAgeSec<=3) then
     Result := DeviceService.HR.Instant
   else
     Result := 0;
@@ -313,47 +322,11 @@ end;
 
 procedure TBLEHudUpdater.StepTrainerInertia(
   const ATargetGrade, ASpeedMps, ADt: Single);
-const
-  Gravity = 9.81;
-  MinG = -15.0;
-  MaxG = 15.0;
-var
-  Target, Speed, Dt, Tau, Alpha: Single;
 begin
-  Target := ATargetGrade;
-  if Target > MaxG then Target := MaxG;
-  if Target < MinG then Target := MinG;
-
-  if not FTrainerGradeInited then
-  begin
-    FTrainerGrade := Target;
-    FTrainerGradeInited := True;
-    Exit;
-  end;
-
-  Dt := ADt;
-  if Dt > 0.25 then Dt := 0.25;
-  if Dt <= 0 then Exit;
-
-  Speed := ASpeedMps;
-  if Speed < 0 then Speed := 0;
-
-  if Target > FTrainerGrade + 0.05 then
-  begin
-    { Тяжелее. Масштаб τ ~ v/g: при 15 м/с ≈ 2 с. Выезд из спуска
-      удлиняем — набранная скорость не должна сразу упереться в стену. }
-    Tau := 0.50 + Speed / Gravity;
-    if FTrainerGrade < 0.5 then
-      Tau := Tau + 0.70 * Speed / Gravity;
-  end
-  else
-    Tau := 0.30;   { легче — педали отпускают быстрее }
-  if Tau < 0.15 then Tau := 0.15;
-
-  Alpha := 1.0 - Exp(-Dt / Tau);
-  FTrainerGrade := FTrainerGrade + (Target - FTrainerGrade) * Alpha;
-  if FTrainerGrade > MaxG then FTrainerGrade := MaxG;
-  if FTrainerGrade < MinG then FTrainerGrade := MinG;
+  if not FTrainerGradeInited then begin
+    FTrainerGrade:=ATargetGrade;FTrainerGradeInited:=True;
+  end else
+    FTrainerGrade:=SmoothTrainerGrade(FTrainerGrade,ATargetGrade,ASpeedMps,ADt);
 end;
 
 procedure TBLEHudUpdater.UpdateBLETrainerControl(AActiveAgent: TPhysicalAgent;
@@ -361,20 +334,24 @@ procedure TBLEHudUpdater.UpdateBLETrainerControl(AActiveAgent: TPhysicalAgent;
 const
   MinSlopeSendInterval = 0.25;
   MinSlopeDeltaToSend = 0.3;         { в grade%, не в градусах }
-  MinTrainerGrade = -15.0;
-  MaxTrainerGrade = 15.0;
 var
   AngleDeg: Single;
   TargetGrade: Single;
   HasDevice: Boolean;
+  Sensitivity:Integer;
 begin
   if not Assigned(AActiveAgent) then Exit;
   if not Assigned(AActiveAgent.State) then Exit;
 
   AngleDeg := AActiveAgent.State.CurrentSlopeAngle;
-  TargetGrade := SlopeDegToGradePct(AngleDeg);
-  if TargetGrade < MinTrainerGrade then TargetGrade := MinTrainerGrade;
-  if TargetGrade > MaxTrainerGrade then TargetGrade := MaxTrainerGrade;
+  { Apply comfort only to outgoing load. Physics and the HUD retain the
+    real grade and the sensor's unmodified measured watts. }
+  Sensitivity:=Settings.GetTrainerGradeSensitivity;
+  if Sensitivity<>FTrainerSensitivity then begin
+    FTrainerSensitivity:=Sensitivity;FTrainerAdjustmentPending:=True;
+  end;
+  TargetGrade:=GradeForTrainer(SlopeDegToGradePct(AngleDeg),Sensitivity);
+  FTrainerTargetGrade:=TargetGrade;
   StepTrainerInertia(TargetGrade, AActiveAgent.State.CurrentSpeed, SecondsPassed);
 
   HasDevice := Assigned(DeviceService) and DeviceService.HasControlDevice;
@@ -403,12 +380,15 @@ begin
 
   FBLESlopeUpdateTime := FBLESlopeUpdateTime + SecondsPassed;
   if FBLESlopeUpdateTime < MinSlopeSendInterval then Exit;
-  if Abs(FTrainerGrade - FLastSentBLESlope) < MinSlopeDeltaToSend then Exit;
+  if (Abs(FTrainerGrade-FLastSentBLESlope)<MinSlopeDeltaToSend) and
+     not ((FTrainerAdjustmentPending or (TargetGrade=0))and
+       (FTrainerGrade=TargetGrade)and(Abs(TargetGrade-FLastSentBLESlope)>0.001)) then Exit;
 
   { В тренажёр — уже инерционный уклон, не сырой из физики. }
   try
     DeviceService.SetSimulation(FTrainerGrade, 0, UserWeight, BikeWeight);
     FLastSentBLESlope := FTrainerGrade;
+    if FTrainerGrade=TargetGrade then FTrainerAdjustmentPending:=False;
   except
     on E: Exception do
       Logger.Warning('[BLEHud] SetSimulation: ' + E.ClassName + ': ' + E.Message);

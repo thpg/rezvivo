@@ -157,6 +157,7 @@ begin
   DevInfo.SupportsControl := True;
   DevInfo.SupportsPower := True;
   DevInfo.SupportsCadence := True;
+  DevInfo.SupportsSpeed := True;
   DevInfo.SupportsHeartRate := True;
 
   if Assigned(OnDeviceFound) then
@@ -210,6 +211,7 @@ begin
   FDeviceInfo.SupportsControl := True;
   FDeviceInfo.SupportsPower := True;
   FDeviceInfo.SupportsCadence := True;
+  FDeviceInfo.SupportsSpeed := True;
   FDeviceInfo.SupportsHeartRate := True;
 
   { Адрес имеет вид "sim:<path>" — извлекаем путь. }

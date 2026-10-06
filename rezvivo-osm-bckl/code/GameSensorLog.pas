@@ -454,7 +454,7 @@ begin
       IntToStr(Data.Distance) + CSVSep +
       Format('%.1f', [ASlope], FS) + CSVSep +
       IntToStr(Data.TotalEnergy) + CSVSep +
-      IntToStr(Data.ResistanceLevel) + CSVSep +
+      FormatFloat('0.0', Data.ResistanceLevel, FS) + CSVSep +
       IntToStr(Data.ElapsedTime) + CSVSep +
       Moving+CSVSep+IntToStr(Ord(FTimerActive))+CSVSep+IntToStr(FLap)+CSVSep+IntToStr(FTarget)+CSVSep+IntToStr(FSourceFlags));
     FLocalError:='';

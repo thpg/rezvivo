@@ -46,7 +46,7 @@ type
 procedure SetGrassSunDir(const ADir:TVector3);
 function GrassMatDensity(MatId:Integer):Single;
 implementation
-uses CastleUriUtils,CastleLog,CastleApplicationProperties,Osm3dGroundComposite,Osm3dGlslLib,Osm3dWind,
+uses Osm3dRtxMaterials,CastleUriUtils,CastleLog,CastleApplicationProperties,Osm3dGroundComposite,Osm3dGlslLib,Osm3dWind,
   Osm3dGpuAccount,Osm3dRenderInstanced,Osm3dStudioSettings,Osm3dVegetationQuality,TreeMath,GL,GLExt
   {$IFDEF TILE_MEM_PROFILE},Osm3dMemCensus{$ENDIF};
 const CELL=GRASS_RENDER_CELL;RADIUS=160;
@@ -583,6 +583,7 @@ var Camera,Sun,HalfSize,ViewCenter:TVector3;Projection,View,Model,ViewModel:TMat
     end;
   end;
 begin
+  if RtxReflectionCaptureActive then Exit;
   FDrawn:=0;FDrawCalls:=0;if not CheckVisible or not RenderGrassActive then Exit;
   if Params.RenderingCamera.Target=rtShadowMap then Exit;
   View:=Params.RenderingCamera.Matrix;Camera:=WorldInverseTransform.MultPoint(CameraWorldPosFromView(View));

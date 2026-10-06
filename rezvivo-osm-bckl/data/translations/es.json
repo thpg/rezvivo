@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "Sensibilidad del rodillo a la pendiente",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: pendiente completa. Por debajo del 100%: limitar las pendientes al 8% y reducir proporcionalmente. 0%: llano. La física y la potencia del entrenamiento no cambian.",
   "Hairstyle": "Peinado",
   "No hair": "Sin pelo",
   "Short crop": "Corte corto",
@@ -343,5 +345,9 @@
   "Front view": "Frente",
   "Side view": "Lado",
   "Rear view": "Detrás",
-  "Drag to rotate · Wheel to zoom": "Arrastra para girar · Rueda para acercar"
+  "Drag to rotate · Wheel to zoom": "Arrastra para girar · Rueda para acercar",
+  "Wheel circumference (mm)": "Circunferencia de rueda (mm)",
+  "Preparing riders": "Preparando ciclistas",
+  "Companion": "Compañero",
+  "Passing cyclist": "Ciclista de paso"
 }

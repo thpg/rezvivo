@@ -3,7 +3,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$EngineRoot,
     [Parameter(Mandatory=$true)][string]$Compiler,
-    [string]$OutputName = 'third_person_navigation.exe'
+    [string]$OutputName = 'third_person_navigation.exe',
+    [switch]$BuildRtx,
+    [string]$Glslang = ''
 )
 $ErrorActionPreference = 'Stop'
 $EngineRoot = (Resolve-Path -LiteralPath $EngineRoot).Path
@@ -146,4 +148,21 @@ $builtExecutable = Join-Path $buildRoot $OutputName
 $activeExecutable = Join-Path $projectRoot $OutputName
 Copy-Item -LiteralPath $builtExecutable -Destination $activeExecutable -Force
 # Runtime libraries are supplied separately; see dependencies/runtime.json.
+# Optional native ray-query backend. The regular Pascal build does not need a
+# C++ compiler or Vulkan SDK; missing/unsupported RTX falls back to raster.
+$rtxRoot = Join-Path $repoRoot 'Osm3d'
+if ($BuildRtx) {
+    Push-Location $rtxRoot
+    try { & (Join-Path $rtxRoot 'rtx\build.ps1') -Glslang $Glslang }
+    finally { Pop-Location }
+}
+if (Test-Path -LiteralPath (Join-Path $rtxRoot 'rezvivo_rtx.dll')) {
+    Copy-Item -LiteralPath (Join-Path $rtxRoot 'rezvivo_rtx.dll') -Destination $projectRoot -Force
+    Copy-Item -LiteralPath (Join-Path $rtxRoot 'rezvivo_rtx.dll') -Destination $buildRoot -Force
+    $shaderRoot = Join-Path $projectRoot 'data\shaders\rtx'
+    New-Item -ItemType Directory -Path $shaderRoot -Force | Out-Null
+    foreach ($shader in @('shadow.spv', 'reflection.spv')) {
+        Copy-Item -LiteralPath (Join-Path $rtxRoot ('data\shaders\rtx\' + $shader)) -Destination $shaderRoot -Force
+    }
+}
 Write-Output $activeExecutable

@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "Чувствительность станка к уклону",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: полный уклон. Ниже 100%: ограничение крутых склонов до 8% и пропорциональное ослабление. 0%: ровная дорога. Физика езды и нагрузка интервальной тренировки не меняются.",
   "Expression": "Мимика",
   "Load (% FTP)": "Нагрузка (% FTP)",
   "Preview load: breathing, body movement and automatic facial expression. 100% is FTP.": "Нагрузка предпросмотра: дыхание, движения тела и автоматическая мимика. 100% — FTP.",
@@ -1577,5 +1579,25 @@
   "Side view": "Сбоку",
   "Rear view": "Сзади",
   "Drag to rotate · Wheel to zoom": "Тянуть — поворот · Колесо — масштаб",
-  "Finish": "Финиш"
+  "Finish": "Финиш",
+  "Wheel circumference (mm)": "Длина окружности колеса (мм)",
+  "Preparing riders": "Подготовка райдеров",
+  "Companion": "Попутчик",
+  "Passing cyclist": "Проезжающий велосипедист",
+  "Distant world cache (experimental)": "Кэш дальнего мира (эксперимент)",
+  "RTX shadows (experimental)": "Тени RTX (эксперимент)",
+  "RTX reflections (experimental)": "Отражения RTX (эксперимент)",
+  "Cached tree shadows": "Кэш проекций для теней",
+  "World shadows": "Тени мира",
+  "RTX reflections": "Отражения RTX",
+  "Raster": "Растровые",
+  "Cached trees": "Кэш деревьев",
+  "RTX (experimental)": "RTX (эксперимент)",
+  "Fit bike to rider": "Сделать байкфит",
+  "Fitting bicycle...": "Подбираем посадку...",
+  "Bike fit applied and saved. You can fine-tune it below.": "Байкфит применён и сохранён. Параметры можно скорректировать вручную.",
+  "Closest bike fit saved. This model has limited adjustment for these body proportions.": "Ближайшая посадка сохранена. У этой модели ограничен диапазон настройки под такие пропорции.",
+  "Could not fit this bicycle. Choose a model with frame size data.": "Не удалось подобрать посадку. Выберите модель с данными о размерах рамы.",
+  "Cached tree silhouettes are faster. RTX requires a ray-tracing GPU; unsupported hardware uses raster shadows.": "Кэш силуэтов деревьев ускоряет тени. RTX требует видеокарту с трассировкой лучей; при отсутствии поддержки используются растровые тени.",
+  "Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.": "Отражает здания, деревья и землю в воде и окнах. Требует режима теней RTX."
 }

@@ -340,6 +340,12 @@ begin
     Waist. Slot 1 is absent on MEN/FEM, so use the two actual spine joints.
     Derived climbing / power poses inherit this adjustment above. }
   if not (Index in [15,16]) then begin
+    { Sit slightly farther along the cushion, leaving its raised rear edge
+      behind the glutes. This is a pose target, so dynamics and hand/foot IK
+      share it and pose transitions blend it. Derived poses inherit it once;
+      standing and grounded poses keep their pedal/ground support. }
+    if not Result.Grounded then
+      Result.OffsetX:=Result.OffsetX+0.025*(1-Result.Motion.Standing);
     CurveTransfer:=EnsureRange((-Result.SpineAngles[0]-24)*0.267,0.0,8.0);
     Result.SpineAngles[0]:=Result.SpineAngles[0]+CurveTransfer;
     Result.SpineAngles[2]:=Result.SpineAngles[2]-CurveTransfer*0.375;

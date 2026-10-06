@@ -9,7 +9,7 @@ uses fpjson;
 type
   TRiderWork = (rwViewUpdate, rwRiderList, rwDistanceCull, rwProfileDisplay,
     rwBikeFrame, rwAppearance, rwGpuFrame, rwNativePose, rwSpineFK, rwLimbIK,
-    rwBodyFrameSend, rwInactiveBodyFrameSend);
+    rwBodyFrameSend, rwInactiveBodyFrameSend, rwBotShadowPose);
 
 var
   RiderRuntimeAuditActive: Boolean = False;
@@ -25,7 +25,8 @@ implementation
 const
   WorkNames: array[TRiderWork] of string = ('view_update','rider_list',
     'distance_cull','profile_display','bike_frame','appearance','gpu_frame',
-    'native_pose','spine_fk','limb_ik','body_frame_send','inactive_body_frame_send');
+    'native_pose','spine_fk','limb_ik','body_frame_send','inactive_body_frame_send',
+    'bot_shadow_pose');
 var
   Counts: array[TRiderWork] of QWord;
 

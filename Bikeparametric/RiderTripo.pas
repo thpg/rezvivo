@@ -37,7 +37,7 @@ unit RiderTripo;
 
 interface
 
-uses RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
+uses RiderShaderSharing, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
@@ -1507,6 +1507,7 @@ begin
       '  scale *= 1.0 - 0.92 * clamp(riderGroundShade, 0.0, 1.0);' + #10 +
       '}';
     FGroundShadeEffect.SetParts([Part]);
+    ShareRiderEffect(FGroundShadeEffect);
     FScene.BeginChangesSchedule;
     try
       { Occluders remove direct sunlight; sky fill and the chosen material
@@ -2672,7 +2673,7 @@ begin
       '{' + LineEnding +
       '  vertex_eye.z += mix(0.0080, 0.0025, hemT);' + LineEnding +
       '}';
-    Eff.SetParts([Part]);
+    Eff.SetParts([Part]);ShareRiderEffect(Eff);
     if App.FdEffects.Count = 0 then
       App.SetEffects([Eff])
     else
@@ -5319,7 +5320,7 @@ var
       Part := TEffectPartNode.Create;
       Part.ShaderType := stFragment;
       Part.Contents := Src;
-      Eff.SetParts([Part]);
+      Eff.SetParts([Part]);ShareRiderEffect(Eff);
       if AApp.FdEffects.Count = 0 then
         AApp.SetEffects([Eff])
       else
@@ -6179,7 +6180,7 @@ begin
     PartV:=TEffectPartNode.Create;PartV.ShaderType:=stVertex;PartV.Contents:=RiderOcclusionVS;
     Effect.SetParts([PartV,Part]);
     FSelfOcclusion:=TRiderOcclusion.Create(Effect);
-  end else Effect.SetParts([Part]);
+  end else Effect.SetParts([Part]);ShareRiderEffect(Effect);
   Result.FdEffects.Add(Effect);
 end;
 
@@ -6376,6 +6377,7 @@ begin
       LightingSpace := TEffectNode.Create('RiderLightingSpace');
       LightingSpace.Language := slGLSL;
       LightingSpace.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
+      ShareRiderEffect(LightingSpace);
       FScene.RootNode.AddChildren(LightingSpace);
       FEnvLight := BuildRiderEnvLight;
       FScene.RootNode.AddChildren(FEnvLight);

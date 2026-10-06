@@ -1,0 +1,60 @@
+#version 460
+#extension GL_EXT_ray_query : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform accelerationStructureEXT world;
+layout(set=0,binding=2) uniform sampler2DArray silhouettes;
+struct Card { vec4 origin;vec4 u;vec4 v;vec4 spare; };
+layout(std430,set=0,binding=3) readonly buffer Cards { Card cards[]; };
+layout(std430,set=0,binding=4) readonly buffer Camera {
+    mat4 invProjection;mat4 invView;vec4 sun;vec4 horizon;vec4 zenith;vec4 depthRange;
+};
+layout(set=0,binding=5) uniform sampler2D normalImage;
+layout(set=0,binding=6) uniform sampler2D depthImage;
+layout(set=0,binding=7,rgba16f) uniform writeonly image2D reflectionImage;
+struct Surface { vec4 normal;vec4 color;vec4 uv0;vec4 uv1;vec4 uv2; };
+layout(std430,set=0,binding=8) readonly buffer Surfaces { Surface surfaces[]; };
+layout(set=0,binding=9) uniform sampler2D buildingAtlas;
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(reflectionImage);
+    if(any(greaterThanEqual(p,size)))return;
+    imageStore(reflectionImage,p,vec4(0));
+    vec4 nm=texelFetch(normalImage,p,0);float depth=texelFetch(depthImage,p,0).r;
+    if(nm.a<.005 || depth>=.9999999)return;
+    vec2 uv=(vec2(p)+.5)/vec2(size);
+    vec4 eye=invProjection*vec4(uv*2.-1.,((depth-depthRange.x)/depthRange.y)*2.-1.,1.);
+    eye/=eye.w;vec3 pos=(invView*eye).xyz;
+    vec3 N=normalize(nm.xyz*2.-1.),V=normalize(invView[3].xyz-pos);
+    if(dot(N,V)<0.)N=-N;
+    vec3 ray=reflect(-V,N),origin=pos+N*.07;
+    rayQueryEXT q;rayQueryInitializeEXT(q,world,gl_RayFlagsNoneEXT,255,origin,.03,ray,600.);
+    while(rayQueryProceedEXT(q)) {
+        if(rayQueryGetIntersectionTypeEXT(q,false)==gl_RayQueryCandidateIntersectionTriangleEXT){
+            uint t=rayQueryGetIntersectionPrimitiveIndexEXT(q,false);Card c=cards[t/2u];
+            vec2 b=rayQueryGetIntersectionBarycentricsEXT(q,false);
+            vec2 st=(t&1u)==0u?vec2(b.x+b.y,b.y):vec2(b.x,b.x+b.y);
+            if(textureLod(silhouettes,vec3(st,c.origin.w),0.).r>.35)rayQueryConfirmIntersectionEXT(q);
+        }
+    }
+    if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return;
+    uint t=rayQueryGetIntersectionPrimitiveIndexEXT(q,true),g=rayQueryGetIntersectionGeometryIndexEXT(q,true);
+    vec3 normal,albedo;
+    if(g!=1u){Surface s=surfaces[t+rayQueryGetIntersectionInstanceCustomIndexEXT(q,true)];normal=normalize(s.normal.xyz);albedo=s.color.rgb;
+        if(s.normal.w>0.){
+            vec2 bary=rayQueryGetIntersectionBarycentricsEXT(q,true);
+            vec2 uv=s.uv0.xy*(1.-bary.x-bary.y)+s.uv1.xy*bary.x+s.uv2.xy*bary.y;
+            float mat=s.normal.w-1.;vec2 grid=s.uv0.zw;
+            vec2 cell=vec2(mod(mat,grid.x),floor(mat/grid.x));
+            vec2 at=(cell+mix(vec2(.012),vec2(.988),fract(uv)))/grid;
+            vec3 paint=textureLod(buildingAtlas,at,0.).rgb;
+            albedo=pow(paint*mix(vec3(1),albedo,s.color.w),vec3(2.2));
+        }
+    }
+    else {normal=-ray;albedo=vec3(.16,.24,.085);}
+    if(dot(normal,ray)>0.)normal=-normal;
+    float lambert=max(dot(normal,sun.xyz),0.);
+    vec3 ambient=mix(vec3(.23,.22,.19),vec3(.48,.53,.60),normal.y*.5+.5);
+    vec3 color=albedo*(ambient+vec3(1,.97,.92)*lambert*1.9);
+    float distance=rayQueryGetIntersectionTEXT(q,true);
+    color=mix(color,horizon.rgb,clamp(distance/1200.,0.,.35));
+    imageStore(reflectionImage,p,vec4(clamp(color,vec3(0),vec3(3)),1));
+}

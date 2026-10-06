@@ -47,12 +47,21 @@ begin
   FSubmit:=TFrameSamples.Create;FGPU:=TFrameSamples.Create;
   FFreeKiB:=-1;FTotalKiB:=-1;FReset:=True;
   ResetRiderRuntimeAudit;RiderRuntimeAuditActive:=True;
+  ProfileSharedEffects:=True;
+  SharedEffectCalls:=0;SharedEffectFields:=0;SharedEffectUploads:=0;
+  SharedEffectSeconds:=0;DynamicUniformSeconds:=0;
+  RenderShapeSeconds:=0;MeshBeginSeconds:=0;MeshAttributesSeconds:=0;
+  MeshPoseSeconds:=0;MeshDrawSeconds:=0;MeshEndSeconds:=0;
+  MeshShaderSeconds:=0;MeshTextureSeconds:=0;
+  NativeSkinUniformSeconds:=0;LightUniformSeconds:=0;OtherUniformSeconds:=0;
+  SharedUploadSeconds:=0;
   FStartCaptures:=CachedMeshCaptures;FStartCacheDraws:=CachedMeshDraws;
 end;
 
 destructor TGamePerformanceProbe.Destroy;
 begin
   RiderRuntimeAuditActive:=False;
+  ProfileSharedEffects:=False;
   FTimer.Free;FMemory.Free;
   FWall.Free;FCPU.Free;FCore.Free;FSubmit.Free;FGPU.Free;
   inherited;
@@ -115,6 +124,32 @@ var Work:TJSONObject;
 begin
   Work:=TJSONObject.Create;Dest.Add('runtime_work',Work);
   SnapshotRiderRuntimeAudit(Work,Reset);
+  Work.Add('shared_effect_calls',Int64(SharedEffectCalls));
+  Work.Add('shared_effect_fields',Int64(SharedEffectFields));
+  Work.Add('shared_effect_uploads',Int64(SharedEffectUploads));
+  Work.Add('shared_effect_ms',SharedEffectSeconds*1000);
+  Work.Add('dynamic_uniform_ms',DynamicUniformSeconds*1000);
+  Work.Add('render_shape_ms',RenderShapeSeconds*1000);
+  Work.Add('mesh_begin_ms',MeshBeginSeconds*1000);
+  Work.Add('mesh_attributes_ms',MeshAttributesSeconds*1000);
+  Work.Add('mesh_pose_ms',MeshPoseSeconds*1000);
+  Work.Add('mesh_draw_ms',MeshDrawSeconds*1000);
+  Work.Add('mesh_end_ms',MeshEndSeconds*1000);
+  Work.Add('mesh_shader_ms',MeshShaderSeconds*1000);
+  Work.Add('mesh_texture_ms',MeshTextureSeconds*1000);
+  Work.Add('native_skin_uniform_ms',NativeSkinUniformSeconds*1000);
+  Work.Add('light_uniform_ms',LightUniformSeconds*1000);
+  Work.Add('other_uniform_ms',OtherUniformSeconds*1000);
+  Work.Add('shared_upload_ms',SharedUploadSeconds*1000);
+  if Reset then begin
+    SharedEffectCalls:=0;SharedEffectFields:=0;SharedEffectUploads:=0;
+    SharedEffectSeconds:=0;DynamicUniformSeconds:=0;
+    RenderShapeSeconds:=0;MeshBeginSeconds:=0;MeshAttributesSeconds:=0;
+    MeshPoseSeconds:=0;MeshDrawSeconds:=0;MeshEndSeconds:=0;
+    MeshShaderSeconds:=0;MeshTextureSeconds:=0;
+    NativeSkinUniformSeconds:=0;LightUniformSeconds:=0;OtherUniformSeconds:=0;
+    SharedUploadSeconds:=0;
+  end;
   Work.Add('cached_pose_captures',Int64(CachedMeshCaptures-FStartCaptures));
   Work.Add('cached_pose_draws',Int64(CachedMeshDraws-FStartCacheDraws));
   if Reset then begin FStartCaptures:=CachedMeshCaptures;FStartCacheDraws:=CachedMeshDraws end;

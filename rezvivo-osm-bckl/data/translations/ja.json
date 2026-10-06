@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "トレーナーの勾配感度",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%：元の勾配。100%未満：急勾配を8%に制限してから、割合に応じて軽減。0%：平坦。走行物理とワークアウトの目標パワーは変わりません。",
   "Hairstyle": "髪型",
   "No hair": "髪なし",
   "Short crop": "ショート",
@@ -354,5 +356,9 @@
   "Front view": "正面",
   "Side view": "側面",
   "Rear view": "背面",
-  "Drag to rotate · Wheel to zoom": "ドラッグで回転 · ホイールで拡大縮小"
+  "Drag to rotate · Wheel to zoom": "ドラッグで回転 · ホイールで拡大縮小",
+  "Wheel circumference (mm)": "ホイール周長 (mm)",
+  "Preparing riders": "ライダーを準備中",
+  "Companion": "同行者",
+  "Passing cyclist": "通りがかりのサイクリスト"
 }

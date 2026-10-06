@@ -413,6 +413,9 @@ begin
         FirstBuildFound := True;
         ModelInfo.BuildName := ObjGetStr(Obj, 'name', '');
         ModelInfo.BarType := ObjGetStr(Obj, 'bar_type', '');
+        { Bike Insights calls a MTB riser bar "moto". It belongs to the
+          flat-bar geometry path, including its shorter cockpit. }
+        if SameText(ModelInfo.BarType,'moto')then ModelInfo.BarType:='flat';
         ModelInfo.SuspensionType := ObjGetStr(Obj, 'suspension_type', '');
         ModelInfo.ForkTravel := ObjGetFloat(Obj, 'fork_travel', 0);
         ModelInfo.RearTravel := ObjGetFloat(Obj, 'rear_travel', 0);

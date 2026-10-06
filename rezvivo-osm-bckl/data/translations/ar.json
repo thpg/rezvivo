@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "حساسية جهاز التدريب للميل",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: الميل الكامل. أقل من 100%: تحديد المنحدرات الشديدة عند 8% ثم تخفيضها تناسبيًا. 0%: طريق مستوٍ. لا تتغير فيزياء الركوب ولا قدرة التمرين.",
   "Hairstyle": "تصفيفة الشعر",
   "No hair": "بدون شعر",
   "Short crop": "شعر قصير",
@@ -343,5 +345,9 @@
   "Front view": "أمام",
   "Side view": "جانب",
   "Rear view": "خلف",
-  "Drag to rotate · Wheel to zoom": "اسحب للتدوير · العجلة للتكبير"
+  "Drag to rotate · Wheel to zoom": "اسحب للتدوير · العجلة للتكبير",
+  "Wheel circumference (mm)": "محيط العجلة (مم)",
+  "Preparing riders": "تجهيز الدراجين",
+  "Companion": "رفيق",
+  "Passing cyclist": "دراج عابر"
 }

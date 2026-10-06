@@ -7,7 +7,7 @@ interface
 uses Classes, SysUtils, CastleViewport, CastleScene, CastleVectors,
   Osm3dGroundComposite, Osm3dGeomMesh, Osm3dTileX3D, Osm3dRenderGrass,
   Osm3dRenderInstanced, Osm3dProceduralVegetation, Osm3dRiderShadow,
-  Osm3dGpuTimer, GameGraphicsOptions, GameScreenFX;
+  Osm3dGpuTimer, GameGraphicsOptions, GameScreenFX, Osm3dImpostorCache;
 
 const GraphicsBenchmarkViewCount = 3;
 
@@ -18,7 +18,7 @@ type
   { A local, deterministic scene, independent of the selected route and HTTP.
     The controller applies transient graphics globals before ApplyProfile;
     this viewport changes only its own visibility and shadow configuration. }
-  TGraphicsBenchmarkScene = class(TCastleViewport)
+  TGraphicsBenchmarkScene = class(TOsmImpostorViewport)
   private
     FWorker: TGraphicsBenchmarkWorker;
     FData: TGraphicsBenchmarkData;
@@ -287,6 +287,7 @@ begin
   FShadow := TRiderShadowAtlas.Create;
   FShadow.WorldShadows := True;
   FShadow.WorldCasters.Add(FCasters);
+  FShadow.WorldCasters.Add(FGround);
   FShadow.WorldCasters.Add(FTrees);
   FShadow.WorldCasters.Add(FProcedural);
   FTimer := TAsyncGpuTimer.Create;
@@ -306,6 +307,7 @@ begin
   if Worker <> nil then Worker.Abandon;
   FreeAndNil(FScreenFX);
   FreeAndNil(FTimer);
+  Rtx:=nil;WorldRoot:=nil;
   FreeAndNil(FShadow);
   { Nodes own the atlas's transferred pixel images. Release the scene first. }
   FreeAndNil(FGround);
@@ -450,6 +452,8 @@ begin
   if Tick - FLastReadinessCheck < 150 then Exit;
   FLastReadinessCheck := Tick;
   Warm := FRenderFrames >= 6;
+  if (FValues[goShadowSize]>0) and FShadow.RtxRequested then
+    Warm:=Warm and (FShadow.RtxBackend<>nil) and (FShadow.RtxBackend.Ready or FShadow.RtxBackend.Failed);
   if FGrass.Exists then
   begin
     D := FGrass.DiagString;
@@ -499,8 +503,14 @@ begin
     try
       RoadMaterialRender(Camera.WorldTranslation);
       FShadow.Casters.Clear;
-      if FValues[goShadowSize] > 0 then
-        FShadow.Render(Self, Camera.WorldTranslation, -FSun, 0.85)
+      Rtx:=nil;WorldRoot:=Items;
+      FShadow.RtxRequested:=FValues[goWorldShadows]<>0;
+      FShadow.RtxRasterComparison:=FValues[goWorldShadows]=1;
+      FShadow.RtxReflections:=(FValues[goWorldShadows]=2) and (FValues[goRtxReflections]<>0);
+      if FValues[goShadowSize] > 0 then begin
+        FShadow.Render(Self, Camera.WorldTranslation, -FSun, 0.85);
+        Rtx:=FShadow.RtxBackend;
+      end
       else HideGroundRiderShadow;
       inherited;
       Inc(FRenderFrames);

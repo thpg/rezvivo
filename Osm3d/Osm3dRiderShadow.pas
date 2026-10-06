@@ -4,7 +4,7 @@ unit Osm3dRiderShadow;
 
 interface
 
-uses X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe;
+uses X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, fpjson;
 
 type
   TRiderShadowMatrices = array[0..3] of TMatrix4;
@@ -49,6 +49,12 @@ type
     FRenderSerial, FCaptures, FCacheDraws: QWord;
     FAtlasSize, FTileSize, FFilter: Integer;
     FZoneHalfExtent: array[0..3] of Single;
+    FWorldDistance: Single;
+    FAvatarReceiver: Boolean;
+    FLayout: TShadowReceiverLayout;
+    FRtx:TRtxShadow;
+    FRtxRequested,FFrameRtx,FRtxRasterComparison,FRtxReflections:Boolean;
+    FRtxRevision:QWord;
     procedure RenderSelected(const Camera: TRenderingCamera);
     procedure ContextClose(Sender: TObject);
     function AcceptShadowShape(const Shape: TShape): Boolean;
@@ -67,9 +73,18 @@ type
     function GroundCoverage(const Point: TVector3): Single;
     function TryGroundCoverage(const Point: TVector3; out Value: Single): Boolean;
     function DebugInfo: String;
+    procedure RtxSnapshot(const J:TJSONObject);
+    property RtxRequested:Boolean read FRtxRequested write FRtxRequested;
+    property RtxBackend:TRtxShadow read FRtx;
+    property RtxRevision:QWord read FRtxRevision write FRtxRevision;
+    property RtxRasterComparison:Boolean read FRtxRasterComparison write FRtxRasterComparison;
+    property RtxReflections:Boolean read FRtxReflections write FRtxReflections;
     property Casters: TCastleTransformList read FCasters;
     property WorldCasters: TCastleTransformList read FWorldCasters;
     property WorldShadows: Boolean read FWorldShadows write FWorldShadows;
+    { Render's Focus is the avatar ground point (or a ground-height reference
+      in Studio). Camera position/direction come from the actual viewport. }
+    property AvatarReceiver: Boolean read FAvatarReceiver write FAvatarReceiver;
   end;
 
   { One session-wide binding, shared by all streamed ground appearances.
@@ -83,6 +98,7 @@ type
     FMatrices: array[0..3] of TSFMatrix4f;
     FAtlas, FWorldShadowsUniform: TSFFloat;
     FBias: TSFVec4f;
+    FReceiverCamera: TSFVec3f;
     FTexel, FStrength, FFilter: TSFFloat;
     FFragment: TEffectPartNode;
     FSource: String;
@@ -103,6 +119,8 @@ procedure SetGroundRiderShadow(const Map: TGeneratedShadowMapNode;
 procedure HideGroundRiderShadow;
 procedure ClearGroundRiderShadow;
 procedure SetGroundRiderShadowCamera(const Position: TVector3);
+{ Explicit frame-capture diagnostics only; no readback or normal-frame cost. }
+procedure GroundShadowDiagnosticSnapshot(const Dest:TJSONObject);
 procedure MarkWorldShadowCaster(const Shape: TShapeNode);
 function IsWorldShadowCaster(const Shape: TX3DNode): Boolean;
 
@@ -140,6 +158,16 @@ const
     '  else p = gc_rider_zone3 * w;' + #10 +
     '  return p.xyz / p.w * 0.5 + 0.5;' + #10 +
     '}' + #10 +
+    '#ifdef GC_SURFACE_RECEIVER' + #10 +
+    'vec3 gc_shadowDx, gc_shadowDy;' + #10 +
+    'vec3 gc_zoneDelta(int zone, vec3 delta) {' + #10 +
+    '  vec4 w = vec4(delta,0.0);' + #10 +
+    '  if (zone == 0) return (gc_rider_zone0*w).xyz*0.5;' + #10 +
+    '  if (zone == 1) return (gc_rider_zone1*w).xyz*0.5;' + #10 +
+    '  if (zone == 2) return (gc_rider_zone2*w).xyz*0.5;' + #10 +
+    '  return (gc_rider_zone3*w).xyz*0.5;' + #10 +
+    '}' + #10 +
+    '#endif' + #10 +
     'float gc_zoneShadow(int zone, vec3 p) {' + #10 +
     '#ifdef GC_RIDER_ATLAS' + #10 +
     '  int size = textureSize(gc_rider_map, 0).x;' + #10 +
@@ -147,9 +175,18 @@ const
     '  ivec2 lo = ivec2(zone % 2, zone / 2) * tile;' + #10 +
     '  ivec2 hi = lo + ivec2(tile - 1);' + #10 +
     '  vec2 at = vec2(lo) + p.xy * float(tile) - 0.5;' + #10 +
+    '  vec2 plane = vec2(0.0);' + #10 +
+    '#ifdef GC_SURFACE_RECEIVER' + #10 +
+    '  vec3 px = gc_zoneDelta(zone,gc_shadowDx), py = gc_zoneDelta(zone,gc_shadowDy);' + #10 +
+    '  float det = px.x*py.y-px.y*py.x;' + #10 +
+    '  if (abs(det)>1e-12)' + #10 +
+    '    plane = clamp(vec2(px.z*py.y-py.z*px.y, py.z*px.x-px.z*py.x)/det, vec2(-16.0),vec2(16.0));' + #10 +
+    '#endif' + #10 +
     '  if (gc_rider_filter < 1.5) {' + #10 +
-    '    float d = texelFetch(gc_rider_map, clamp(ivec2(floor(at+0.5)), lo, hi), 0).r;' + #10 +
-    '    return p.z-gc_rider_bias[zone] > d ? 1.0 : 0.0;' + #10 +
+    '    ivec2 q = clamp(ivec2(floor(at+0.5)), lo, hi);' + #10 +
+    '    float d = texelFetch(gc_rider_map, q, 0).r;' + #10 +
+    '    float ref = p.z + dot(plane,(vec2(q-lo)+0.5)/float(tile)-p.xy);' + #10 +
+    '    return ref-gc_rider_bias[zone] > d ? 1.0 : 0.0;' + #10 +
     '  }' + #10 +
     '  int taps = gc_rider_filter < 4.5 ? 2 : 4;' + #10 +
     '  ivec2 first = ivec2(floor(at)) - ivec2(taps / 2 - 1);' + #10 +
@@ -157,10 +194,12 @@ const
     '  float shadow = 0.0;' + #10 +
     '  for (int y = 0; y < taps; ++y)' + #10 +
     '    for (int x = 0; x < taps; ++x) {' + #10 +
-    '      float d = texelFetch(gc_rider_map, clamp(first + ivec2(x,y), lo, hi), 0).r;' + #10 +
+    '      ivec2 q = clamp(first + ivec2(x,y), lo, hi);' + #10 +
+    '      float d = texelFetch(gc_rider_map, q, 0).r;' + #10 +
+    '      float ref = p.z + dot(plane,(vec2(q-lo)+0.5)/float(tile)-p.xy);' + #10 +
     '      float wx = x == 0 ? 1.0-f.x : (x == taps-1 ? f.x : 1.0);' + #10 +
     '      float wy = y == 0 ? 1.0-f.y : (y == taps-1 ? f.y : 1.0);' + #10 +
-    '      if (p.z-gc_rider_bias[zone] > d) shadow += wx*wy;' + #10 +
+    '      if (ref-gc_rider_bias[zone] > d) shadow += wx*wy;' + #10 +
     '    }' + #10 +
     '  return shadow / float((taps-1)*(taps-1));' + #10 +
     '#else' + #10 +
@@ -183,11 +222,15 @@ const
     'float gc_staticShadowWeight() {' + #10 +
     '#ifdef GC_RIDER_SHADOW' + #10 +
     '  if (gc_rider_world_shadows > 0.5 && gc_rider_atlas > 0.5 && gc_rider_strength > 0.0) {' + #10 +
-    '    vec3 p = gc_zonePosition(3, gc_riderRelativePosition);' + #10 +
-    '    if (gc_insideZone(p)) {' + #10 +
+    '    float remaining = 1.0;' + #10 +
+    '    for (int zone = 0; zone < 4; ++zone) {' + #10 +
+    '      vec3 p = gc_zonePosition(zone, gc_riderRelativePosition);' + #10 +
+    '      if (!gc_insideZone(p)) continue;' + #10 +
     '      float edge = max(abs(p.x * 2.0 - 1.0), abs(p.y * 2.0 - 1.0));' + #10 +
-    '      return smoothstep(0.90, 0.99, edge);' + #10 +
+    '      remaining *= (zone == 3) ? smoothstep(0.90, 0.99, edge) : smoothstep(0.85, 0.98, edge);' + #10 +
+    '      if (remaining < 0.001) return 0.0;' + #10 +
     '    }' + #10 +
+    '    return remaining;' + #10 +
     '  }' + #10 +
     '#endif' + #10 +
     '  return 1.0;' + #10 +
@@ -196,23 +239,25 @@ const
     'float gc_staticCoverage = 0.0;' + #10 +
     'float gc_sampleRiderShadow() {' + #10 +
     '#ifdef GC_RIDER_SHADOW' + #10 +
+    '#ifdef GC_SURFACE_RECEIVER' + #10 +
+    '  // Derivatives precede per-pixel cascade selection and early returns.' + #10 +
+    '  gc_shadowDx = dFdx(gc_riderRelativePosition);' + #10 +
+    '  gc_shadowDy = dFdy(gc_riderRelativePosition);' + #10 +
+    '#endif' + #10 +
     '  if (gc_rider_strength <= 0.0) return 0.0;' + #10 +
     '#ifdef GC_RIDER_ATLAS' + #10 +
     '  if (gc_rider_atlas > 0.5) {' + #10 +
+    '    float shadow = 0.0, remaining = 1.0;' + #10 +
     '    for (int zone = 0; zone < 4; ++zone) {' + #10 +
     '      vec3 p = gc_zonePosition(zone, gc_riderRelativePosition);' + #10 +
     '      if (!gc_insideZone(p)) continue;' + #10 +
     '      float edge = max(abs(p.x * 2.0 - 1.0), abs(p.y * 2.0 - 1.0));' + #10 +
-    '      float shadow = gc_zoneShadow(zone, p);' + #10 +
-    '      if (zone < 3 && edge > 0.85) {' + #10 +
-    '        vec3 next = gc_zonePosition(zone + 1, gc_riderRelativePosition);' + #10 +
-    '        if (gc_insideZone(next))' + #10 +
-    '          shadow = mix(shadow, gc_zoneShadow(zone + 1, next), smoothstep(0.85, 0.98, edge));' + #10 +
-    '      }' + #10 +
-    '      if (zone == 3) shadow *= 1.0 - smoothstep(0.90, 0.99, edge);' + #10 +
-    '      return shadow * gc_rider_strength;' + #10 +
+    '      float fade = (zone == 3) ? smoothstep(0.90, 0.99, edge) : smoothstep(0.85, 0.98, edge);' + #10 +
+    '      shadow += remaining * (1.0 - fade) * gc_zoneShadow(zone, p);' + #10 +
+    '      remaining *= fade;' + #10 +
+    '      if (remaining < 0.001) break;' + #10 +
     '    }' + #10 +
-    '    return 0.0;' + #10 +
+    '    return shadow * gc_rider_strength;' + #10 +
     '  }' + #10 +
     '  return 0.0;' + #10 +
     '#else' + #10 +
@@ -251,7 +296,7 @@ const
 implementation
 
 uses SysUtils, Math, CastleBoxes, CastleRectangles, CastleTimeUtils, CastleApplicationProperties,
-  CastleSceneCore, CastleInternalRenderer, CastleGL, Osm3dRenderInstanced,
+  CastleSceneCore, CastleInternalRenderer, CastleGL, Osm3dRenderInstanced, Osm3dStudioSettings,
   CastleRendererInternalShader, CastleRendererInternalTextureEnv;
 
 type
@@ -384,6 +429,8 @@ begin
   AddCustomField(FWorldShadowsUniform);
   FBias := TSFVec4f.Create(Self, True, 'gc_rider_bias', Vector4(0, 0, 0, 0));
   AddCustomField(FBias);
+  FReceiverCamera := TSFVec3f.Create(Self, True, 'gc_rider_camera', TVector3.Zero);
+  AddCustomField(FReceiverCamera);
   FTexel := TSFFloat.Create(Self, True, 'gc_rider_texel', 1.0 / 1024.0);
   AddCustomField(FTexel);
   FStrength := TSFFloat.Create(Self, True, 'gc_rider_strength', 0);
@@ -451,12 +498,19 @@ begin
       FWorldShadowsUniform.Send(Ord(CurrentWorldShadows));
     if CurrentAtlas then
     begin
+      { These uniforms form one coordinate system with the matrices below.
+        Relative equality permits centimetres/metres of stale camera offset
+        at large world coordinates, while the matrices change every frame. }
+      if not TVector3.PerfectlyEquals(FReceiverCamera.Value, CurrentReceiverCamera) then
+        FReceiverCamera.Send(CurrentReceiverCamera);
       for I := 0 to 3 do
       begin
         M := FMatrices[I].Value;
         if not CompareMem(@M, @CurrentMatrices[I], SizeOf(M)) then FMatrices[I].Send(CurrentMatrices[I]);
       end;
-      if not TVector4.Equals(FBias.Value, CurrentBias) then FBias.Send(CurrentBias);
+      { Bias is normalized depth and commonly smaller than SameValue's
+        minimum epsilon. Approximate equality can leave all four biases zero. }
+      if not TVector4.PerfectlyEquals(FBias.Value, CurrentBias) then FBias.Send(CurrentBias);
     end;
   end;
   { Omit the sampler entirely when disconnected: a null shadow sampler
@@ -537,6 +591,29 @@ begin
   finally LeaveCriticalSection(RegistryLock) end;
 end;
 
+procedure GroundShadowDiagnosticSnapshot(const Dest:TJSONObject);
+var E:TRiderShadowGroundEffect;CameraError,BiasError:Single;I,Count:Integer;
+begin
+  CameraError:=0;BiasError:=0;Count:=0;
+  EnterCriticalSection(RegistryLock);
+  try
+    E:=Effects;
+    while E<>nil do begin
+      if (E.Scene is TCastleSceneCore) and TCastleSceneCore(E.Scene).Exists then begin
+        Inc(Count);
+        CameraError:=Max(CameraError,(E.FReceiverCamera.Value-CurrentReceiverCamera).Length);
+        for I:=0 to 3 do
+          BiasError:=Max(BiasError,Abs(E.FBias.Value.Data[I]-CurrentBias.Data[I]));
+      end;
+      E:=E.FNext;
+    end;
+    Dest.Add('camera',TJSONArray.Create([CurrentReceiverCamera.X,CurrentReceiverCamera.Y,CurrentReceiverCamera.Z]));
+    Dest.Add('bias',TJSONArray.Create([CurrentBias.X,CurrentBias.Y,CurrentBias.Z,CurrentBias.W]));
+    Dest.Add('receiver_count',Count);
+    Dest.Add('max_camera_error_m',CameraError);Dest.Add('max_bias_error',BiasError);
+  finally LeaveCriticalSection(RegistryLock);end;
+end;
+
 procedure TRiderShadowViewport.RenderWithoutScreenEffects;
 var Previous, P, D, U: TVector3;
 begin
@@ -598,10 +675,12 @@ begin
   FZoneHalfExtent[1] := 10;
   FZoneHalfExtent[2] := EnsureRange(ADistance, 60, 160) * 0.25;
   FZoneHalfExtent[3] := EnsureRange(ADistance, 60, 160);
+  FWorldDistance := FZoneHalfExtent[3];
 end;
 
 procedure TRiderShadowAtlas.ContextClose(Sender: TObject);
 begin
+  FreeAndNil(FRtx);
   FProbe.ContextClose;
   { Release before the engine renderer cache. Recreated lazily next Render. }
   TTextureResources.Unprepare(FMap);
@@ -609,6 +688,7 @@ end;
 
 destructor TRiderShadowAtlas.Destroy;
 begin
+  FreeAndNil(FRtx);
   ApplicationProperties.OnGLContextCloseObject.Remove(@ContextClose);
   if CurrentMap = FMap then ClearGroundRiderShadow;
   TTextureResources.Unprepare(FMap);
@@ -660,6 +740,37 @@ end;
 procedure TRiderShadowAtlas.RenderSelected(const Camera: TRenderingCamera);
 var I: Integer;
 begin
+  if FFrameRtx then begin
+    if FRtxRasterComparison then begin
+      { Keep native per-shape/cascade culling for buildings. Only trees need
+        the cached cards; batching the whole city's mesh into every cascade
+        needlessly repeats distant roof and wall vertex work. }
+      FWorldSelected.Clear;
+      for I:=0 to FSelected.Count-1 do
+        if (FWorldCasters.IndexOf(FSelected[I])>=0) and
+          ((FSelected[I] is TCastleSceneCore) or not ProceduralVegetationActive) then FWorldSelected.Add(FSelected[I]);
+      FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
+      FRtx.DrawCachedRaster(FRenderingZone);
+    end else begin
+      FRtx.CopyDepth;
+      if not ProceduralVegetationActive then begin
+        FWorldSelected.Clear;
+        for I:=0 to FSelected.Count-1 do
+          if (FWorldCasters.IndexOf(FSelected[I])>=0) and not (FSelected[I] is TCastleSceneCore) then
+            FWorldSelected.Add(FSelected[I]);
+        if FWorldSelected.Count>0 then
+          FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape,False);
+      end;
+    end;
+    if FProbeEnabled and (FRenderingZone=FProbeZone) and FProbe.SampleDue(FProbePoint) then
+      FProbe.Submit(FProbePoint,FProbeClip,FTileSize,2*FZoneHalfExtent[FRenderingZone]/FTileSize);
+    FRidersSelected.Clear;
+    for I:=0 to FSelected.Count-1 do
+      if FWorldCasters.IndexOf(FSelected[I])<0 then FRidersSelected.Add(FSelected[I]);
+    if FRidersSelected.Count>0 then
+      FViewport.InternalRenderShadowCasters(Camera,FRidersSelected,nil,False);
+    Exit;
+  end;
   if FWorldShadows and FProbeEnabled and (FRenderingZone = FProbeZone) then
   begin
     FWorldSelected.Clear;
@@ -690,8 +801,9 @@ var
   Bounds: array of TProjectedBounds;
   Box: TBox3D;
   D, Side, Up, UpHint, P, Q, Eye, CameraPosition, CameraDirection, CameraUp: TVector3;
+  Angles: TVector2;
   I, J, Zone, N: Integer;
-  X, Y, Z, FocusX, FocusY, CenterX, CenterY, Step, H, Inner: Single;
+  X, Y, Z, CenterX, CenterY, Step, H, Inner: Single;
   MinDepth, MaxDepth, DepthSpan: Single;
   PreviousX, PreviousY: Single;
   Matrices: TRiderShadowMatrices;
@@ -699,12 +811,16 @@ var
   Resource: TGeneratedShadowMapResource;
   StartTime: TTimerResult;
   StartCaptures, StartDraws: QWord;
+  RayZones:TRtxZones;
+  RayOrigin,RayU,RayV:TVector3;
+  RayMatrix:TMatrix4;
+  RayEnd,RayRow:TVector3;
 begin
   FWorldShapeCount := 0;
   if FWorldShadows then
     for I := 0 to FWorldCasters.Count - 1 do FCasters.Add(FWorldCasters[I]);
   FillChar(FZoneCasterCount, SizeOf(FZoneCasterCount), 0);
-  if (Viewport = nil) or (SunDirection.Length < 1e-6) or (Strength <= 0) then
+  if (Viewport = nil) or (Viewport.Camera = nil) or (SunDirection.Length < 1e-6) or (Strength <= 0) then
   begin
     HideGroundRiderShadow;
     Exit;
@@ -712,19 +828,24 @@ begin
   StartTime := Timer;
   StartCaptures := CachedMeshCaptures;
   StartDraws := CachedMeshDraws;
-  D := SunDirection.Normalize;
-  UpHint := Vector3(0, 1, 0);
-  if Abs(D.Y) > 0.99 then UpHint := Vector3(0, 0, 1);
-  Side := TVector3.CrossProduct(D, UpHint).Normalize;
-  Up := TVector3.CrossProduct(Side, D);
-  { Focus is the camera world position. Projection along sunlight preserves light XY,
-    naturally moving the ground footprint towards the shadow side. }
+  Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
+  { Use the engine's aspect/FOV conversion, including a just-resized viewport;
+    the cached effective FOV still describes the previous render at this point. }
+  Angles:=TViewpointNode.InternalFieldOfView(Viewport.Camera.Perspective.FieldOfView,
+    Viewport.Camera.Perspective.FieldOfViewAxis,
+    Max(1,Viewport.EffectiveWidthForChildren),Max(1,Viewport.EffectiveHeightForChildren));
+  BuildShadowReceiverLayout(CameraPosition,CameraDirection,Vector3(Angles.X,Angles.Y,0),
+    Focus,SunDirection,FAvatarReceiver,FWorldDistance,FTileSize,FLayout);
+  { One identical light basis for fitting, caster culling and both renderers.
+    Even another normalization can lose centimetres at distant OSM origins. }
+  D:=FLayout.Direction; Side:=FLayout.Side; Up:=FLayout.Up;
+  UpHint:=Vector3(0,1,0);
+  if Abs(D.Y)>0.99 then UpHint:=Vector3(0,0,1);
+  for Zone:=0 to 3 do FZoneHalfExtent[Zone]:=FLayout.Zones[Zone].HalfExtent;
   FFocus := Focus;
   FProbeZone := -1;
-  FocusX := TVector3.DotProduct(Side, Focus);
-  FocusY := TVector3.DotProduct(Up, Focus);
-  MinDepth := TVector3.DotProduct(D, Focus) - 110;
-  MaxDepth := MinDepth + 220;
+  MinDepth := FLayout.MinDepth;
+  MaxDepth := FLayout.MaxDepth;
   SetLength(Bounds, FCasters.Count);
   N := 0;
   for I := 0 to FCasters.Count - 1 do
@@ -748,8 +869,8 @@ begin
       end;
       { Cull by projected footprint, not by distance: a distant rider can
         still cast into the receiving region at low sun. }
-      if (Bounds[N].MaxX < FocusX - FZoneHalfExtent[3] - 1) or (Bounds[N].MinX > FocusX + FZoneHalfExtent[3] + 1) or
-         (Bounds[N].MaxY < FocusY - FZoneHalfExtent[3] - 1) or (Bounds[N].MinY > FocusY + FZoneHalfExtent[3] + 1) then Continue;
+      if (Bounds[N].MaxX < FLayout.MinX - 1) or (Bounds[N].MinX > FLayout.MaxX + 1) or
+         (Bounds[N].MaxY < FLayout.MinY - 1) or (Bounds[N].MinY > FLayout.MaxY + 1) then Continue;
       MinDepth := Min(MinDepth, Bounds[N].MinD - 1);
       MaxDepth := Max(MaxDepth, Bounds[N].MaxD + 1);
       Inc(N);
@@ -782,6 +903,44 @@ begin
   FViewport := Viewport;
   PreviousX := 0; PreviousY := 0;
   Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
+  FFrameRtx:=False;
+  if not FRtxRequested then FreeAndNil(FRtx)
+  else if FWorldShadows then begin
+    { The static world uses the cache/BVH. Probe it before appending dynamic
+      riders to the same depth map, exactly like the ordinary raster path. }
+    if FRtx=nil then FRtx:=TRtxShadow.Create;
+    FRtx.RasterComparison:=FRtxRasterComparison;
+    FRtx.Reflections:=FRtxReflections;
+    FRtx.Prepare(FWorldCasters,FRtxRevision,FLayout.CacheFocus,D,FAtlasSize,FLayout.CacheHalfExtent,@AcceptShadowShape);
+    if FRtx.Ready then begin
+      for Zone:=0 to 3 do begin
+        H:=FZoneHalfExtent[Zone];Step:=2*H/FTileSize;
+        CenterX:=FLayout.Zones[Zone].X;CenterY:=FLayout.Zones[Zone].Y;
+        Eye:=Side*CenterX+Up*CenterY+D*MinDepth;
+        { Use exactly the receiver's projector, rebased in Double. Building
+          coordinates can be hundreds of kilometres from the route origin.
+          Constructing another light origin in Single loses centimetres and
+          makes the depth test on a facade alternate between lit and shaded. }
+        FLight.FdProjectionLocation.Value:=Eye;
+        FLight.FdProjectionRectangle.Value:=Vector4(-H,-H,H,H);
+        RayMatrix:=RelativeShadowMatrix(FLight.GetProjectorMatrix,FRtx.Origin);
+        { Analytic orthographic inverse. The generic inverse rejects the very
+          small determinant of the outer zone as singular. Never leave a zone
+          uninitialized: it still has to write every depth texel. }
+        RayOrigin:=TVector3.Zero;
+        for J:=0 to 2 do begin
+          RayRow:=Vector3(RayMatrix.Data[0,J],RayMatrix.Data[1,J],RayMatrix.Data[2,J]);
+          RayRow:=RayRow/TVector3.DotProduct(RayRow,RayRow);
+          RayOrigin:=RayOrigin-RayRow*(1+RayMatrix.Data[3,J]);
+          case J of 0:RayU:=RayRow*2;1:RayV:=RayRow*2;2:RayEnd:=RayRow*2;end;
+        end;
+        RayZones[Zone].Origin:=Vector4(RayOrigin.X,RayOrigin.Y,RayOrigin.Z,0);
+        RayZones[Zone].DU:=Vector4(RayU.X,RayU.Y,RayU.Z,0);RayZones[Zone].DV:=Vector4(RayV.X,RayV.Y,RayV.Z,0);
+        RayZones[Zone].Ray:=Vector4(RayEnd.Normalize.X,RayEnd.Normalize.Y,RayEnd.Normalize.Z,RayEnd.Length);
+      end;
+      FFrameRtx:=FRtx.Trace(RayZones);
+    end;
+  end;
   BeginVegetationShadowPass(CameraPosition);
   try
     for Zone := 0 to 3 do
@@ -789,14 +948,18 @@ begin
       FRenderingZone := Zone;
       H := FZoneHalfExtent[Zone];
       Step := 2 * H / FTileSize;
-      CenterX := Round(FocusX / Step) * Step;
-      CenterY := Round(FocusY / Step) * Step;
+      CenterX := FLayout.Zones[Zone].X;
+      CenterY := FLayout.Zones[Zone].Y;
       Q := Side * CenterX + Up * CenterY;
       Eye := Q + D * MinDepth;
       FLight.FdProjectionLocation.Value := Eye;
       FLight.FdProjectionRectangle.Value := Vector4(-H, -H, H, H);
       Matrices[Zone] := FLight.GetProjectorMatrix;
-      Bias.Data[Zone] := Min(0.03, Step * 0.25) / DepthSpan;
+      { Raster model-view and BVH transforms round at different stages.
+        Include their Single-coordinate error bound, especially hundreds of
+        kilometres from the route origin; texel bias alone was sub-millimetre. }
+      Bias.Data[Zone] := (Min(0.03, Step * 0.25) +
+        2*1.1920929e-7*Max(Abs(Eye.X),Max(Abs(Eye.Y),Abs(Eye.Z)))) / DepthSpan;
       { The front wheel can be outside the camera's finest zone. Sample
         the first containing tile, before adding riders to its world depth. }
       if FProbeEnabled and (FProbeZone < 0) then
@@ -856,12 +1019,33 @@ begin
   FCacheDraws := CachedMeshDraws - StartDraws;
 end;
 
+procedure TRiderShadowAtlas.RtxSnapshot(const J:TJSONObject);
+var Zones:TJSONArray; Row:TJSONObject; I:Integer;
+begin
+  J.Add('enabled',FRtxRequested);J.Add('used_this_frame',FFrameRtx);
+  if FRtx<>nil then FRtx.Snapshot(J) else begin J.Add('active',False);J.Add('failed',False);end;
+  J.Add('avatar_receiver',FAvatarReceiver);
+  J.Add('view_distance',FLayout.ViewDistance);
+  J.Add('atlas_size',FAtlasSize);
+  J.Add('probe_zone',FProbeZone);
+  Zones:=TJSONArray.Create;
+  for I:=0 to 3 do begin
+    Row:=TJSONObject.Create;
+    Row.Add('focus',TJSONArray.Create([FLayout.Zones[I].Focus.X,FLayout.Zones[I].Focus.Y,FLayout.Zones[I].Focus.Z]));
+    Row.Add('half_extent',FZoneHalfExtent[I]);
+    Row.Add('view_depth',FLayout.Zones[I].ViewDepth);
+    Row.Add('casters',FZoneCasterCount[I]);
+    Zones.Add(Row);
+  end;
+  J.Add('receivers',Zones);
+end;
+
 function TRiderShadowAtlas.DebugInfo: String;
 begin
   Result := Format('size=%d tiles=%d filter=%d extent=%.0f,%.0f,%.0f,%.0f visible=%d casters=%d,%d,%d,%d submit_ms=%.3f frames=%d captures=%d cached_draws=%d world=%d world_sources=%d world_shapes=%d probe=%.3f focus=%.3f,%.3f,%.3f probe_zone=%d',
     [FAtlasSize, FTileSize, FFilter, FZoneHalfExtent[0], FZoneHalfExtent[1], FZoneHalfExtent[2], FZoneHalfExtent[3], FVisibleCasterCount, FZoneCasterCount[0], FZoneCasterCount[1],
      FZoneCasterCount[2], FZoneCasterCount[3], FSubmitMilliseconds,
-     FRenderSerial, FCaptures, FCacheDraws, Ord(FWorldShadows), FWorldCasters.Count, FWorldShapeCount, FProbe.Coverage(FProbePoint), FFocus.X, FFocus.Y, FFocus.Z, FProbeZone]);
+    FRenderSerial, FCaptures, FCacheDraws, Ord(FWorldShadows), FWorldCasters.Count, FWorldShapeCount, FProbe.Coverage(FProbePoint), FFocus.X, FFocus.Y, FFocus.Z, FProbeZone])+Format(' rtx=%d avatar_receiver=%d view_distance=%.1f',[Ord(FFrameRtx),Ord(FAvatarReceiver),FLayout.ViewDistance]);
 end;
 
 initialization

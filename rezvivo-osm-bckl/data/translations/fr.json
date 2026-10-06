@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "Sensibilité du home trainer à la pente",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100% : pente complète. Sous 100% : limiter les fortes pentes à 8%, puis réduire proportionnellement. 0% : plat. La physique et la puissance de l’entraînement restent inchangées.",
   "Hairstyle": "Coiffure",
   "No hair": "Sans cheveux",
   "Short crop": "Coupe courte",
@@ -343,5 +345,9 @@
   "Front view": "Face",
   "Side view": "Profil",
   "Rear view": "Dos",
-  "Drag to rotate · Wheel to zoom": "Glisser pour tourner · Molette pour zoomer"
+  "Drag to rotate · Wheel to zoom": "Glisser pour tourner · Molette pour zoomer",
+  "Wheel circumference (mm)": "Circonférence de roue (mm)",
+  "Preparing riders": "Préparation des cyclistes",
+  "Companion": "Compagnon",
+  "Passing cyclist": "Cycliste de passage"
 }

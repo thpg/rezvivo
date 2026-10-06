@@ -198,7 +198,7 @@ function TWorkoutHud.ControlsTrainer:Boolean;
 begin Result:=WorkoutPlayer.NeedsTrainerControl;end;
 
 procedure TWorkoutHud.Step(Seconds:Single;WorldReady:Boolean;ShowHud:Boolean);
-var Fresh,Pedaling,Done:Boolean;P:Double;Target:Integer;NowTick:QWord;S,Next:TWorkoutSegment;
+var Fresh,CadenceFresh,Pedaling,Done:Boolean;P,C:Double;Target:Integer;NowTick:QWord;S,Next:TWorkoutSegment;
     Status,Goal,Message:String;Device:Pointer;WasDone:Boolean;
     TrainerState:TTrainerControlStatus;
 begin
@@ -218,10 +218,10 @@ begin
   Fresh:=Assigned(DeviceService)and Assigned(DeviceService.Power)and
     DeviceService.Power.HasData and(DeviceService.Power.DataAgeSec<3);
   P:=0;if Fresh then P:=DeviceService.Power.Instant;
-  Pedaling:=P>0;
-  if Assigned(DeviceService)and Assigned(DeviceService.Cadence)then
-    if DeviceService.Cadence.HasData and(DeviceService.Cadence.DataAgeSec<3)then
-      Pedaling:=Pedaling or(DeviceService.Cadence.Instant>0);
+  CadenceFresh:=Assigned(DeviceService)and Assigned(DeviceService.Cadence)and
+    DeviceService.Cadence.HasData and(DeviceService.Cadence.DataAgeSec<3);
+  C:=0;if CadenceFresh then C:=DeviceService.Cadence.Instant;
+  Pedaling:=WorkoutPedaling(Fresh,CadenceFresh,P,C);
   WasDone:=WorkoutPlayer.State=wsFinished;
   WorkoutPlayer.Step(Seconds,WorldReady,Pedaling,Fresh);
   Done:=WorkoutPlayer.State=wsFinished;S:=WorkoutPlayer.Stage;
@@ -234,7 +234,7 @@ begin
   FChart.SetPlayback(WorkoutPlayer.Index,WorkoutPlayer.StageTime,WorkoutPlayer.VisualPowerScale);
   FReference.Caption:=Format(UiText('Base: %d W'),[Round(WorkoutPlayer.ReferenceWatts)]);
   if Done then Status:=UiText('Workout complete')
-  else if WorkoutPlayer.State=wsPaused then Status:=UiText('Paused')
+  else if WorkoutPlayer.State=wsPaused then Status:=UiText('Paused')+' · '+UiText('Start pedaling')
   else if WorkoutPlayer.SignalLost then Status:=UiText('Waiting for the power signal')
   else if not WorldReady then Status:=UiText('Preparing the ride…')
   else if WorkoutPlayer.State=wsReady then Status:=UiText('Start pedaling')

@@ -20,7 +20,7 @@ BLOCKED_PARTS = {'users', 'profiles', 'cache', 'logs', 'crash-reports', '.ssh',
                  'node_modules', 'castle-engine-output', '__pycache__'}
 TEXT_SUFFIXES = {'.pas', '.inc', '.dpr', '.py', '.ps1', '.json', '.xml', '.x3d', '.ini', '.cfg', '.toml', '.sh', '.bat',
                  '.txt', '.md', '.patch', '.yml', '.glsl', '.vert', '.frag', '.zwo',
-                 '.castle-user-interface'}
+                 '.castle-user-interface', '.cpp', '.c', '.h', '.hpp', '.comp'}
 # Matches identify locations only. Never print matched values.
 RULES = {
     'private-key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),

@@ -406,8 +406,8 @@ type
     { ЕДИНАЯ сцена байка: весь байк (рама/колёса/шатун/райдер) + райдер GLB +
       теневой rig живут в одном графе — требование shadow maps CGE
       (per-scene casters/receivers). FSubGroup[i] — именованные подграфы
-      частей внутри FMainRoot. FSubScenes[i] — API-шим совместимости:
-      все указывают на FBikeScene. }
+      частей внутри FMainRoot. SubScene(i) сохраняет совместимость
+      редакторов компонентов и возвращает эту же единую сцену. }
     FBikeScene: TCastleScene;
     FMainRoot: TX3DRootNode;
     FSubGroup: array[0..BSG_COUNT-1] of TTransformNode;
@@ -428,7 +428,6 @@ type
       FVisSwitch — видимость райдера в его сцене (обёртка glb-контента). }
     FBikeContainer: TMatrixTransformNode;
     FVisSwitch: TSwitchNode;
-    FSubScenes: array[0..BSG_COUNT-1] of TCastleScene;
     FOnSubSceneBuilt: TSubSceneBuiltEvent;
     FBaseCrankCycle: Single;  { CrankCycleInterval used at build time }
     FBaseWheelCycle: Single;  { период оборота колеса с билда (с/об); TimeSensor'ов нет — действует как дефолт для GPU-фазы }
@@ -622,7 +621,6 @@ type
     FDiagComps, FDiagUtrd: Double;
     FDiagPoseApply, FDiagIK, FDiagPedals, FDiagContacts, FDiagShadowDyn: Double;
     FDiagGpuSend: Double;   { время SendFrame в GPU-скин и GPU-spin (рассылка uniform-ов) }
-    FDiagCpuPose: Integer;       { TEMP-DIAG: 2 дампа posed-спины CPU-пути }
     { OPT (pose-7ms): кэш узлов педалей — FindNode по имени каждый кадр
       стоил ~0.65 мс/байк. Инвалидируется из NotifyBuildBegin/MountBikeIntoRider. }
     FPedFootR, FPedFootL: TTransformNode;
@@ -710,7 +708,6 @@ type
     procedure SendShadowCapsules(const DynA, DynB: array of TVector3;
       const DynRA, DynRB: array of Single; DynCount: Integer);
     procedure UpdateShadowDynamic(const OBB, PedalR, PedalL: TVector3);
-    function RiderJointPos(const Nm: string; out P: TVector3): Boolean;
     procedure SetGpuAnim(V: Boolean);
     procedure SetAnimationEnabled(V: Boolean);
     procedure InvalidateGpuRiderSkin; { drop GPU plug; next UpdateTripoRider rebuilds }
@@ -876,7 +873,26 @@ type
       эффектов (DebugJson из TGpuBikeSpin), bbox сцены, трансформы
       контейнеров. Владение результатом переходит вызывающему. }
     function WheelsDebugJson: TJSONObject;
+    { Current analytic joints / authored anchors in the centred bike frame.
+      Used by the low-detail NPC shadow, without CPU mesh skinning. }
+    function RiderJointPos(const Nm: string; out P: TVector3): Boolean;
+    function BikeAnchor(const Nm: string; out P: TVector3): Boolean;
+    { Loading-time fit against this rider's real joints/cleats. Samples one
+      seated revolution without skinning vertices, then rebuilds the seat
+      once. Call before resource/shader warm-up, never from frame updates. }
+    function FitSaddleToRider(KneeFlexDeg: Single = 35;
+      AdjustSetback: Boolean = False): Boolean;
+    { Fit the existing cockpit on virtual anchors; rebuild geometry once. }
+    function FitCockpitToRider(out FitScore: Single): Boolean;
+    { Actual tyre support after steering, bicycle balance and world placement.
+      Analytic torus support, independent of wheel spin and tessellation. }
+    function WheelSupportPoint(Front:Boolean;const GroundNormal:TVector3;
+      out P:TVector3):Boolean;
 
+    { One scene owns bicycle groups and the mounted rider. SubScene remains
+      a compatibility accessor for component editors, not an enumeration. }
+    property Scene: TCastleScene read FBikeScene;
+    function ActiveShapeCount: Integer;
     function SubScene(Idx: Integer): TCastleScene;
     function RiderScene: TCastleScene;
 
@@ -891,7 +907,7 @@ type
       field, mounts the glb (via LoadTripoRider) and pushes body-shape, so an
       in-game rider matches exactly what the editor saved. O is the parsed
       "tripoRider" object. Returns True if a rider path was present and loaded. }
-    function LoadTripoRiderFromSection(O: TJSONObject): Boolean;
+    function LoadTripoRiderFromSection(O: TJSONObject; Prepared: TTripoGlbPrepared = nil): Boolean;
     function HasTripoRider: Boolean;
     { Цвета одежды райдера (preset уровня байк-инстанса): запоминаются здесь и
       стейджатся в текущего райдера; видимый результат — после перезагрузки
@@ -1147,20 +1163,10 @@ function GravelBikeComponents: TBikeComponentClassArray;
 { Count estimated triangle count in an X3D node subtree }
 function CountNodePolygons(Node: TX3DNode): Integer;
 
-{ Диагностика bsmCGE: лить тень только от рамы (без колёс/шатуна/райдера) —
-  замер стоимости caster'ов shadow-volume прохода. Выставляется хостом
-  (в игре — флаг --shadowframe). }
 var
-  BikeShadowFrameOnly: Boolean = False;
-
   { Диагностика bsmCGE: False = catcher белый opaque (виден ли квад в сцене);
     True (бой) = multiply-blending (невидимый, только тень). }
   BikeShadowCatcherBlend: Boolean = True;
-
-  { Диагностика bsmCGE: casters = рама + райдер (без колёс/шатуна).
-    В игре — флаг --shadowfew. }
-var
-  BikeShadowNoWheels: Boolean = False;
 
   { Диагностика bsmCGE: Global у BikeShadowSun. False (бой) — свет только на
     свой catcher: иначе глобальные теневые солнца всех байков/тайлов
@@ -2653,7 +2659,6 @@ begin
     FSubGroup[I] := TTransformNode.Create;
     FSubGroup[I].X3DName := 'BSG_' + IntToStr(I);
     FMainRoot.AddChildren(FSubGroup[I]);
-    FSubScenes[I] := FBikeScene;   { API-шим: SubScene(i) -> единая сцена }
   end;
   FTripoGroup := TTransformNode.Create;
   FTripoGroup.X3DName := 'TripoRider';
@@ -2766,16 +2771,16 @@ begin
   FBreathPhase := Random; FBreathLoad:=0.25;
   ApplyRiderPose(BuiltinRiderPose(0), 0);
 
-  SceneLifecycleLog(Format(
-    'BIKE-ASM Create inst=$%p owner=%s(%s) group=$%p bikescene=$%p rigscene=$%p',
-    [Pointer(Self), FOwner.Name, FOwner.ClassName,
+  if SceneLifecycleLogEnabled then SceneLifecycleLog(Format(
+    'BIKE-ASM Create inst=$%p owner=$%p group=$%p bikescene=$%p rigscene=$%p',
+    [Pointer(Self), Pointer(FOwner),
      Pointer(FGroup), Pointer(FBikeScene), Pointer(FShadowRigScene)]));
 end;
 
 destructor TBikeInstance.Destroy;
 var I: Integer;
 begin
-  SceneLifecycleLog(Format(
+  if SceneLifecycleLogEnabled then SceneLifecycleLog(Format(
     'BIKE-FREE begin inst=$%p group=$%p bikescene=$%p rigscene=$%p tripomounted=%s',
     [Pointer(Self), Pointer(FGroup), Pointer(FBikeScene), Pointer(FShadowRigScene),
      BoolToStr(FTripoRider <> nil, True)]));
@@ -2812,7 +2817,8 @@ begin
   FreeAndNil(FTripoRider);    { frees its TCastleScene; CGE detaches it from FGroup }
   FreeAndNil(FBikeSkeleton);
   FGroup.Free;
-  SceneLifecycleLog(Format('BIKE-FREE done inst=$%p', [Pointer(Self)]));
+  if SceneLifecycleLogEnabled then
+    SceneLifecycleLog(Format('BIKE-FREE done inst=$%p', [Pointer(Self)]));
   inherited;
 end;
 
@@ -2963,9 +2969,9 @@ begin
   WheelIntv := FWheelIntervalCur; if WheelIntv < 0 then WheelIntv := FBaseWheelCycle;
   RequestedRate := 0;
   if (CrankIntv > 0.01) and (CrankIntv < 1000) then RequestedRate := 1 / CrankIntv;
-  P := BuildRiderPose('');
   if (FTripoRider <> nil) and FTripoRider.PoseAnimating then
-    P := FTripoRider.CurrentPose;
+    P := FTripoRider.CurrentPose
+  else P := BuildRiderPose('');
   FPedalRate := AdvancePedalRate(FPedalRate, RequestedRate, Dt,
     PedalContactsReady(P.Motion.Pedalling, P.LegFreeR, P.LegFreeL,
       FBaseRiderPose.Grounded));
@@ -3518,8 +3524,15 @@ end;
 function TBikeInstance.SubScene(Idx: Integer): TCastleScene;
 begin
   if (Idx >= 0) and (Idx < BSG_COUNT) then
-    Result := FSubScenes[Idx]
+    Result := FBikeScene
   else Result := nil;
+end;
+
+function TBikeInstance.ActiveShapeCount: Integer;
+begin
+  Result := 0;
+  if (FBikeScene <> nil) and FBikeScene.Exists then
+    Result := FBikeScene.ShapesActiveCount;
 end;
 
 function TBikeInstance.AnimDebugJson: TJSONObject;
@@ -4029,7 +4042,7 @@ begin
   FTripoRider.Scene.CastGlobalLights := True;
   FTripoRider.Scene.ShadowMapsDefaultSize := 1024;
   FGroup.Add(FTripoRider.Scene);
-  SceneLifecycleLog(Format(
+  if SceneLifecycleLogEnabled then SceneLifecycleLog(Format(
     'BIKE-ASM tripomount inst=$%p riderscene=$%p oldbikescene=$%p groupkids=%d',
     [Pointer(Self), Pointer(FTripoRider.Scene), Pointer(FBikeScene),
      FGroup.Count]));
@@ -4043,12 +4056,11 @@ begin
   FSteerAxisCached := False;
   FSteerAngleApplied := -9999;
   FMainRoot  := Root;
-  for I := 0 to BSG_COUNT - 1 do FSubScenes[I] := FBikeScene;
   { rig вернётся в граф под новым хостом, если режим требует }
   ApplyShadowMode;
 end;
 
-function TBikeInstance.LoadTripoRiderFromSection(O: TJSONObject): Boolean;
+function TBikeInstance.LoadTripoRiderFromSection(O: TJSONObject; Prepared: TTripoGlbPrepared): Boolean;
 var
   D: TJSONData;
   Ang: TJSONArray;
@@ -4101,7 +4113,8 @@ begin
   StageBodyParameters(O,Path);
   if Trim(Path) = '' then Exit;   { no rider configured — leave bike riderless }
 
-  Result := LoadTripoRider(Path);  { mounts under FGroup; LoadTripoRider also calls ApplyTripoBodyShape }
+  if Prepared<>nil then Result:=LoadTripoRiderPrepared(Prepared)
+  else Result := LoadTripoRider(Path);
 
   { The editor stores the glb path exactly as picked on ITS machine — often
     an absolute OS path. A bike JSON that TRAVELS (relay guests receiving
@@ -4859,8 +4872,10 @@ begin
   FTripoRider.Scene.Translation := Support - PelvisRot;
   if (FTripoRider.Correctives<>nil)and(FTripoRider.Correctives.Body<>nil)then begin
     FTripoRider.Correctives.Body.UseDynamics:=FBodyDynamicsEnabled;
-    if FBodyDynamicsEnabled then FTripoRider.Correctives.Body.SetDynamicsFrame(
-      FBodyDynamics.Frame,FTripoRider.Scene.Transform,O(Saddle));
+    if Component(TSeatComponent)<>nil then FTripoRider.Correctives.Body.SetDynamicsFrame(
+      FBodyDynamics.Frame,FTripoRider.Scene.Transform,O(Saddle),
+      TSeatComponent(Component(TSeatComponent)).ContactSurface,
+      (1-LivePose.Motion.Standing)*Ord(not LivePose.Grounded));
   end;
   if FBikeContainer <> nil then
   begin
@@ -5053,14 +5068,6 @@ begin
   T1u := Timer;
   FDiagIK := FDiagIK * 0.95 + TimerSeconds(T1u, T0u) * 1000 * 0.05;
 
-  { TEMP-DIAG (этап 2 отладка): posed-позиции спины/плеч CPU-пути в кадре байка
-    (через Transform сцены райдера) — сверка с GPU-симом sim_gpu_skin.py. }
-  if FDiagCpuPose < 2 then
-  begin
-    Inc(FDiagCpuPose);
-    StartupLog('[cpu-pose] ' + FTripoRider.DbgSpineShoulders);
-  end;
-
   { pedal follows the foot — AFTER the pose so the foot is solved. Tilt each pedal
     platform by the foot's FULL sagittal roll (leg-IK orientation + ankling), not
     just the ankling FootPitch, so the platform stays perpendicular to the cleat
@@ -5072,10 +5079,10 @@ begin
   if not FPedNodesValid then
   begin
     FPedFootR := nil; FPedFootL := nil;
-    if Assigned(FSubScenes[BSG_CRANK]) and (FSubScenes[BSG_CRANK].RootNode <> nil) then
+    if Assigned(FBikeScene) and (FBikeScene.RootNode <> nil) then
     begin
-      FPedFootR := FSubScenes[BSG_CRANK].RootNode.FindNode(TTransformNode, 'PedalRightFoot', [fnNilOnMissing]) as TTransformNode;
-      FPedFootL := FSubScenes[BSG_CRANK].RootNode.FindNode(TTransformNode, 'PedalLeftFoot', [fnNilOnMissing]) as TTransformNode;
+      FPedFootR := FBikeScene.RootNode.FindNode(TTransformNode, 'PedalRightFoot', [fnNilOnMissing]) as TTransformNode;
+      FPedFootL := FBikeScene.RootNode.FindNode(TTransformNode, 'PedalLeftFoot', [fnNilOnMissing]) as TTransformNode;
     end;
     FPedNodesValid := True;
   end;
@@ -5932,29 +5939,12 @@ begin
   { Casters — вся единая сцена (рама/колёса/шатун/райдер): для карт это
     глубина из источника, дёшево. ReceiveShadowVolumes=False — в volume
     проход (если он где-то есть) байк не входит. }
-  for I := 0 to BSG_COUNT - 1 do
+  S := FBikeScene;
+  if S <> nil then
   begin
-    S := FSubScenes[I];
-    if S <> nil then
-    begin
-      S.CastShadows := True;
-      if BikeShadowFrameOnly then S.CastShadows := (I = BSG_FRAME);
-      if BikeShadowNoWheels then S.CastShadows := (I = BSG_FRAME) or (I = BSG_RIDER);
-      S.RenderOptions.WholeSceneManifold := True;
-      S.ReceiveShadowVolumes := False;
-    end;
-  end;
-
-  { the rider casts too (so its silhouette is in the shadow) }
-  if (FTripoRider <> nil) and (not BikeShadowFrameOnly) then
-  begin
-    S := FTripoRider.Scene;
-    if S <> nil then
-    begin
-      S.CastShadows := True;
-      S.RenderOptions.WholeSceneManifold := True;
-      S.ReceiveShadowVolumes := False;
-    end;
+    S.CastShadows := True;
+    S.RenderOptions.WholeSceneManifold := True;
+    S.ReceiveShadowVolumes := False;
   end;
 
   { the capsule quad must never appear in the shadow pass }
@@ -6527,10 +6517,204 @@ end;
 
 function TBikeInstance.RiderJointPos(const Nm: string; out P: TVector3): Boolean;
 begin
-  if not FTripoShowRider then begin P:=TVector3.Zero;Exit(False) end;
+  if not FTripoShowRider or (FTripoRider=nil) then begin P:=TVector3.Zero;Exit(False) end;
   if FGpuAnim and (FGpuSkin<>nil) and FGpuSkin.Ready then
     Result:=FGpuSkin.ShadowJoint(Nm,P)
   else Result:=FTripoRider.PosedJointParent(Nm,P);
+end;
+
+function TBikeInstance.BikeAnchor(const Nm:string;out P:TVector3):Boolean;
+begin
+  P:=TVector3.Zero;
+  Result:=(FBikeSkeleton<>nil)and FBikeSkeleton.TryGetBone(Nm,P);
+  { Skeleton positions are already in scene metres. Only centre them on
+    the wheelbase, exactly as the rendered bicycle geometry. }
+  if Result then P.X:=P.X-BikeCenterX(FBikeSkeleton);
+end;
+
+function TBikeInstance.FitSaddleToRider(KneeFlexDeg:Single;
+  AdjustSetback:Boolean):Boolean;
+const
+  Sides:array[0..1]of string=('R_','L_');
+  LowPostMm=10.0;
+var
+  Seat:TSeatComponent;Frame:TFrameComponent;Saved:TBikePlaybackState;
+  OriginalSaddle,Axis,Hip,Knee,Foot,U,V,BB:TVector3;
+  Pass,I,J,SaddleIndex:Integer;
+  Lo,Hi,Mid,MinFlex,Flex,Lengths,NewPost:Single;
+
+  function RailOffset(PostMm:Single):Single;
+  var Height:Single;
+  begin
+    Result:=Seat.SaddleOffset;
+    if not AdjustSetback then Exit;
+    Height:=OriginalSaddle.Y+Axis.Y*(PostMm-Seat.SeatpostExtension)*FBikeSkeleton.MM-BB.Y;
+    { Keep the pelvis setback of the reference 74-degree road fit when a
+      catalogue frame has a different seat angle. The rails have finite travel. }
+    Result:=EnsureRange(Height*(Cot(DegToRad(Frame.SeatTubeAngle))-
+      Cot(DegToRad(74)))/FBikeSkeleton.MM,-50,50);
+  end;
+begin
+  Result:=False;
+  if (FTripoRider=nil) or not FTripoRider.Loaded or (FBikeSkeleton=nil) then Exit;
+  Seat:=TSeatComponent(Component(TSeatComponent));
+  Frame:=TFrameComponent(Component(TFrameComponent));
+  if (Seat=nil) or (Frame=nil) or
+     not FBikeSkeleton.TryGetBone('saddle_contact',OriginalSaddle) or
+     not FBikeSkeleton.TryGetBone('bb',BB) then Exit;
+  Axis:=Vector3(-Cos(DegToRad(Frame.SeatTubeAngle)),Sin(DegToRad(Frame.SeatTubeAngle)),0);
+  SaddleIndex:=FBikeSkeleton.FindIndex('saddle_contact');
+  Saved:=CaptureReplay;
+  Lo:=LowPostMm;Hi:=400;
+  KneeFlexDeg:=EnsureRange(KneeFlexDeg,20,45);
+  try
+    ApplyRiderPose(BuiltinRiderPose(0),0);
+    FBodyDynamicsEnabled:=False;
+    FPhaseSynced:=True;FPhaseStarted:=True;
+    FPedalRate:=85/60;FMotionCadence:=85;
+    FBreathPhase:=0;FBreathLoad:=0.7;
+    FRiderEffort:=0.7;FRiderEffortTarget:=0.7;
+    FSteerAngleDeg:=0;FPedalSteerDeg:=0;FPedalLeanDeg:=0;
+    FTripoPrevElapsed:=FAnimElapsed;
+    { The ankle also changes position as the leg extends: foot orientation
+      is part of the contact solve. Therefore measure the real IK at each
+      candidate, instead of treating the ankle as a fixed point. Ten steps
+      resolve the seatpost to 0.4 mm; geometry is rebuilt only at the end. }
+    for Pass:=0 to 9 do
+    begin
+      Mid:=(Lo+Hi)*0.5;
+      FBikeSkeleton.FBones[SaddleIndex].Pos:=OriginalSaddle+
+        Axis*((Mid-Seat.SeatpostExtension)*FBikeSkeleton.MM);
+      FBikeSkeleton.FBones[SaddleIndex].Pos.X:=FBikeSkeleton.FBones[SaddleIndex].Pos.X+
+        (RailOffset(Mid)-Seat.SaddleOffset)*FBikeSkeleton.MM;
+      MinFlex:=180;
+      for I:=0 to 31 do
+      begin
+        FPhase:=I/32;
+        UpdateTripoRider(FAnimElapsed);
+        for J:=0 to 1 do
+        begin
+          if not (RiderJointPos(Sides[J]+'Thigh',Hip) and
+            RiderJointPos(Sides[J]+'Calf',Knee) and
+            RiderJointPos(Sides[J]+'Foot',Foot)) then Exit;
+          U:=Hip-Knee;V:=Foot-Knee;Lengths:=U.Length*V.Length;
+          if Lengths<0.01 then Exit;
+          Flex:=RadToDeg(ArcCos(EnsureRange(-TVector3.DotProduct(U,V)/Lengths,-1.0,1.0)));
+          MinFlex:=Min(MinFlex,Flex);
+        end;
+      end;
+      if MinFlex>KneeFlexDeg then Lo:=Mid else Hi:=Mid;
+    end;
+  finally
+    FBikeSkeleton.FBones[SaddleIndex].Pos:=OriginalSaddle;
+    RestoreReplay(Saved);
+  end;
+  NewPost:=Lo;
+  if IsNan(NewPost) or IsInfinite(NewPost) or (NewPost<10) or (NewPost>400) then Exit;
+  Seat.SaddleOffset:=RailOffset(NewPost);
+  Seat.SeatpostExtension:=NewPost;
+  RebuildGroup(BSG_FRAME,True);
+  Result:=True;
+end;
+
+function TBikeInstance.FitCockpitToRider(out FitScore:Single):Boolean;
+const Sides:array[0..1]of string=('R_','L_');
+var
+  Fork:TForkComponent;Frame:TFrameComponent;Saved:TBikePlaybackState;
+  SavedBones:array of TBikeBone;
+  H,S,E,W,U,V,Shift,PostAxis,StemAxis:TVector3;
+  I,J,Side,StemMm,SpacerMm,MaxStem:Integer;
+  OldStem,OldSpacers,BestStem,BestSpacers,Score,Flex,Shoulder,Lengths:Single;
+  P:TRiderPose;
+
+  procedure MoveGrips;
+  var K:Integer;Name:string;
+  begin
+    Shift:=PostAxis*((SpacerMm-OldSpacers)*0.001)+
+      StemAxis*((StemMm-OldStem)*0.001);
+    for K:=0 to High(SavedBones) do begin
+      Name:=SavedBones[K].Name;
+      if (Name='stem_end') or (Pos('place_',Name)=1) or
+         (Pos('hood_',Name)=1) or (Pos('bar_',Name)=1) then
+        FBikeSkeleton.FBones[K].Pos:=SavedBones[K].Pos+Shift;
+    end;
+  end;
+begin
+  Result:=False;FitScore:=Infinity;
+  if not HasTripoRider or (FBikeSkeleton=nil) then Exit;
+  Fork:=TForkComponent(Component(TForkComponent));
+  Frame:=TFrameComponent(Component(TFrameComponent));
+  if (Fork=nil)or(Frame=nil)then Exit;
+  OldStem:=Fork.StemLength;OldSpacers:=Fork.HeadsetSpacer;
+  BestStem:=OldStem;BestSpacers:=OldSpacers;
+  PostAxis:=Vector3(-Cos(DegToRad(Frame.HeadTubeAngle)),Sin(DegToRad(Frame.HeadTubeAngle)),0);
+  StemAxis:=Vector3(Cos(DegToRad(Fork.StemAngle)),Sin(DegToRad(Fork.StemAngle)),0);
+  SavedBones:=Copy(FBikeSkeleton.FBones);Saved:=CaptureReplay;
+  MaxStem:=140;if BarType=btFlat then MaxStem:=110;
+  try
+    P:=BuiltinRiderPose(0);ApplyRiderPose(P,0);
+    FBodyDynamicsEnabled:=False;FPhaseSynced:=True;FPhaseStarted:=True;
+    FPedalRate:=85/60;FMotionCadence:=85;FPhase:=0.125;
+    FBreathPhase:=0;FBreathLoad:=0.7;
+    FRiderEffort:=0.7;FRiderEffortTarget:=0.7;
+    FSteerAngleDeg:=0;FPedalSteerDeg:=0;FPedalLeanDeg:=0;
+    FTripoPrevElapsed:=FAnimElapsed;
+    { Small discrete hardware search, using the same IK as the visible rider.
+      No meshes, GLBs, LODs or body parameters are rebuilt in this loop. }
+    for I:=0 to 10 do begin
+      SpacerMm:=I*5;
+      for J:=0 to (MaxStem-60)div 5 do begin
+        StemMm:=60+J*5;MoveGrips;UpdateTripoRider(FAnimElapsed);
+        Score:=0;
+        if FUtrLastError<>'' then Exit;
+        for Side:=0 to 1 do begin
+          if not (RiderJointPos('Pelvis',H)and
+            RiderJointPos(Sides[Side]+'Upperarm',S)and
+            RiderJointPos(Sides[Side]+'Forearm',E)and
+            RiderJointPos(Sides[Side]+'Hand',W))then Exit;
+          U:=S-E;V:=W-E;Lengths:=U.Length*V.Length;
+          if Lengths<0.001 then Exit;
+          Flex:=RadToDeg(ArcCos(EnsureRange(-TVector3.DotProduct(U,V)/Lengths,-1.0,1.0)));
+          U:=H-S;V:=E-S;Lengths:=U.Length*V.Length;
+          if Lengths<0.001 then Exit;
+          Shoulder:=RadToDeg(ArcCos(EnsureRange(TVector3.DotProduct(U,V)/Lengths,-1.0,1.0)));
+          Score:=Score+Sqr((Flex-40)/15)+0.35*Sqr((Shoulder-80)/25);
+        end;
+        Score:=Score+0.08*Sqr((StemMm-90)/40)+0.08*Sqr((SpacerMm-25)/25);
+        if Score<FitScore then begin
+          FitScore:=Score;BestStem:=StemMm;BestSpacers:=SpacerMm;
+        end;
+      end;
+    end;
+  finally
+    FBikeSkeleton.FBones:=SavedBones;
+    RestoreReplay(Saved);
+  end;
+  if IsInfinite(FitScore)or IsNan(FitScore)then Exit;
+  Fork.StemLength:=BestStem;Fork.HeadsetSpacer:=BestSpacers;
+  RebuildGroup(BSG_FRAME,True);Result:=True;
+end;
+
+function TBikeInstance.WheelSupportPoint(Front:Boolean;const GroundNormal:TVector3;
+  out P:TVector3):Boolean;
+var A,Axis,Normal,Radial:TVector3;W:TWheelComponent;ScaleM:Single;Nm:string;
+begin
+  Result:=False;P:=TVector3.Zero;
+  if (FBikeSkeleton=nil)or(FGroup=nil)or(GroundNormal.Length<0.001)then Exit;
+  W:=TWheelComponent(Component(TWheelComponent));if W=nil then Exit;
+  if Front then Nm:='front_axle' else Nm:='rear_axle';
+  if not FBikeSkeleton.TryGetBone(Nm,A)then Exit;
+  { Skeleton anchors, like rendered geometry, are already in metres. }
+  A.X:=A.X-BikeCenterX(FBikeSkeleton);Axis:=Vector3(0,0,1);
+  if Front then begin Axis:=SteerPoint(A+Axis)-SteerPoint(A);A:=SteerPoint(A) end;
+  Axis:=FGroup.LocalToWorldDirection(Axis).Normalize;
+  Normal:=GroundNormal.Normalize;
+  Radial:=Normal-Axis*TVector3.DotProduct(Normal,Axis);
+  if Radial.Length<0.001 then Exit;
+  ScaleM:=FGroup.LocalToWorldDirection(Vector3(1,0,0)).Length*0.001;
+  P:=FGroup.LocalToWorld(A)-Radial.Normalize*((W.WheelRadius-W.TireWidth)*ScaleM)
+    -Normal*(W.TireWidth*ScaleM);
+  Result:=True;
 end;
 
 procedure TBikeInstance.UpdateShadowDynamic(const OBB, PedalR, PedalL: TVector3);

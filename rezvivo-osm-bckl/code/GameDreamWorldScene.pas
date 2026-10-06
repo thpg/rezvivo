@@ -42,6 +42,7 @@ type
     destructor Destroy;override;
     procedure Update(Seconds:Single);
     procedure AppendShadowCasters(List:TCastleTransformList);
+    procedure AppendReflectionSurfaces(List:TCastleTransformList);
     function Diagnostics:TJSONObject;
   end;
   { The loader hands over its prepared visual. Preview -> ride moves the same
@@ -519,6 +520,14 @@ begin
     if TCastleScene(FCasterChunks[I]).Exists then List.Add(TCastleScene(FCasterChunks[I]));
   if FTrees.Exists then List.Add(FTrees);if FShrubs.Exists then List.Add(FShrubs);
   if FProcedural.Exists then List.Add(FProcedural);
+end;
+procedure TDreamWorldVisual.AppendReflectionSurfaces(List:TCastleTransformList);
+var I:Integer;Chunk:TCastleScene;
+begin
+  for I:=0 to FChunks.Count-1 do begin
+    Chunk:=TCastleScene(FChunks[I]);
+    if (Chunk<>nil) and Chunk.Exists and (List.IndexOf(Chunk)<0) then List.Add(Chunk);
+  end;
 end;
 function TDreamWorldVisual.Diagnostics:TJSONObject;
 begin Result:=TJSONObject.Create(['visual_id',FSerial,'grass',FGrass.DiagString,'tree_tiles',FTrees.TileCount,'shrub_tiles',FShrubs.TileCount,

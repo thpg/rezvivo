@@ -22,7 +22,7 @@ uses Osm3dStaticGeometry,
   Osm3dGeomMesh,
   Osm3dGlslLib,
   Osm3dCompositeAtlas,    { TCompositeAtlasBase / TAtlasLayout — общая база атласов }
-  Osm3dGroundComposite,   { TGroundCompositeMesh / Builder reuse }
+  Osm3dGroundComposite, Osm3dGpuGround,
   Osm3dBuildingTextures   { FACADE_TEX_DIR / ROOF_TEX_DIR + name helpers }
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ;
@@ -91,207 +91,40 @@ type
   SunDirToward = direction TOWARD the sun (zero -> default). nil if empty. }
 function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
   Atlas: TBuildingAtlas; const SunDirToward: TVector3;
-  LogProc: TLogProc = nil): TShapeNode;
+  LogProc: TLogProc = nil): TShapeNode; overload;
+function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
+  Atlas: TBuildingAtlas; const SunDirToward: TVector3;
+  out DetailGroup: TCollisionNode; LogProc: TLogProc;
+  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0): TShapeNode; overload;
+
+{ Coarse, conservative batch culling plus collision exclusion for near trims. }
+function BuildingDetailGroup(Shape: TShapeNode): TCollisionNode;
 
 const
-
-  BUILDING_COMPOSITE_VS =
-    'attribute float materialId;' + #10 +
-    { TUnlitMaterial makes CGE skip texcoord/normal upload, so UV and normal
-      ride dedicated TFloatVertexAttributeNode streams (as in the ground composite). }
-    'attribute vec2  bldUV;' + #10 +
-    'attribute vec3  bldNormal;' + #10 +
-    '' + #10 +
-    'varying float vBldMatId;' + #10 +
-    'varying vec2  vBldUV;' + #10 +
-    'varying vec3  vBldNormalOS;' + #10 +
-    'flat varying vec2 vBldFacadeId;' + #10 +
-    '' + #10 +
-    'void PLUG_vertex_object_space(' + #10 +
-    '  const in vec4 vertex_object,' + #10 +
-    '  const in vec3 normal_object)' + #10 +
-    '{' + #10 +
-    '    vBldMatId    = materialId;' + #10 +
-    '    vBldNormalOS = bldNormal;' + #10 +
-    '    vec3 facadeId = floor(bldNormal * 64.0 + 0.5);' + #10 +
-    '    vBldFacadeId = facadeId.xz * 17.0 + facadeId.y * 5.0;' + #10 +
-    '    vBldUV       = bldUV;' + #10 +
-    '}' + #10;
-
-  BUILDING_COMPOSITE_FS =
-    '#define U_BLD_MAT_COUNT 16' + #10 +
-    '#define PI 3.141592653589793' + #10 +
-    { Single brightness knob — kept equal to the ground composite''s
-      GROUND_EXPOSURE so walls/roofs sit at the same daylight level as the
-      ground and the instanced vegetation. }
-    '#define BLD_EXPOSURE 2.0' + #10 +
-    '' + #10 +
-    'varying float vBldMatId;' + #10 +
-    'varying vec2  vBldUV;' + #10 +
-    'varying vec3  vBldNormalOS;' + #10 +
-    'flat varying vec2 vBldFacadeId;' + #10 +
-    '' + #10 +
-    'uniform sampler2D u_bld_atlas;' + #10 +
-    'uniform sampler2D u_bld_normal_atlas;' + #10 +
-    'uniform sampler2D u_bld_mask_atlas;' + #10 +
-    'uniform sampler2D u_bld_glow_atlas;' + #10 +
-    'uniform int   u_bld_grid_cols;' + #10 +
-    'uniform int   u_bld_grid_rows;' + #10 +
-    { Cell apron inset (gutter_px / tile_px): UV maps into [ins, 1-ins] so sampling
-      never reaches the gutter ring. Must match BLD_CELL_GUTTER. }
-    'uniform float u_bld_cell_inset;' + #10 +
-    'uniform vec3  u_bld_fallback_rgb[U_BLD_MAT_COUNT];' + #10 +
-    'uniform float u_bld_metallic[U_BLD_MAT_COUNT];' + #10 +
-    'uniform float u_bld_tint_amount[U_BLD_MAT_COUNT];' + #10 +
-    '' + #10 +
-    '/* Sun + sky. gc_SunDirToward = direction TOWARD the sun (world). */' + #10 +
-    'uniform vec3  gc_SunDirToward;' + #10 +
-    'uniform vec3  u_sky_zenith;' + #10 +
-    'uniform vec3  u_sky_horizon;' + #10 +
-    'uniform vec3  u_sky_ground;' + #10 +
-    'uniform vec3  u_sun_tint;' + #10 +
-    'uniform float u_bld_reflect_strength;' + #10 +
-    { Max per-window reflection-normal jitter (rad); fixed tilt per pane so glints
-      don't line up across panes. 0 = off. }
-    'uniform float u_bld_window_tilt;' + #10 +
-    '' + #10 +
-    GLSL_LOD_UNIFORMS +
-    '' + #10 +
-    GLSL_SUN_CONSTS +
-    '' + #10 +
-    '/* World space from castle-shader:/EyeWorldSpace.glsl (attached via' + #10 +
-    '   TEffectNode.SetShaderLibraries) — same mechanism the ground/glass' + #10 +
-    '   effects use. Avoids needing a host-pumped u_camera_pos uniform. */' + #10 +
-    'vec4 position_eye_to_world_space(vec4 position_eye);' + #10 +
-    'vec3 gBldCamWorld;' + #10 +
-    'vec3 gBldToCamera;' + #10 +
-    'void PLUG_fragment_eye_space(const vec4 vertex_eye, inout vec3 normal_eye)' + #10 +
-    '{' + #10 +
-    '    gBldCamWorld = position_eye_to_world_space(vec4(0.0,0.0,0.0,1.0)).xyz;' + #10 +
-    '    gBldToCamera = position_eye_to_world_space(vec4(-vertex_eye.xyz,0.0)).xyz;' + #10 +
-    '}' + #10 +
-    '' + #10 +
-    GLSL_PBR_HELPERS +
-    '' + #10 +
-    '/* Dave Hoskins'' "Hash without Sine" (hash22): stable per-cell 2D' + #10 +
-    '   pseudo-random in [0,1], no sin() precision artifacts. Used to give' + #10 +
-    '   each window pane a fixed small reflection-angle offset. */' + #10 +
-    'vec2 bldHash22(vec2 p) {' + #10 +
-    '    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));' + #10 +
-    '    p3 += dot(p3, p3.yzx + 33.33);' + #10 +
-    '    return fract((p3.xx + p3.yz) * p3.zy);' + #10 +
-    '}' + #10 +
-    '' + #10 +
-    'void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)' + #10 +
-    '{' + #10 +
-    '    int matId = int(floor(vBldMatId + 0.5));' + #10 +
-    '    if (matId < 0) matId = 0;' + #10 +
-    '    if (matId >= U_BLD_MAT_COUNT) matId = 0;' + #10 +
-    '' + #10 +
-    '    /* ── LOD far cull (horizontal distance, altitude-scaled). Near' + #10 +
-    '       culling is done per-tile on the CPU (UpdateDistanceCulling), so' + #10 +
-    '       only the far gate lives here. */' + #10 +
-    '    float lodDist  = length(gBldToCamera.xz);' + #10 +
-    '    float camAbove = max(0.0, gBldCamWorld.y - u_lod_ground_ref_y);' + #10 +
-    '    float hScale   = 1.0 + camAbove / u_lod_height_ref;' + #10 +
-    '    if (lodDist > u_lod_far_base * hScale) discard;' + #10 +
-    '' + #10 +
-    '    /* Atlas cell for this matId. */' + #10 +
-    '    float colsF = float(u_bld_grid_cols);' + #10 +
-    '    float rowsF = float(u_bld_grid_rows);' + #10 +
-    '    int col = matId - (matId/u_bld_grid_cols)*u_bld_grid_cols;' + #10 +
-    '    int row = matId / u_bld_grid_cols;' + #10 +
-    '    vec2 cellOrigin = vec2(float(col)/colsF, float(row)/rowsF);' + #10 +
-    '    vec2 cellSpan   = vec2(1.0/colsF, 1.0/rowsF);' + #10 +
-    '' + #10 +
-    '    /* UV is pre-baked on the mesh (walls: window×floor tiling; roofs:' + #10 +
-    '       planar metres/4). fract() tiles inside the cell, but the sample is' + #10 +
-    '       confined to the cell INTERIOR [ins, 1-ins] (the gutter ring is' + #10 +
-    '       only for tile-correct mip averaging — see BLD_CELL_GUTTER).' + #10 +
-    '       textureGrad with pre-fract derivatives (scaled by the interior' + #10 +
-    '       span) keeps mip selection from collapsing at the integer wrap. */' + #10 +
-    '    vec2  baseUV  = vBldUV;' + #10 +
-    '    float ins     = u_bld_cell_inset;' + #10 +
-    '    float ispan   = 1.0 - 2.0 * ins;' + #10 +
-    '    vec2  tiledUV = fract(baseUV);' + #10 +
-    '    vec2  localUV = vec2(ins) + tiledUV * ispan;' + #10 +
-    '    vec2  atlasUV = cellOrigin + localUV * cellSpan;' + #10 +
-    '    vec2  gradX = dFdx(baseUV) * cellSpan * ispan;' + #10 +
-    '    vec2  gradY = dFdy(baseUV) * cellSpan * ispan;' + #10 +
-    '' + #10 +
-    '    vec4 diffSample = textureGrad(u_bld_atlas, atlasUV, gradX, gradY);' + #10 +
-    '    vec3 albedoLin  = gc_SRGBtoLINEAR(diffSample.rgb);' + #10 +
-    '    albedoLin *= mix(vec3(1.0),' + #10 +
-    '                     gc_SRGBtoLINEAR(u_bld_fallback_rgb[matId]),' + #10 +
-    '                     clamp(u_bld_tint_amount[matId], 0.0, 1.0));' + #10 +
-    '' + #10 +
-    '    vec3 nrmSample = textureGrad(u_bld_normal_atlas, atlasUV, gradX, gradY).rgb;' + #10 +
-    '    float perceptualRoughness = clamp(' + #10 +
-    '        textureGrad(u_bld_mask_atlas, atlasUV, gradX, gradY).r, 0.04, 1.0);' + #10 +
-    '    float metallic = clamp(u_bld_metallic[matId], 0.0, 1.0);' + #10 +
-    '' + #10 +
-    '    /* Tangent-space normal mapping from screen-space derivatives' + #10 +
-    '       (no tangent attribute). Derivatives computed unconditionally —' + #10 +
-    '       branchless to keep them defined across a 2×2 quad. */' + #10 +
-    '    vec3 dp1 = -dFdx(gBldToCamera);' + #10 +
-    '    vec3 dp2 = -dFdy(gBldToCamera);' + #10 +
-    '    vec2 du1 = dFdx(vBldUV);' + #10 +
-    '    vec2 du2 = dFdy(vBldUV);' + #10 +
-    '    vec3 N = normalize(vBldNormalOS);' + #10 +
-    GLSL_COTANGENT_FRAME +
-    '' + #10 +
-    '    /* View vector — true per-fragment world view direction. */' + #10 +
-    '    vec3 V = normalize(gBldToCamera);' + #10 +
-    '    if (dot(worldN, V) < 0.0) worldN = -worldN;' + #10 +
-    '' + #10 +
-    '    /* Cook-Torrance GGX directional sun (same maths as ground FS). */' + #10 +
-    GLSL_COOK_TORRANCE_SUN +
-    '' + #10 +
-    '    /* ── Glass reflection. The glow atlas R channel marks glass panes' + #10 +
-    '       (white) vs frame/wall (black); roofs carry an all-black glow cell' + #10 +
-    '       so this never fires for them. Procedural 3-stop sky keyed on the' + #10 +
-    '       reflected ray Y plus a sharp sun glint — a compact port of the' + #10 +
-    '       Osm3dSceneEffects glass FS. (Sky colours are authored sRGB-ish,' + #10 +
-    '       converted to linear before mixing into the lit colour.) */' + #10 +
-    '    float glass = textureGrad(u_bld_glow_atlas, atlasUV, gradX, gradY).r;' + #10 +
-    '    if (glass > 0.5) {' + #10 +
-    '        /* Per-window pane id = integer cell of the tiling wall UV (one' + #10 +
-    '           window-unit per fract repeat) → constant across the whole' + #10 +
-    '           pane. Facade orientation is quantized in the vertex shader' + #10 +
-    '           and passed flat. Hashing a smoothly interpolated normal' + #10 +
-    '           amplifies its roundoff into stripes within one glass pane. */' + #10 +
-    '        vec2 paneId = floor(vBldUV);' + #10 +
-    '        vec2 seed   = paneId + vBldFacadeId;' + #10 +
-    '        vec2 jitter = (bldHash22(seed) - 0.5) * 2.0 * u_bld_window_tilt;' + #10 +
-    '        /* Tilt the reflection normal in the wall tangent frame (small-' + #10 +
-    '           angle approx of a rotation). Drives both the sky direction and' + #10 +
-    '           the sun glint, so some panes flash and others do not. */' + #10 +
-    '        vec3 glassN = normalize(worldN + T * jitter.x + B * jitter.y);' + #10 +
-    '        vec3 Rr  = reflect(-V, glassN);' + #10 +
-    '        float g2h = smoothstep(-0.05, 0.15, Rr.y);' + #10 +
-    '        float h2z = smoothstep( 0.15, 0.55, Rr.y);' + #10 +
-    '        vec3 env = mix(u_sky_ground, u_sky_horizon, g2h);' + #10 +
-    '        env      = mix(env,          u_sky_zenith,  h2z);' + #10 +
-    '        vec3 envLin = gc_SRGBtoLINEAR(env);' + #10 +
-    '        float sd    = clamp(dot(Rr, L), 0.0, 1.0);' + #10 +
-    '        float glint = pow(sd, 90.0) * 2.0;' + #10 +
-    '        float k = clamp(u_bld_reflect_strength, 0.0, 1.0);' + #10 +
-    '        vec3 reflected = mix(colorLin, envLin, k) + u_sun_tint * glint;' + #10 +
-    '        colorLin = mix(colorLin, reflected, glass);' + #10 +
-    '    }' + #10 +
-    '' + #10 +
-    '    colorLin *= BLD_EXPOSURE;' + #10 +
-    '    vec3 colorTM = colorLin / (colorLin + vec3(1.0));' + #10 +
-    '    fragment_color.rgb = gc_LINEARtoSRGB(colorTM);' + #10 +
-    '    fragment_color.a   = 1.0;' + #10 +
-    '}' + #10;
+  BUILDING_COMPOSITE_VS = {$I shaders/building_material.vs.glsl.inc};
+  BUILDING_COMPOSITE_FS = '#define PI 3.141592653589793' + #10 +
+    GLSL_PBR_HELPERS + {$I shaders/building_material.glsl.inc};
+  BUILDING_DETAIL_VS = {$I shaders/building_detail.vs.glsl.inc};
+  BUILDING_DETAIL_FS = '#define PI 3.141592653589793' + #10 +
+    GLSL_PBR_HELPERS + {$I shaders/building_detail.glsl.inc};
 
 implementation
 
 uses
+  Osm3dRiderShadow,
+  Osm3dBuildingFacade,
   Osm3dStudioSettings,   { EnableShaderAtomicCounters gate }
   Osm3dProfiler,         { PROF_COUNTER_HOUSES / _HOUSES_VS slots }
-  Osm3dSceneEffects;     { AttachCounterEffectFS / AttachCounterEffectVS }
+  Osm3dRtxMaterials, Osm3dSceneEffects;     { AttachCounterEffectFS / AttachCounterEffectVS }
+
+function BuildingShadowGLSL: String;
+begin
+  { CGE discovers PLUG names before preprocessing. Rename the ground's final
+    colour hook: facades apply visibility to direct lighting themselves. }
+  Result := '#define GC_SURFACE_RECEIVER' + #10 +
+    StringReplace(RIDER_SHADOW_GLSL, 'PLUG_fragment_modify',
+    'bld_unusedGroundTint', [rfReplaceAll]);
+end;
 
 const
   { Alias of the shared atlas gutter; the shader inset u_bld_cell_inset =
@@ -488,11 +321,104 @@ begin
   Result := BuildCompositeIFS(Composite, 'bldUV', 'bldNormal', True, Osm3dStudioSettings.BuildingShadowsActive);
 end;
 
-function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
+function BuildBuildingDetailShape(Geo: TIndexedFaceSetNode;
+  const SunDirToward: TVector3; SharedApp: TAppearanceNode): TShapeNode;
+var
+  App: TAppearanceNode;
+  Mat: TUnlitMaterialNode;
+  MatP: TPhysicalMaterialNode;
+  Effect: TEffectNode;
+  PV, PF: TEffectPartNode;
+  Sun: TVector3;
+begin
+  Result := nil;
+  if Geo = nil then Exit;
+  if SharedApp <> nil then
+  begin
+    Result := TShapeNode.Create; Result.X3DName := 'BuildingNearDetails';
+    Result.Geometry := Geo; Result.Appearance := SharedApp;
+    CompactTileGeometry(Result);
+    Exit;
+  end;
+  App := TAppearanceNode.Create;
+  { These bounded, fading trims do not enter the sun shadow map. The original
+    complete wall/roof remains its sole caster, independent of camera distance. }
+  App.ShadowCaster := False;
+  if Osm3dStudioSettings.BuildingShadowsActive then
+  begin
+    MatP := TPhysicalMaterialNode.Create;
+    MatP.BaseColor := Vector3(1,1,1); MatP.Metallic := 0; MatP.Roughness := 0.8;
+    App.Material := MatP;
+  end else
+  begin
+    Mat := TUnlitMaterialNode.Create; Mat.EmissiveColor := Vector3(1,1,1);
+    App.Material := Mat;
+  end;
+  if Osm3dStudioSettings.BuildingShadowsActive then Effect := TEffectNode.Create
+  else Effect := TRiderShadowGroundEffect.Create;
+  Effect.Language := slGLSL;
+  Effect.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
+  PV := TEffectPartNode.Create; PV.ShaderType := stVertex;
+  PV.Contents := BUILDING_DETAIL_VS;
+  PF := TEffectPartNode.Create; PF.ShaderType := stFragment;
+  if Osm3dStudioSettings.BuildingShadowsActive then
+    PF.Contents := '#define BLD_NATIVE_LIGHTING' + #10 + BUILDING_DETAIL_FS +
+      {$I shaders/building_detail.native.glsl.inc}
+  else PF.Contents := BuildingShadowGLSL + BUILDING_DETAIL_FS;
+  Effect.SetParts([PV,PF]);
+  if Effect is TRiderShadowGroundEffect then
+    TRiderShadowGroundEffect(Effect).SetGroundFragment(PF);
+  Sun := SunDirToward;
+  if Sun.LengthSqr < 0.001 then Sun := DEFAULT_SUN_TOWARD;
+  Effect.AddCustomField(TSFVec3f.Create(Effect, True, 'gc_SunDirToward', Sun));
+  Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_bld_detail_near', BUILDING_DETAIL_NEAR));
+  Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_bld_detail_far', BUILDING_DETAIL_FAR));
+  App.SetEffects([Effect]);
+  Result := TShapeNode.Create; Result.X3DName := 'BuildingNearDetails';
+  Result.Geometry := Geo; Result.Appearance := App;
+  CompactTileGeometry(Result);
+end;
+
+function BuildingDetailGroup(Shape: TShapeNode): TCollisionNode;
+var Coord: TCoordinateNode; Geo:TIndexedFaceSetNode; LOD:TLODNode;
+    MinP,MaxP,P:TVector3; I,J:Integer;
+begin
+  Result:=nil;
+  if Shape=nil then Exit;
+  Result:=TCollisionNode.Create; Result.Enabled:=False;
+  Geo:=Shape.Geometry as TIndexedFaceSetNode;
+  Coord:=Geo.Coord as TCoordinateNode;
+  MinP:=Vector3(1e30,1e30,1e30); MaxP:=-MinP;
+  for I:=0 to Coord.FdPoint.Count-1 do
+  begin
+    P:=Coord.FdPoint.Items[I];
+    for J:=0 to 2 do
+    begin
+      if P.Data[J]<MinP.Data[J] then MinP.Data[J]:=P.Data[J];
+      if P.Data[J]>MaxP.Data[J] then MaxP.Data[J]:=P.Data[J];
+    end;
+  end;
+  LOD:=TLODNode.Create;
+  LOD.FdCenter.Send((MinP+MaxP)*0.5);
+  { If a box is within 70 m of the camera its batch must still be active.
+    Beyond this enclosing sphere even vertex processing/draw submission stops. }
+  if Geo.X3DName='BuildingEntrances' then
+    LOD.FdRange.Send([600+(MaxP-MinP).Length*0.5])
+  else LOD.FdRange.Send([BUILDING_DETAIL_FAR+(MaxP-MinP).Length*0.5]);
+  LOD.AddChildren(Shape); LOD.AddChildren(TGroupNode.Create);
+  Result.AddChildren(LOD);
+end;
+
+function BuildBuildingCompositeInternal(Composite: TGroundCompositeMesh;
   Atlas: TBuildingAtlas; const SunDirToward: TVector3;
-  LogProc: TLogProc): TShapeNode;
+  out DetailGroup: TCollisionNode; WantDetails: Boolean; LogProc: TLogProc;
+  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0): TShapeNode;
 var
   Geo:        TIndexedFaceSetNode;
+  Facade: TBuildingFacadeData;
+  DetailGeos: TBuildingDetailGeometryArray;
+  DetailShape: TShapeNode;
+  DetailApp: TAppearanceNode;
   Mat:        TUnlitMaterialNode;
   MatP:       TPhysicalMaterialNode;
   App:        TAppearanceNode;
@@ -507,20 +433,38 @@ var
   DiffuseTex, NormalTex, MaskTex, GlowTex: TAbstractTexture2DNode;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1359);{$ENDIF}
-  Result := nil;
+  Result := nil; DetailGroup := nil;
   if (Composite = nil) or (Composite.TriangleCount = 0) then Exit;
   if Atlas = nil then
     raise EInvalidOperation.Create('BuildBuildingCompositeShape: Atlas is nil');
 
-  Geo := BuildBuildingIFS(Composite);
-  if Geo = nil then Exit;
+  Facade := TBuildingFacadeData.Create(Composite, WantDetails, Ground, GroundX, GroundZ);
+  try
+    Geo := BuildBuildingIFS(Composite);
+    if Geo = nil then Exit;
+    Facade.AttachInfo(Geo);
+    if WantDetails then
+    begin
+      DetailGeos := Facade.DetailGeometries;
+      DetailApp := nil;
+      if Length(DetailGeos)>0 then
+      begin
+        DetailGroup := TCollisionNode.Create; DetailGroup.Enabled := False;
+        for I:=0 to High(DetailGeos) do
+        begin
+          DetailShape := BuildBuildingDetailShape(DetailGeos[I], SunDirToward, DetailApp);
+          DetailApp := DetailShape.Appearance as TAppearanceNode;
+          DetailGroup.AddChildren(BuildingDetailGroup(DetailShape));
+        end;
+      end;
+    end;
+  finally
+    Facade.Free;
+  end;
 
   App := TAppearanceNode.Create;
-  { BuildingShadows: hand lighting to CGE. A LIT white matte material makes CGE
-    run its own lighting on this shape, applying the sun's shadow via its native
-    PLUG_light_scale (no manual shadow-map sampling from us). The FS below then
-    outputs plain atlas albedo instead of its own lit colour, so CGE computes
-    albedo x (sun x shadow + fills). Flag off: original unlit emissive path. }
+  { Native CGE light/shadow hooks receive the same complete surface as the
+    self-lit composite path: atlas normals, wear roughness and glass interior. }
   if Osm3dStudioSettings.BuildingShadowsActive then
   begin
     MatP := TPhysicalMaterialNode.Create;
@@ -536,7 +480,8 @@ begin
     App.Material := Mat;
   end;
 
-  Effect := TEffectNode.Create;
+  if Osm3dStudioSettings.BuildingShadowsActive then Effect := TEffectNode.Create
+  else Effect := TRiderShadowGroundEffect.Create;
   Effect.Language := slGLSL;
   Effect.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
 
@@ -545,17 +490,16 @@ begin
   PV.Contents   := BUILDING_COMPOSITE_VS;
   PF := TEffectPartNode.Create;
   PF.ShaderType := stFragment;
-  { BuildingShadows on: output plain LINEAR albedo and let CGE's own lighting
-    (with its native shadow) multiply it — CGE gamma-corrects afterwards. The
-    composite's own GGX/glass/tonemap still compute but their result is unused.
-    Flag off: the original self-lit sRGB output. }
   if Osm3dStudioSettings.BuildingShadowsActive then
-    PF.Contents := StringReplace(BUILDING_COMPOSITE_FS,
-      '    fragment_color.rgb = gc_LINEARtoSRGB(colorTM);',
-      '    fragment_color.rgb = albedoLin;', [])
+    PF.Contents := '#define BLD_NATIVE_LIGHTING' + #10 + BUILDING_COMPOSITE_FS +
+      {$I shaders/building_material.native.glsl.inc}
   else
-    PF.Contents   := BUILDING_COMPOSITE_FS;
+    PF.Contents := BuildingShadowGLSL + BUILDING_COMPOSITE_FS;
+  PF.Contents:=RTX_MATERIAL_GLSL+PF.Contents;
+  AttachRtxMaterial(Effect);
   Effect.SetParts([PV, PF]);
+  if Effect is TRiderShadowGroundEffect then
+    TRiderShadowGroundEffect(Effect).SetGroundFragment(PF);
 
   { Atlas samplers. Prefer URL nodes (shareable across tiles, deduped by
     CGE) once SaveToCache has run; otherwise single-use pixel nodes — valid
@@ -621,23 +565,15 @@ begin
     'u_sky_horizon', Vector3(0.74, 0.84, 0.94)));
   Effect.AddCustomField(TSFVec3f.Create(Effect, True,
     'u_sky_ground',  Vector3(0.10, 0.11, 0.12)));
-  Effect.AddCustomField(TSFVec3f.Create(Effect, True,
-    'u_sun_tint',    Vector3(1.0, 0.93, 0.78)));
   Effect.AddCustomField(TSFFloat.Create(Effect, True,
-    'u_bld_reflect_strength', 0.85));
-  { Per-window reflection jitter: ±2.5° normal tilt (≈ ±5° reflection swing),
+    'u_bld_reflect_strength', 1.0));
+  { Per-window reflection jitter: about ±0.34 degrees of normal tilt,
     fixed per pane. 0 disables it (all panes reflect identically). }
   Effect.AddCustomField(TSFFloat.Create(Effect, True,
-    'u_bld_window_tilt', 0.0436));
+    'u_bld_window_tilt', 0.006));
 
-  { LOD far cull only; defaults are conservative — the assembler may overwrite
-    them from GlobalLODConfig.BuildingsFarMeters etc. }
-  Effect.AddCustomField(TSFFloat.Create(Effect, True,
-    'u_lod_far_base', 4000.0));
-  Effect.AddCustomField(TSFFloat.Create(Effect, True,
-    'u_lod_height_ref', 300.0));
-  Effect.AddCustomField(TSFFloat.Create(Effect, True,
-    'u_lod_ground_ref_y', 0.0));
+  { Whole-tile CPU distance culling handles the far gate. Avoid a fragment
+    discard here: it prevents early depth rejection behind nearby facades. }
 
   App.SetEffects([Effect]);
 
@@ -661,6 +597,24 @@ begin
        Atlas.Layout.GridCols * Atlas.Layout.TilePixels,
        Atlas.Layout.GridRows * Atlas.Layout.TilePixels,
        BoolToStr(UseUrl, 'URL', 'pixel')]));
+end;
+
+function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
+  Atlas: TBuildingAtlas; const SunDirToward: TVector3;
+  LogProc: TLogProc): TShapeNode;
+var Ignored: TCollisionNode;
+begin
+  Result := BuildBuildingCompositeInternal(Composite, Atlas, SunDirToward,
+    Ignored, False, LogProc);
+end;
+
+function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
+  Atlas: TBuildingAtlas; const SunDirToward: TVector3;
+  out DetailGroup: TCollisionNode; LogProc: TLogProc;
+  Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single): TShapeNode;
+begin
+  Result := BuildBuildingCompositeInternal(Composite, Atlas, SunDirToward,
+    DetailGroup, True, LogProc, Ground, GroundX, GroundZ);
 end;
 
 end.

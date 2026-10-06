@@ -467,7 +467,11 @@ begin
   end;
   if (not AgentCliNoGround) and Assigned(FPhysics) then
   begin
-    if (FLastGroundClock < 0) or not FPhysics.GroundPlacementValid or
+    { A bicycle is constrained by two contacts every displayed frame.
+      Cached surface reads are cheap; throttling them made curbs and slope
+      changes step at 30 Hz even when position/rendering ran faster. }
+    if State.WheelContactAtOrigin or
+       (FLastGroundClock < 0) or not FPhysics.GroundPlacementValid or
        (FLocalClock - FLastGroundClock >= GroundPlacementPeriod) then
     begin
       if FLastGroundClock < 0 then DtGround := SecondsPassed

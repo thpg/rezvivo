@@ -7,7 +7,7 @@ unit RiderBodyDeformation;
   skeletal attachments; soft contact is bounded and independent of frame time. }
 interface
 uses Classes, SysUtils, Math, fpjson, CastleUtils, CastleVectors, X3DNodes, X3DFields,
-  TripoRig, RiderBodyParameters, RiderDynamics;
+  TripoRig, RiderBodyParameters, RiderDynamics, BikeSeatSurface;
 type
   TRiderBodyDeformation = class
   private
@@ -40,7 +40,7 @@ type
       FFrameFields: array[0..1] of TSFVec2f;
       FDynamicFields: array[0..1] of TMFVec4f;
       FDynamicValues: TVector4List;
-      FDynamicSent: array[0..1,0..7] of TVector4;
+      FDynamicSent: array[0..1,0..7+SeatSurfaceCount] of TVector4;
       FDynamicValid: array[0..1] of Boolean;
       FUseDynamics: Boolean;
       FLast: TRiderBodyParameters;
@@ -57,7 +57,7 @@ type
     procedure RefreshBind;
     procedure Update(const Effort:Single; const Phase:Double);
     procedure SetDynamicsFrame(const Frame:TRiderDynamicsFrame;
-      const ToBike:TMatrix4;const Saddle:TVector3);
+      const ToBike:TMatrix4;const Saddle:TVector3;const Surface:TSeatSurface;ContactAmount:Single);
     property UseDynamics:Boolean read FUseDynamics write FUseDynamics;
     procedure SendActiveFrame;
     function ShaderSource(const JointFunction:string):string;
@@ -85,7 +85,7 @@ begin
       raise EReadError.Create('Invalid rider deformation header');
     FLengths:=TSingleList.Create;SetLength(FMuscles,M.Count);
     FDynamicValues:=TVector4List.Create;
-    for I:=0 to 7 do FDynamicValues.Add(Vector4(0,0,0,0));
+    for I:=0 to 7+SeatSurfaceCount do FDynamicValues.Add(Vector4(0,0,0,0));
     for I:=0 to M.Count-1 do begin
       O:=M.Objects[I];FMuscles[I].JA:=ArrOf(O,'joints').Integers[0];
       FMuscles[I].JB:=ArrOf(O,'joints').Integers[1];
@@ -370,8 +370,8 @@ begin
 end;
 
 procedure TRiderBodyDeformation.SetDynamicsFrame(const Frame:TRiderDynamicsFrame;
-  const ToBike:TMatrix4;const Saddle:TVector3);
-var X,Y,Z,T:TVector3;Den:Single;
+  const ToBike:TMatrix4;const Saddle:TVector3;const Surface:TSeatSurface;ContactAmount:Single);
+var X,Y,Z,T:TVector3;Den:Single;I:Integer;
 begin
   if FDynamicValues=nil then Exit;
   FDynamicValues[0]:=Vector4(Frame.Muscle[0],Frame.Muscle[1],Frame.Muscle[2],Frame.Muscle[3]);
@@ -379,7 +379,7 @@ begin
   FDynamicValues[2]:=Vector4(Frame.Tissue[0]/0.12,Frame.Tissue[1]/0.12,
     Frame.Tissue[2]/0.10,Frame.Tissue[3]/0.10);
   FDynamicValues[3]:=Vector4(Frame.SeatCompression[0],Frame.SeatCompression[1],
-    Ord(Frame.SeatLoad[0]+Frame.SeatLoad[1]>0.1),Ord(FUseDynamics));
+    ContactAmount,Ord(FUseDynamics));
   X:=ToBike.MultDirection(Vector3(1,0,0));Y:=ToBike.MultDirection(Vector3(0,1,0));
   Z:=ToBike.MultDirection(Vector3(0,0,1));T:=ToBike.MultPoint(TVector3.Zero)-Saddle;
   FDynamicValues[4]:=Vector4(X.X,Y.X,Z.X,T.X);
@@ -387,6 +387,7 @@ begin
   FDynamicValues[6]:=Vector4(X.Z,Y.Z,Z.Z,T.Z);
   Den:=Max(1E-8,X.LengthSqr);
   FDynamicValues[7]:=Vector4(X.Y/Den,Y.Y/Den,Z.Y/Den,0);
+  for I:=0 to SeatSurfaceCount-1 do FDynamicValues[8+I]:=Surface[I];
 end;
 
 procedure TRiderBodyDeformation.SendActiveFrame;
@@ -407,10 +408,10 @@ begin
   for I:=0 to 1 do
     if (FEffects[I]<>nil)and FEffects[I].Enabled and(FDynamicFields[I]<>nil)then begin
       Dirty:=not FDynamicValid[I];
-      for J:=0 to 7 do if not TVector4.Equals(FDynamicSent[I,J],FDynamicValues[J])then Dirty:=True;
+      for J:=0 to 7+SeatSurfaceCount do if not TVector4.Equals(FDynamicSent[I,J],FDynamicValues[J])then Dirty:=True;
       if Dirty then begin
         FDynamicFields[I].Send(FDynamicValues);
-        for J:=0 to 7 do FDynamicSent[I,J]:=FDynamicValues[J];
+        for J:=0 to 7+SeatSurfaceCount do FDynamicSent[I,J]:=FDynamicValues[J];
         FDynamicValid[I]:=True;
       end;
     end;
@@ -436,7 +437,7 @@ begin
     S.Add('#ifdef BODY_NORMAL_GRADIENTS');
     S.Add('attribute vec4 riderGradient0,riderGradient1,riderGradient2;');
     S.Add('#endif');
-    S.Add('uniform vec4 uBodyProfile; uniform vec2 uBodyFrame;uniform vec4 uBodyDynamics[8];');
+    S.Add('uniform vec4 uBodyProfile; uniform vec2 uBodyFrame;uniform vec4 uBodyDynamics['+IntToStr(8+SeatSurfaceCount)+'];');
     S.Add('uniform float uMuscleRestLength['+IntToStr(Length(FMuscles))+'];');
     S.Add('uniform vec4 uMuscleA['+IntToStr(Length(FMuscles))+'];uniform vec4 uMuscleB['+IntToStr(Length(FMuscles))+'];');
     S.Add('uniform vec4 uMuscleResponse['+IntToStr(Length(FMuscles))+'];');
@@ -485,11 +486,14 @@ begin
     S.Add(' vec3 base=n/s+axis*(dot(n,axis)*(1.0-1.0/s));');
     S.Add(' vec3 dual=grad/s+axis*(dot(grad,axis)*(1.0-1.0/s));float det=1.0+dot(radial,dual);');
     S.Add(' if(abs(det)>1e-4)n=normalize(base-dual*(dot(radial,base)/det));}');
-    S.Add('vec3 bodySeatPush(vec3 p){if(uBodyDynamics[3].w<.5||uBodyDynamics[3].z<.5||riderTissue.y<.0001||!bodyBroadMuscle(int(riderTissue.x+.5)))return vec3(0);');
+    S.Add('vec3 bodySeatPush(vec3 p){if(uBodyDynamics[3].z<.001)return vec3(0);');
     S.Add(' vec4 v=vec4(p,1);vec3 seat=vec3(dot(uBodyDynamics[4],v),dot(uBodyDynamics[5],v),dot(uBodyDynamics[6],v));');
-    S.Add(' float footprint=1.0-smoothstep(.65,1.0,dot(seat.xz/vec2(.14,.078),seat.xz/vec2(.14,.078)));');
-    S.Add(' float depth=max(0.0,-seat.y),limit=min(.018,max(uBodyDynamics[3].x,uBodyDynamics[3].y)+.002);');
-    S.Add(' return uBodyDynamics[7].xyz*(limit*(1.0-exp(-depth/max(limit,.001)))*footprint); }');
+    S.Add(' if(seat.y<-.09 || seat.y>.10 || seat.x<uBodyDynamics[8].x || seat.x>uBodyDynamics['+IntToStr(7+SeatSurfaceCount)+'].x)return vec3(0);');
+    S.Add(' float f=clamp((seat.x-uBodyDynamics[8].x)/max(.001,uBodyDynamics['+IntToStr(7+SeatSurfaceCount)+'].x-uBodyDynamics[8].x)*'+IntToStr(SeatSurfaceCount-1)+'.0,0.0,'+IntToStr(SeatSurfaceCount-1)+'.0);int i=min(int(f),'+IntToStr(SeatSurfaceCount-2)+');vec4 section=mix(uBodyDynamics[8+i],uBodyDynamics[9+i],f-float(i));');
+    S.Add(' float lateral=abs(seat.z)/max(section.z,.005);if(lateral>=1.0)return vec3(0);');
+    S.Add(' float top=section.y-section.w*pow(lateral,4.0);float depth=max(0.0,top+.001-seat.y);');
+    S.Add(' float edge=1.0-smoothstep(.83,1.0,lateral);float bottom=smoothstep(-.09,-.06,seat.y);');
+    S.Add(' return uBodyDynamics[7].xyz*(depth*edge*bottom*uBodyDynamics[3].z); }');
     S.Add('vec3 bodySoftPush(vec3 p){vec3 push=bodySeatPush(p);float w=riderTissue.z;if(abs(w)<.0001)return push;');
     S.Add(' float soft=clamp(.45+.22*uBodyProfile.x-.12*uBodyProfile.y,.25,.8);');
     S.Add(' if(w<0.0){mat4 m=bodyJoint('+IntToStr(FInfo.Get('bellyJoint',0))+');');
@@ -503,8 +507,14 @@ begin
       S.Add('vec3 ab=b-a;float t=clamp(dot(p-a,ab)/max(dot(ab,ab),.0001),.12,.90);vec3 d=p-(a+t*ab);float l=length(d);float radius='+Num(FInfo.Get('thighRadius',0.07))+'*(1.0+.28*uBodyProfile.x+.24*uBodyProfile.y);float penetration=max(0.0,radius-l-riderContactRest['+IntToStr(I)+']);float limit=.010*soft;push+=d/max(l,.0001)*(penetration/(1.0+penetration/max(limit,.001)))*w;}');
     end;
     S.Add('}return push;}');
+    S.Add('void bodyContactDeform(inout vec3 p,inout vec3 n){');
+    { Contact normal follows the same position function (central differences
+      on the tangent plane); no separately sculpted normal correction. }
+    S.Add(' if(abs(riderTissue.z)>.0001||(uBodyDynamics[3].z>.001)){vec3 push=bodySoftPush(p);if(dot(push,push)>1e-16){vec3 t=normalize(cross(n,abs(n.y)<.9?vec3(0,1,0):vec3(1,0,0)));vec3 b=cross(n,t);float e=.0005;');
+    S.Add(' vec3 dt=t+(bodySoftPush(p+t*e)-bodySoftPush(p-t*e))/(2.0*e);vec3 db=b+(bodySoftPush(p+b*e)-bodySoftPush(p-b*e))/(2.0*e);n=normalize(cross(dt,db));p+=push;}}');
+    S.Add('}');
     S.Add('void bodyDeform(vec3 p,vec3 n,vec4 w,ivec4 j,out vec3 resultP,out vec3 resultN){');
-    S.Add(' if(riderCentre.w<.00001){mat4 m=mat4(0.0);for(int i=0;i<4;i++)if(w[i]>0.0)m+=w[i]*bodyJoint(j[i]);resultP=(m*vec4(p,1.0)).xyz;resultN=normalize(mat3(m)*n);skinMatrix=m;return;}');
+    S.Add(' if(riderCentre.w<.00001){mat4 m=mat4(0.0);for(int i=0;i<4;i++)if(w[i]>0.0)m+=w[i]*bodyJoint(j[i]);resultP=(m*vec4(p,1.0)).xyz;resultN=normalize(mat3(m)*n);skinMatrix=m;bodyContactDeform(resultP,resultN);return;}');
     S.Add(' mat4 m=mat4(0.0);vec4 q=vec4(0.0),ref=vec4(0.0);float total=dot(w,vec4(1.0));w/=max(total,.000001);');
     S.Add('#ifdef BODY_NORMAL_GRADIENTS');
     S.Add(' vec4 wu=vec4(riderGradient0.xyz,-dot(riderGradient0.xyz,vec3(1.0)));');
@@ -542,10 +552,7 @@ begin
     S.Add('#endif');
     S.Add(' mat3 frame=mat3(m)*(1.0-blend)+mat3(bodyRotate(q,vec3(1,0,0)),bodyRotate(q,vec3(0,1,0)),bodyRotate(q,vec3(0,0,1)))*blend;skinMatrix=mat4(frame);skinMatrix[3]=vec4(resultP-frame*p,1.0);');
     S.Add(' bodyMuscleDeform(resultP,resultN,envelopeGradient);');
-    { Contact normal follows the same position function (central differences
-      on the tangent plane); no separately sculpted normal correction. }
-    S.Add(' if(abs(riderTissue.z)>.0001||(uBodyDynamics[3].w>.5&&bodyBroadMuscle(int(riderTissue.x+.5)))){vec3 push=bodySoftPush(resultP);if(dot(push,push)>1e-16){vec3 t=normalize(cross(resultN,abs(resultN.y)<.9?vec3(0,1,0):vec3(1,0,0)));vec3 b=cross(resultN,t);float e=.0005;');
-    S.Add(' vec3 dt=t+(bodySoftPush(resultP+t*e)-bodySoftPush(resultP-t*e))/(2.0*e);vec3 db=b+(bodySoftPush(resultP+b*e)-bodySoftPush(resultP-b*e))/(2.0*e);resultN=normalize(cross(dt,db));resultP+=push;}}');
+    S.Add(' bodyContactDeform(resultP,resultN);');
     S.Add('}');
     Result:=S.Text;
   finally S.Free end;

@@ -95,7 +95,12 @@ type
     FLblPose, FLblCadence, FLblEffort, FLblResultInfo: TCastleLabel;
     FLblStack, FLblReach: TCastleLabel;
     FFitOverlay: TCastleRectangleControl;
-    FBtnBikePick, FBtnSizePick: TCastleButton;
+    FBtnBikePick, FBtnSizePick, FBtnAutoFit: TCastleButton;
+    FAutoFitPending: Boolean;
+    FAutoFitStatus: Integer; { 0 normal, 1 fitted, 2 limited, 3 failed, 4 save failed }
+    procedure ClickAutoFit(Sender: TObject);
+    procedure RunAutoFit;
+  private
     FBtnCadenceDown, FBtnCadenceUp: TCastleButton;
     FBtnEffortDown, FBtnEffortUp: TCastleButton;
     FBtnSeatHDown, FBtnSeatHUp: TCastleButton;
@@ -282,6 +287,7 @@ type
     { MCP: AParam = height|inseam|bulk|belly|knee|ankle|seat|offset|spacers|stem|cadence|effort;
       ASteps signed, one UI click each. }
     procedure McpBody(AParams,AResult:TJSONObject);
+    procedure McpAutoFit;
     procedure McpNudge(const AParam: string; ASteps: Integer);
     { MCP: цвет слота — jersey|shorts|socks|boots|gloves|skin|hair|frame|rim|
       helmet; AOn=False = «выкл» (сток). C — компоненты 0..1. }
@@ -304,7 +310,7 @@ implementation
 
 uses CastleApplicationProperties,UiTranslations,GameUserData,
   jsonparser, CastleKeysMouse,CastleImages,CastleRectangles,
-  GameViewMenu, GameViewPlay, AppSettings, DebugLog;
+  GameViewMenu, GameViewPlay, AppSettings, DebugLog, GameBikeAutoFit;
 
 const
   DefaultCamPos: TVector3 = (X: 1.6; Y: 0.95; Z: 2.1);
@@ -698,6 +704,12 @@ begin
   FBtnSizePick.Anchor(vpMiddle, 0);
   BikeRow.InsertFront(FBtnSizePick);
 
+  FBtnAutoFit:=MakeNavBtn('Fit bike to rider',@ClickAutoFit,240,34);
+  FBtnAutoFit.Name:='BikeFitAutoFit';
+  FBtnAutoFit.Enabled:=False;
+  TMenuButton(FBtnAutoFit).Style:=mbPrimary;
+  FColParams.InsertFront(FBtnAutoFit);
+
   FPopupOverlay := TMenuButton.Create(FUiOwner);
   FPopupOverlay.FullSize := True;
   FPopupOverlay.AutoSize := False;
@@ -1060,7 +1072,9 @@ begin
   if FButtonBack <> nil then
     FButtonBack.Exists := False;
   BindUiText(FButtonApply, 'Save bike fit');FButtonApply.Exists:=False;FPoseAuto:=False;
+  FAutoFitStatus:=0;
   FCadenceRpm := 80;
+  BindUiText(FBtnAutoFit,'Fit bike to rider');
   FPoseTimer := 0;
   FPoseCycleSec := DefaultPoseCycleSec;
   FPoseBlendSec := DefaultPoseBlendSec;
@@ -1145,6 +1159,7 @@ begin
     Exit;
   end;
   if FLiveSettingsDirty then ClickApply(nil);
+  FAutoFitPending:=False;
   CancelValue(nil);ClosePopup;CloseHairList(nil);
   CloseDyePopup;
   FWantRiderPath := '';
@@ -1415,6 +1430,7 @@ begin
   ClosePopup;
   if (Idx < 0) or (Idx >= FBikePaths.Count) then Exit;
   if Idx = FSelBike then Exit;
+  FAutoFitStatus:=0;
   FSelBike := Idx;
   FSelSize := -1;
   LoadSelectedInsights;
@@ -1435,6 +1451,7 @@ begin
   ClosePopup;
   if (Idx < 0) or (Idx >= FSizeNames.Count) then Exit;
   if Idx = FSelSize then Exit;
+  FAutoFitStatus:=0;
   FSelSize := Idx;
   FSelPose := 0;
   FPoseTimer := 0;
@@ -1835,6 +1852,12 @@ begin
     BindUiText(FLabelStatus, 'Changes saved automatically');
   if FLiveRide and (FLabelStatus <> nil) then
     BindUiText(FLabelStatus, 'Changes apply to the rider in the current ride');
+  if FLabelStatus<>nil then case FAutoFitStatus of
+    1:BindUiText(FLabelStatus,'Bike fit applied and saved. You can fine-tune it below.');
+    2:BindUiText(FLabelStatus,'Closest bike fit saved. This model has limited adjustment for these body proportions.');
+    3:BindUiText(FLabelStatus,'Could not fit this bicycle. Choose a model with frame size data.');
+    4:BindUiText(FLabelStatus,'Could not save settings. Please try again.');
+  end;
 end;
 
 { ═══════════════════════ color strip (верхний оверлей панели результата) ══ }
@@ -2682,8 +2705,11 @@ begin
   FBtnBikePick.Height:=32/S;FBtnBikePick.FontScale:=1;FBtnBikePick.FontSize:=14/S;
   FBtnBikePick.Border.Right:=78/S;
   FBtnSizePick.Height:=32/S;FBtnSizePick.Width:=65/S;FBtnSizePick.FontScale:=1;FBtnSizePick.FontSize:=14/S;
-  Row(FBtnSeatHDown,0,0,182);Row(FBtnSeatODown,0,1,182);
-  Row(FBtnSpacersDown,0,2,182);Row(FBtnStemDown,0,3,182);
+  FBtnAutoFit.Exists:=FSection=0;FBtnAutoFit.Width:=W-24/S;FBtnAutoFit.Height:=34/S;
+  FBtnAutoFit.FontScale:=1;FBtnAutoFit.FontSize:=15/S;
+  FBtnAutoFit.Anchor(hpMiddle);FBtnAutoFit.Anchor(vpTop,-178/S);
+  Row(FBtnSeatHDown,0,0,224);Row(FBtnSeatODown,0,1,224);
+  Row(FBtnSpacersDown,0,2,224);Row(FBtnStemDown,0,3,224);
   FBodyRows.Exists:=FSection=1;
   FBodyRows.Border.Top:=92/S;FBodyRows.Border.Bottom:=158/S;
   FBodyRows.ScrollArea.Height:=350/S;
@@ -2750,6 +2776,7 @@ begin
   try
     PumpResultRiderLoad;
     if FDirtyResult then ReloadResultPreview;
+    if FAutoFitPending and(FWantRiderPath='')then RunAutoFit;
   finally
     FLoadingPreview := False;
     if FReleasePreviewPending then
@@ -2759,6 +2786,8 @@ begin
     end;
   end;
   if not Exists then Exit;
+  FBtnAutoFit.Enabled:=(FResultBike<>nil)and FResultBike.HasTripoRider and
+    not FAutoFitPending and not FDirtyResult and(FWantRiderPath='')and(FSizeNames.Count>0);
   if FLiveSettingsDirty then begin
     FFitSaveDelay:=FFitSaveDelay-SecondsPassed;
     if FFitSaveDelay<=0 then begin FFitSaveDelay:=5;ClickApply(nil);end;
@@ -2836,12 +2865,53 @@ end;
 
 procedure TBikeFitPage.NudgeFit(var AValue: Single; ADelta, AMin, AMax: Single);
 begin
+  FAutoFitStatus:=0;
   AValue := EnsureRange(AValue + ADelta, AMin, AMax);
   FFitInited := True;
   ApplyFitToPreview;
   ApplyPreviewAnimation;
   UpdateLabels;
 end;
+
+procedure TBikeFitPage.ClickAutoFit(Sender:TObject);
+begin
+  if FLoadingPreview or FDirtyResult or FAutoFitPending or(FWantRiderPath<>'')or
+    (FResultBike=nil)or not FResultBike.HasTripoRider or(FSizeNames.Count=0)then Exit;
+  ClosePopup;CancelValue(nil);
+  FAutoFitStatus:=0;FAutoFitPending:=True;
+  FBtnAutoFit.Enabled:=False;BindUiText(FBtnAutoFit,'Fitting bicycle...');
+end;
+
+procedure TBikeFitPage.RunAutoFit;
+var Fit:TAutomaticBikeFit;T0:QWord;
+begin
+  FAutoFitPending:=False;T0:=GetTickCount64;
+  try
+    if not FitCatalogBike(FResultBike,FGeoList,FSizeNames,FModelInfo,CurrentBody,Fit)then
+      raise Exception.Create('No usable frame geometry for automatic fit');
+    FSelSize:=Fit.SizeIndex;
+    FFitSeatExt:=Fit.SeatExt;FFitSaddleOff:=Fit.SaddleOffset;
+    FFitSpacers:=Fit.Spacers;FFitStem:=Fit.Stem;FFitInited:=True;
+    ReapplyColorsAfterBuild;
+    ApplyPreviewAnimation;
+    if FLiveRide then ViewPlay.BikeFitChanged else FitCameraToItems(FVpResult);
+    FLiveSettingsDirty:=True;
+    ClickApply(nil);
+    if not FLiveSettingsDirty then begin
+      FAutoFitStatus:=1;if Fit.Limited then FAutoFitStatus:=2;
+    end else FAutoFitStatus:=4;
+    Logger.Info(Format('[BikeFit] automatic size=%s seat=%.1f offset=%.1f spacers=%.0f stem=%.0f score=%.2f time=%d ms',
+      [CurrentSizeName,FFitSeatExt,FFitSaddleOff,FFitSpacers,FFitStem,Fit.CockpitScore,GetTickCount64-T0]));
+  except
+    on E:Exception do begin
+      FAutoFitStatus:=3;Logger.Warning('[BikeFit] automatic fit failed: '+E.Message);
+    end;
+  end;
+  BindUiText(FBtnAutoFit,'Fit bike to rider');UpdateLabels;
+end;
+
+procedure TBikeFitPage.McpAutoFit;
+begin ClickAutoFit(nil) end;
 
 procedure TBikeFitPage.SyncFitFromBikeIfNeeded;
 var
@@ -2904,6 +2974,7 @@ end;
 procedure TBikeFitPage.ApplyRiderShapeToPreview;
 begin
   if FResultBike=nil then Exit;
+  FAutoFitStatus:=0;
   SeedRiderShapeFromBike;
   FResultBike.BodyParameters:=CurrentBody;
   LiveFitChanged;
@@ -2939,12 +3010,12 @@ end;
 
 procedure TBikeFitPage.ClickSeatHDown(Sender: TObject);
 begin
-  NudgeFit(FFitSeatExt, -5, 20, 280);
+  NudgeFit(FFitSeatExt, -5, 10, 400);
 end;
 
 procedure TBikeFitPage.ClickSeatHUp(Sender: TObject);
 begin
-  NudgeFit(FFitSeatExt, 5, 20, 280);
+  NudgeFit(FFitSeatExt, 5, 10, 400);
 end;
 
 procedure TBikeFitPage.ClickSeatODown(Sender: TObject);
@@ -3151,6 +3222,11 @@ end;
 procedure TBikeFitPage.McpFillStatus(AResult: TJSONObject);
 var FaceState, HairState: TJSONObject;
 begin
+  AResult.Add('auto_fit_pending',FAutoFitPending);
+  AResult.Add('auto_fit_status',FAutoFitStatus);
+  if(FSelBike>=0)and(FSelBike<FBikePaths.Count)then
+    AResult.Add('bike_path',FBikePaths[FSelBike]);
+  AResult.Add('bike_size',CurrentSizeName);
   AResult.Add('hair_style',UserPreference('rider_hair_style','short'));
   AResult.Add('head_editor_open',(FHairOverlay<>nil)and FHairOverlay.Exists);
   AResult.Add('head_category',FHeadCategory);
@@ -3378,7 +3454,7 @@ begin
   if not TryStrToFloat(StringReplace(Trim(FValueEdit.Text),',','.',[rfReplaceAll]),V,FS)then Exit;
   if IsNan(V)or IsInfinite(V)then Exit;
   case FValueIndex of
-    0:FFitSeatExt:=EnsureRange(V,20,280);1:FFitSaddleOff:=EnsureRange(V,-50,50);
+    0:FFitSeatExt:=EnsureRange(V,10,400);1:FFitSaddleOff:=EnsureRange(V,-50,50);
     2:FFitSpacers:=EnsureRange(V,0,50);3:FFitStem:=EnsureRange(V,60,140);
     4:FFitHeightCm:=EnsureRange(V,130,220);5:FFitInseamCm:=V;
     6:FFitWeightKg:=EnsureRange(V,35,180);7:FFitComposition:=EnsureRange(V/100,0,1);

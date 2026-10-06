@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "트레이너 경사 민감도",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: 원래 경사. 100% 미만: 급경사를 8%로 제한한 뒤 비율에 따라 줄입니다. 0%: 평지. 주행 물리와 운동 목표 파워는 바뀌지 않습니다.",
   "Hairstyle": "헤어스타일",
   "No hair": "머리카락 없음",
   "Short crop": "짧은 머리",
@@ -343,5 +345,9 @@
   "Front view": "앞",
   "Side view": "옆",
   "Rear view": "뒤",
-  "Drag to rotate · Wheel to zoom": "드래그로 회전 · 휠로 확대/축소"
+  "Drag to rotate · Wheel to zoom": "드래그로 회전 · 휠로 확대/축소",
+  "Wheel circumference (mm)": "바퀴 둘레 (mm)",
+  "Preparing riders": "라이더 준비 중",
+  "Companion": "동행자",
+  "Passing cyclist": "지나가는 자전거 이용자"
 }

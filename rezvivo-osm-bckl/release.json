@@ -1,7 +1,7 @@
 {
-  "version": "0.2.3-alpha.1",
-  "build": 5,
-  "file_version": "0.2.3.5",
+  "version": "0.2.4-alpha.1",
+  "build": 6,
+  "file_version": "0.2.4.6",
   "channel": "alpha",
-  "notes": "Add the visual head editor with headwear, hairstyles, beards and mustaches. Improve head and neck shape, hair attachment and headwear fit. Share helmet color with the bandana and cycling cap, including saved settings. Update rider motion, ride cameras and FIT-based training load."
+  "notes": "Add one-click bicycle fitting for the avatar: frame size, saddle height and setback, stem length and headset spacers. Fix modelled handlebar adjustment and saddle contact. Improve local bot riding, device compatibility, workout auto-pause, building materials and rendering performance. Add optional RTX shadows and reflections, road puddles, and improved world and rider shadow receivers."
 }

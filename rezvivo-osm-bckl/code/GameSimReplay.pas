@@ -3,7 +3,7 @@ unit GameSimReplay;
 interface
 uses Classes, SysUtils, Contnrs, CastleVectors, GamePhysicalAgent,
   GameCinematicCamera, GameRiderPoseControl, BikeParametric, GamePhysicsCommon,
-  GameSimCameraTrack;
+  GameSimCameraTrack, GameLocalBots;
 type
   TSimAgentCheckpoint = record
     Agent: TPhysicalAgent; { identity only; never dereferenced after removal }
@@ -16,6 +16,7 @@ type
     Seconds: Double;
     Agents: array of TSimAgentCheckpoint;
     Lanes: TLaneReplayState;
+    LocalBots:TLocalBotsReplay;
     Bike: TBikePlaybackState;
     Pose: TPoseManagerReplay;
     Camera: TCameraReplayState;
@@ -54,7 +55,8 @@ implementation
 uses Math;
 const MaxHistoryBytes = 32*1024*1024; { the other half is the camera track }
 function TSimCheckpoint.Bytes: SizeInt;
-begin Result:=InstanceSize+Length(Agents)*SizeOf(TSimAgentCheckpoint)+Length(Lanes)*SizeOf(TLaneRider) end;
+begin Result:=InstanceSize+Length(Agents)*SizeOf(TSimAgentCheckpoint)+Length(Lanes)*SizeOf(TLaneRider)
+  +Length(LocalBots.CrossUsed)*SizeOf(Integer) end;
 constructor TSimReplayHistory.Create;
 begin
   inherited; FItems:=TObjectList.Create(True); FSpacing:=0.1;

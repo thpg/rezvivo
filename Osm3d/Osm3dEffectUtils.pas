@@ -29,7 +29,7 @@ function BuildGroundBlendEffect(GR, GG, GB, FR, FG, FB, NearM, FarM: Single): TE
 implementation
 
 uses
-  SysUtils, CastleRenderOptions;
+  SysUtils, MD5, CastleRenderOptions;
 
 {$IFDEF IAM_LIVE}
 uses
@@ -80,6 +80,9 @@ begin
   PV := TEffectPartNode.Create; PV.ShaderType := stVertex;   PV.Contents := VS;
   PF := TEffectPartNode.Create; PF.ShaderType := stFragment; PF.Contents := FSrc;
   Eff := TEffectNode.Create; Eff.SetParts([PV, PF]);
+  { Tile placeholders have no instance uniforms. Reuse their identical
+    program instead of linking a new copy for every arriving distant tile. }
+  Eff.InternalSharedCodeKey := 'osm-ground-blend:' + MD5Print(MD5String(VS + #0 + FSrc));
   Result := Eff;
 end;
 

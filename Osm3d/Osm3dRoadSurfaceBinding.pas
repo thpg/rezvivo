@@ -13,7 +13,7 @@ procedure AttachRoadSurface(Geo: TIndexedFaceSetNode;
 implementation
 
 uses SysUtils, Math, Generics.Collections, Osm3dRoadSurface,
-  Osm3dRoadMaterial, Osm3dGeomRoads, Osm3dRoadCurbs;
+  Osm3dRoadMaterial, Osm3dGeomRoads, Osm3dRoadCurbs, Osm3dRoadPuddles;
 
 type
   TWayInfo = record
@@ -123,6 +123,7 @@ var
   R:TRoadPageRequest;
   A:TRoadCoordAttribute;
   SA:TFloatVertexAttributeNode;
+  Puddles:TRoadPuddleCollector;
   procedure RequestPoint(AProfile,ABlock:Integer; const AP:TVector3);
   begin
     Key:=(QWord(AProfile) shl 32) or LongWord(ABlock);
@@ -145,6 +146,7 @@ begin
   Owners:=SurfaceOwners(Composite,Model,TileOrigin,EastScale);
   Ways:=specialize TDictionary<Int64,TWayInfo>.Create;
   RequestsByKey:=specialize TDictionary<QWord,Integer>.Create;
+  Puddles:=TRoadPuddleCollector.Create;
   try
     if Model<>nil then
       for I:=0 to Model.RoadSegCount-1 do
@@ -281,6 +283,15 @@ begin
     for Tri:=0 to Composite.TriangleCount-1 do
     begin
       V0:=Composite.Indices[Tri*3]; Profile:=Round(Coord[V0*4+3]);
+      if Coord[V0*4+2]>=1 then begin
+        V1:=Composite.Indices[Tri*3+1];V2:=Composite.Indices[Tri*3+2];
+        Puddles.Triangle(Composite.PositionOf(V0),Composite.PositionOf(V1),Composite.PositionOf(V2),
+          Composite.NormalOf(V0),Composite.NormalOf(V1),Composite.NormalOf(V2),
+          Vector4(Coord[V0*4],Coord[V0*4+1],Coord[V0*4+2],Coord[V0*4+3]),
+          Vector4(Coord[V1*4],Coord[V1*4+1],Coord[V1*4+2],Coord[V1*4+3]),
+          Vector4(Coord[V2*4],Coord[V2*4+1],Coord[V2*4+2],Coord[V2*4+3]),
+          Vector4(Style[V0*4],Style[V0*4+1],Style[V0*4+2],Style[V0*4+3]));
+      end;
       if (Profile=0) or (Profile < -1) then Continue;
       if Profile<0 then
       begin
@@ -337,7 +348,8 @@ begin
     SA.NameField:='roadStyle'; SA.NumComponents:=4; AssignStaticField(SA.FdValue, Style);
     Geo.FdAttrib.Add(A); Geo.FdAttrib.Add(SA);
     A.Publish(Requests);
-  finally RequestsByKey.Free; Ways.Free end;
+    RegisterRoadPuddles(Geo,Puddles.Sites);
+  finally Puddles.Free;RequestsByKey.Free; Ways.Free end;
 end;
 
 end.

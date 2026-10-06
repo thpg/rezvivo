@@ -337,7 +337,7 @@ implementation
 
 uses
   CastleLog, CastleUriUtils, Math, Generics.Collections,
-  Osm3dGlslLib, Osm3dVegetationBranchMesh;
+  Osm3dGlslLib, Osm3dVegetationBranchMesh, Osm3dRtxMaterials;
 
 function CameraWorldPosFromView(const ViewMat: TMatrix4): TVector3;
 var
@@ -1024,6 +1024,7 @@ var
   SavedDepthTest, SavedDepthMask, SavedBlend, SavedCull: GLboolean;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(692);{$ENDIF}
+  if RtxReflectionCaptureActive then Exit;
   if not CheckVisible then Exit;
   if not RenderTreesActive then Exit;
   if FProceduralAlternative and ProceduralVegetationActive then Exit;

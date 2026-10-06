@@ -11,8 +11,8 @@ from installer_assets import redundant_assets, validate_asset_links
 from installer_update import select_delta, components, validate_manifest, installer_guards
 ROOT=Path(__file__).resolve().parents[1]
 DLLS=('fmt.dll','freetype.dll','libcrypto-1_1-x64.dll','libogg.dll','libvorbis.dll','libpng14-14.dll',
-      'libssl-1_1-x64.dll','OpenAL32.dll','simplecble.dll','sqlite3.dll',
-      'vcruntime140.dll','msvcr120.dll','vorbisfile.dll','zlib1.dll')
+      'libssl-1_1-x64.dll','OpenAL32.dll','simplecble.dll','libusb0.dll','sqlite3.dll',
+      'vcruntime140.dll','msvcr120.dll','vorbisfile.dll','zlib1.dll','rezvivo_rtx.dll')
 
 def digest(path):
     sha=hashlib.sha256()

@@ -44,7 +44,7 @@ uses SysUtils,
   RideUploadQueue, VeloSiteAPI, GameOsmAccess,
   GameLocalization, AppSettings, GameGraphicsOptions,
   GameMcpServer,GameClientUpdate,GameCrashReports,GameAudio,GameOfflineReadiness,
-  GameStreamingRetirement;
+  GameStreamingRetirement, GameShaderCache;
 
 var
   Window: TCastleWindow;
@@ -103,6 +103,7 @@ end;
 
 procedure ApplicationInitialize;
 begin
+  ConfigureProgramShaderCache;
   { Scene lifecycle tracing opens and flushes a file for every scene. Keep
     the diagnostic available without charging normal streaming for it. }
   SceneLifecycleLogEnabled := GetEnvironmentVariable('REZVIVO_SCENE_LIFECYCLE_LOG') = '1';
@@ -209,6 +210,7 @@ initialization
     Most of your actual application initialization (in particular, any file reading)
     should happen inside ApplicationInitialize. }
 
+  ConfigureDriverShaderCache;
   Application.OnInitialize := @ApplicationInitialize;
 
   Window := TCastleWindow.Create(Application);

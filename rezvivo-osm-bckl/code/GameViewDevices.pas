@@ -15,6 +15,8 @@ type
     FEmptyTitle,FEmptyHint:TCastleLabel;
     FPoll,FLastWidth:Single;
     FSignature:String;
+    FWheelEdit:TMenuEdit;
+    FWheelLabel:TCastleLabel;
     FAdvanced:TCastleUserInterface;
     FSensorPanel:TObject;
     FSimulation:TMenuPanel;
@@ -23,6 +25,14 @@ type
     FSimChoices:TMenuFlow;
     FSimRoute,FSimPick:TMenuButton;
     FRefreshingSimulation,FSimWasEnabled:Boolean;
+    FGradePanel:TMenuPanel;
+    FGradeTitle,FGradeValue,FGradeHint:TCastleLabel;
+    FGradeSlider:TCastleIntegerSlider;
+    FGradeSavePending:Boolean;
+    FGradeSaveDelay:Single;
+    procedure GradeChanged(Sender:TObject);
+    procedure RefreshGrade;
+    procedure SaveGrade;
     procedure Layout;
     procedure Refresh;
     procedure Rebuild;
@@ -30,6 +40,7 @@ type
     procedure ClickDisconnect(Sender:TObject);
     procedure ClickScan(Sender:TObject);
     procedure ClickAdvanced(Sender:TObject);
+    procedure WheelChanged(Sender:TObject);
     procedure ToggleAdapter(Sender:TObject);
     procedure ToggleSimulation(Sender:TObject);
     procedure UseRouteFit(Sender:TObject);
@@ -81,6 +92,15 @@ begin
   FSimPick:=TMenuButton.Create(Self);FSimPick.Name:='SimulationPickFit';
   BindUiText(FSimPick,'Choose another FIT…');FSimPick.OnClick:=@PickSimulationFit;FSimChoices.InsertFront(FSimPick);
   FSimFile:=TMenuLabel.Create(Self);FSimFile.Color:=MenuMuted;FSimulation.InsertFront(FSimFile);
+  FGradePanel:=TMenuPanel.Create(Self);FGradePanel.Name:='TrainerGradePanel';InsertFront(FGradePanel);
+  FGradeTitle:=TMenuLabel.Create(Self);FGradeTitle.Name:='TrainerGradeTitle';BindUiText(FGradeTitle,'Trainer gradient sensitivity');FGradePanel.InsertFront(FGradeTitle);
+  FGradeValue:=TMenuLabel.Create(Self);FGradeValue.Name:='TrainerGradeValue';FGradeValue.Color:=MenuAccent;FGradePanel.InsertFront(FGradeValue);
+  FGradeSlider:=TCastleIntegerSlider.Create(Self);FGradeSlider.Name:='TrainerGradeSensitivity';
+  FGradeSlider.Min:=0;FGradeSlider.Max:=100;FGradeSlider.Value:=Settings.GetTrainerGradeSensitivity;
+  FGradeSlider.DisplayValue:=False;FGradeSlider.OnChange:=@GradeChanged;FGradePanel.InsertFront(FGradeSlider);
+  FGradeHint:=TMenuLabel.Create(Self);FGradeHint.Name:='TrainerGradeHint';FGradeHint.Color:=MenuMuted;
+  BindUiText(FGradeHint,'100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.');
+  FGradePanel.InsertFront(FGradeHint);RefreshGrade;
   FStatus:=TMenuLabel.Create(Self);FStatus.Color:=White;InsertFront(FStatus);
   FAdapters:=TMenuFlow.Create(Self);FAdapters.Spacing:=16;FAdapters.Exists:=False;InsertFront(FAdapters);
   if DeviceService<>nil then for I:=0 to DeviceService.Manager.ProviderCount-1 do begin
@@ -90,6 +110,12 @@ begin
     CB.Checked:=DeviceService.Manager.IsProviderEnabled(P);
     CB.OnChange:=@ToggleAdapter;FAdapters.InsertFront(CB);
   end;
+  FWheelLabel:=TMenuLabel.Create(Self);BindUiText(FWheelLabel,'Wheel circumference (mm)');
+  FWheelLabel.Color:=MenuMuted;FAdapters.InsertFront(FWheelLabel);
+  FWheelEdit:=TMenuEdit.Create(Self);FWheelEdit.Name:='SensorWheelCircumference';
+  FWheelEdit.Width:=100;FWheelEdit.Height:=36;
+  FWheelEdit.Text:=IntToStr(Settings.GetWheelCircumferenceMm);
+  FWheelEdit.OnChange:=@WheelChanged;FAdapters.InsertFront(FWheelEdit);
   FScroll:=TMenuScrollView.Create(Self);FScroll.FullSize:=True;FScroll.Border.Left:=16;FScroll.Border.Right:=16;FScroll.Border.Bottom:=16;InsertFront(FScroll);
   FContent:=TCastleUserInterface.Create(Self);FScroll.ScrollArea.InsertFront(FContent);
   FAdvanced:=TCastleUserInterface.Create(Self);FAdvanced.FullSize:=True;FAdvanced.Border.Top:=180;
@@ -97,11 +123,11 @@ begin
   RefreshSimulation;
 end;
 destructor TDevicesPage.Destroy;
-begin FreeAndNil(FSensorPanel);inherited;end;
+begin SaveGrade;FreeAndNil(FSensorPanel);inherited;end;
 procedure TDevicesPage.PageShown;
 begin inherited;DeviceService.EnableContinuousScan;FSignature:='#refresh';Refresh;Layout;end;
 procedure TDevicesPage.PageHidden;
-begin inherited;end;
+begin SaveGrade;inherited;end;
 procedure TDevicesPage.Resize;
 begin inherited;if FAdvanced<>nil then begin Layout;FSignature:='#refresh';end;end;
 procedure TDevicesPage.Layout;
@@ -134,6 +160,16 @@ begin
     H:=H+FSimFile.EffectiveHeight+16/S;
   end;
   FSimulation.Height:=H;Y:=Y+H+16/S;
+  FGradePanel.Width:=FSimulation.Width;FGradePanel.Anchor(hpLeft,16/S);FGradePanel.Anchor(vpTop,-Y);
+  FGradeTitle.FontSize:=17/S;FGradeTitle.MaxWidth:=FGradePanel.Width-115/S;
+  FGradeTitle.Anchor(hpLeft,16/S);FGradeTitle.Anchor(vpTop,-12/S);
+  FGradeValue.FontSize:=17/S;FGradeValue.Anchor(hpRight,-16/S);FGradeValue.Anchor(vpTop,-12/S);
+  H:=Max(24/S,FGradeTitle.EffectiveHeight)+20/S;
+  FGradeSlider.Width:=FGradePanel.Width-32/S;FGradeSlider.Height:=26/S;
+  FGradeSlider.Anchor(hpLeft,16/S);FGradeSlider.Anchor(vpTop,-H);
+  H:=H+34/S;FGradeHint.FontSize:=13/S;FGradeHint.MaxWidth:=FGradePanel.Width-32/S;
+  FGradeHint.Anchor(hpLeft,16/S);FGradeHint.Anchor(vpTop,-H);
+  FGradePanel.Height:=H+FGradeHint.EffectiveHeight+12/S;Y:=Y+FGradePanel.Height+12/S;
   FStatus.FontSize:=17/S;FStatus.MaxWidth:=EffectiveWidth-32/S;FStatus.Anchor(hpLeft,16/S);FStatus.Anchor(vpTop,-Y);
   FScroll.Border.Top:=Y+FStatus.EffectiveHeight+16/S;
   FEmpty.Anchor(vpTop,-FScroll.Border.Top);
@@ -145,6 +181,10 @@ end;
 procedure TDevicesPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 begin
   inherited;FPoll:=FPoll+SecondsPassed;
+  if FGradeSavePending then begin
+    FGradeSaveDelay:=FGradeSaveDelay-SecondsPassed;
+    if FGradeSaveDelay<=0 then SaveGrade;
+  end;
   if Abs(FLastWidth-EffectiveWidth)>1 then begin Layout;FSignature:='#refresh';end;
   if FPoll<0.4 then Exit;FPoll:=0;Refresh;
 end;
@@ -153,6 +193,7 @@ var I,Count:Integer;E:TGameDeviceEntry;Sig,Text:String;K:TSensorKind;Sensor:TDev
 begin
   if DeviceService=nil then Exit;Sig:='';Count:=0;
   RefreshSimulation;
+  RefreshGrade;
   if FSensorPanel<>nil then TSensorPanel(FSensorPanel).Refresh;
   for I:=0 to DeviceService.Devices.Count-1 do begin E:=DeviceService.Devices[I];
     if not VisibleDevice(E) then Continue;Inc(Count);
@@ -232,6 +273,14 @@ begin
   if FAdvanced.Exists and(FSensorPanel=nil)then begin FSensorPanel:=TSensorPanel.Create(Self);TSensorPanel(FSensorPanel).Build(FAdvanced);end;
   Layout;
 end;
+procedure TDevicesPage.WheelChanged(Sender:TObject);
+var V:Integer;
+begin
+  if not TryStrToInt(Trim(FWheelEdit.Text),V) or (V<500) or (V>4000) then Exit;
+  Settings.SetWheelCircumferenceMm(V);
+  DeviceService.Manager.RefreshWheelCircumference;
+end;
+
 procedure TDevicesPage.ToggleAdapter(Sender:TObject);
 var CB:TCastleCheckbox;P:TTransportProvider;
 begin
@@ -254,6 +303,25 @@ begin
   else Caption:=ExtractFileName(Path);
   if Caption<>FSimFile.Caption then begin FSimFile.Caption:=Caption;FLastWidth:=-1;end;
   if FSimWasEnabled<>Enabled then begin FSimWasEnabled:=Enabled;FLastWidth:=-1;end;
+end;
+
+procedure TDevicesPage.RefreshGrade;
+begin
+  if not FGradeSavePending then FGradeSlider.Value:=Settings.GetTrainerGradeSensitivity;
+  FGradeValue.Caption:=IntToStr(FGradeSlider.Value)+'%';
+end;
+
+procedure TDevicesPage.GradeChanged(Sender:TObject);
+begin
+  FGradeSavePending:=True;FGradeSaveDelay:=0.3;
+  FGradeValue.Caption:=IntToStr(FGradeSlider.Value)+'%';
+end;
+
+procedure TDevicesPage.SaveGrade;
+begin
+  if FGradeSavePending and (Settings<>nil)then begin
+    FGradeSavePending:=False;Settings.SetTrainerGradeSensitivity(FGradeSlider.Value);
+  end;
 end;
 
 procedure TDevicesPage.ToggleSimulation(Sender:TObject);

@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "骑行台坡度灵敏度",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%：完整坡度。低于100%：先将陡坡限制为8%，再按比例减弱。0%：平路。骑行物理和训练目标功率不变。",
   "Hairstyle": "发型",
   "No hair": "无头发",
   "Short crop": "短发",
@@ -354,5 +356,9 @@
   "Front view": "正面",
   "Side view": "侧面",
   "Rear view": "背面",
-  "Drag to rotate · Wheel to zoom": "拖动旋转 · 滚轮缩放"
+  "Drag to rotate · Wheel to zoom": "拖动旋转 · 滚轮缩放",
+  "Wheel circumference (mm)": "车轮周长 (毫米)",
+  "Preparing riders": "正在准备骑手",
+  "Companion": "骑行伙伴",
+  "Passing cyclist": "路过的骑手"
 }

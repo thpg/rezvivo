@@ -25,7 +25,8 @@ data with handcrafted Dream Worlds, smart-trainer integration and interval train
   are excluded from uploads.
 - **Devices and simulation:** Bluetooth trainer and sensor integration, plus
   FIT-based simulation for exploring without connected equipment.
-- **Bike fitting:** adjustable avatars, riding positions and parametric bicycles.
+- **Bike fitting:** adjustable avatars, riding positions and parametric bicycles,
+  with automatic frame sizing and saddle, stem and spacer adjustment.
 
 REZVIVO is in **alpha**. The source build currently targets **Windows x86-64**;
 graphics performance and device compatibility are still being refined.
@@ -111,6 +112,13 @@ Keep `data` beside it. Runtime DLLs are supplied separately;
 [dependencies/runtime.json](dependencies/runtime.json) lists the expected files,
 observed versions, hashes and upstream sources. Compilation does not require
 those DLLs, but running and packaging the client does.
+
+The optional RTX backend has its source in [Osm3d/rtx](Osm3d/rtx). To build it,
+install the Visual C++ x64 build tools and a Vulkan SDK shader compiler, then add
+`-BuildRtx -Glslang "C:/VulkanSDK/<version>/Bin/glslangValidator.exe"` to the build
+command above. Its script fetches the pinned Khronos headers and copies the DLL
+and compiled shaders beside the game. The regular Pascal build uses raster
+rendering when the RTX backend is unavailable.
 
 Review the [distribution notes](PUBLICATION.md) before redistributing a binary package.
 

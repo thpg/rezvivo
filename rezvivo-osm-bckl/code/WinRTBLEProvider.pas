@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs,
-  TrainerData, GameTransportBase, FTMSProtocol;
+  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol;
 
 type
   TScannedDev = record Name, Address: string; RSSI: Int16; end;
@@ -32,6 +32,10 @@ type
   private
     FDevice: Pointer;
     FFTMSParser: TFTMSParser;
+    FFECParser: TCyclingANTParser;
+    FLastFECUserKg, FLastFECBikeKg: Single;
+    FLastFECWind: Single;
+    FFECUserConfigured, FFECWindConfigured: Boolean;
     FHasPower, FHasFEC, FHasHR, FHasCSC: Boolean;
     FFTMSCtrlChar: Pointer;
     FFECWriteChar: Pointer;  { FE-C control write (6e40fec3) }
@@ -53,10 +57,14 @@ type
     function TryPairDevice(Level: Integer): TPairOutcome;
     function TryUnpairDevice: Boolean;
     function ReopenDevice: Boolean;
+    function WriteFEC(const Page: TBytes): Boolean;
   protected
     function WriteFTMSCommand(const Data: TBytes): Boolean; override;
   public
     BatteryLevel: Byte;  { 0..100%, updated via Battery Level notification }
+    { Same entry point for native GATT notifications and offline packet tests. }
+    procedure ReceiveCharacteristicData(const UUID: string; const Data: TBytes);
+    procedure ApplyCharacteristicRead(const UUID: string; const Data: TBytes);
     constructor Create(const AAddress: string; const AFriendlyName: string = ''); override;
     destructor Destroy; override;
     function Connect: Boolean; override;
@@ -542,58 +550,122 @@ end;
   ValueChanged handler
   ═══════════════════════════════════════════════════════════════════ }
 
-{ Parse FE-C ANT-over-BLE notification data }
-procedure ParseFECNotification(Sess: TWinRTBLESession; const Data: TBytes);
-var
-  Page: Byte;
-  Ofs: Integer;
-  Speed: Word;
-  Cadence: Byte;
-  InstPower: Word;
+function ReadCharacteristicBytes(Ch: PIUnk): TBytes;
+var Op,Res,Buf,Acc: PIUnk; Status,Len: Cardinal; Ptr: PByte;
 begin
-  if Length(Data) = 0 then Exit;
+  Result:=nil; Op:=nil; Res:=nil; Buf:=nil; Acc:=nil;
+  try
+    TVtGetObj(VT(Ch)^[15])(Ch,Op);
+    if Op=nil then Exit;
+    Res:=AsyncWaitObjPoll(Op,3000);
+    if Res=nil then Exit;
+    Status:=$FF;
+    TVtGetU32(VT(Res)^[6])(Res,Status);
+    if Status<>0 then Exit;
+    TVtGetObj(VT(Res)^[7])(Res,Buf);
+    if Buf=nil then Exit;
+    Len:=0; TVtGetU32(VT(Buf)^[7])(Buf,Len);
+    if (Len=0) or (Len>512) then Exit;
+    if QI(Buf,IID_IBufferByteAccess,Acc)<>S_OK then Exit;
+    Ptr:=nil; TVtGetPtr(VT(Acc)^[3])(Acc,Ptr);
+    if Ptr=nil then Exit;
+    SetLength(Result,Len); Move(Ptr^,Result[0],Len);
+  finally SafeRelease(Acc); SafeRelease(Buf); SafeRelease(Res); SafeRelease(Op) end;
+end;
 
-  { Determine payload offset: full ANT frame starts with $A4, raw payload doesn't }
-  if (Data[0] = $A4) and (Length(Data) >= 13) then
+procedure TWinRTBLESession.ApplyCharacteristicRead(const UUID: string; const Data: TBytes);
+var U: string; V: Cardinal; F: TTrainerFeatures;
+  function W(P: Integer): Word;
+  begin Result:=Word(Data[P]) or (Word(Data[P+1]) shl 8) end;
+begin
+  U:=LowerCase(UUID);
+  if Pos('2acc',U)>0 then
   begin
-    { Full ANT frame: A4 09 MsgId Channel Data[8] Checksum }
-    if Length(Data) >= 5 then
-      Sess.FFECChannel := Data[3];
-    Ofs := 4; { payload starts at byte 4 }
+    F:=FFTMSParser.ParseFTMSFeatures(Data);
+    if not F.Known then Exit;
+    FTrainerFeatures.Known:=True;
+    FTrainerFeatures.SupportsPower:=F.SupportsPower;
+    FTrainerFeatures.SupportsCadence:=F.SupportsCadence;
+    FTrainerFeatures.SupportsHeartRate:=F.SupportsHeartRate;
+    FTrainerFeatures.SupportsResistanceControl:=F.SupportsResistanceControl;
+    FTrainerFeatures.SupportsPowerControl:=F.SupportsPowerControl;
+    FTrainerFeatures.SupportsInclineControl:=F.SupportsInclineControl;
+    FTrainerFeatures.SupportsSimulation:=F.SupportsSimulation;
   end
-  else
+  else if (Pos('2ad8',U)>0) and (Length(Data)>=6) then
   begin
-    Ofs := 0; { raw 8-byte payload }
-  end;
+    if (SmallInt(W(0))<0) or (SmallInt(W(2))<SmallInt(W(0))) then Exit;
+    FTrainerFeatures.MinPower:=W(0); FTrainerFeatures.MaxPower:=W(2);
+    FTrainerFeatures.PowerIncrement:=W(4);
+    FTrainerFeatures.PowerRangeKnown:=True;
+  end
+  else if (Pos('2ad6',U)>0) and (Length(Data)>=6) then
+  begin
+    if SmallInt(W(2))<SmallInt(W(0)) then Exit;
+    FTrainerFeatures.MinResistance10:=SmallInt(W(0));
+    FTrainerFeatures.MaxResistance10:=SmallInt(W(2));
+    FTrainerFeatures.ResistanceIncrement10:=W(4);
+    FTrainerFeatures.ResistanceRangeKnown:=True;
+  end
+  else if (Pos('2ad5',U)>0) and (Length(Data)>=6) then
+  begin
+    if SmallInt(W(2))<SmallInt(W(0)) then Exit;
+    FTrainerFeatures.MinIncline:=SmallInt(W(0));
+    FTrainerFeatures.MaxIncline:=SmallInt(W(2));
+    FTrainerFeatures.InclineIncrement10:=W(4);
+    FTrainerFeatures.InclineRangeKnown:=True;
+  end
+  else if (Pos('2a5c',U)>0) and (Length(Data)>=2) then
+  begin
+    V:=W(0);
+    FDeviceInfo.SupportsSpeed:=FDeviceInfo.SupportsSpeed or ((V and 1)<>0);
+    FDeviceInfo.SupportsCadence:=FDeviceInfo.SupportsCadence or ((V and 2)<>0);
+  end
+  else if (Pos('2a65',U)>0) and (Length(Data)>=4) then
+  begin
+    V:=Cardinal(W(0)) or (Cardinal(W(2)) shl 16);
+    FDeviceInfo.SupportsSpeed:=FDeviceInfo.SupportsSpeed or ((V and (1 shl 2))<>0);
+    FDeviceInfo.SupportsCadence:=FDeviceInfo.SupportsCadence or ((V and (1 shl 3))<>0);
+  end
+  else if (Pos('2a19',U)>0) and (Length(Data)>=1) and (Data[0]<=100) then
+    BatteryLevel:=Data[0];
+end;
 
-  if Length(Data) < Ofs + 8 then Exit;
-  Page := Data[Ofs];
-
-  case Page of
-    16: { General FE Data — speed + HR }
-    begin
-      Speed := Data[Ofs + 4] or (Data[Ofs + 5] shl 8);
-      Sess.FLastData.InstantSpeed := Speed * 0.001 * 3.6;
-      if Data[Ofs + 6] <> $FF then
-        Sess.FLastData.HeartRate := Data[Ofs + 6];
-      Sess.FLastData.Timestamp := Now;
-      Sess.NotifyDataReceived;
-    end;
-    25: { Trainer Specific Data — power + cadence }
-    begin
-      Cadence := Data[Ofs + 2];
-      InstPower := Data[Ofs + 5] or ((Data[Ofs + 6] and $0F) shl 8);
-      Sess.FLastData.InstantCadence := Cadence;
-      Sess.FLastData.InstantPower := InstPower;
-      Sess.FLastData.IsMoving := (Cadence > 0) or (InstPower > 0);
-      Sess.FLastData.Timestamp := Now;
-      if Sess.FLastData.AveragePower = 0 then
-        Sess.FLastData.AveragePower := InstPower
-      else
-        Sess.FLastData.AveragePower := (Sess.FLastData.AveragePower * 3 + InstPower) div 4;
-      Sess.NotifyDataReceived;
-    end;
+procedure TWinRTBLESession.ReceiveCharacteristicData(const UUID: string; const Data: TBytes);
+var U: string; Parsed: TTrainerDataRecord; Page: TBytes; Channel: Byte; Valid: Boolean;
+begin
+  U:=LowerCase(UUID);
+  if Pos('2ad9',U)>0 then begin ReceiveControlPoint(Data); Exit end;
+  if Pos('2ada',U)>0 then
+  begin
+    if (Length(Data)>0) and (Data[0] in [1,$FF]) then CancelControl;
+    Exit;
   end;
+  if Pos('2a19',U)>0 then begin ApplyCharacteristicRead(U,Data); Exit end;
+  Valid:=False;
+  FLock.Enter;
+  try
+    FFTMSParser.WheelCircumferenceM:=WheelCircumferenceMm/1000.0;
+    FFECParser.WheelCircumferenceM:=WheelCircumferenceMm/1000.0;
+    if Pos('6e40fec2',U)>0 then
+    begin
+      if not DecodeFECFrame(Data,Page,Channel) then Exit;
+      if Channel<>255 then FFECChannel:=Channel;
+      if Page[0]=71 then begin ReceiveFECStatus(Page); Exit end;
+      Valid:=FFECParser.Parse(17,Page,Parsed);
+      if FFECParser.Features.Known then FTrainerFeatures:=FFECParser.Features;
+    end
+    else
+    begin
+      if Pos('2ad2',U)>0 then Parsed:=FFTMSParser.ParseIndoorBikeData(Data)
+      else if Pos('2a63',U)>0 then Parsed:=FFTMSParser.ParseCyclingPowerMeasurement(Data)
+      else if Pos('2a5b',U)>0 then Parsed:=FFTMSParser.ParseCSCMeasurement(Data)
+      else if Pos('2a37',U)>0 then Parsed:=FFTMSParser.ParseHeartRateData(Data)
+      else Exit;
+      Valid:=FFTMSParser.LastPacketValid;
+    end;
+  finally FLock.Leave end;
+  if Valid then PublishMeasurement(Parsed);
 end;
 
 function Notify_Invoke(Self: PDelegate; Sender, Args: PIUnk): HRESULT; stdcall;
@@ -605,8 +677,6 @@ var
   Ptr: PByte;
   Bytes: TBytes;
   Sess: TWinRTBLESession;
-  ParsedMeasurement: Boolean;
-  ParsedData: TTrainerDataRecord;
 begin
   Result := S_OK;
   if (Args = nil) or (Self^.UserData = nil) then Exit;
@@ -630,58 +700,7 @@ begin
       begin
         SetLength(Bytes, Len);
         Move(Ptr^, Bytes[0], Len);
-        ParsedMeasurement := False;
-        if Pos('2ad2', UD.CharUUID) > 0 then
-        begin
-          ParsedMeasurement := True;
-          ParsedData := Sess.FFTMSParser.ParseIndoorBikeData(Bytes);
-        end
-        else if Pos('2a63', UD.CharUUID) > 0 then
-        begin
-          ParsedMeasurement := True;
-          ParsedData := Sess.FFTMSParser.ParseCyclingPowerMeasurement(Bytes);
-        end
-        else if Pos('2a5b', UD.CharUUID) > 0 then
-        begin
-          ParsedMeasurement := True;
-          ParsedData := Sess.FFTMSParser.ParseCSCMeasurement(Bytes);
-        end
-        else if Pos('2a37', UD.CharUUID) > 0 then
-        begin
-          if Length(Bytes) >= 2 then
-          begin
-            if (Bytes[0] and 1) = 0 then
-              Sess.FLastData.HeartRate := Bytes[1]
-            else if Length(Bytes) >= 3 then
-            begin
-              { 16-bit HR format; clamp to 255 since HeartRate is Byte }
-              Sess.FLastData.HeartRate := Math.Min(Bytes[1] or (Bytes[2] shl 8), 255);
-            end;
-            Sess.FLastData.Timestamp := Now;
-          end;
-        end
-        else if Pos('2ad9', UD.CharUUID) > 0 then
-        begin
-          Sess.ReceiveControlPoint(Bytes);
-          SafeRelease(Acc);
-          Exit;
-        end
-        else if Pos('2a19', UD.CharUUID) > 0 then
-        begin
-          { Battery Level: single byte 0..100 }
-          if Length(Bytes) >= 1 then
-            Sess.BatteryLevel := Bytes[0];
-        end
-        else if Pos('6e40fec2', UD.CharUUID) > 0 then
-        begin
-          { FE-C data: ANT-over-BLE frame or raw payload }
-          ParseFECNotification(Sess, Bytes);
-        end;
-        if (not ParsedMeasurement) or Sess.FFTMSParser.LastPacketValid then
-        begin
-          if ParsedMeasurement then Sess.FLastData := ParsedData;
-          Sess.NotifyDataReceived;
-        end;
+        Sess.ReceiveCharacteristicData(UD.CharUUID,Bytes);
       end;
       SafeRelease(Acc);
     end;
@@ -817,6 +836,7 @@ begin
   inherited Create(AAddress, AFriendlyName);
   FDevice := nil;
   FFTMSParser := TFTMSParser.Create;
+  FFECParser := TCyclingANTParser.Create;
   FFTMSCtrlChar := nil;
   FFECWriteChar := nil;
   FFECChannel := 5;
@@ -869,6 +889,7 @@ begin
   ShutdownControl;
   Disconnect;
   FFTMSParser.Free;
+  FFECParser.Free;
   inherited;
 end;
 
@@ -890,6 +911,9 @@ begin
     GATT-слоты в драйвере до reboot. }
   ReleaseRadioResources;
   SetConnectionState(csConnecting, 'WinRT connecting...');
+  FFTMSParser.Reset; FFECParser.Reset;
+  FTrainerFeatures:=Default(TTrainerFeatures);
+  FFECUserConfigured:=False; FFECWindConfigured:=False;
   FHasFTMS := False; FHasPower := False; FHasFEC := False;
   FHasHR := False; FHasCSC := False;
 
@@ -970,9 +994,10 @@ begin
     FDeviceInfo.ProviderName := 'WinRT';
     FDeviceInfo.SupportsFTMS := FHasFTMS;
     FDeviceInfo.SupportsControl := (FFTMSCtrlChar <> nil) or (FFECWriteChar <> nil);
-    FDeviceInfo.SupportsPower := FHasPower or FHasFEC or FHasFTMS;
-    FDeviceInfo.SupportsCadence := FHasFEC or FHasFTMS or FHasCSC or FHasPower;
-    FDeviceInfo.SupportsHeartRate := FHasHR;
+    FDeviceInfo.SupportsPower := FHasPower or FHasFEC or FTrainerFeatures.SupportsPower;
+    FDeviceInfo.SupportsCadence := FDeviceInfo.SupportsCadence or FTrainerFeatures.SupportsCadence;
+    FDeviceInfo.SupportsSpeed := FDeviceInfo.SupportsSpeed or FHasFEC or FHasFTMS;
+    FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
 
     Logger.Info(Format('[WinRT] Caps: FTMS=%s Power=%s HR=%s CSC=%s FEC=%s',
       [BoolToStr(FHasFTMS,True), BoolToStr(FHasPower,True),
@@ -1305,9 +1330,6 @@ var
   ND: TNotifyContext;
   Del: PDelegate;
   { Battery read vars }
-  ReadRes, ReadBuf, ReadAcc: PIUnk;
-  ReadStatus, ReadLen: Cardinal;
-  ReadPtr: PByte;
 begin
   if FDevice = nil then begin Logger.Warning('[WinRT] DiscoverAndSubscribe: FDevice=nil'); Exit; end;
 
@@ -1428,6 +1450,12 @@ begin
                           Logger.Debug(Format('[WinRT]     Char[%d]: %s props=$%.2X', [J, ChS, Props]));
 
                           { Save write chars for trainer control }
+                          if ((Props and $02)<>0) and
+                            ((Pos('2acc',ChS)>0) or (Pos('2ad8',ChS)>0) or
+                             (Pos('2ad6',ChS)>0) or (Pos('2ad5',ChS)>0) or
+                             (Pos('2a5c',ChS)>0) or (Pos('2a65',ChS)>0) or
+                             (Pos('2a19',ChS)>0)) then
+                            ApplyCharacteristicRead(ChS,ReadCharacteristicBytes(Ch));
                           if Pos('6e40fec3', ChS) > 0 then
                           begin
                             FFECWriteChar := Ch;
@@ -1440,7 +1468,7 @@ begin
                             if (Pos('2ad2', ChS) > 0) or (Pos('2a63', ChS) > 0) or
                                (Pos('6e40fec2', ChS) > 0) or (Pos('2a37', ChS) > 0) or
                                (Pos('2a5b', ChS) > 0) or (Pos('2ad9', ChS) > 0) or
-                               (Pos('2a19', ChS) > 0) then
+                               (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) then
                             begin
                               { Don't set ProtectionLevel — let Windows handle encryption transparently }
 
@@ -1488,55 +1516,6 @@ begin
                                   FFTMSCtrlChar := Ch;
 
                                 { Initial read for Battery Level (notifications are infrequent) }
-                                if Pos('2a19', ChS) > 0 then
-                                begin
-                                  AsyncOp := nil;
-                                  { IGattCharacteristic::ReadValueAsync — vtable[14] }
-                                  TVtCallOut(VT(Ch)^[14])(Ch, AsyncOp);
-                                  if AsyncOp <> nil then
-                                  begin
-                                    ReadRes := AsyncWaitObjPoll(AsyncOp, 5000);
-                                    SafeRelease(AsyncOp);
-                                    if ReadRes <> nil then
-                                    begin
-                                      ReadStatus := $FF;
-                                      TVtGetU32(VT(ReadRes)^[6])(ReadRes, ReadStatus);
-                                      if ReadStatus = 0 then
-                                      begin
-                                        ReadBuf := nil;
-                                        TVtGetObj(VT(ReadRes)^[7])(ReadRes, ReadBuf);
-                                        if ReadBuf <> nil then
-                                        begin
-                                          ReadLen := 0;
-                                          TVtGetU32(VT(ReadBuf)^[7])(ReadBuf, ReadLen);
-                                          if ReadLen >= 1 then
-                                          begin
-                                            ReadAcc := nil;
-                                            if QI(ReadBuf, IID_IBufferByteAccess, ReadAcc) = S_OK then
-                                            begin
-                                              ReadPtr := nil;
-                                              TVtGetPtr(VT(ReadAcc)^[3])(ReadAcc, ReadPtr);
-                                              if ReadPtr <> nil then
-                                              begin
-                                                BatteryLevel := ReadPtr^;
-                                                Logger.Info(Format('[WinRT]     Battery: %d%%', [BatteryLevel]));
-                                              end;
-                                              SafeRelease(ReadAcc);
-                                            end;
-                                          end else
-                                            Logger.Warning('[WinRT]     Battery read: buffer empty');
-                                          SafeRelease(ReadBuf);
-                                        end else
-                                          Logger.Warning('[WinRT]     Battery read: get_Value returned nil');
-                                      end else
-                                        Logger.Warning(Format('[WinRT]     Battery read: status=%d', [ReadStatus]));
-                                      SafeRelease(ReadRes);
-                                    end else
-                                      Logger.Warning('[WinRT]     Battery read: AsyncWaitObjPoll returned nil');
-                                  end else
-                                    Logger.Warning('[WinRT]     Battery read: ReadValueAsync returned nil op');
-                                end;
-
                                 { Skip SafeRelease — char ownership transferred to FSubs }
                                 Continue;
                               end
@@ -1716,11 +1695,21 @@ begin
   Result := WriteFTMSControl(FFTMSCtrlChar, Data);
 end;
 
+function TWinRTBLESession.WriteFEC(const Page: TBytes): Boolean;
+begin
+  Result:=(FConnectionState=csConnected) and (FFECWriteChar<>nil);
+  if Result then Result:=WriteFECPage(FFECWriteChar,FFECChannel,Page);
+end;
+
 function TWinRTBLESession.RequestControl: Boolean;
 begin
   Result := False;
   if FConnectionState <> csConnected then Exit;
-  if FHasFEC then begin Result := True; Exit; end; { FE-C: no request needed }
+  if FHasFEC then begin
+    Result:=FFECWriteChar<>nil;
+    if Result then WriteFEC(FECRequestPage(54));
+    Exit;
+  end;
   if not FHasFTMS then Exit;
   Result := inherited RequestControl;
   if Result then
@@ -1731,19 +1720,20 @@ end;
 
 function TWinRTBLESession.SetTargetPower(Watts: Word): Boolean;
 var
-  Page: array[0..7] of Byte;
+  Page: TBytes;
   QW: Word;
 begin
   Result := False;
   if FConnectionState <> csConnected then Exit;
   if FHasFEC and (FFECWriteChar <> nil) then
   begin
+    SetLength(Page,8);
     QW := Min(16383, Watts) * 4;
     Page[0] := 49; { Page 49 = Target Power }
     Page[1] := $FF; Page[2] := $FF; Page[3] := $FF;
     Page[4] := $FF; Page[5] := $FF;
     Page[6] := Lo(QW); Page[7] := Hi(QW);
-    Result := WriteFECPage(FFECWriteChar, FFECChannel, Page);
+    Result := SendFECCommand(Page,@WriteFEC);
   end
   else if FHasFTMS then
     Result := inherited SetTargetPower(Watts);
@@ -1752,17 +1742,18 @@ end;
 
 function TWinRTBLESession.SetResistanceLevel(Level: Byte): Boolean;
 var
-  Page: array[0..7] of Byte;
+  Page: TBytes;
 begin
   Result := False;
   if FConnectionState <> csConnected then Exit;
   if FHasFEC and (FFECWriteChar <> nil) then
   begin
+    SetLength(Page,8);
     Page[0] := 48; { Page 48 = Basic Resistance }
     Page[1] := $FF; Page[2] := $FF; Page[3] := $FF;
     Page[4] := $FF; Page[5] := $FF; Page[6] := $FF;
     Page[7] := Min(100, Level) * 2; { same percent units as other providers }
-    Result := WriteFECPage(FFECWriteChar, FFECChannel, Page);
+    Result := SendFECCommand(Page,@WriteFEC);
   end
   else if FHasFTMS then
     Result := inherited SetResistanceLevel(Level);
@@ -1771,7 +1762,7 @@ end;
 
 function TWinRTBLESession.SetIncline(InclinePercent: Single): Boolean;
 var
-  Page: array[0..7] of Byte;
+  Page: TBytes;
   FECGrade: Integer;
 begin
   Result := False;
@@ -1782,12 +1773,13 @@ begin
     FECGrade := Round((InclinePercent + 200.0) * 100);
     if FECGrade < 0 then FECGrade := 0;
     if FECGrade > 40000 then FECGrade := 40000;
+    SetLength(Page,8);
     Page[0] := 51; { Page 51 = Track Resistance }
     Page[1] := $FF; Page[2] := $FF; Page[3] := $FF;
     Page[4] := $FF;
     Page[5] := Lo(Word(FECGrade)); Page[6] := Hi(Word(FECGrade));
     Page[7] := $FF; { CRR = default }
-    Result := WriteFECPage(FFECWriteChar, FFECChannel, Page);
+    Result := SendFECCommand(Page,@WriteFEC);
   end
   else if FHasFTMS then
     Result := inherited SetIncline(InclinePercent);
@@ -1797,36 +1789,27 @@ end;
 
 function TWinRTBLESession.SetSimulation(Grade: Single; WindSpeed: Single;
   RiderWeight: Single; BikeWeight: Single): Boolean;
-var
-  Page: array[0..7] of Byte;
-  FECGrade: Integer;
+var Page: TBytes; EncodedGrade: Word;
 begin
-  Result := False;
-  if FConnectionState <> csConnected then Exit;
-  try
-    if FHasFEC and (FFECWriteChar <> nil) then
-    begin
-      { FE-C Page 51 — Track Resistance
-        Grade: unsigned 16-bit, units 0.01%, offset +200.00%
-        Value = (Grade% + 200) * 100; range 0..40000 }
-      FECGrade := Round((Grade + 200.0) * 100);
-      if FECGrade < 0 then FECGrade := 0;
-      if FECGrade > 40000 then FECGrade := 40000;
-      Page[0] := 51; { Page 51 = Track Resistance }
-      Page[1] := $FF; Page[2] := $FF; Page[3] := $FF;
-      Page[4] := $FF;
-      Page[5] := Lo(Word(FECGrade)); Page[6] := Hi(Word(FECGrade));
-      Page[7] := $FF;
-      Result := WriteFECPage(FFECWriteChar, FFECChannel, Page);
-    end
-    else if FHasFTMS then
-      Result := inherited SetSimulation(Grade, WindSpeed, RiderWeight, BikeWeight);
-  except
-    on E: Exception do
-      Logger.Error('[WinRT] SetSimulation: ' + E.ClassName + ': ' + E.Message);
+  Result:=False;
+  if FConnectionState<>csConnected then Exit;
+  if not FHasFEC then
+    Exit(inherited SetSimulation(Grade,WindSpeed,RiderWeight,BikeWeight));
+  if FFECWriteChar=nil then Exit;
+  if not FFECUserConfigured or (Abs(FLastFECUserKg-RiderWeight)>0.01) or
+    (Abs(FLastFECBikeKg-BikeWeight)>0.01) then
+  begin
+    if not WriteFEC(FECUserConfiguration(RiderWeight,BikeWeight,WheelCircumferenceMm/1000.0)) then Exit;
+    FLastFECUserKg:=RiderWeight; FLastFECBikeKg:=BikeWeight; FFECUserConfigured:=True;
   end;
-  Logger.Debug('[WinRT] SetSimulation(grade=' + FormatFloat('0.0', Grade) +
-    '% wind=' + FormatFloat('0.0', WindSpeed) + ') -> ' + BoolToStr(Result, True));
+  if not FFECWindConfigured or (Abs(FLastFECWind-WindSpeed)>0.05) then
+  begin
+    if not WriteFEC(FECWindParameters(WindSpeed,0.51)) then Exit;
+    FLastFECWind:=WindSpeed; FFECWindConfigured:=True;
+  end;
+  EncodedGrade:=Round(EnsureRange(Grade+200.0,0,400)*100);
+  Page:=TBytes.Create(51,$FF,$FF,$FF,$FF,Lo(EncodedGrade),Hi(EncodedGrade),100);
+  Result:=SendFECCommand(Page,@WriteFEC);
 end;
 
 function TWinRTBLESession.Start: Boolean;
@@ -1843,7 +1826,12 @@ function TWinRTBLESession.Stop: Boolean;
 begin
   Result := False;
   if FConnectionState <> csConnected then Exit;
-  if FHasFEC then Exit(SetTargetPower(0));
+  if FHasFEC then
+  begin
+    if FTrainerFeatures.Known and not FTrainerFeatures.SupportsResistanceControl then
+      Exit(SetTargetPower(0));
+    Exit(SetResistanceLevel(0));
+  end;
   if not FHasFTMS then Exit;
   Result := inherited Stop;
   Logger.Debug(Format('[WinRT] Stop → %s', [BoolToStr(Result, True)]));
@@ -1853,7 +1841,12 @@ function TWinRTBLESession.Pause: Boolean;
 begin
   Result := False;
   if FConnectionState <> csConnected then Exit;
-  if FHasFEC then Exit(SetTargetPower(0));
+  if FHasFEC then
+  begin
+    if FTrainerFeatures.Known and not FTrainerFeatures.SupportsResistanceControl then
+      Exit(SetTargetPower(0));
+    Exit(SetResistanceLevel(0));
+  end;
   if not FHasFTMS then Exit;
   Result := inherited Pause;
   Logger.Debug(Format('[WinRT] Pause → %s', [BoolToStr(Result, True)]));

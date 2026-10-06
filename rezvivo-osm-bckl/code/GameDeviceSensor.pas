@@ -284,13 +284,13 @@ begin
   if AInfo.SupportsHeartRate then
     Result.Add(THRSensor.Create(AInfo.Address, AInfo.Name));
 
-  if AInfo.SupportsPower or AInfo.SupportsFTMS then
+  if AInfo.SupportsPower then
     Result.Add(TPowerSensor.Create(AInfo.Address, AInfo.Name));
 
-  if AInfo.SupportsCadence or AInfo.SupportsFTMS then
+  if AInfo.SupportsCadence then
     Result.Add(TCadenceSensor.Create(AInfo.Address, AInfo.Name));
 
-  if AInfo.SupportsFTMS then
+  if AInfo.SupportsSpeed then
     Result.Add(TSpeedSensor.Create(AInfo.Address, AInfo.Name));
 end;
 
@@ -329,9 +329,25 @@ begin
 end;
 
 function TDeviceSensor.Update(const Data: TTrainerDataRecord): Boolean;
+const Metrics: array[TSensorKind] of TTrainerMetric =
+  (tmHeartRate, tmPower, tmCadence, tmSpeed);
 var
   NewInstant, NewDevAvg: Double;
+  M: TTrainerMetric;
 begin
+  Result := False;
+  M := Metrics[FKind];
+  if Data.HasMetricMask then
+  begin
+    if not (M in Data.PresentMetrics) then Exit;
+    if (Data.MetricTime[M]<>0) and (Data.MetricTime[M]<FLastUpdate) then Exit;
+    if not (M in Data.ValidMetrics) then
+    begin
+      FHasData := False;
+      FInstant := 0;
+      Exit;
+    end;
+  end;
   Result := DoExtract(Data, NewInstant, NewDevAvg);
   if not Result then Exit;
 
@@ -344,12 +360,11 @@ begin
   FSessionSum := FSessionSum + NewInstant;
   Inc(FSessionCount);
 
-  if not FHasData then
+  if FSessionCount=1 then
   begin
     { Первый замер — инициализируем min/max }
     FSessionMin := NewInstant;
     FSessionMax := NewInstant;
-    FHasData := True;
   end
   else
   begin
@@ -357,11 +372,16 @@ begin
     if NewInstant > FSessionMax then FSessionMax := NewInstant;
   end;
 
-  FLastUpdate := Now;
+  FHasData := True;
+  if Data.HasMetricMask and (Data.MetricTime[M] <> 0) then
+    FLastUpdate := Data.MetricTime[M]
+  else if Data.Timestamp <> 0 then FLastUpdate := Data.Timestamp
+  else FLastUpdate := Now;
 end;
 
 procedure TDeviceSensor.ResetSession;
 begin
+  FLastUpdate := 0;
   FInstant := 0;
   FPrevInstant := 0;
   FDeviceAverage := 0;

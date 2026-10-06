@@ -79,10 +79,27 @@ end;
 
 function TDeviceRoleAssignments.Matches(Role: TDeviceRole;
   const Transport, Address: String): Boolean;
+var Saved, Candidate, Legacy, ProfileText: String; P, Q: Integer; Profile: Integer;
 begin
-  Result := (FSelections[Role].Mode = dsmDevice) and
-    SameText(FSelections[Role].Transport, Trim(Transport)) and
-    SameText(FSelections[Role].Address, Trim(Address));
+  Result:=False;
+  if (FSelections[Role].Mode<>dsmDevice) or
+    not SameText(FSelections[Role].Transport,Trim(Transport)) then Exit;
+  Saved:=LowerCase(Trim(FSelections[Role].Address));
+  Candidate:=LowerCase(Trim(Address));
+  if Saved=Candidate then Exit(True);
+  { Previous releases saved only ANT:number. Preserve those selections without
+    confusing a belt with a trainer having the same number. All previously
+    supported non-HR ANT roles belonged to FE-C. }
+  if (Pos('ant:',Saved)<>1) or (Pos('ant:',Candidate)<>1) or
+    (Pos(':',Copy(Saved,5,MaxInt))<>0) then Exit;
+  P:=Pos(':',Copy(Candidate,5,MaxInt));
+  if P=0 then Exit;
+  Inc(P,4); Legacy:=Copy(Candidate,1,P-1);
+  if Saved<>Legacy then Exit;
+  ProfileText:=Copy(Candidate,P+1,MaxInt);
+  Q:=Pos(':',ProfileText); if Q>0 then ProfileText:=Copy(ProfileText,1,Q-1);
+  Profile:=StrToIntDef(ProfileText,-1);
+  if Role=drHeartRate then Result:=Profile=120 else Result:=Profile=17;
 end;
 
 function TDeviceRoleAssignments.Allows(Role: TDeviceRole;

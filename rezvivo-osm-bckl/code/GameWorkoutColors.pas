@@ -2,6 +2,7 @@ unit GameWorkoutColors;
 {$mode objfpc}{$H+}
 interface
 uses CastleColors, WorkoutFile;
+const WorkoutZone1Upper:Single=0.55;
 function WorkoutPowerColor(Power:Single):TCastleColor;
 function WorkoutPowerZone(Power:Single):Integer;
 function WorkoutSegmentColor(Segment:TWorkoutSegment;Scale:Single):TCastleColor;
@@ -10,7 +11,7 @@ uses CastleVectors;
 function WorkoutPowerZone(Power:Single):Integer;
 begin
   if Power<0.001 then Result:=0
-  else if Power<0.55 then Result:=1
+  else if Power<WorkoutZone1Upper then Result:=1
   else if Power<0.75 then Result:=2
   else if Power<0.90 then Result:=3
   else if Power<1.05 then Result:=4

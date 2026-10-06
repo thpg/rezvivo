@@ -428,6 +428,7 @@ type
       Commit: Boolean): TVector3;
     function TrafficLimit(AHandle: TLaneRiderHandle): Single;
     procedure UnregisterRider(AHandle: TLaneRiderHandle);
+    procedure ReplaceRiderTag(OldTag,NewTag:Pointer);
     procedure SetRiderPos(AHandle: TLaneRiderHandle; ALoopPos: Single);
     procedure SetRiderActive(AHandle: TLaneRiderHandle; AActive: Boolean);
     function GetLane(AHandle: TLaneRiderHandle): Integer;
@@ -1007,18 +1008,29 @@ begin
 end;
 
 function TLaneManager.RegisterRider(ATag: Pointer): TLaneRiderHandle;
+var I:Integer;
 begin
-  Result := FCount;
-  if FCount >= Length(FRiders) then
-    SetLength(FRiders, FCount + 8);
-  FRiders[FCount].Active := True;
-  FRiders[FCount].LoopPos := 0;
-  FRiders[FCount].PrevLoopPos := 0;
-  FRiders[FCount].Lane := FDefaultLane;
-  FRiders[FCount].SmoothLane := FDefaultLane;
-  FRiders[FCount].Tag := ATag;
-  FRiders[FCount].DriftTimer := 2.0 + Random * 6.0;  { first drift in 2-8s }
-  Inc(FCount);
+  Result:=FindRider(ATag);if Result>=0 then Exit;
+  Result:=FCount;
+  for I:=0 to FCount-1 do if not FRiders[I].Active then begin Result:=I;Break end;
+  if Result=FCount then begin
+    if FCount>=Length(FRiders)then SetLength(FRiders,FCount+8);
+    Inc(FCount);
+  end;
+  FRiders[Result]:=Default(TLaneRider);
+  FRiders[Result].Active:=True;FRiders[Result].Lane:=FDefaultLane;
+  FRiders[Result].SmoothLane:=FDefaultLane;FRiders[Result].Tag:=ATag;
+  FRiders[Result].DriftTimer:=2.0+Random*6.0;
+end;
+
+procedure TLaneManager.ReplaceRiderTag(OldTag,NewTag:Pointer);
+var I:Integer;
+begin
+  if OldTag=nil then Exit;
+  for I:=0 to FCount-1 do if FRiders[I].Tag=OldTag then begin
+    FRiders[I].Tag:=NewTag;
+    if NewTag=nil then UnregisterRider(I);
+  end;
 end;
 
 procedure TLaneManager.UnregisterRider(AHandle: TLaneRiderHandle);

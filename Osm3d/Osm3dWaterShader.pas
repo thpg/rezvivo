@@ -37,12 +37,13 @@ procedure AttachWaterScale(Shape: TShapeNode; const Rec: TTileMeshRec; VertexCou
 procedure WaterShaderTick(SecondsElapsed: Single);
 procedure ClearWaterShaderRegistry;
 function WaterShaderFieldCount: Integer;
+function WaterFilmGLSL: string;
 function WaterShaderClock: Single;
 
 implementation
 
 uses
-  Osm3dStudioSettings            { WaterWaveSizeActive / WaterLevelLiftActive }
+  Osm3dRtxMaterials, Osm3dSunSky, Osm3dStudioSettings            { WaterWaveSizeActive / WaterLevelLiftActive }
 ;
 
 {
@@ -104,7 +105,7 @@ const
     'uniform vec3 gc_SunDirToward;' + #10 +
     'vec4 position_eye_to_world_space(vec4 position_eye);' + #10 +
     'float waterFbm(vec2 p,float footprint);' + #10 +
-    'vec3 gWaterToCamera;' + #10 +
+    'vec3 gWaterToCamera;vec4 rzWaterRequest=vec4(0);' + #10 +
     '// Compensated product: keep fractional phase even millions of metres away.' + #10 +
     'float waterProductError(float a,float b,float product) {' + #10 +
     '  float ac=4097.0*a, bc=4097.0*b;' + #10 +
@@ -172,10 +173,14 @@ const
     '  vec2 p=xz;' + #10 +
     '  float t=time/sqrt(scale);' + #10 +
     '  float pixelMetres=max(length(dFdx(gWaterToCamera.xz)),length(dFdy(gWaterToCamera.xz)));' + #10 +
+    '  // Half-resolution normals must select the same waves as the main view.' + #10 +
+    '  pixelMetres*=rz_capture>.5 ? .5 : 1.0;' + #10 +
     '  float sea=0.25+1.5*clamp(sea_state,0.0,1.0);' + #10 +
     '  // Retain broad waves at twice the previous pixel footprint. Apply the' + #10 +
     '  // same LOD scale to packet filtering; capillary ripples keep their own AA.' + #10 +
     '  float swellPixelMetres=pixelMetres/2.0;' + #10 +
+    '  // Reflected buildings need moving broad normals well beyond the near ripples.' + #10 +
+    '  if(rz_available>.5 || rz_capture>.5)swellPixelMetres*=.25;' + #10 +
     '  float broadFade=1.0-smoothstep(0.3,1.5,swellPixelMetres/scale);' + #10 +
     '  float crest=0.0; vec3 n0=vec3(0,1,0);' + #10 +
     '  if (broadFade>0.001) {' + #10 +
@@ -187,6 +192,7 @@ const
     '  float microFrequency=max(wave_size,0.05)/(0.55*max(sqrt(scale),0.12));' + #10 +
     '  float mt=time;' + #10 +
     '  float footprint=max(length(dFdx(gWaterToCamera.xz)),length(dFdy(gWaterToCamera.xz)))*microFrequency;' + #10 +
+    '  footprint*=rz_capture>.5 ? .5 : 1.0;' + #10 +
     '  float microFade=1.0-smoothstep(0.08,0.5,footprint);' + #10 +
     '  vec3 detail=vec3(0);' + #10 +
     '  float glitterNoise=0.5;' + #10 +
@@ -200,7 +206,8 @@ const
     '    detail=vec3(h-hx,0,h-hz)*1.5*(sea*0.6+0.4)*microFade;' + #10 +
     '    glitterNoise=fb*0.5+0.5;' + #10 +
     '  }' + #10 +
-    '  vec3 N=normalize(n0+detail);' + #10 +
+    '  vec3 N=normalize(n0+detail);rzWaterRequest=vec4(N*.5+.5,1.0);' + #10 +
+    '  if(rz_capture>.5)return;' + #10 +
     '  vec3 V=normalize(gWaterToCamera);' + #10 +
     '  vec3 L=normalize(gc_SunDirToward);' + #10 +
     '  float daylight=smoothstep(0.0,0.42,asin(clamp(L.y,-1.0,1.0)));' + #10 +
@@ -218,9 +225,9 @@ const
     '  vec3 R=reflect(-V,N); R.y=max(R.y,0.04); R=normalize(R);' + #10 +
     '  vec3 sky=mix(horizon,zenith,pow(max(R.y,0.0),0.42));' + #10 +
     '  float sr=max(dot(R,L),0.0);' + #10 +
-    '  sky+=sun*(pow(sr,10.0)*0.18+smoothstep(0.9994,0.9998,sr)*30.0);' + #10 +
+    '  sky+=sun*(pow(sr,180.0)*0.18+rzSunDisc(R,L)*30.0);' + #10 +
     '  float fresnel=0.02+0.98*pow(1.0-clamp(dot(N,V),0.0,1.0),5.0);' + #10 +
-    '  vec3 color=mix(body,sky,fresnel);' + #10 +
+    '  vec3 color=mix(body,rzEnvironment(sky),fresnel);' + #10 +
     '  vec3 H=normalize(L+V);' + #10 +
     '  float nh=max(dot(N,H),0.0);' + #10 +
     '  color+=sun*(pow(nh,500.0)*mix(0.4,3.4,glitterNoise)*microFade+pow(nh,48.0)*0.12);' + #10 +
@@ -262,7 +269,11 @@ begin
 
   PartFrag := TEffectPartNode.Create;
   PartFrag.ShaderType := stFragment;
-  PartFrag.Contents   := WATER_FRAGMENT_GLSL;
+  { The effect shares the ground mesh with roads. Only override actual water:
+    a zero request on dry material would erase the ground effect's puddles. }
+  PartFrag.Contents   := RTX_MATERIAL_GLSL+SUN_DISC_GLSL+WATER_FRAGMENT_GLSL+#10+
+    'void PLUG_fragment_end(inout vec4 color){if(rz_capture>.5 && abs(water_mat_id-20.0)<.5)color=rzWaterRequest;}';
+  AttachRtxMaterial(Result);
 
   Result.SetParts([PartNoise, PartVertex, PartFrag]);
 
@@ -283,6 +294,31 @@ end;
 function TWaterCompositeShader.MeshLift: Single;
 begin
   Result := WaterLevelLiftActive;
+end;
+
+function WaterFilmGLSL: string;
+begin
+  Result :=
+    'uniform float gp_time;' + #10 +
+    'vec3 gpWaterFilmNormal(vec2 p,float pixelMetres,vec3 groundN){' + #10 +
+    '    // Millimetric capillary ripples. No ocean swell or displacement on asphalt.' + #10 +
+    '    p=mod(p,4096.0);' + #10 +
+    '    float aa=1.0-smoothstep(.025,.15,pixelMetres);' + #10 +
+    '    vec2 wave=vec2(cos(dot(p,vec2(12.1,8.4))-gp_time*1.8),' + #10 +
+    '                   cos(dot(p,vec2(-9.3,17.6))+gp_time*2.1));' + #10 +
+    '    return normalize(groundN+vec3(wave.x*.006,0.0,wave.y*.006)*aa);' + #10 +
+    '}' + #10 +
+    'vec3 gpWaterFilm(vec3 road,vec3 N,vec3 V,vec3 L){' + #10 +
+    '    float daylight=smoothstep(0.0,.42,asin(clamp(L.y,-1.0,1.0)));' + #10 +
+    '    vec3 R=reflect(-V,N);' + #10 +
+    '    vec3 sky=mix(vec3(.85,.36,.16),vec3(.52,.68,.82),daylight);' + #10 +
+    '    sky=mix(sky,mix(vec3(.03,.05,.16),vec3(.07,.20,.42),daylight),pow(max(R.y,0.0),.42));' + #10 +
+    '    float fresnel=.02+.98*pow(1.0-clamp(dot(N,V),0.0,1.0),5.0);' + #10 +
+    '    // Transparent water: the darkened road and its markings remain underneath.' + #10 +
+    '    vec3 water=mix(road*.68,gpEnvironment(sky),fresnel);' + #10 +
+    '    float glint=pow(max(dot(N,normalize(V+L)),0.0),650.0);' + #10 +
+    '    return water+vec3(1.0,.94,.83)*glint*.35*smoothstep(-.03,.03,L.y);' + #10 +
+    '}' + #10;
 end;
 
 { ----- обёртки над общим диспетчером (см. интерфейс) ----- }

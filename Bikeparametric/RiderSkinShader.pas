@@ -1,7 +1,7 @@
 unit RiderSkinShader;
 {$mode objfpc}{$H+}
 interface
-uses X3DNodes,X3DFields,CastleVectors;
+uses RiderShaderSharing, X3DNodes,X3DFields,CastleVectors;
 type
   TRiderSkin=class
   private
@@ -236,7 +236,7 @@ begin
   Eff.AddCustomField(TSFVec3f.Create(Eff,True,'reIris',(FIris[0]+FIris[1])*0.5));
   V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=EyeVS;
   F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=EyeFS;
-  Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
+  Eff.SetParts([V,F]);ShareRiderEffect(Eff);App.FdEffects.Add(Eff);
 end;
 procedure TRiderSkin.VisitOral(Sh:TShapeNode);
 var Geo:TAbstractComposedGeometryNode;Colors:TColorRGBANode;Coord:TCoordinateNode;
@@ -260,7 +260,7 @@ begin
   Eff:=TEffectNode.Create('RiderOralSurface');Eff.Language:=slGLSL;Eff.UniformMissing:=umIgnore;
   V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=OralVS;
   F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=OralFS;
-  Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
+  Eff.SetParts([V,F]);ShareRiderEffect(Eff);App.FdEffects.Add(Eff);
 end;
 procedure TRiderSkin.Visit(Node:TX3DNode);
 var Sh:TShapeNode;App:TAppearanceNode;Mat:TPhysicalMaterialNode;
@@ -335,7 +335,7 @@ begin
   Eff.AddCustomField(TSFVec3f.Create(Eff,True,'rsIrisR',FIris[1]));
   V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=RiderSurfaceMotionVS+SkinVS;
   F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=SkinFS;
-  Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
+  Eff.SetParts([V,F]);ShareRiderEffect(Eff);App.FdEffects.Add(Eff);
 end;
 constructor TRiderSkin.Create(Root:TX3DNode;Height:Single;const FaceFile:String;GeometricFace:Boolean;GeometricEyes:Boolean);
 var Source:TFileStream;Data:TJSONData;Eyes:TJSONArray;I:Integer;

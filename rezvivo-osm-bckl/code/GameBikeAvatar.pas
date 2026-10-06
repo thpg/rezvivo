@@ -1,4 +1,4 @@
-{
+﻿{
   GameBikeAvatar — loads a parametric bike+rider model from JSON
   and applies it to a TCastleScene for use as the player avatar.
 
@@ -17,7 +17,7 @@ interface
 
 uses
   Classes,
-  CastleScene, X3DNodes, BikeParametric;
+  CastleScene, X3DNodes, BikeParametric, RiderTripo;
 
 var
   { Session-only MCP benchmark override. Empty uses the player's selection. }
@@ -30,14 +30,9 @@ var
 function LoadBikeAvatarFromJSON(const AJsonUrl: string;
   AScene: TCastleScene): TX3DRootNode;
 
-{ Same but builds from a JSON string (e.g. received from network).
-  Does the same pipeline: LoadBikeFromJSON → Build → Strip → Reorient → Load. }
-function LoadBikeAvatarFromJSONString(const AJsonText: string;
-  AScene: TCastleScene): TX3DRootNode;
-
 { Build a TBikeInstance with LOD from a JSON config file.
-  The instance owns 4 sub-scenes (Frame, Wheels, Crank, Rider).
-  StripEnvironment + ReorientBikeRoot are applied to each sub-scene root. }
+  Bicycle groups and the rider share one scene. StripEnvironment and
+  ReorientBikeRoot are applied once to that scene root. }
 function LoadBikeInstanceFromJSON(const AJsonUrl: string;
   AOwner: TComponent;
   LOD3Dist: Single = 15.0;
@@ -52,10 +47,12 @@ function LoadBikeInstanceFromJSONString(const AJsonText: string;
   LOD2Dist: Single = 40.0;
   LOD1Dist: Single = 80.0;
   AAttachRider: Boolean = True;
-  AUseLod: Boolean = True): TBikeInstance;
+  AUseLod: Boolean = True;
+  AAutoFitRider: Boolean = False): TBikeInstance;
 
 { Монтирует tripoRider из JSON в уже собранный инстанс. }
-procedure AttachTripoRiderFromJSON(Inst: TBikeInstance; const AJsonText: string);
+procedure AttachTripoRiderFromJSON(Inst: TBikeInstance; const AJsonText: string;
+  Prepared: TTripoGlbPrepared = nil);
 
 { Selected bike URL: Insights provides geometry overrides for the base bike.
   Rider postures are defined independently in RiderPoseCatalog. }
@@ -78,10 +75,6 @@ function LoadActiveBikeInstance(AOwner: TComponent;
   LOD2Dist: Single = 40.0;
   LOD1Dist: Single = 80.0): TBikeInstance;
 
-{ The offline companion uses the current avatar assets, with the opposite
-  gender and its own white clothing preset. Never modifies the user profile. }
-function LoadCompanionBikeInstance(AOwner: TComponent): TBikeInstance;
-
 { Рост/inseam в см относительно rest-меша, bulk/belly — доли (0 = как в модели). }
 procedure ApplyRiderShapeAdjustments(Inst: TBikeInstance;
   HeightCm, InseamCm, Bulk, Belly: Single);
@@ -96,41 +89,6 @@ procedure ApplyFitKneeAnkle(Inst: TBikeInstance; KneeFlare, AnkleFlex: Single);
   загрузки glb. Шлем — live tint, если райдер уже смонтирован. }
 procedure ApplyBikeFitColorsToInstance(Inst: TBikeInstance);
 
-{ ═══════════════════════════════════════════════════════════════════
-  Threaded bike building — runs TBikeBuilder.Build in background.
-  Usage:
-    Thread := TBikeBuildThread.Create(JsonText, 15, 40, 80);
-    // ... later each frame ...
-    if Thread.Finished then begin
-      Inst := AssembleBikeInstanceFromThread(Thread, Owner);
-      FreeAndNil(Thread);
-    end;
-  ═══════════════════════════════════════════════════════════════════ }
-type
-  TBikeBuildThread = class(TThread)
-  private
-    FJsonText: string;
-    FLODs: array[0..2] of Single;
-    FSceneRoots: array[0..BSG_COUNT-1] of TX3DRootNode;
-    FError: string;
-  protected
-    procedure Execute; override;
-  public
-    constructor Create(const AJsonText: string; ALod3, ALod2, ALod1: Single);
-    destructor Destroy; override;
-    { Error message if build failed, empty on success. }
-    property Error: string read FError;
-    { Access built scene roots (valid only after Finished=True and Error=''). }
-    function SceneRoot(Sub: Integer): TX3DRootNode;
-  end;
-
-{ Assemble a TBikeInstance from thread results.
-  Takes ownership of the X3D roots from the thread.
-  Call only after Thread.Finished=True and Thread.Error=''.
-  Applies StripEnvironment + ReorientBikeRoot + Pickable/Collides settings. }
-function AssembleBikeInstanceFromThread(AThread: TBikeBuildThread;
-  AOwner: TComponent): TBikeInstance;
-
 { Helper procedures — also used by gameviewplay for incremental build assembly }
 procedure StripEnvironmentNodes(Root: TX3DRootNode);
 procedure ReorientBikeRoot(Root: TX3DRootNode);
@@ -141,7 +99,7 @@ implementation
 uses RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
-  DebugLog, AppSettings, RiderTripo;
+  DebugLog, AppSettings, GameBikeAutoFit;
 
 { Remove environment nodes that belong to the standalone viewer
   (Background, NavigationInfo, Viewpoint, DirectionalLight) but keep
@@ -327,71 +285,26 @@ begin
   Logger.Info('[BikeAvatar] ' + '<<< LoadBikeAvatarFromJSON done: ' + AJsonUrl);
 end;
 
-function BuildBikeRootNodeFromString(const AJsonText: string): TX3DRootNode;
-var
-  Builder: TBikeBuilder;
-  I: Integer;
-begin
-  Logger.Info('[BikeAvatar] ' + '=== BuildBikeRootNodeFromString START ===');
-  Logger.Info('[BikeAvatar] ' + Format('  JSON length=%d', [Length(AJsonText)]));
-
-  Builder := LoadBikeFromJSON(AJsonText);
-  try
-    { SeatTubeLength moved to TFrameComponent and BarType is derived via
-      Builder.BarType — see note in LoadBikeAvatarFromJSONString above if
-      re-enabling per-build diagnostics. }
-    Logger.Info('[BikeAvatar] ' + Format('  Colors.Frame: (%.3f, %.3f, %.3f)',
-      [Builder.Colors.Frame.X, Builder.Colors.Frame.Y, Builder.Colors.Frame.Z]));
-    for I := 0 to Builder.ComponentCount - 1 do
-      Logger.Info('[BikeAvatar] ' + Format('    Component[%d]: %s', [I, Builder.Components[I].ComponentName]));
-
-    Result := Builder.Build;
-    Logger.Info('[BikeAvatar] ' + Format('  Build done. RootNode=$%p', [Pointer(Result)]));
-  finally
-    Builder.Free;
-  end;
-
-  StripEnvironmentNodes(Result);
-  ReorientBikeRoot(Result);
-  //MergeBikeRootShapes(FindBikeRoot(Result));
-
-  LogRootChildren('BikeAvatar[from-string]', Result);
-  Logger.Info('[BikeAvatar] ' + '=== BuildBikeRootNodeFromString END ===');
-end;
-
-function LoadBikeAvatarFromJSONString(const AJsonText: string;
-  AScene: TCastleScene): TX3DRootNode;
-begin
-  Logger.Info('[BikeAvatar] ' + '>>> LoadBikeAvatarFromJSONString');
-  Result := BuildBikeRootNodeFromString(AJsonText);
-  AScene.Load(Result, true);
-  ApplySceneSettings(AScene);
-  Logger.Info('[BikeAvatar] ' + '<<< LoadBikeAvatarFromJSONString done');
-end;
-
 { ═══════════════════════════════════════════════════════════════════
   TBikeInstance-based loading (with multi-LOD support)
   ═══════════════════════════════════════════════════════════════════ }
 
-{ Strip environment from each sub-scene and reorient bike root }
+{ Strip environment and reorient the unified bike scene. }
 procedure PostProcessBikeInstance(Inst: TBikeInstance);
 var
-  Sub: Integer;
   S: TCastleScene;
 begin
-  for Sub := 0 to BSG_COUNT - 1 do
+  S := Inst.Scene;
+  if (S <> nil) and (S.RootNode <> nil) then
   begin
-    S := Inst.SubScene(Sub);
-    if (S <> nil) and (S.RootNode <> nil) then
-    begin
-      StripEnvironmentNodes(S.RootNode);
-      ReorientBikeRoot(S.RootNode);
-    end;
+    StripEnvironmentNodes(S.RootNode);
+    ReorientBikeRoot(S.RootNode);
   end;
 end;
 
 function DoBuildBikeInstance(AJson: TJSONObject; AOwner: TComponent;
-  LOD3Dist, LOD2Dist, LOD1Dist: Single; AUseLod: Boolean): TBikeInstance;
+  LOD3Dist, LOD2Dist, LOD1Dist: Single; AUseLod: Boolean;
+  AAutoFitRider: Boolean = False): TBikeInstance;
 var
   Comps: TBikeComponentClassArray;
   Preset: string;
@@ -423,6 +336,13 @@ begin
     D := AJson.Find('components');
     if (D <> nil) and (D is TJSONObject) then
       Result.AssignComponentStateFromJSON(TJSONObject(D));
+    if AAutoFitRider then
+    begin
+      D := AJson.FindPath('tripoRider.body');
+      if not (D is TJSONObject) then
+        raise Exception.Create('Automatic bike fit requires rider body parameters');
+      AutoFitRoadBike(Result, ReadRiderBody(TJSONObject(D), DefaultRiderBody));
+    end;
     { Runtime-only flags — дефолты TBikeBuilder.InitDefaults, которые
       раньше копировались с мастер-билдера. }
     Result.ShowSkeleton := False;
@@ -439,15 +359,8 @@ begin
       Result.Build(Comps, Colors, nil);
     PostProcessBikeInstance(Result);
 
-    { Set sub-scenes non-interactive for the game }
-    Result.SubScene(BSG_FRAME).Pickable := False;
-    Result.SubScene(BSG_FRAME).Collides := False;
-    Result.SubScene(BSG_WHEELS).Pickable := False;
-    Result.SubScene(BSG_WHEELS).Collides := False;
-    Result.SubScene(BSG_CRANK).Pickable := False;
-    Result.SubScene(BSG_CRANK).Collides := False;
-    Result.SubScene(BSG_RIDER).Pickable := False;
-    Result.SubScene(BSG_RIDER).Collides := False;
+    Result.Scene.Pickable := False;
+    Result.Scene.Collides := False;
 
     { CPU-driven procedural rider bone animation was removed. The Tripo
       authored rig is GPU-skinned by CGE and driven via AnimateFrame, so the
@@ -470,7 +383,8 @@ end;
   bike group, and applies body shape — so the in-game rider matches the
   editor. AnimateFrame then drives it each frame. No-op (logged) if the
   section/path is absent or the load fails — the bike still renders. }
-procedure AttachTripoRiderFromJSON(Inst: TBikeInstance; const AJsonText: string);
+procedure AttachTripoRiderFromJSON(Inst: TBikeInstance; const AJsonText: string;
+  Prepared: TTripoGlbPrepared);
 var
   Data, Node: TJSONData;
   Ok: Boolean;
@@ -484,7 +398,7 @@ begin
       begin
         Node := TJSONObject(Data).Find('tripoRider');
         if (Node <> nil) and (Node is TJSONObject) then
-          Ok := Inst.LoadTripoRiderFromSection(TJSONObject(Node));
+          Ok := Inst.LoadTripoRiderFromSection(TJSONObject(Node),Prepared);
       end;
     finally
       Data.Free;
@@ -539,7 +453,8 @@ function LoadBikeInstanceFromJSONString(const AJsonText: string;
   LOD2Dist: Single;
   LOD1Dist: Single;
   AAttachRider: Boolean;
-  AUseLod: Boolean): TBikeInstance;
+  AUseLod: Boolean;
+  AAutoFitRider: Boolean): TBikeInstance;
 var
   Root: TJSONObject;
 begin
@@ -547,7 +462,7 @@ begin
 
   Root := TJSONObject(GetJSON(AJsonText));
   try
-    Result := DoBuildBikeInstance(Root, AOwner, LOD3Dist, LOD2Dist, LOD1Dist, AUseLod);
+    Result := DoBuildBikeInstance(Root, AOwner, LOD3Dist, LOD2Dist, LOD1Dist, AUseLod, AAutoFitRider);
   finally
     Root.Free;
   end;
@@ -721,30 +636,6 @@ begin
   ApplyBikeFitColorsToInstance(Result);
 end;
 
-function LoadCompanionBikeInstance(AOwner: TComponent): TBikeInstance;
-var Text: TStringList; JsonText, Gender, Rider: string; Slot: TClothSlot; Body:TRiderBodyParameters;
-begin
-  Gender := 'female';
-  if (Settings <> nil) and SameText(Settings.GetGender, 'female') then Gender := 'male';
-  Rider := ResolveRiderGlbPath(RiderGlbUrlForGender(Gender));
-  Text := TStringList.Create;
-  try
-    Text.LoadFromFile(BikeJsonUrlToFilename('castle-data:/bike_road2.json'));
-    JsonText := InjectRiderPath(Text.Text, Rider,False);
-  finally Text.Free end;
-  Result := LoadBikeInstanceFromJSONString(JsonText, AOwner, 15, 40, 80, False);
-  try
-    Result.ClothDyePresetMode := cdmShader;
-    for Slot := csJersey to csGloves do
-      Result.StageRiderClothColor(Slot, Vector3(1, 1, 1));
-    AttachTripoRiderFromJSON(Result, JsonText);
-    Body:=DefaultRiderBody(1-AvatarBodyParameters.Sex);
-    Result.BodyParameters:=Body;
-    if Result.TripoRider <> nil then
-      Result.TripoRider.ApplyHelmetColor(Vector3(1, 1, 1), True);
-  except FreeAndNil(Result); raise end;
-end;
-
 procedure ApplyFitKneeAnkle(Inst: TBikeInstance; KneeFlare, AnkleFlex: Single);
 begin
   if Inst = nil then Exit;
@@ -892,148 +783,6 @@ begin
     the mesh. Only push when the shape actually changed. }
   if Same then Exit;
   Inst.ApplyTripoBodyShape;
-end;
-
-{ ═══════════════════════════════════════════════════════════════════
-  TBikeBuildThread — background geometry builder
-  ═══════════════════════════════════════════════════════════════════ }
-
-constructor TBikeBuildThread.Create(const AJsonText: string;
-  ALod3, ALod2, ALod1: Single);
-begin
-  inherited Create(False);  { start immediately }
-  FreeOnTerminate := False;
-  FJsonText := AJsonText;
-  FLODs[0] := ALod3;
-  FLODs[1] := ALod2;
-  FLODs[2] := ALod1;
-  FError := '';
-  FillChar(FSceneRoots, SizeOf(FSceneRoots), 0);
-end;
-
-destructor TBikeBuildThread.Destroy;
-var Sub: Integer;
-begin
-  { Free any unclaimed roots (thread was destroyed before results consumed) }
-  for Sub := 0 to BSG_COUNT - 1 do
-    FreeAndNil(FSceneRoots[Sub]);
-  inherited;
-end;
-
-function TBikeBuildThread.SceneRoot(Sub: Integer): TX3DRootNode;
-begin
-  if (Sub >= 0) and (Sub < BSG_COUNT) then
-    Result := FSceneRoots[Sub]
-  else
-    Result := nil;
-end;
-
-procedure TBikeBuildThread.Execute;
-var
-  MasterBuilder, Builder: TBikeBuilder;
-  Comps: TBikeComponentClassArray;
-  Colors: TBikeColors;
-  DisNames: TStringList;
-  LodNode: TLODNode;
-  Root, ScRoot: TX3DRootNode;
-  Sub, LOD, I, CompGroup: Integer;
-  Preset: string;
-begin
-  try
-    MasterBuilder := LoadBikeFromJSON(FJsonText);
-    try
-      Preset := MasterBuilder.Preset;
-      Colors := MasterBuilder.Colors;
-      Comps := TBikeInstance.PrepareBuildComps(Preset);
-      DisNames := TStringList.Create;
-      try
-        for Sub := 0 to BSG_COUNT - 1 do
-        begin
-          if Terminated then Exit;
-
-          { Compute disabled names for this sub-scene
-            (same logic as BuildDisabledForSub in BikeParametric) }
-          DisNames.Clear;
-          for I := 0 to High(Comps) do
-          begin
-            CompGroup := SubSceneForComp(Comps[I].ComponentName);
-            if CompGroup = -2 then begin
-              if Sub = BSG_FRAME then
-                if DisNames.IndexOf(Comps[I].ComponentName) < 0 then
-                  DisNames.Add(Comps[I].ComponentName);
-            end
-            else if (CompGroup >= 0) and (CompGroup <> Sub) then
-              if DisNames.IndexOf(Comps[I].ComponentName) < 0 then
-                DisNames.Add(Comps[I].ComponentName);
-          end;
-
-          { Build LOD node with 4 detail levels }
-          LodNode := TLODNode.Create;
-          LodNode.FdRange.Items.Add(FLODs[0]);
-          LodNode.FdRange.Items.Add(FLODs[1]);
-          LodNode.FdRange.Items.Add(FLODs[2]);
-
-          for LOD := 3 downto 0 do
-          begin
-            if Terminated then Exit;
-            Builder := TBikeBuilder.Create(Comps);
-            try
-              Builder.Preset      := Preset;
-              Builder.DetailLevel := LOD;
-              Builder.Colors := Colors;
-              Builder.DisabledNames.Assign(DisNames);
-              Root := Builder.Build;
-              LodNode.AddChildren(Root);
-            finally
-              Builder.Free;
-            end;
-            BuildYield;  { release heap lock for main thread }
-          end;
-
-          ScRoot := TX3DRootNode.Create;
-          ScRoot.AddChildren(LodNode);
-          FSceneRoots[Sub] := ScRoot;
-        end;
-      finally
-        DisNames.Free;
-      end;
-    finally
-      MasterBuilder.Free;
-    end;
-  except
-    on E: Exception do
-      FError := E.Message;
-  end;
-end;
-
-{ ═══════════════════════════ AssembleBikeInstanceFromThread ═══════════════════════════ }
-
-function AssembleBikeInstanceFromThread(AThread: TBikeBuildThread;
-  AOwner: TComponent): TBikeInstance;
-var
-  Sub: Integer;
-  Root: TX3DRootNode;
-begin
-  Result := TBikeInstance.Create(AOwner);
-  try
-    for Sub := 0 to BSG_COUNT - 1 do
-    begin
-      Root := AThread.SceneRoot(Sub);
-      if Root <> nil then
-      begin
-        StripEnvironmentNodes(Root);
-        ReorientBikeRoot(Root);
-        Result.SubScene(Sub).Load(Root, True);
-        { Nil out the thread's reference — TBikeInstance now owns the node }
-        AThread.FSceneRoots[Sub] := nil;
-      end;
-      Result.SubScene(Sub).Pickable := False;
-      Result.SubScene(Sub).Collides := False;
-    end;
-  except
-    Result.Free;
-    raise;
-  end;
 end;
 
 end.

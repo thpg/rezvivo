@@ -1,0 +1,8 @@
+{
+  "project": "libusb-win32",
+  "version": "1.4.0.2",
+  "source": "https://github.com/mcuee/libusb-win32/tree/release_1.4.0.2",
+  "binary": "https://github.com/mcuee/libusb-win32/releases/download/release_1.4.0.2/libusb-win32-bin-1.4.0.2.zip",
+  "sha256": "0cd18719d5701e9cc642fc93a83f13830931d6f29f664fedbdf212bcb7c349bd",
+  "driver": "Requires compatible libusb0/libusbK ANT USB driver; driver installation is not automatic."
+}

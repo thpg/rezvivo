@@ -38,15 +38,17 @@ uses Math, Generics.Collections, Osm3dGeomMesh, Osm3dCurbSimplify,
   Osm3dRoadSurface;
 
 type
-  TEdge = record A,B,C,Mat,Roads:Integer; Neighbour:Boolean end;
+  TEdge = record A,B,C,Mat,Roads:Integer; Neighbour,MappedNeighbour:Boolean end;
   TCurbEdge = record
     A,B,C,Mat,Side:Integer;
     StartInset,EndInset:TVector3;
-    NewChain:Boolean;
+    NewChain,Unmapped:Boolean;
   end;
   TEdges = specialize TDictionary<QWord,TEdge>;
   TLink = record Count,First,Second:Integer end;
   TLinks = specialize TDictionary<Integer,TLink>;
+  TRoadIds = specialize TList<Integer>;
+  TRoadGrid = specialize TObjectDictionary<Int64,TRoadIds>;
 
 function AppendUrbanRoadCurbs(Comp:TGroundCompositeMesh; Model:TTileModel;
   const TileOrigin:TVector3; EastScale:Single; var CurbVertices:TCurbMesh; PhaseOriginX,PhaseOriginZ:Double):Integer;
@@ -66,6 +68,111 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
   RingLift:array[0..3] of Boolean;
   RingIndex:array[0..3,0..ROAD_CURB_ROWS-1] of Integer;
   PreviousIndex:array[0..ROAD_CURB_ROWS-1] of Integer;
+  RoadGrid:TRoadGrid;
+  RoadSeen:array of Integer;
+  RoadStamp:Integer;
+  procedure AddJoin(Vertex:Integer; const Inset:TVector3); forward;
+  function GridKey(X,Z:Integer):Int64; inline;
+  begin Result:=Int64((QWord(LongWord(X)) shl 32) or LongWord(Z)) end;
+  procedure IndexRoads;
+  var S,X,Z,K,Mat:Integer; A,B,C:TVector3; Items:TRoadIds; Key:Int64;
+  begin
+    { Use the rendered road polygons, including junction widening and asphalt
+      areas. Centerline rectangles cannot describe the actual junction outline. }
+    SetLength(RoadSeen,Comp.TriangleCount);
+    for S:=0 to Comp.TriangleCount-1 do begin
+      K:=Comp.Indices[S*3];Mat:=Comp.MatIdOf(K);
+      if not ((Mat=13) or (Mat in [24..27])) then Continue;
+      A:=Comp.PositionOf(K);B:=Comp.PositionOf(Comp.Indices[S*3+1]);C:=Comp.PositionOf(Comp.Indices[S*3+2]);
+      for Z:=Floor((Min(A.Z,Min(B.Z,C.Z))-2*ROAD_CURB_WIDTH-0.02)/64) to
+             Floor((Max(A.Z,Max(B.Z,C.Z))+2*ROAD_CURB_WIDTH+0.02)/64) do
+        for X:=Floor((Min(A.X,Min(B.X,C.X))-2*ROAD_CURB_WIDTH-0.02)/64) to
+               Floor((Max(A.X,Max(B.X,C.X))+2*ROAD_CURB_WIDTH+0.02)/64) do begin
+          Key:=GridKey(X,Z);
+          if not RoadGrid.TryGetValue(Key,Items) then begin
+            Items:=TRoadIds.Create;RoadGrid.Add(Key,Items);
+          end;
+          Items.Add(S);
+        end;
+    end;
+  end;
+  procedure AddOpenEdge;
+  var Cuts:array of TVector2; CutN,X,Z,S,N,K:Integer; Items:TRoadIds;
+    A0,A1,A2,D,StartP,Probe,Nrm:TVector3; Area,SignArea,T0,T1,At,Left,Right,SurfaceY,Clearance:Single;
+    Swap:TVector2;
+    function Clip(Value,Delta,Lo,Hi:Single):Boolean;
+    var L,R,T:Single;
+    begin
+      if Abs(Delta)<1e-7 then Exit((Value>=Lo)and(Value<=Hi));
+      L:=(Lo-Value)/Delta;R:=(Hi-Value)/Delta;
+      if L>R then begin T:=L;L:=R;R:=T end;
+      T0:=Max(T0,L);T1:=Min(T1,R);Result:=T1>T0;
+    end;
+    function VertexAt(T:Single):Integer;
+    var V:TMeshVertex;
+    begin
+      if T<0.00001 then Exit(Edge.A);
+      if T>0.99999 then Exit(Edge.B);
+      V:=Default(TMeshVertex);V.Position:=P+(Q-P)*T;
+      V.Normal:=(Comp.NormalOf(Edge.A)*(1-T)+Comp.NormalOf(Edge.B)*T).Normalize;
+      V.UV:=Comp.UVOf(Edge.A)*(1-T)+Comp.UVOf(Edge.B)*T;
+      V.OsmId:=Comp.OsmIdOf(Edge.A);Result:=Comp.AppendVertex(V,Edge.Mat);
+    end;
+    procedure Keep(L,R:Single);
+    begin
+      if (R-L)*Len<0.10 then Exit;
+      Curb:=Default(TCurbEdge);Curb.A:=VertexAt(L);Curb.B:=VertexAt(R);
+      Curb.C:=Edge.C;Curb.Mat:=Edge.Mat;Curb.Unmapped:=not Edge.MappedNeighbour;
+      AddJoin(Curb.A,Inside);AddJoin(Curb.B,Inside);
+      if Count=Length(Candidates) then SetLength(Candidates,Max(16,Count*2));
+      Candidates[Count]:=Curb;Inc(Count);
+    end;
+  begin
+    Inc(RoadStamp);CutN:=0;
+    Clearance:=ROAD_CURB_WIDTH+0.02;
+    { An unmapped terrain remnant between two road polygons needs room for
+      both curbs. Otherwise their faces overlap across a triangulation sliver.
+      Explicitly mapped islands keep the ordinary single-curb test. }
+    if not Edge.MappedNeighbour then Clearance:=2*ROAD_CURB_WIDTH+0.02;
+    for Z:=Floor(Min(P.Z,Q.Z)/64) to Floor(Max(P.Z,Q.Z)/64) do
+      for X:=Floor(Min(P.X,Q.X)/64) to Floor(Max(P.X,Q.X)/64) do
+        if RoadGrid.TryGetValue(GridKey(X,Z),Items) then for S in Items do begin
+          if RoadSeen[S]=RoadStamp then Continue;RoadSeen[S]:=RoadStamp;
+          A0:=Comp.PositionOf(Comp.Indices[S*3]);
+          A1:=Comp.PositionOf(Comp.Indices[S*3+1]);
+          A2:=Comp.PositionOf(Comp.Indices[S*3+2]);
+          Area:=(A1.X-A0.X)*(A2.Z-A0.Z)-(A1.Z-A0.Z)*(A2.X-A0.X);
+          if Abs(Area)<0.00001 then Continue;
+          SignArea:=1;if Area<0 then SignArea:=-1;
+          { The whole curb must fit on the non-road side. Testing only its
+            centre leaves raised blocks spanning thin grass slivers in joints. }
+          StartP:=P+Inside*Clearance;D:=Q-P;T0:=0;T1:=1;
+          if not Clip(SignArea*((A1.X-A0.X)*(StartP.Z-A0.Z)-(A1.Z-A0.Z)*(StartP.X-A0.X)),
+            SignArea*((A1.X-A0.X)*D.Z-(A1.Z-A0.Z)*D.X),0,1e20) then Continue;
+          if not Clip(SignArea*((A2.X-A1.X)*(StartP.Z-A1.Z)-(A2.Z-A1.Z)*(StartP.X-A1.X)),
+            SignArea*((A2.X-A1.X)*D.Z-(A2.Z-A1.Z)*D.X),0,1e20) then Continue;
+          if not Clip(SignArea*((A0.X-A2.X)*(StartP.Z-A2.Z)-(A0.Z-A2.Z)*(StartP.X-A2.X)),
+            SignArea*((A0.X-A2.X)*D.Z-(A0.Z-A2.Z)*D.X),0,1e20) then Continue;
+          Probe:=StartP+D*((T0+T1)*0.5);
+          Nrm:=TVector3.CrossProduct(A1-A0,A2-A0);
+          SurfaceY:=A0.Y-(Nrm.X*(Probe.X-A0.X)+Nrm.Z*(Probe.Z-A0.Z))/Nrm.Y;
+          { Decks at another elevation cannot cut an opening in this curb. }
+          if Abs(SurfaceY-Probe.Y)>0.35 then Continue;
+          SetLength(Cuts,CutN+1);Cuts[CutN]:=Vector2(T0,T1);Inc(CutN);
+        end;
+    for N:=1 to CutN-1 do begin
+      Swap:=Cuts[N];K:=N;
+      while (K>0)and(Cuts[K-1].X>Swap.X) do begin Cuts[K]:=Cuts[K-1];Dec(K) end;
+      Cuts[K]:=Swap;
+    end;
+    At:=0;
+    for N:=0 to CutN-1 do begin
+      Left:=Cuts[N].X;Right:=Cuts[N].Y;
+      if Left>At then Keep(At,Left);
+      At:=Max(At,Right);
+    end;
+    if At<1 then Keep(At,1);
+  end;
   procedure AddJoin(Vertex:Integer; const Inset:TVector3);
   var Id,D:Integer; N:TVector3;
   begin
@@ -234,7 +341,9 @@ begin
   Asphalt:=specialize TDictionary<Int64,Boolean>.Create;
   Joins:=specialize TDictionary<Integer,TVector3>.Create;
   Degrees:=specialize TDictionary<Integer,Integer>.Create;
+  RoadGrid:=TRoadGrid.Create([doOwnsValues]);RoadStamp:=0;
   try
+    IndexRoads;
     for I:=0 to Model.RoadSegCount-1 do
     begin
       Seg:=Model.RoadSegs[I];
@@ -268,7 +377,12 @@ begin
       begin
         Key:=EdgeKey(Comp.Indices[Tri*3+I],Comp.Indices[Tri*3+(I+1) mod 3]);
         if Edges.TryGetValue(Key,Edge) then
-        begin Edge.Neighbour:=True; Edges[Key]:=Edge end;
+        begin
+          Edge.Neighbour:=True;
+          Edge.MappedNeighbour:=Edge.MappedNeighbour or
+            (Mat<>GROUND_MAT_TERRAIN) or (Comp.OsmIdOf(Comp.Indices[Tri*3])<>0);
+          Edges[Key]:=Edge;
+        end;
       end;
     end;
     { Most indexed road edges are internal and never become curbs. Do not
@@ -285,12 +399,21 @@ begin
       Inside:=Vector3(-DZ/Len,0,DX/Len);
       if (R.X-P.X)*Inside.X+(R.Z-P.Z)*Inside.Z<0 then Inside:=-Inside;
       Inside:=-Inside; // joins use the same outward direction as the curb faces
-      AddJoin(Edge.A,Inside); AddJoin(Edge.B,Inside);
-      Curb:=Default(TCurbEdge);Curb.A:=Edge.A;Curb.B:=Edge.B;Curb.C:=Edge.C;Curb.Mat:=Edge.Mat;
-      if Count=Length(Candidates) then SetLength(Candidates,Min(Edges.Count,Max(16,Count*2)));
-      Candidates[Count]:=Curb; Inc(Count);
+      AddOpenEdge;
     end;
-    SetLength(Candidates,Count);
+    { Clipping the sides of a narrow terrain remnant can leave its short end
+      cap on its own. Discard only isolated unmapped caps narrower than two
+      curbs; mapped islands and connected short blocks remain intact. }
+    J:=0;
+    for I:=0 to Count-1 do begin
+      Curb:=Candidates[I];P:=Comp.PositionOf(Curb.A);Q:=Comp.PositionOf(Curb.B);
+      if Curb.Unmapped and
+         (Degrees[Comp.Verts[Curb.A].PoolIdx]=1) and
+         (Degrees[Comp.Verts[Curb.B].PoolIdx]=1) and
+         (Sqr(P.X-Q.X)+Sqr(P.Z-Q.Z)<Sqr(2*ROAD_CURB_WIDTH)) then Continue;
+      Candidates[J]:=Curb;Inc(J);
+    end;
+    Count:=J;SetLength(Candidates,Count);
     { Freeze the original endpoint cross-sections before simplifying. This
       keeps miter corners and terrain contact at retained endpoints unchanged. }
     for I:=0 to Count-1 do
@@ -400,7 +523,7 @@ begin
       CurbVertices.Indices[IndexBase+J-FirstTri*3]:=
         ExportBase+Integer(Comp.Indices[J])-FirstVertex;
     Comp.TrimArrays;
-  finally Degrees.Free; Joins.Free; Asphalt.Free; Edges.Free end;
+  finally RoadGrid.Free; Degrees.Free; Joins.Free; Asphalt.Free; Edges.Free end;
 end;
 
 end.

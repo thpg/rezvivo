@@ -11,7 +11,7 @@ unit GameTransportBase;
 interface
 
 uses
-  Classes, SysUtils, syncobjs, TrainerData, GameTrainerControl;
+  Classes, SysUtils, syncobjs, TrainerData, GameTrainerControl, FECAcknowledgement;
 
 type
   TTransportSession = class;
@@ -34,12 +34,15 @@ type
     FControlQueue: TTrainerControlQueue;
     FControlIO: TCriticalSection;
     FControlAck: TFTMSAcknowledgement;
+    FFECAck: TFECAcknowledgement;
+    FWheelCircumferenceMm: Cardinal;
     FExecutingGeneration: Cardinal;
-    FCommandResult: TTrainerControlState;
     FLastControlFailure: QWord;
     FDisconnecting: Boolean;
+    FLastTelemetryTick: QWord;
     function ExecuteControl(const Command: TTrainerCommand): TTrainerControlState;
   protected
+    FCommandResult: TTrainerControlState;
     FLock: TCriticalSection;
     FConnectionState: TConnectionState;
     FDeviceInfo: TDeviceInfo;
@@ -51,8 +54,10 @@ type
     procedure SetConnectionState(AState: TConnectionState;
       const AMessage: string = ''); virtual;
     procedure NotifyDataReceived; virtual;
+    procedure PublishMeasurement(const Data: TTrainerDataRecord);
     function SendConfirmedFTMS(const Data: TBytes;
       Writer: TWriteTrainerBytes): Boolean;
+    function SendFECCommand(const Data: TBytes; Writer: TWriteTrainerBytes): Boolean;
   public
     constructor Create(const AAddress: string; const AFriendlyName: string = ''); virtual;
     destructor Destroy; override;
@@ -69,6 +74,7 @@ type
     procedure UnlockTransport;
     function ControlStatus: TTrainerControlStatus;
     procedure ReceiveControlPoint(const Data: TBytes);
+    procedure ReceiveFECStatus(const Data: TBytes);
 
     { --- Управление подключением --- }
     function Connect: Boolean; virtual; abstract;
@@ -96,6 +102,8 @@ type
     property DeviceInfo: TDeviceInfo read FDeviceInfo;
     property TrainerFeatures: TTrainerFeatures read FTrainerFeatures;
     property LastData: TTrainerDataRecord read FLastData;
+    property LastTelemetryTick: QWord read FLastTelemetryTick;
+    property WheelCircumferenceMm: Cardinal read FWheelCircumferenceMm write FWheelCircumferenceMm;
     property HasControl: Boolean read FHasControl;
 
     property OnDataReceived: TOnSessionDataReceived
@@ -142,6 +150,8 @@ type
 
 implementation
 
+uses CyclingANTProtocol;
+
 { TTransportSession }
 
 constructor TTransportSession.Create(const AAddress: string;
@@ -151,6 +161,8 @@ begin
   FLock := TCriticalSection.Create;
   FControlIO := TCriticalSection.Create;
   FControlAck := TFTMSAcknowledgement.Create;
+  FFECAck := TFECAcknowledgement.Create;
+  FWheelCircumferenceMm := 2105;
   FControlQueue := TTrainerControlQueue.Create(@ExecuteControl);
   FConnectionState := csDisconnected;
 
@@ -171,6 +183,7 @@ begin
   ShutdownControl;
   FreeAndNil(FControlQueue);
   FreeAndNil(FControlAck);
+  FreeAndNil(FFECAck);
   FreeAndNil(FControlIO);
   FOnDataReceived := nil;
   FOnConnectionChanged := nil;
@@ -188,6 +201,7 @@ begin
   begin
     FDisconnecting := False;
     FControlAck.NewConnection;
+    FFECAck.NewConnection;
     FHasControl := False;
     FLastControlFailure := 0;
   end;
@@ -214,6 +228,7 @@ procedure TTransportSession.CancelControl;
 begin
   FControlQueue.Cancel;
   FControlAck.Cancel;
+  FFECAck.Cancel;
   FHasControl := False;
 end;
 
@@ -253,6 +268,27 @@ end;
 procedure TTransportSession.ReceiveControlPoint(const Data: TBytes);
 begin
   FControlAck.Receive(Data);
+end;
+
+procedure TTransportSession.ReceiveFECStatus(const Data: TBytes);
+begin
+  FFECAck.Receive(Data);
+end;
+
+function TTransportSession.SendFECCommand(const Data: TBytes;
+  Writer: TWriteTrainerBytes): Boolean;
+var Probe: Boolean;
+begin
+  Result:=False;
+  if FConnectionState<>csConnected then Exit;
+  Probe:=FFECAck.BeginCommand(Data);
+  if not Writer(Data) then begin FCommandResult:=tcsFailed; Exit end;
+  FCommandResult:=tcsSent;
+  if Probe then
+  begin
+    if Writer(FECRequestPage(71)) then FCommandResult:=FFECAck.Wait(900);
+  end;
+  Result:=FCommandResult in [tcsSent,tcsAccepted];
 end;
 
 function TTransportSession.SendConfirmedFTMS(const Data: TBytes;
@@ -299,6 +335,14 @@ begin
       Exit(FCommandResult);
     FExecutingGeneration := Command.Generation;
     FCommandResult := tcsSent;
+    if FTrainerFeatures.Known then
+      case Command.Kind of
+        tcPower: if not FTrainerFeatures.SupportsPowerControl then Exit(tcsUnsupported);
+        tcResistance: if not FTrainerFeatures.SupportsResistanceControl then Exit(tcsUnsupported);
+        tcIncline: if not FTrainerFeatures.SupportsInclineControl then Exit(tcsUnsupported);
+        tcSimulation: if not (FTrainerFeatures.SupportsSimulation or
+          FTrainerFeatures.SupportsInclineControl) then Exit(tcsUnsupported);
+      end;
     { Only acquire control once per connection, and only after the peer ACK. }
     if not FHasControl then
     begin
@@ -339,8 +383,25 @@ end;
 procedure TTransportSession.NotifyDataReceived;
 begin
   if FDestroying then Exit;
+  FLastTelemetryTick := GetTickCount64;
+  LearnTrainerMetrics(FDeviceInfo, FLastData);
   if Assigned(FOnDataReceived) then
     FOnDataReceived(Self, FLastData);
+end;
+
+procedure TTransportSession.PublishMeasurement(const Data: TTrainerDataRecord);
+var Snapshot: TTrainerDataRecord;
+begin
+  if FDestroying then Exit;
+  FLock.Enter;
+  try
+    FLastData.PresentMetrics := [];
+    MergeTrainerData(FLastData, Data);
+    LearnTrainerMetrics(FDeviceInfo, Data);
+    FLastTelemetryTick := GetTickCount64;
+    Snapshot := FLastData;
+  finally FLock.Leave end;
+  if Assigned(FOnDataReceived) then FOnDataReceived(Self, Snapshot);
 end;
 
 function TTransportSession.IsConnectionAlive: Boolean;

@@ -7,7 +7,7 @@ unit RiderPoseCorrectives;
   uploads joint angles; the procedural path derives them from its own solve. }
 interface
 
-uses Classes, SysUtils, Math, fpjson, jsonparser, CastleUtils, CastleVectors, CastleImages,
+uses RiderShaderSharing, Classes, SysUtils, Math, fpjson, jsonparser, CastleUtils, CastleVectors, CastleImages,
   CastleScene, X3DNodes, X3DFields, TripoRig, RiderBodyParameters, RiderBodyDeformation;
 
 type
@@ -287,6 +287,7 @@ begin
       '  vertex += skinMatrix * vec4(dp, 0.0);' + LineEnding +
       '  normal += mat3(skinMatrix) * dn;' + LineEnding + '}';
     FCpuEffect.FdParts.Add(Part);
+    ShareRiderEffect(FCpuEffect);
     Apps := TList.Create;
     try
       for I := 0 to Skin.FdShapes.Count - 1 do

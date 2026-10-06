@@ -56,6 +56,7 @@ type
     FWorldCenters: array of TVector3;
     FFitLoad: TFitLoadProfile;
     FFitLoadStations: TFitLoadValues;
+    FFitLoadReversed: Boolean;
     FPassageDistances: array of Single;
     FPassages: array of TPathPassageSpan;
     FSteeringCorners: array of Boolean;
@@ -119,7 +120,10 @@ type
     { Скопировать точки/ширины/уровень-сцену в другой путь (например,
       из пути аватара в путь свежесозданного удалённого райдера) — без
       повторного чтения файла. Целевой путь помечается «не запечён». }
-    procedure CopyTo(ADest: TGamePath);
+    procedure CopyTo(ADest: TGamePath; const Reversed: Boolean = False);
+    { Same physical point on a copy with reversed traversal. Point zero and
+      the two endpoints of an out-and-back route keep their indices. }
+    function ReversedPosition(const Pos:TPathPosition):TPathPosition;
     procedure SetFitLoadProfile(const Profile: TFitLoadProfile;
       const SourceIndices: array of Double);
     function HasFitLoadProfile: Boolean;
@@ -209,6 +213,7 @@ type
     property PointCount: Integer read GetPointCount;
     property Position: TPathPosition read FPosition write FPosition;
     property PreparedBuildingRoute: Boolean read FPreparedBuildingRoute;
+    property OutAndBack: Boolean read FOutAndBack;
     property SmoothedRouteDir: TVector3 read FSmoothedRouteDir write FSmoothedRouteDir;
   end;
 
@@ -361,7 +366,7 @@ begin
   SetLength(FPointWidths, 0);
   SetLength(FPointCenters, 0);
   SetLength(FWorldPoints, 0);
-  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;
+  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;FFitLoadReversed:=False;
   FSteeringCorners:=nil; FCornerDistance:=nil;
   FPassages:=nil; FPassageDistances:=nil;
   FPreparedBuildingRoute:=False;
@@ -482,11 +487,11 @@ begin
     ' road points (in-memory, direct from FIT)');
 end;
 
-procedure TGamePath.CopyTo(ADest: TGamePath);
+procedure TGamePath.CopyTo(ADest: TGamePath; const Reversed: Boolean);
 var
-  I, Count: Integer;
+  I, J, Count: Integer;
 begin
-  if ADest = nil then Exit;
+  if (ADest = nil) or (ADest=Self) then Exit;
   ADest.Clear;
   ADest.SetLevelScene(FLevelScene);
   Count := Length(FPoints);
@@ -494,21 +499,40 @@ begin
   SetLength(ADest.FPointWidths, Count);
   for I := 0 to Count - 1 do
   begin
-    ADest.FPoints[I] := FPoints[I];
-    if I <= High(FPointWidths) then
-      ADest.FPointWidths[I] := FPointWidths[I]
+    J:=I;if Reversed then J:=(Count-I) mod Count;
+    ADest.FPoints[I] := FPoints[J];
+    if J <= High(FPointWidths) then
+      ADest.FPointWidths[I] := FPointWidths[J]
     else
       ADest.FPointWidths[I] := 0.0;
   end;
   { Центры дороги тоже копируем (если есть). }
-  SetLength(ADest.FPointCenters, Length(FPointCenters));
-  for I := 0 to High(FPointCenters) do
-    ADest.FPointCenters[I] := FPointCenters[I];
+  if Length(FPointCenters)>0 then begin
+    SetLength(ADest.FPointCenters,Count);
+    for I := 0 to Count-1 do begin
+      J:=I;if Reversed then J:=(Count-I) mod Count;
+      if J<Length(FPointCenters) then ADest.FPointCenters[I]:=FPointCenters[J]
+      else ADest.FPointCenters[I]:=FPoints[J];
+    end;
+  end;
   ADest.FPreparedBuildingRoute:=FPreparedBuildingRoute;
   ADest.FOutAndBack:=FOutAndBack;
   ADest.FFitLoad:=FFitLoad;ADest.FFitLoadStations:=FFitLoadStations;
+  ADest.FFitLoadReversed:=FFitLoadReversed xor Reversed;
+  if Reversed and (Length(FFitLoadStations)=Count) then begin
+    ADest.FFitLoadStations:=Copy(FFitLoadStations);
+    for I:=0 to Count-1 do ADest.FFitLoadStations[I]:=FFitLoadStations[(Count-I) mod Count];
+  end;
   ADest.FWorldPointsBaked := false;
   Logger.Info('[GamePath] ' + 'CopyTo: ' + IntToStr(Count) + ' points copied');
+end;
+
+function TGamePath.ReversedPosition(const Pos:TPathPosition):TPathPosition;
+begin
+  Result:=ClampPathPosition(Pos);
+  if PointCount<2 then Exit;
+  Result.Segment:=PointCount-1-Result.Segment;
+  Result.T:=1-Result.T;
 end;
 
 procedure TGamePath.SetFitLoadProfile(const Profile: TFitLoadProfile;
@@ -518,7 +542,7 @@ var
   PathM,SourceM,Smoothed:TFitLoadValues;
   Delta:TVector3;
 begin
-  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;
+  FFitLoad:=Default(TFitLoadProfile);FFitLoadStations:=nil;FFitLoadReversed:=False;
   if (Length(Profile.HeightM)<2) or (Length(SourceIndices)<>PointCount) then Exit;
   FFitLoad:=Profile;SetLength(FFitLoadStations,PointCount);
   for I:=0 to PointCount-1 do
@@ -571,7 +595,10 @@ begin
   if I<0 then I:=0 else if I>=N then I:=N-1;
   J:=I+1;if J=N then J:=0;
   A:=FFitLoadStations[I];B:=FFitLoadStations[J];
-  if (J=0) and not FOutAndBack then B:=FFitLoad.LengthM;
+  if not FOutAndBack then begin
+    if not FFitLoadReversed and (J=0) then B:=FFitLoad.LengthM;
+    if FFitLoadReversed and (I=0) then A:=FFitLoad.LengthM;
+  end;
   S:=A+(B-A)*EnsureRange(Pos.T,Single(0),Single(1));SourceM:=S;
   Reverse:=(B<A) or ((B=A) and FOutAndBack and (I>=N div 2));
   Result:=FitLoadAt(FFitLoad,S,HeightM,GradePct);
@@ -1096,11 +1123,11 @@ begin
 
   { Точка пути лежит на сегменте Segment → Segment+1. }
   I0 := Pos.Segment;
-  I1 := Pos.Segment + 1;
   if I0 < 0 then I0 := 0;
   if I0 > High(FPointWidths) then I0 := High(FPointWidths);
-  if I1 < 0 then I1 := 0;
-  if I1 > High(FPointWidths) then I1 := High(FPointWidths);
+  { The final segment ends at point zero, like FollowTangent/RoadCenterAt.
+    Clamping to the last width made the same segment differ when reversed. }
+  I1 := (I0 + 1) mod Length(FPointWidths);
 
   W0 := FPointWidths[I0];
   W1 := FPointWidths[I1];

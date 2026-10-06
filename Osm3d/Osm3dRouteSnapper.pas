@@ -237,6 +237,16 @@ type
     BBoxMaxZ:   Single;
   end;
   TSnapSegmentArray = array of TSnapSegment;
+  TBotCrossing = record
+    RouteDistance: Double;
+    RoutePoint: Integer;
+    WayId: Int64;
+    Width: Single;
+    Center: TVector3;
+    Points: array of TVector3;
+  end;
+  TBotCrossingArray = array of TBotCrossing;
+
 
   TRouteSnapStats = record
     Total:      Integer;
@@ -257,6 +267,9 @@ type
       the caller should skip it. Single point where both the live-
       dataset path and the tile-cache path build the snapper's input,
       so the geometry is derived identically. }
+    class function BotCrossings(const Route: TRouteLatLonArray;
+      const Segs: TSnapSegmentArray; Projection: TLocalProjection;
+      const RouteWays: TRouteWayIdArray): TBotCrossingArray; static;
     class function MakeSnapSegment(X0, Z0, X1, Z1, Width: Single;
       WayId: Int64; out Seg: TSnapSegment;
       AIsBridge: Boolean = False): Boolean;
@@ -2088,5 +2101,7 @@ begin
          Stats.Rejoined, Stats.Ambiguous, Stats.Unchanged, Length(Segs),
          Grid.Cols, Grid.Rows, Grid.CellSize]));
 end;
+
+{$I Osm3dRouteCrossings.inc}
 
 end.

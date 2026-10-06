@@ -11,7 +11,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
   caption="REZVIVO"
   qualified_name="io.castleengine.third.person.navigation"
 >
-  <version value="0.2.3-alpha.1" code="5" />
+  <version value="0.2.4-alpha.1" code="6" />
   <icons>
     <icon path="data/branding/rezvivo.ico" />
     <icon path="data/branding/rezvivo.png" />

@@ -1,7 +1,7 @@
 unit RiderHair;
 {$mode objfpc}{$H+}
 interface
-uses X3DNodes, X3DFields, CastleVectors, CastleScene, CastleTransform,
+uses RiderShaderSharing, X3DNodes, X3DFields, CastleVectors, CastleScene, CastleTransform,
   RiderHairData, RiderHairPhysics, fpjson;
 type
   TRiderWindSampler=function(const WorldPosition:TVector3):TVector3;
@@ -179,6 +179,7 @@ begin
   SetStyle(FStyle);
   { No partially built geometry may be published to a live scene. }
   FParent.AddChildren(FRoot);
+  ShareRiderEffect(FEffect);
 end;
 procedure TRiderHair.EnsureStyle(Value:TRiderHairStyle);
 var I,J:Integer;Sh:TRiderHairShape;App:TAppearanceNode;Mat:TPhysicalMaterialNode;

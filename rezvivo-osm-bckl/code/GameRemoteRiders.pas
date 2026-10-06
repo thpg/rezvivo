@@ -897,32 +897,25 @@ begin
 end;
 
 function TRemoteRidersManager.CountRemoteShapes: Integer;
-var I, J: Integer; S: TCastleScene;
+var I: Integer;
 begin
   Result := 0;
   for I := 0 to FRemoteVisualCount - 1 do
   begin
     if not FRemoteVisuals[I].Active or not Assigned(FRemoteVisuals[I].BikeInst) then Continue;
-    for J := 0 to BSG_COUNT - 1 do
-    begin
-      S := FRemoteVisuals[I].BikeInst.SubScene(J);
-      if Assigned(S) and S.Exists then Result := Result + S.ShapesActiveCount;
-    end;
+    Inc(Result, FRemoteVisuals[I].BikeInst.ActiveShapeCount);
   end;
 end;
 
 procedure TRemoteRidersManager.GetRemoteRiderShapeInfo(out Lines: string);
-var I, J, RS: Integer; S: TCastleScene;
+var I, RS: Integer;
 begin
   Lines := '';
   for I := 0 to FRemoteVisualCount - 1 do
   begin
     if FRemoteVisuals[I].Active and Assigned(FRemoteVisuals[I].BikeInst) then
     begin
-      RS := 0;
-      for J := 0 to BSG_COUNT - 1 do
-      begin S := FRemoteVisuals[I].BikeInst.SubScene(J);
-        if Assigned(S) and S.Exists then RS := RS + S.ShapesActiveCount; end;
+      RS := FRemoteVisuals[I].BikeInst.ActiveShapeCount;
       Lines := Lines + Format('  R%d:%d', [FRemoteVisuals[I].RiderId, RS]);
     end
     else if FRemoteVisuals[I].Active then

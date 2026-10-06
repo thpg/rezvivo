@@ -5,7 +5,7 @@ unit FTMSProtocol;
 interface
 
 uses
-  Classes, SysUtils, Math, TrainerData,
+  Classes, SysUtils, Math, TrainerData, CyclingRevolutions,
   GameTransportBase;     { TTransportSession base for TFTMSCapableSession }
 
 const
@@ -60,22 +60,19 @@ type
   TFTMSParser = class
   private
     FLastData: TTrainerDataRecord;
-    { Crank revolution tracking for cadence calculation }
-    FPrevCrankRevs: Word;
-    FPrevCrankTime: Word;
-    FHasPrevCrank: Boolean;
+    FCPSCrank, FCSCCrank, FCPSWheel, FCSCWheel: TRevolutionTracker;
+    FWheelCircumferenceM: Single;
     FLastPacketValid: Boolean;
-    FLastCrankChangeTick: QWord;
-    FCrankTimeoutMs: QWord;
     function GetUInt8(const Data: TBytes; var Offset: Integer): Byte;
     function GetUInt16(const Data: TBytes; var Offset: Integer): Word;
     function GetInt16(const Data: TBytes; var Offset: Integer): SmallInt;
     function GetNonnegativePower(const Data: TBytes; var Offset: Integer): Word;
     function GetUInt24(const Data: TBytes; var Offset: Integer): Cardinal;
-    function CalcCadenceFromCrank(CrankRevs, CrankTime: Word): Word;
-    function CurrentCrankCadence: Word;
   public
     constructor Create;
+    procedure Reset;
+    property WheelCircumferenceM: Single read FWheelCircumferenceM write FWheelCircumferenceM;
+    function ParseHeartRateData(const Data: TBytes): TTrainerDataRecord;
     property LastPacketValid: Boolean read FLastPacketValid;
     
     // Парсинг данных Indoor Bike Data
@@ -175,12 +172,19 @@ implementation
 
 constructor TFTMSParser.Create;
 begin
-  inherited Create;
-  FillChar(FLastData, SizeOf(FLastData), 0);
-  FPrevCrankRevs := 0;
-  FPrevCrankTime := 0;
-  FHasPrevCrank := False;
-  FCrankTimeoutMs := 3000;
+  inherited;
+  FWheelCircumferenceM := 2.105;
+  Reset;
+end;
+
+procedure TFTMSParser.Reset;
+begin
+  FLastData := Default(TTrainerDataRecord);
+  FCPSCrank := Default(TRevolutionTracker);
+  FCSCCrank := Default(TRevolutionTracker);
+  FCPSWheel := Default(TRevolutionTracker);
+  FCSCWheel := Default(TRevolutionTracker);
+  FLastPacketValid := False;
 end;
 
 { ── BLE characteristic classification ─────────────────────────────────── }
@@ -222,27 +226,60 @@ begin
 end;
 
 function TFTMSCapableSession.SetTargetPower(Watts: Word): Boolean;
+var V: Integer;
 begin
   Result := False;
   if not FHasControl then Exit;
+  if FTrainerFeatures.Known and not FTrainerFeatures.SupportsPowerControl then Exit;
+  V := Min(Watts,32767);
+  if FTrainerFeatures.PowerRangeKnown then
+  begin
+    V := EnsureRange(V,Integer(FTrainerFeatures.MinPower),Integer(FTrainerFeatures.MaxPower));
+    if FTrainerFeatures.PowerIncrement>0 then
+      V := FTrainerFeatures.MinPower + Round((V-FTrainerFeatures.MinPower)/
+        FTrainerFeatures.PowerIncrement)*FTrainerFeatures.PowerIncrement;
+    V := Min(V,Integer(FTrainerFeatures.MaxPower));
+  end;
   if FHasFTMS then
-    Result := SendConfirmedFTMS(TFTMSParser.CreateSetTargetPowerCommand(Watts), @WriteFTMSCommand);
+    Result := SendConfirmedFTMS(TFTMSParser.CreateSetTargetPowerCommand(V), @WriteFTMSCommand);
 end;
 
 function TFTMSCapableSession.SetResistanceLevel(Level: Byte): Boolean;
+var V: Integer; Command: TBytes;
 begin
   Result := False;
   if not FHasControl then Exit;
+  if FTrainerFeatures.Known and not FTrainerFeatures.SupportsResistanceControl then Exit;
+  V := Level*10;
+  if FTrainerFeatures.ResistanceRangeKnown then
+  begin
+    V := EnsureRange(V,Integer(FTrainerFeatures.MinResistance10),Integer(FTrainerFeatures.MaxResistance10));
+    if FTrainerFeatures.ResistanceIncrement10>0 then
+      V := FTrainerFeatures.MinResistance10 + Round((V-FTrainerFeatures.MinResistance10)/
+        FTrainerFeatures.ResistanceIncrement10)*FTrainerFeatures.ResistanceIncrement10;
+    V := Min(V,Integer(FTrainerFeatures.MaxResistance10));
+  end;
+  SetLength(Command,3); Command[0]:=FTMS_SET_TARGET_RESISTANCE;
+  Command[1]:=Lo(Word(SmallInt(V))); Command[2]:=Hi(Word(SmallInt(V)));
   if FHasFTMS then
-    Result := SendConfirmedFTMS(TFTMSParser.CreateSetResistanceLevelCommand(Level), @WriteFTMSCommand);
+    Result := SendConfirmedFTMS(Command, @WriteFTMSCommand);
 end;
 
 function TFTMSCapableSession.SetIncline(InclinePercent: Single): Boolean;
-var Incline10: SmallInt;
+var Incline10: Integer;
 begin
   Result := False;
   if not FHasControl then Exit;
+  if FTrainerFeatures.Known and not FTrainerFeatures.SupportsInclineControl then Exit;
   Incline10 := Round(Max(-3276.8, Min(3276.7, InclinePercent)) * 10);
+  if FTrainerFeatures.InclineRangeKnown then
+  begin
+    Incline10 := EnsureRange(Incline10,FTrainerFeatures.MinIncline,FTrainerFeatures.MaxIncline);
+    if FTrainerFeatures.InclineIncrement10>0 then
+      Incline10:=FTrainerFeatures.MinIncline+Round((Incline10-FTrainerFeatures.MinIncline)/
+        FTrainerFeatures.InclineIncrement10)*FTrainerFeatures.InclineIncrement10;
+    Incline10:=Min(Incline10,FTrainerFeatures.MaxIncline);
+  end;
   if FHasFTMS then
     Result := SendConfirmedFTMS(TFTMSParser.CreateSetInclineCommand(Incline10), @WriteFTMSCommand);
 end;
@@ -252,6 +289,11 @@ function TFTMSCapableSession.SetSimulation(Grade: Single;
 begin
   Result := False;
   if not FHasControl then Exit;
+  if FTrainerFeatures.Known and not FTrainerFeatures.SupportsSimulation then
+  begin
+    if FTrainerFeatures.SupportsInclineControl then Result:=SetIncline(Grade);
+    Exit;
+  end;
   if FHasFTMS then
     Result := SendConfirmedFTMS(TFTMSParser.CreateSetSimulationCommand(
       Round(Max(-32.768, Min(32.767, WindSpeed)) * 1000),
@@ -293,53 +335,6 @@ begin
     Result := SendConfirmedFTMS(TFTMSParser.CreateResetCommand, @WriteFTMSCommand);
     if Result then FHasControl := False;
   end;
-end;
-
-{ ── Cadence from cumulative crank revolution data ── }
-
-function TFTMSParser.CalcCadenceFromCrank(CrankRevs, CrankTime: Word): Word;
-var
-  DeltaRevs: Integer;
-  DeltaTime: Integer;
-  Cadence: Cardinal;
-begin
-  Result := 0;
-  if not FHasPrevCrank then
-  begin
-    FPrevCrankRevs := CrankRevs;
-    FPrevCrankTime := CrankTime;
-    FHasPrevCrank := True;
-    FLastCrankChangeTick := GetTickCount64;
-    Exit;
-  end;
-
-  { Handle uint16 rollover }
-  DeltaRevs := (CrankRevs - FPrevCrankRevs) and $FFFF;
-  DeltaTime := (CrankTime - FPrevCrankTime) and $FFFF;
-
-  FPrevCrankRevs := CrankRevs;
-  FPrevCrankTime := CrankTime;
-
-  { DeltaTime is in 1/1024 seconds. Cadence = deltaRevs / deltaTime * 60 * 1024 }
-  if (DeltaTime > 0) and (DeltaRevs > 0) and (DeltaRevs < 20) then
-  begin
-    Cadence := (DeltaRevs * 1024 * 60) div DeltaTime;
-    if Cadence > High(Word) then Exit;
-    Result := Cadence;
-    FLastCrankChangeTick := GetTickCount64;
-    { Allow two expected revolution intervals at low cadence, at least 3 s. }
-    FCrankTimeoutMs := (QWord(DeltaTime) * 2000) div (QWord(DeltaRevs) * 1024);
-    if FCrankTimeoutMs < 3000 then FCrankTimeoutMs := 3000;
-  end
-  else
-    Result := CurrentCrankCadence;
-end;
-
-function TFTMSParser.CurrentCrankCadence: Word;
-begin
-  Result := FLastData.InstantCadence;
-  if FHasPrevCrank and (GetTickCount64 - FLastCrankChangeTick >= FCrankTimeoutMs) then
-    Result := 0;
 end;
 
 function TFTMSParser.GetUInt8(const Data: TBytes; var Offset: Integer): Byte;
@@ -389,250 +384,175 @@ begin
 end;
 
 function TFTMSParser.ParseIndoorBikeData(const Data: TBytes): TTrainerDataRecord;
-const
-  FieldSizes: array[1..12] of Byte = (2,2,2,3,2,2,2,5,1,1,2,2);
-var
-  Flags: Word;
-  Offset, RequiredSize, Bit: Integer;
+const FieldSizes: array[1..12] of Byte = (2,2,2,3,2,2,2,5,1,1,2,2);
+var Flags, Raw: Word; Offset, RequiredSize, Bit: Integer;
 begin
   Result := FLastData;
   FLastPacketValid := False;
-  
-  if Length(Data) < 2 then Exit;
-  
-  Offset := 0;
-  Flags := GetUInt16(Data, Offset);
-  RequiredSize := 2;
-  if (Flags and 1) = 0 then Inc(RequiredSize, 2);
-  for Bit := 1 to 12 do
-    if (Flags and (1 shl Bit)) <> 0 then Inc(RequiredSize, FieldSizes[Bit]);
-  if Length(Data) < RequiredSize then Exit;
-  Result.Timestamp := Now;
-  
-  // Флаг 0: More Data - игнорируем
-  
-  // Флаг 1: Average Speed present
-  if (Flags and $0001) = 0 then // Instantaneous Speed present when bit is 0
+  if Length(Data)<2 then Exit;
+  Offset:=0;
+  Flags:=GetUInt16(Data,Offset);
+  RequiredSize:=2;
+  if (Flags and 1)=0 then Inc(RequiredSize,2);
+  for Bit:=1 to 12 do
+    if (Flags and (1 shl Bit))<>0 then Inc(RequiredSize,FieldSizes[Bit]);
+  if Length(Data)<RequiredSize then Exit;
+  BeginTrainerPacket(Result);
+  if (Flags and 1)=0 then
   begin
-    Result.InstantSpeed := GetUInt16(Data, Offset) / 100.0; // 0.01 km/h resolution
+    Raw:=GetUInt16(Data,Offset);
+    Result.InstantSpeed:=Raw/100.0;
+    if Raw=$FFFF then Result.InstantSpeed:=0;
+    MarkTrainerMetric(Result,tmSpeed,Raw<>$FFFF);
   end;
-  
-  if (Flags and $0002) <> 0 then // Average Speed
+  if (Flags and 2)<>0 then Result.AverageSpeed:=GetUInt16(Data,Offset)/100.0;
+  if (Flags and 4)<>0 then
   begin
-    Result.AverageSpeed := GetUInt16(Data, Offset) / 100.0;
+    Raw:=GetUInt16(Data,Offset);
+    Result.InstantCadence:=Raw div 2;
+    if Raw=$FFFF then Result.InstantCadence:=0;
+    MarkTrainerMetric(Result,tmCadence,Raw<>$FFFF);
   end;
-  
-  // Флаг 2: Instantaneous Cadence
-  if (Flags and $0004) <> 0 then
+  if (Flags and 8)<>0 then Result.AverageCadence:=GetUInt16(Data,Offset) div 2;
+  if (Flags and $10)<>0 then
   begin
-    Result.InstantCadence := GetUInt16(Data, Offset) div 2; // 0.5 rpm resolution
+    Result.Distance:=GetUInt24(Data,Offset);
+    MarkTrainerMetric(Result,tmDistance);
   end;
-  
-  // Флаг 3: Average Cadence
-  if (Flags and $0008) <> 0 then
+  if (Flags and $20)<>0 then
   begin
-    Result.AverageCadence := GetUInt16(Data, Offset) div 2;
+    { Indoor Bike Data uses whole levels; the control point/range uses 0.1. }
+    Result.ResistanceLevel:=GetInt16(Data,Offset);
+    MarkTrainerMetric(Result,tmResistance);
   end;
-  
-  // Флаг 4: Total Distance
-  if (Flags and $0010) <> 0 then
+  if (Flags and $40)<>0 then
   begin
-    Result.Distance := GetUInt24(Data, Offset); // meters
+    Result.InstantPower:=GetNonnegativePower(Data,Offset);
+    MarkTrainerMetric(Result,tmPower);
   end;
-  
-  // Флаг 5: Resistance Level
-  if (Flags and $0020) <> 0 then
+  if (Flags and $80)<>0 then Result.AveragePower:=GetNonnegativePower(Data,Offset);
+  if (Flags and $100)<>0 then
   begin
-    Result.ResistanceLevel := GetInt16(Data, Offset);
+    Result.TotalEnergy:=GetUInt16(Data,Offset);
+    Inc(Offset,3);
+    MarkTrainerMetric(Result,tmEnergy);
   end;
-  
-  // Флаг 6: Instantaneous Power
-  if (Flags and $0040) <> 0 then
+  if (Flags and $200)<>0 then
   begin
-    Result.InstantPower := GetNonnegativePower(Data, Offset);
+    Result.HeartRate:=GetUInt8(Data,Offset);
+    MarkTrainerMetric(Result,tmHeartRate,(Result.HeartRate>0) and (Result.HeartRate<>255));
   end;
-  
-  // Флаг 7: Average Power
-  if (Flags and $0080) <> 0 then
+  if (Flags and $400)<>0 then Inc(Offset);
+  if (Flags and $800)<>0 then
   begin
-    Result.AveragePower := GetNonnegativePower(Data, Offset);
+    Result.ElapsedTime:=GetUInt16(Data,Offset);
+    MarkTrainerMetric(Result,tmElapsed);
   end;
-  
-  // Флаг 8: Expended Energy
-  if (Flags and $0100) <> 0 then
-  begin
-    Result.TotalEnergy := GetUInt16(Data, Offset); // kcal
-    GetUInt16(Data, Offset); // Energy per hour - skip
-    GetUInt8(Data, Offset);  // Energy per minute - skip
-  end;
-  
-  // Флаг 9: Heart Rate
-  if (Flags and $0200) <> 0 then
-  begin
-    Result.HeartRate := GetUInt8(Data, Offset);
-  end;
-  
-  // Флаг 10: Metabolic Equivalent - skip
-  if (Flags and $0400) <> 0 then
-  begin
-    GetUInt8(Data, Offset);
-  end;
-  
-  // Флаг 11: Elapsed Time
-  if (Flags and $0800) <> 0 then
-  begin
-    Result.ElapsedTime := GetUInt16(Data, Offset);
-  end;
-  
-  // Флаг 12: Remaining Time - skip
-  if (Flags and $1000) <> 0 then
-  begin
-    GetUInt16(Data, Offset);
-  end;
-  
-  Result.IsMoving := (Result.InstantSpeed > 0.1) or (Result.InstantCadence > 0);
-  FLastData := Result;
-  FLastPacketValid := True;
+  Result.IsMoving:=(Result.InstantSpeed>0.1) or (Result.InstantCadence>0);
+  FLastData:=Result;
+  FLastPacketValid:=True;
 end;
 
 function TFTMSParser.ParseCyclingPowerMeasurement(const Data: TBytes): TTrainerDataRecord;
-const
-  FieldSizes: array[0..11] of Byte = (1,0,2,0,6,4,4,4,3,2,2,2);
-var
-  Flags: Word;
+const FieldSizes: array[0..11] of Byte = (1,0,2,0,6,4,4,4,3,2,2,2);
+var Flags, Revs, EventTime: Word; WheelRevs: Cardinal;
   Offset, RequiredSize, Bit: Integer;
-  CrankRevs, CrankTime, Cad: Word;
 begin
-  Result := FLastData;
-  FLastPacketValid := False;
-  
-  if Length(Data) < 4 then Exit;
-  
-  Offset := 0;
-  Flags := GetUInt16(Data, Offset);
-  RequiredSize := 4;
-  for Bit := 0 to 11 do
-    if (Flags and (1 shl Bit)) <> 0 then Inc(RequiredSize, FieldSizes[Bit]);
-  if Length(Data) < RequiredSize then Exit;
-  Result.Timestamp := Now;
-  Result.InstantCadence := CurrentCrankCadence;
-  
-  // Instantaneous Power всегда присутствует
-  Result.InstantPower := GetNonnegativePower(Data, Offset);
-  
-  // Флаг 0: Pedal Power Balance - skip
-  if (Flags and $0001) <> 0 then
+  Result:=FLastData;
+  FLastPacketValid:=False;
+  if Length(Data)<4 then Exit;
+  Offset:=0;
+  Flags:=GetUInt16(Data,Offset);
+  RequiredSize:=4;
+  for Bit:=0 to 11 do
+    if (Flags and (1 shl Bit))<>0 then Inc(RequiredSize,FieldSizes[Bit]);
+  if Length(Data)<RequiredSize then Exit;
+  BeginTrainerPacket(Result);
+  Result.InstantPower:=GetNonnegativePower(Data,Offset);
+  MarkTrainerMetric(Result,tmPower);
+  if (Flags and 1)<>0 then Inc(Offset);
+  if (Flags and 4)<>0 then Inc(Offset,2);
+  if (Flags and $10)<>0 then
   begin
-    GetUInt8(Data, Offset);
+    WheelRevs:=GetUInt16(Data,Offset);
+    WheelRevs:=WheelRevs or (Cardinal(GetUInt16(Data,Offset)) shl 16);
+    EventTime:=GetUInt16(Data,Offset);
+    Result.InstantSpeed:=RevolutionRate(FCPSWheel,WheelRevs,EventTime,2048,False,30)*
+      FWheelCircumferenceM*3.6;
+    MarkTrainerMetric(Result,tmSpeed);
   end;
-  
-  // Флаг 2: Accumulated Torque - skip
-  if (Flags and $0004) <> 0 then
+  if (Flags and $20)<>0 then
   begin
-    GetUInt16(Data, Offset);
+    Revs:=GetUInt16(Data,Offset);
+    EventTime:=GetUInt16(Data,Offset);
+    Result.InstantCadence:=Round(RevolutionRate(FCPSCrank,Revs,EventTime,1024,True,6)*60);
+    MarkTrainerMetric(Result,tmCadence);
   end;
-  
-  // Флаг 4: Wheel Revolution Data
-  if (Flags and $0010) <> 0 then
-  begin
-    // Cumulative Wheel Revolutions (uint32) и Last Wheel Event Time (uint16)
-    Inc(Offset, 6);
-  end;
-  
-  // Флаг 5: Crank Revolution Data
-  if (Flags and $0020) <> 0 then
-  begin
-    if Offset + 3 < Length(Data) then
-    begin
-      CrankRevs := GetUInt16(Data, Offset);
-      CrankTime := GetUInt16(Data, Offset);
-      Cad := CalcCadenceFromCrank(CrankRevs, CrankTime);
-      Result.InstantCadence := Cad;
-    end
-    else
-      Inc(Offset, 4);
-  end;
-  
-  Result.IsMoving := Result.InstantPower > 0;
-  FLastData := Result;
-  FLastPacketValid := True;
+  Result.IsMoving:=Result.InstantPower>0;
+  FLastData:=Result;
+  FLastPacketValid:=True;
 end;
 
-{ ── Cycling Speed & Cadence Measurement (0x2A5B) ──
-  Flags byte:
-    bit 0: Wheel Revolution Data Present (uint32 cumRevs + uint16 lastTime)
-    bit 1: Crank Revolution Data Present (uint16 cumRevs + uint16 lastTime)
-  Used by standalone speed/cadence sensors (Garmin, Wahoo RPM, etc.) }
-
 function TFTMSParser.ParseCSCMeasurement(const Data: TBytes): TTrainerDataRecord;
-var
-  Flags: Byte;
-  Offset, RequiredSize: Integer;
-  WheelRevs: Cardinal;
-  WheelTime: Word;
-  CrankRevs, CrankTime, Cad: Word;
+var Flags: Byte; Offset, RequiredSize: Integer;
+  WheelRevs: Cardinal; Revs, EventTime: Word;
 begin
-  Result := FLastData;
-  FLastPacketValid := False;
-
-  if Length(Data) < 1 then Exit;
-
-  Offset := 0;
-  Flags := GetUInt8(Data, Offset);
-  RequiredSize := 1;
-  if (Flags and 1) <> 0 then Inc(RequiredSize, 6);
-  if (Flags and 2) <> 0 then Inc(RequiredSize, 4);
-  if Length(Data) < RequiredSize then Exit;
-  Result.Timestamp := Now;
-  Result.InstantCadence := CurrentCrankCadence;
-
-  { Wheel Revolution Data (bit 0) — speed }
-  if (Flags and $01) <> 0 then
+  Result:=FLastData;
+  FLastPacketValid:=False;
+  if Length(Data)<1 then Exit;
+  Flags:=Data[0]; Offset:=1; RequiredSize:=1;
+  if (Flags and 1)<>0 then Inc(RequiredSize,6);
+  if (Flags and 2)<>0 then Inc(RequiredSize,4);
+  if Length(Data)<RequiredSize then Exit;
+  BeginTrainerPacket(Result);
+  if (Flags and 1)<>0 then
   begin
-    if Offset + 5 < Length(Data) then
-    begin
-      WheelRevs := GetUInt16(Data, Offset) or (Cardinal(GetUInt16(Data, Offset)) shl 16);
-      WheelTime := GetUInt16(Data, Offset);
-      { Speed calculation would need wheel circumference — skip for now,
-        trainers provide speed via other means }
-    end
-    else
-      Inc(Offset, 6);
+    WheelRevs:=GetUInt16(Data,Offset);
+    WheelRevs:=WheelRevs or (Cardinal(GetUInt16(Data,Offset)) shl 16);
+    EventTime:=GetUInt16(Data,Offset);
+    Result.InstantSpeed:=RevolutionRate(FCSCWheel,WheelRevs,EventTime,1024,False,30)*
+      FWheelCircumferenceM*3.6;
+    MarkTrainerMetric(Result,tmSpeed);
   end;
-
-  { Crank Revolution Data (bit 1) — cadence }
-  if (Flags and $02) <> 0 then
+  if (Flags and 2)<>0 then
   begin
-    if Offset + 3 < Length(Data) then
-    begin
-      CrankRevs := GetUInt16(Data, Offset);
-      CrankTime := GetUInt16(Data, Offset);
-      Cad := CalcCadenceFromCrank(CrankRevs, CrankTime);
-      Result.InstantCadence := Cad;
-    end;
+    Revs:=GetUInt16(Data,Offset);
+    EventTime:=GetUInt16(Data,Offset);
+    Result.InstantCadence:=Round(RevolutionRate(FCSCCrank,Revs,EventTime,1024,True,6)*60);
+    MarkTrainerMetric(Result,tmCadence);
   end;
+  Result.IsMoving:=(Result.InstantSpeed>0.1) or (Result.InstantCadence>0);
+  FLastData:=Result;
+  FLastPacketValid:=True;
+end;
 
-  Result.IsMoving := Result.InstantCadence > 0;
-  FLastData := Result;
-  FLastPacketValid := True;
+function TFTMSParser.ParseHeartRateData(const Data: TBytes): TTrainerDataRecord;
+var Value: Word; ContactOK: Boolean;
+begin
+  Result:=FLastData;
+  FLastPacketValid:=False;
+  if Length(Data)<2 then Exit;
+  Value:=Data[1];
+  if (Data[0] and 1)<>0 then
+  begin
+    if Length(Data)<3 then Exit;
+    Value:=Value or (Word(Data[2]) shl 8);
+  end;
+  ContactOK:=((Data[0] and 4)=0) or ((Data[0] and 2)<>0);
+  BeginTrainerPacket(Result);
+  Result.HeartRate:=Min(Value,255);
+  MarkTrainerMetric(Result,tmHeartRate,(Value>0) and (Value<255) and ContactOK);
+  FLastData:=Result;
+  FLastPacketValid:=True;
 end;
 
 function TFTMSParser.ParseHeartRateMeasurement(const Data: TBytes): Byte;
-var
-  Flags: Byte;
-  Offset: Integer;
+var Parsed: TTrainerDataRecord;
 begin
-  Result := 0;
-  if Length(Data) < 2 then Exit;
-  
-  Offset := 0;
-  Flags := GetUInt8(Data, Offset);
-  
-  // Флаг 0: Heart Rate Value Format
-  if (Flags and $01) = 0 then
-    Result := GetUInt8(Data, Offset)  // UINT8
-  else
-    Result := Lo(GetUInt16(Data, Offset)); // UINT16, берём младший байт
+  Parsed:=ParseHeartRateData(Data);
+  if FLastPacketValid and (tmHeartRate in Parsed.ValidMetrics) then
+    Result:=Parsed.HeartRate
+  else Result:=0;
 end;
 
 function TFTMSParser.ParseFTMSFeatures(const Data: TBytes): TTrainerFeatures;
@@ -653,6 +573,10 @@ begin
   // Следующие 4 байта - Target Setting Features
   TargetFeatures := Data[4] or (Data[5] shl 8) or (Data[6] shl 16) or (Data[7] shl 24);
   
+  Result.Known := True;
+  Result.SupportsCadence := (Features and (1 shl 1)) <> 0;
+  Result.SupportsHeartRate := (Features and (1 shl 10)) <> 0;
+  Result.SupportsPower := (Features and (1 shl 14)) <> 0;
   Result.SupportsResistanceControl := (TargetFeatures and TARGET_RESISTANCE) <> 0;
   Result.SupportsPowerControl := (TargetFeatures and TARGET_POWER) <> 0;
   Result.SupportsInclineControl := (TargetFeatures and $0002) <> 0;    // Inclination Target Setting

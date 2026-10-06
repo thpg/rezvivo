@@ -192,6 +192,8 @@ type
     procedure StartScan;
     procedure StopScan;
     function IsSessionAlive(const AAddress: string): Boolean;
+    function IsConnecting(const AAddress: string): Boolean;
+    procedure RefreshWheelCircumference;
     { Sessions remain owned by the manager until shutdown. Used by the main
       thread after a connection notification, including reconnecting a FIT. }
     function GetSession(const AAddress: string): TTransportSession;
@@ -452,6 +454,22 @@ var
 begin
   for I := 0 to FProviders.Count - 1 do
     FProviders[I].StopScan;
+end;
+
+function TDeviceManager.IsConnecting(const AAddress: string): Boolean;
+begin
+  FConnectingLock.Enter;
+  try Result:=FConnectingAddrs.IndexOf(AAddress)>=0 finally FConnectingLock.Leave end;
+end;
+
+procedure TDeviceManager.RefreshWheelCircumference;
+var I: Integer; V: Integer;
+begin
+  V:=Settings.GetWheelCircumferenceMm;
+  FLock.Enter;
+  try
+    for I:=0 to FSessions.Count-1 do FSessions[I].WheelCircumferenceMm:=V;
+  finally FLock.Leave end;
 end;
 
 function TDeviceManager.IsSessionAlive(const AAddress: string): Boolean;
@@ -847,9 +865,10 @@ begin
         SetLength(FPendingData, FPendingDataCount + 8);
       I := FPendingDataCount;
       Inc(FPendingDataCount);
+      FPendingData[I].Data := Default(TTrainerDataRecord);
     end;
     FPendingData[I].Device := Dev;
-    FPendingData[I].Data := Data;
+    MergeTrainerData(FPendingData[I].Data, Data);
   finally
     FLock.Leave;
   end;
@@ -1286,6 +1305,7 @@ begin
 
       S := Provider.CreateSession(FAddress, FFriendlyName);
       if not Assigned(S) then Exit;
+      S.WheelCircumferenceMm:=Settings.GetWheelCircumferenceMm;
       S.OnDataReceived := @FOwner.HandleSessionDataReceived;
       S.OnConnectionChanged := @FOwner.HandleSessionConnectionChanged;
 

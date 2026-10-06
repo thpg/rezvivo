@@ -14,10 +14,14 @@ type
     FRevision:QWord;
     FJournalLap:Integer;
     FWaitForPedal,FRequireSignal,FSignalLost:Boolean;
+    FAutoPaused,FWasPedaling,FResumeOnPedal,FPedalTracking:Boolean;
+    FNoPedalingTime:Double;
     procedure JournalState;
     procedure Advance;
     function GetStage:TWorkoutSegment;
     function GetTarget:Double;
+    function GetStagePower:Double;
+    function GetAutoPauseDelay:Double;
     function GetRemaining:Double;
     function GetVisualPowerScale:Single;
   public
@@ -54,11 +58,25 @@ type
     property StageStartElapsed:Double read FStageStartElapsed;
     property Intensity:Double read FIntensity;
     property SignalLost:Boolean read FSignalLost;
+    property AutoPaused:Boolean read FAutoPaused;
+    property NoPedalingTime:Double read FNoPedalingTime;
+    property AutoPauseDelay:Double read GetAutoPauseDelay;
     property JournalLap:Integer read FJournalLap;
   end;
+{ A fresh cadence sample is authoritative, including zero. Power is a fallback
+  for devices without cadence; flywheel speed never indicates pedalling. }
+function WorkoutPedaling(PowerFresh,CadenceFresh:Boolean;PowerWatts,CadenceRpm:Double):Boolean;
 var WorkoutPlayer:TWorkoutPlayer;
 implementation
-uses Math,GameSensorLog;
+uses Math,GameSensorLog,GameWorkoutColors;
+
+function WorkoutPedaling(PowerFresh,CadenceFresh:Boolean;PowerWatts,CadenceRpm:Double):Boolean;
+begin
+  if CadenceFresh and not IsNan(CadenceRpm) and not IsInfinite(CadenceRpm) and
+     (CadenceRpm>=0) and (CadenceRpm<255) then Exit(CadenceRpm>0);
+  Result:=PowerFresh and not IsNan(PowerWatts) and not IsInfinite(PowerWatts) and
+    (PowerWatts>0) and (PowerWatts<65535);
+end;
 
 procedure TWorkoutPlayer.JournalState;
 begin
@@ -79,6 +97,9 @@ begin
   Result.Add('intensity',FIntensity);Result.Add('stage_start',FStageStartElapsed);
   Result.Add('journal_lap',FJournalLap);
   Result.Add('wait_pedal',FWaitForPedal);Result.Add('require_signal',FRequireSignal);
+  Result.Add('auto_paused',FAutoPaused);Result.Add('was_pedaling',FWasPedaling);
+  Result.Add('resume_pedal',FResumeOnPedal);Result.Add('pedal_tracking',FPedalTracking);
+  Result.Add('no_pedal_time',FNoPedalingTime);
   A:=TJSONArray.Create;Result.Add('segments',A);
   for I:=0 to FPlan.Segments.Count-1 do begin
     S:=FPlan.Segments[I];J:=TJSONObject.Create(['kind',Ord(S.Kind),'duration',S.Duration,
@@ -121,6 +142,13 @@ begin
     FIntensity:=EnsureRange(O.Get('intensity',1.0),0.25,1.5);FStageStartElapsed:=Max(0,O.Get('stage_start',0.0));
     if FIndex>=FPlan.Segments.Count then FState:=wsFinished
     else if StateValue=Ord(wsPaused)then FState:=wsPaused else FState:=wsReady;
+    FAutoPaused:=(FState=wsPaused)and O.Get('auto_paused',False);
+    FWasPedaling:=O.Get('was_pedaling',False);
+    FResumeOnPedal:=O.Get('resume_pedal',True);
+    FPedalTracking:=O.Get('pedal_tracking',FWaitForPedal or FRequireSignal);
+    FNoPedalingTime:=O.Get('no_pedal_time',0.0);
+    if IsNan(FNoPedalingTime)or IsInfinite(FNoPedalingTime)then FNoPedalingTime:=0;
+    FNoPedalingTime:=EnsureRange(FNoPedalingTime,0.0,15.0);
     if Stage<>nil then FStageTime:=Min(FStageTime,Stage.Duration);
     FJournalLap:=Max(0,O.Get('journal_lap',0));JournalState;
     Inc(FRevision);
@@ -146,6 +174,8 @@ end;
 procedure TWorkoutPlayer.Stop;
 begin
   FreeAndNil(FPlan);FState:=wsIdle;FSignalLost:=False;
+  FAutoPaused:=False;FWasPedaling:=False;FResumeOnPedal:=False;
+  FPedalTracking:=False;FNoPedalingTime:=0;
   FIndex:=0;FStageTime:=0;FElapsed:=0;FPosition:=0;
   FStageStartElapsed:=0;Inc(FRevision);
   Inc(FJournalLap);SensorLog.SetSessionState(False,FJournalLap,0);
@@ -155,6 +185,8 @@ procedure TWorkoutPlayer.Restart;
 begin
   if FPlan=nil then Exit;
   FIndex:=0;FStageTime:=0;FElapsed:=0;FPosition:=0;FSignalLost:=False;FState:=wsReady;
+  FAutoPaused:=False;FWasPedaling:=False;FResumeOnPedal:=False;
+  FPedalTracking:=FWaitForPedal or FRequireSignal;FNoPedalingTime:=0;
   FStageStartElapsed:=0;Inc(FRevision);
   Inc(FJournalLap);JournalState;
 end;
@@ -173,37 +205,82 @@ begin
   FStageStartElapsed:=FElapsed;
   if FIndex>=FPlan.Segments.Count then begin
     FState:=wsFinished;
+    FAutoPaused:=False;FResumeOnPedal:=False;FNoPedalingTime:=0;
     if Assigned(OnFinished)then OnFinished(Self);
   end;
   Inc(FJournalLap);JournalState;
 end;
 
 procedure TWorkoutPlayer.Step(Seconds:Double;WorldReady,Pedaling,SignalFresh:Boolean);
-var D,Left:Double;S:TWorkoutSegment;
+var D,Left,IdleLimit,ZoneBoundary,Scale:Double;S:TWorkoutSegment;Idle,Expired:Boolean;
 begin
-  if(FPlan=nil)or(FState in[wsIdle,wsPaused,wsFinished])or not WorldReady then Exit;
+  if(FPlan=nil)or(FState in[wsIdle,wsFinished])or not WorldReady then Exit;
   if IsNan(Seconds)or IsInfinite(Seconds)or(Seconds<=0)then Exit;
   FSignalLost:=FRequireSignal and not SignalFresh;
-  if FSignalLost then begin FState:=wsReady;JournalState;Exit;end;
+  FWasPedaling:=Pedaling and not FSignalLost;
+  if FWasPedaling then FPedalTracking:=True;
+  if FState=wsPaused then begin
+    { A manual pause pressed while turning the cranks waits for a stop and a
+      fresh start, rather than disappearing in the following frame. }
+    if not FWasPedaling then FResumeOnPedal:=True;
+    if not(FResumeOnPedal and FWasPedaling)then Exit;
+    Resume;
+  end;
+  if FSignalLost then begin
+    FState:=wsReady;FNoPedalingTime:=0;JournalState;Exit;
+  end;
+  if Pedaling then FNoPedalingTime:=0;
   if FState=wsReady then begin
     if FWaitForPedal and not Pedaling then Exit;
     FState:=wsRunning;
   end;
+  Idle:=FPedalTracking and not Pedaling;
   while(Seconds>0)and(FState=wsRunning)do begin
     S:=Stage;
     if S=nil then begin FState:=wsFinished;Break;end;
     if IsNan(S.Duration)or IsInfinite(S.Duration)or(S.Duration<=0)then begin Advance;Continue;end;
-    Left:=Max(0,S.Duration-FStageTime);D:=Min(Left,Seconds);
+    Left:=Max(Double(0),S.Duration-FStageTime);D:=Min(Left,Seconds);
+    Expired:=False;
+    if Idle then begin
+      IdleLimit:=GetAutoPauseDelay;
+      D:=Min(D,Max(Double(0),IdleLimit-FNoPedalingTime));
+      { Split a long update at a ramp's zone boundary too. A warmup becoming
+        harder changes the grace period even when no interval has ended. }
+      Scale:=VisualPowerScale;
+      if(S.Kind in[wskWarmup,wskCooldown,wskRamp])and(Scale>0)and
+        (S.PowerHigh<>S.PowerLow)then begin
+        ZoneBoundary:=(WorkoutZone1Upper/Scale-S.PowerLow)/(S.PowerHigh-S.PowerLow)*S.Duration;
+        { Step just beyond the boundary so rounding cannot leave either ramp
+          on its previous side of the threshold. }
+        ZoneBoundary:=ZoneBoundary+1e-6;
+        if ZoneBoundary>FStageTime+1e-7 then D:=Min(D,ZoneBoundary-FStageTime);
+      end;
+      FNoPedalingTime:=FNoPedalingTime+D;
+      Expired:=FNoPedalingTime>=IdleLimit-1e-7;
+    end;
     FStageTime:=FStageTime+D;FElapsed:=FElapsed+D;FPosition:=FPosition+D;Seconds:=Seconds-D;
-    if FStageTime>=S.Duration-1e-7 then Advance else Break;
+    if FStageTime>=S.Duration-1e-7 then Advance;
+    if Expired and(FState=wsRunning)then begin
+      FState:=wsPaused;FAutoPaused:=True;FResumeOnPedal:=True;
+    end;
   end;
   JournalState;
 end;
 
 procedure TWorkoutPlayer.Pause;
-begin if FState in[wsReady,wsRunning]then begin FState:=wsPaused;JournalState;end;end;
+begin
+  if FState in[wsReady,wsRunning,wsPaused]then begin
+    FState:=wsPaused;FAutoPaused:=False;FNoPedalingTime:=0;
+    FResumeOnPedal:=not FWasPedaling;JournalState;
+  end;
+end;
 procedure TWorkoutPlayer.Resume;
-begin if FState=wsPaused then begin FState:=wsReady;JournalState;end;end;
+begin
+  if FState=wsPaused then begin
+    FState:=wsReady;FAutoPaused:=False;FResumeOnPedal:=False;
+    FNoPedalingTime:=0;JournalState;
+  end;
+end;
 procedure TWorkoutPlayer.Skip;
 begin
   if(FPlan<>nil)and(FState in[wsReady,wsRunning,wsPaused])then begin
@@ -228,7 +305,7 @@ function TWorkoutPlayer.GetRemaining:Double;
 begin
   Result:=0;
   if(Stage<>nil)and not IsNan(Stage.Duration)and not IsInfinite(Stage.Duration)then
-    Result:=Max(0,Stage.Duration-FStageTime);
+    Result:=Max(Double(0),Stage.Duration-FStageTime);
 end;
 
 function TWorkoutPlayer.GetVisualPowerScale:Single;
@@ -237,18 +314,28 @@ begin
   if FInitialReference>0 then Result:=Result*FReference/FInitialReference;
 end;
 
-function TWorkoutPlayer.GetTarget:Double;
+function TWorkoutPlayer.GetStagePower:Double;
 var S:TWorkoutSegment;Fraction,P:Double;
 begin
   Result:=0;S:=Stage;
-  if(S=nil)or(S.Kind=wskFreeRide)or(FReference<=0)then Exit;
+  if(S=nil)or(S.Kind=wskFreeRide)then Exit;
   P:=S.PowerLow;
   if S.Kind in[wskWarmup,wskCooldown,wskRamp]then begin
-    Fraction:=0;if S.Duration>0 then Fraction:=EnsureRange(FStageTime/S.Duration,0.0,1.0);
+    Fraction:=0;if S.Duration>0 then Fraction:=EnsureRange(FStageTime/S.Duration,Double(0),Double(1));
     P:=S.PowerLow+(S.PowerHigh-S.PowerLow)*Fraction;
   end;
   if IsNan(P)or IsInfinite(P)then Exit;
-  Result:=Max(0,P*FReference*FIntensity);
+  if P>0 then Result:=P;
+end;
+
+function TWorkoutPlayer.GetTarget:Double;
+begin Result:=GetStagePower*FReference*FIntensity;end;
+
+function TWorkoutPlayer.GetAutoPauseDelay:Double;
+begin
+  if(Stage<>nil)and((Stage.Kind=wskFreeRide)or
+    (GetStagePower*VisualPowerScale<WorkoutZone1Upper))then Result:=15
+  else Result:=5;
 end;
 
 function TWorkoutPlayer.NeedsTrainerControl:Boolean;

@@ -4,7 +4,7 @@ interface
 uses Classes, SysUtils, Generics.Collections, CastleTransform, CastleVectors,
   CastleBoxes, CastleFrustum, Osm3dTileX3D, Osm3dGeoMath,
   TreeModel, TreeMath, TreeRuntime, TreeRenderer, TreeFoliageLOD,
-  CastleGLUtils, Osm3dVegetationBudget;
+  CastleGLUtils, Osm3dVegetationBudget, Osm3dRtxShadow;
 type
   TSpeciesVersions = array[TTreeSpecies] of QWord;
   TSpeciesCounts = array[TTreeSpecies] of Integer;
@@ -91,6 +91,8 @@ type
     FCacheBudget, FDetailBytes, FFreeVram: Int64;
     FMemoryTime, FUploadTime, FTargetFPS: Single;
     FLastRenderTick: QWord;
+    FLastColorFrame: Int64;
+    FLastColorCamera: TCastleCamera;
     FQualityRevision: Cardinal;
     FLoad: TTreeLoadControl;
     FDrawCalls, FTriangles, FFarTrees, FAtlasCount, FCrownProxies, FFoliageShoots: Integer;
@@ -117,7 +119,9 @@ type
     procedure RemoveTile(TileX, TileZ: Single);
     function LocalBoundingBox: TBox3D; override;
     function Diagnostics: string;
+    function CollectRtxTrees(Cache:TRtxShadow;var CellIndex,EntryIndex:Integer):Boolean;
     property SunRayDirection: TVector3 read FSunRayDirection write FSunRayDirection;
+    property ShadowGeneration:QWord read FGenerationCount;
   end;
 function ProceduralVegetationDiagnostics: string;
 function ProceduralTreeQuality(const Distance: Single): Single;
@@ -125,10 +129,44 @@ implementation
 uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Math, CastleGL, CastleRenderContext, CastleRenderOptions,
   CastleApplicationProperties, CastleUriUtils, Osm3dProceduralTreeData,
   Osm3dStudioSettings, Osm3dRenderInstanced, Osm3dWind, TreeSeason, TreeLOD, CastleLog,
-  Osm3dVegetationQuality;
+  Osm3dVegetationQuality, CastleTimeUtils, Osm3dRtxMaterials;
 const
   CELL_METERS = 128;
 var LastRenderer: TOsmProceduralVegetation;
+
+function TOsmProceduralVegetation.CollectRtxTrees(Cache:TRtxShadow;var CellIndex,EntryIndex:Integer):Boolean;
+var C:TProceduralCell;E:TProceduralEntry;R:TTreeRenderer;S:TTreeSpecies;M:TMatrix4;P:TVector3;
+begin
+  Result:=False;if FShared=nil then Exit;
+  if FError<>'' then raise Exception.Create('Tree projection cache: '+FError);
+  M:=WorldTransform;
+  while (CellIndex<FCells.Count) and Cache.TimeAvailable do begin
+    C:=FCells[CellIndex];
+    if Cache.Intersects(C.Bounds.Transform(M)) then begin
+      while (EntryIndex<C.Count) and Cache.TimeAvailable do begin
+        E:=C.Entries[EntryIndex];
+        if not Cache.Intersects(E.Bounds.Transform(M)) then begin Inc(EntryIndex);Continue;end;
+        S:=E.Instance.Species;
+        if not FShared.HasSeasonLOD(FProfiles[S]) then begin
+          { An off-screen caster still needs its mask. The colour renderer's
+            visibility-driven queue alone cannot prepare all shadow casters. }
+          if FJob=nil then begin
+            FJob:=TProceduralJob.Create(True);FJob.AtlasJob:=True;
+            FJob.Profile:=FProfiles[S];FJob.AtlasDirectory:=FAtlasDir;FJob.Start;
+          end;
+          Exit;
+        end;
+        R:=nil;if E.Detail<>nil then R:=E.Detail.Renderer;
+        P:=M.MultPoint(Vector3(E.Position.X,E.Position.Y,E.Position.Z));
+        if not Cache.AddTree(E.Instance,FProfiles[S],P,R,FShared,FSeason) then Exit;
+        Inc(EntryIndex);
+      end;
+      if EntryIndex<C.Count then Exit;
+    end;
+    Inc(CellIndex);EntryIndex:=0;
+  end;
+  Result:=CellIndex>=FCells.Count;
+end;
 
 function TreeDistanceScale: Single;
 begin
@@ -216,6 +254,7 @@ constructor TOsmProceduralVegetation.Create(AOwner: TComponent);
 var S: TTreeSpecies;
 begin
   inherited;
+  FLastColorFrame:=-1;
   FCells:=specialize TObjectList<TProceduralCell>.Create(True);
   FDetails:=specialize TObjectList<TProceduralDetail>.Create(True);
   FBounds:=TBox3D.Empty;FViewerRight:=Vector3(1,0,0);
@@ -571,7 +610,7 @@ end;
 procedure TOsmProceduralVegetation.LocalRender(const Params:TRenderParams);
 var Projection,View,Model:TTreeMat4;M,V:TMatrix4;Frustum:TFrustum;
     Camera,LocalCamera,Sun,Right:TVector3;Eye:TTreeVec3;Env:TTreeRenderEnvironment;
-    Depth:Boolean;C:TProceduralCell;D:TProceduralDetail;S:TTreeSpecies;I,UploadBudget:Integer;
+    Depth,FreshColor:Boolean;C:TProceduralCell;D:TProceduralDetail;S:TTreeSpecies;I,UploadBudget:Integer;
     Instance:TreeModel.TTreeInstance;
     Target,OldQ,DetailDistance,LeafDistance,AdaptiveDetail:Single;
     Stats:TTreeRenderStats;Tick:QWord;OldLevel:Integer;
@@ -580,6 +619,7 @@ var Projection,View,Model:TTreeMat4;M,V:TMatrix4;Frustum:TFrustum;
     WasDepth,WasBlend,WasCull,OldDepthMask:GLBoolean;
     VisibleCells:TProceduralCells;VisibleCount:Integer;Batch:TProceduralFarBatch;BatchOrigin:TTreeWorldPosition;
 begin
+  if RtxReflectionCaptureActive then Exit;
   if not ProceduralVegetationActive then begin
     if not FInactive then begin
       FInactive:=True;
@@ -603,6 +643,8 @@ begin
   FInactive:=False;
   if not RenderTreesActive or (FCells.Count=0) then Exit;
   Depth:=Params.RenderingCamera.Target=rtShadowMap;
+  FreshColor:=not Depth and ((FLastColorFrame<>TFramesPerSecond.RenderFrameId)or
+    (FLastColorCamera<>Params.RenderingCamera.Camera));
   V:=Params.RenderingCamera.Matrix;
   Camera:=CameraWorldPosFromView(V);
   if Depth then begin
@@ -627,6 +669,12 @@ begin
     end;
     if not Depth then begin
       LastRenderer:=Self;FDrawCalls:=0;FTriangles:=0;FFarTrees:=0;FCrownProxies:=0;FFoliageShoots:=0;
+    end;
+    if FreshColor then begin
+      { Several world-cache slabs use the same camera in one frame. Measure
+        actual frame time and advance adaptation/LOD once, not once per slab. }
+      FLastColorFrame:=TFramesPerSecond.RenderFrameId;
+      FLastColorCamera:=Params.RenderingCamera.Camera;
       { Cache work follows the viewing camera even when the ride's physics
         time scale is zero or replay is slowed down. Advance once in the
         colour pass; shadow cascades must not advance it again. }

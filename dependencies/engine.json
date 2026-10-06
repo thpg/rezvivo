@@ -2,11 +2,15 @@
   "repository": "https://github.com/castle-engine/castle-engine.git",
   "commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "patch": "patches/cge-rezvivo.patch",
-  "patch_sha256": "94a9069ba0b01732b613945a7dc6bb8d5fa9c5f1621d377da54be7c5dace0394",
+  "patch_sha256": "8c9336a7e1c3d0de0d48a706be9d621bc0faf53a5035cc0b75ec5a0b0d2a4645",
   "modified_files": [
     {
+      "path": "src/base/castlerenderoptions_renderoptions.inc",
+      "sha256_lf": "23745837cb92ccc2ece39505e3943a724bfdecee6de37d2ced422e99ede79497"
+    },
+    {
       "path": "src/base_rendering/castleglshaders.pas",
-      "sha256_lf": "5ae1614e3f9306342499f17ebac1cc15d9ee80496d2fd4867cd251d6dafada9a"
+      "sha256_lf": "039de6718618033d079e2270b5bea08dbcee56743be25cc6e6db83543a606ac0"
     },
     {
       "path": "src/base_rendering/castlerendercontext.pas",
@@ -22,7 +26,7 @@
     },
     {
       "path": "src/scene/castleinternalbackgroundrenderer.pas",
-      "sha256_lf": "ab7c554221e6a363ccb3630c3ef5a049e17a6cc18df9c87907c9737ee5f1fda4"
+      "sha256_lf": "eabc1d4ce98755f8596339018e6b15a2de06dc0aa38c6bd954339108e736e626"
     },
     {
       "path": "src/scene/castleinternalbatchshapes.pas",
@@ -42,11 +46,15 @@
     },
     {
       "path": "src/scene/castleinternalrenderer_cache_types.inc",
-      "sha256_lf": "a03b8a315ba4ef545d18a7e7e77dd0771d071dee3b159c91dd6f03117b8c0978"
+      "sha256_lf": "28cda54cf429128c679b4760561d2f8595a106b0dc74e7676003644200b8c30f"
+    },
+    {
+      "path": "src/scene/castleinternalrenderer_glsl.inc",
+      "sha256_lf": "590a9739cfb52fb468b5b739ac2763d57b9bd291050219c8834684ec1f469042"
     },
     {
       "path": "src/scene/castleinternalrenderer_meshrenderer.inc",
-      "sha256_lf": "2dbbc48b758fc6b2b441f2d226d92496bb8781809c9a258920ce754733ef2cec"
+      "sha256_lf": "53d94c0d0fd0f0b054938b8bb7d0df455607e4c34315d783420b74959e2c0f12"
     },
     {
       "path": "src/scene/castleinternalrenderer_pass.inc",
@@ -54,7 +62,7 @@
     },
     {
       "path": "src/scene/castleinternalrenderer_renderer.inc",
-      "sha256_lf": "43d4db9261abc7cf11ae37cba102115d685792db51a1fffd2672ee69649403a0"
+      "sha256_lf": "d401a4ad18f003dbb4f1a75bb6d15dfec2e20ab5d799930f90203a4fbe7ae38c"
     },
     {
       "path": "src/scene/castleinternalrenderer_shape.inc",
@@ -74,7 +82,11 @@
     },
     {
       "path": "src/scene/castlerendererinternalshader.pas",
-      "sha256_lf": "b23c0dea66fca7bc1ab32c18d90b8236defb000bc1e814776d96c713e2bd7bf9"
+      "sha256_lf": "1ebf2f4e320a9f9e1b8c05cb88a8c3c32bb5929c94d8d7bb12a63b4c322d0a32"
+    },
+    {
+      "path": "src/scene/castlerendererinternalshader_hash.inc",
+      "sha256_lf": "8919b8d0be64b8f22fa59e421857d089f32bd64d312966061bc13f031d688dca"
     },
     {
       "path": "src/scene/castlescene.pas",
@@ -82,7 +94,7 @@
     },
     {
       "path": "src/scene/castlescenecore.pas",
-      "sha256_lf": "8f2aed2b984f4b6b602d9de72898a3eacf1fc6a4447cda939ef0e6e6a85ce799"
+      "sha256_lf": "1b08eececb20508f25ad6902f6a3c1ed483ea8a5103859860ba46c8dbaca62e3"
     },
     {
       "path": "src/scene/castlesceneinternalshape.pas",
@@ -94,7 +106,7 @@
     },
     {
       "path": "src/scene/castleviewport.pas",
-      "sha256_lf": "d454aaee6c57149a1eae7fb81b25252dc8c49cb1c3ba72b150c16499326ff1eb"
+      "sha256_lf": "99a6e3f64eda4b18a657d162bae278c9978dc171c143d4026835f7d83aaaec71"
     },
     {
       "path": "src/scene/backup/castleinternalrenderer_texture_20260727_130654.inc",
@@ -134,7 +146,7 @@
     },
     {
       "path": "src/scene/x3d/x3dnodes_castle.inc",
-      "sha256_lf": "c8b2ddb5ae873277381279d2f8cee2058faa3898c727dffacec9a396692bc4b7"
+      "sha256_lf": "9adfd1196764950b3d2ab04a12f06ffb56b62e3c2d6bddb6eaaee20ad1c94b30"
     },
     {
       "path": "src/scene/x3d/x3dnodes_standard_shape.inc",

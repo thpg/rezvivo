@@ -41,6 +41,8 @@ type
     FFarMinHeight,FFarMaxHeight: Single;
     FDepthCounts: array[0..4] of Integer;
     FStats: TTreeRenderStats;
+    FShadowFingerprint: LongWord;
+    FShadowBoundsMin, FShadowBoundsMax: TTreeVec3;
     FReady: Boolean;
     FEnvironment: TTreeRenderEnvironment;
     USunDirection,UBillboardRight,UFogColor,UFogDensity,UOutputGamma,UDepthOnly,UDirectBranches,ULeafScale,UNeedleScale: GLint;
@@ -96,6 +98,11 @@ type
     procedure UploadLODAtlas(const Prepared: TPreparedTreeLOD);
     function HasLODAtlas(const Profile: TTreeParams): Boolean;
     function HasSeasonLOD(const Profile: TTreeParams): Boolean;
+    function ShadowLOD(const Profile: TTreeParams; out Texture: Cardinal;
+      out Frames: TLODFrames; out Seasonal, Fruit: Boolean): Boolean;
+    property ShadowFingerprint: LongWord read FShadowFingerprint;
+    property ShadowBoundsMin: TTreeVec3 read FShadowBoundsMin;
+    property ShadowBoundsMax: TTreeVec3 read FShadowBoundsMax;
     property BakeMode: Boolean read FBakeMode write FBakeMode;
     property UseBakedLOD: Boolean read FUseBakedLOD write FUseBakedLOD;
     property Season: Single read FSeason write FSeason;
@@ -106,6 +113,14 @@ type
   end;
 implementation
 uses Classes, Math, TreeFruits;
+function TTreeRenderer.ShadowLOD(const Profile: TTreeParams; out Texture: Cardinal;
+  out Frames: TLODFrames; out Seasonal, Fruit: Boolean): Boolean;
+begin
+  if FShared<>nil then Exit(FShared.ShadowLOD(Profile,Texture,Frames,Seasonal,Fruit));
+  Texture:=FLODTextures[Profile.Species];Frames:=FLODFrames[Profile.Species];
+  Seasonal:=FLODSeasonParts[Profile.Species];Fruit:=FLODFruitLayer[Profile.Species];
+  Result:=(Texture<>0) and HasLODAtlas(Profile);
+end;
 function CompileShader(Kind: GLenum; const Source: string): GLuint;
 var P: PChar; OK,Len: GLint; Log: string;
 begin
@@ -308,6 +323,8 @@ var Items: TTreeGPUItems; I,G,N,Index,J,Offset: Integer; B: TTreeBranch; L: TTre
     Next:array[0..NEEDLE_DENSITY_GROUPS-1]of Integer;
     OldVAO,OldBuffer:GLint;Fruit:TTreeFruit;
 begin
+  FShadowFingerprint:=Data.Fingerprint;
+  FShadowBoundsMin:=Data.BoundsMin;FShadowBoundsMax:=Data.BoundsMax;
   FBranchCount:=Length(Data.Branches); FLeafCount:=Length(Data.Leaves); FCrownCount:=Length(Data.Crowns);
   FNeedleShootCount:=Length(Data.NeedleShoots);
   FFruitCount:=Length(Data.Fruits);FFruitRadius:=0;FFruitMembers:=1;

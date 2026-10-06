@@ -115,7 +115,7 @@
     "bytes": 87880,
     "sha256": "373b674f24425ea3f472509dd77e443534ef0edb0573c23b39960ec302bf6241",
     "version": "14.00.24123.0 built by: VCTOOLSREL",
-    "product": "Microsoft® Visual Studio® 2015",
+    "product": "Microsoft\u0412\u00ae Visual Studio\u0412\u00ae 2015",
     "upstream": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist",
     "license": "Microsoft redistributable license",
     "redistributed_in_git": false,
@@ -126,7 +126,7 @@
     "bytes": 963240,
     "sha256": "753ac30c30aae62415cc225e3d057b8b6254afe280696e0a43f1a7c3132632a6",
     "version": "12.00.40664.0 built by: VSULDR",
-    "product": "Microsoft® Visual Studio® 2013",
+    "product": "Microsoft\u0412\u00ae Visual Studio\u0412\u00ae 2013",
     "upstream": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist",
     "license": "Microsoft redistributable license",
     "redistributed_in_git": false,
@@ -153,5 +153,27 @@
     "license": "Zlib",
     "redistributed_in_git": false,
     "status": "version metadata identified; review release notices/source requirements"
+  },
+  {
+    "filename": "libusb0.dll",
+    "redistributed_in_git": false,
+    "bytes": 123552,
+    "sha256": "0cd18719d5701e9cc642fc93a83f13830931d6f29f664fedbdf212bcb7c349bd",
+    "version": "1.4.0.2",
+    "product": "libusb-win32",
+    "upstream": "https://github.com/mcuee/libusb-win32/tree/release_1.4.0.2",
+    "license": "LGPL-2.1-or-later",
+    "status": "Versioned upstream binary; notices and source URL in data/licenses/libusb-win32"
+  },
+  {
+    "filename": "rezvivo_rtx.dll",
+    "redistributed_in_git": false,
+    "bytes": 272896,
+    "sha256": "0c2f7bd2ae539c0b9af1ad57f15db9b4a187d4e38f3ac9c7673e3278730c98dd",
+    "version": "0.2.4-alpha.1",
+    "product": "REZVIVO Vulkan ray-query bridge",
+    "upstream": "Osm3d/rtx",
+    "license": "GPL-3.0-or-later",
+    "status": "Project source and pinned header dependency provided; build with Osm3d/rtx/build.ps1"
   }
 ]

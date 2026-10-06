@@ -921,7 +921,7 @@ function LanduseUVScalesFromMaterials: TLanduseUVScales;
 
 implementation
 
-uses Osm3dRiderShadow, Osm3dRoadMaterial, Osm3dRockMaterial, Math, GrassModel;
+uses Osm3dRtxMaterials, Osm3dRiderShadow, Osm3dRoadMaterial, Osm3dRockMaterial, Math, GrassModel;
 
 { Vertex effect — port of streets-gl. U_GROUND_MAT_COUNT генерируется
   из константы GROUND_MAT_COUNT (была зашита строкой — расходилась бы
@@ -992,7 +992,9 @@ begin
   Result :=
     'bool gc_grass_display_active=false; vec3 gc_grass_display;' + #10 +
     StringReplace(RIDER_SHADOW_GLSL,'PLUG_fragment_modify','gc_grass_applyShadow',[rfReplaceAll]) +
-    RoadMaterialSamplingGLSL + GrassSurfaceGLSL +
+    StringReplace(StringReplace(RTX_MATERIAL_GLSL,'rz','gp',[rfReplaceAll]),'gp_capture','rz_ground_capture',[rfReplaceAll]) +
+    RoadMaterialSamplingGLSL + ({$I shaders/road_puddles.glsl.inc}) + WaterFilmGLSL + GrassSurfaceGLSL +
+    'float gp_mask=0.0;vec3 gp_normal=vec3(0,1,0);vec4 gp_request=vec4(0);' + #10 +
     '#define U_GROUND_MAT_COUNT ' + IntToStr(GROUND_MAT_COUNT) + #10 +
     '#define MAT_TERRAIN        0' + #10 +
     '#define MAT_SANDY_SOIL    22' + #10 +
@@ -1206,6 +1208,13 @@ begin
     '' + #10 +
     'void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)' + #10 +
     '{' + #10 +
+    '    float gp_pixel=max(length(dFdx(vRoadCoord.xy)),length(dFdy(vRoadCoord.xy)));' + #10 +
+    '    gp_pixel*=rz_ground_capture>.5 ? .5 : 1.0;' + #10 +
+    '    if(gp_available>.5 || rz_ground_capture>.5){' + #10 +
+    '        gp_mask=gpPuddleMask(vRoadCoord,vRoadStyle,gp_pixel)*(smoothstep(.985,.998,normalize(vGroundNormalOS).y));' + #10 +
+    '        if(gp_mask>.001){gp_normal=gpWaterFilmNormal(vRoadCoord.xy,gp_pixel,normalize(vGroundNormalOS));gp_request=vec4(gp_normal*.5+.5,1);}' + #10 +
+    '    }' + #10 +
+    '    if(rz_ground_capture>.5){fragment_color=gp_request;return;}' + #10 +
     '    int matId = int(floor(vGroundMaterialId + 0.5));' + #10 +
     '    if (matId < 0) matId = 0;' + #10 +
     '    if (matId >= U_GROUND_MAT_COUNT) matId = 0;' + #10 +
@@ -1734,12 +1743,14 @@ begin
     '    if (!gc_grass_display_active) gc_grass_applyShadow(color);' + #10 +
     '}' + #10 +
     'void PLUG_fragment_end(inout vec4 color) {' + #10 +
+    '    if(rz_ground_capture>.5){color=gp_request;return;}' + #10 +
     '    /* The instanced canopy writes display RGB directly. Keep its base' + #10 +
     '       in that space too: viewport ACES must not tone-map it a second time.' + #10 +
     '       Apply the shared shadow here, after static coverage is collected. */' + #10 +
     '    if (gc_grass_display_active) {' + #10 +
     '        color.rgb=gc_grass_display; gc_grass_applyShadow(color);' + #10 +
     '    }' + #10 +
+    '    if(gp_mask>.001)color.rgb=mix(color.rgb,gpWaterFilm(color.rgb,gp_normal,normalize(gLodToCamera),normalize(gc_SunDirToward)),gp_mask);' + #10 +
     '}' + #10;
 end;
 

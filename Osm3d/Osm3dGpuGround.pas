@@ -42,6 +42,9 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure Add(const Geo:TIndexedFaceSetNode; CurbStart:Cardinal);
+    { Worker-side access to the SAME indexed triangles, before any GL upload.
+      Also used by the GPU failure fallback; no duplicate surface index. }
+    function SampleGeometry(LX,LZ,ReferenceY:Single; Curbs:Boolean; out Y:Single):Boolean;
     procedure CloseGpu;
   end;
   TGpuGroundPatch = class
@@ -75,6 +78,8 @@ type
     FPreparedShapes:QWord;
     FPrepareMs,FPrepareMaxMs:Double;
     FEdges,FEdgeMisses:QWord;
+    FFallbackCalls,FFallbackHits:QWord;
+    FFallbackMs,FFallbackMaxMs:Double;
     procedure ContextClose(Sender:TObject);
     procedure EnsureProgram;
     function PrepareTile(Tile:TGpuGroundTile;var PrepareBudget:Integer):Boolean;
@@ -88,7 +93,7 @@ type
     procedure AddTile(Tile:TGpuGroundTile; Scene:TCastleScene);
     procedure RemoveTile(Tile:TGpuGroundTile);
     function Sample(Tile:TGpuGroundTile; LX,LZ,ReferenceY:Single;
-      Curbs:Boolean; out Y:Single):Boolean;
+      Curbs:Boolean; out Y:Single;AllowFallback:Boolean=True):Boolean;
     procedure Compare(const CpuY,GpuY:Single);
     procedure Render;
     function Info:string;
@@ -247,12 +252,26 @@ end;
 
 function TOsmGpuGround.SampleFallback(Tile:TGpuGroundTile; LX,LZ,ReferenceY:Single;
   Curbs:Boolean; out Y:Single):Boolean;
+var T0:TTimerResult;Ms:Double;
+begin
+  T0:=Timer;Inc(FFallbackCalls);
+  { A queued GPU patch is a cache miss, not missing terrain. Keep moving on
+    the tile's existing indexed triangles while that patch is produced.
+    This neither waits for GL nor builds/copies a second collision mesh. }
+  Result:=Tile.SampleGeometry(LX,LZ,ReferenceY,Curbs,Y);
+  if Result then Inc(FFallbackHits);
+  Ms:=T0.ElapsedTime*1000;FFallbackMs:=FFallbackMs+Ms;
+  FFallbackMaxMs:=Max(FFallbackMaxMs,Ms);
+end;
+
+function TGpuGroundTile.SampleGeometry(LX,LZ,ReferenceY:Single;
+  Curbs:Boolean; out Y:Single):Boolean;
 var P:TGpuGroundPart;X,Z,H,K,T:Integer;V,Lowest,Highest:Single;
 begin
   { A failed/unsupported GPU must not remove wheel contact. Read the existing
     scene coordinates, reconstructing just the spatial index when necessary. }
   Y:=0;Lowest:=NoHeight;Highest:=-NoHeight;
-  for P in Tile.Parts do begin
+  for P in Parts do begin
     if Length(P.Bins)=0 then P.Build(P.Geometry,P.FirstCurb);
     X:=Floor((LX-P.MinX)*P.InvX);Z:=Floor((LZ-P.MinZ)*P.InvZ);
     if(X<0)or(Z<0)or(X>=P.BinCount)or(Z>=P.BinCount)then Continue;
@@ -301,12 +320,17 @@ begin
 end;
 
 function TOsmGpuGround.Sample(Tile:TGpuGroundTile; LX,LZ,ReferenceY:Single;
-  Curbs:Boolean; out Y:Single):Boolean;
+  Curbs:Boolean; out Y:Single;AllowFallback:Boolean):Boolean;
 var P,Best:TGpuGroundPatch; I,X,Z,Old:Integer; DX,DZ,V00,V10,V01,V11:Single;
+  function Fallback:Boolean;
+  begin
+    Result:=False;
+    if AllowFallback then Result:=SampleFallback(Tile,LX,LZ,ReferenceY,Curbs,Y);
+  end;
 begin
   Result:=False;Y:=0;Inc(FClock);Best:=nil;
   if (Tile=nil)or(Tile.Parts.Count=0) then Exit;
-  if FError<>'' then Exit(SampleFallback(Tile,LX,LZ,ReferenceY,Curbs,Y));
+  if FError<>'' then Exit(Fallback);
   for P in FPatches do
     if (P.Tile=Tile)and(P.Curbs=Curbs)and
        ((Abs(P.ReferenceY-ReferenceY)<0.25)or((P.ReferenceY>1e19)and(ReferenceY>1e19)))and
@@ -320,14 +344,18 @@ begin
       for I:=0 to FPatches.Count-1 do
         if FPatches[I].Ready and(FPatches[I].ReadyFrame<FFrame)then
         if (Old<0)or(FPatches[I].Used<FPatches[Old].Used) then Old:=I;
-      if Old<0 then begin Inc(FMisses);Exit end;
+      if Old<0 then begin
+        Inc(FMisses);Exit(Fallback);
+      end;
       FPatches.Delete(Old);
     end;
     Best:=TGpuGroundPatch.Create;Best.Tile:=Tile;Best.ReferenceY:=ReferenceY;Best.Curbs:=Curbs;
     Best.X:=Floor(LX/2)*2-1;Best.Z:=Floor(LZ/2)*2-1;FPatches.Add(Best);
   end;
   Best.Used:=FClock;
-  if not Best.Ready then begin Inc(FMisses);Exit end;
+  if not Best.Ready then begin
+    Inc(FMisses);Exit(Fallback);
+  end;
   DX:=(LX-Best.X)/PatchStep-0.5;DZ:=(LZ-Best.Z)/PatchStep-0.5;
   X:=EnsureRange(Floor(DX),0,PatchN-2);Z:=EnsureRange(Floor(DZ),0,PatchN-2);
   DX:=EnsureRange(DX-X,0.0,1.0);DZ:=EnsureRange(DZ-Z,0.0,1.0);
@@ -338,10 +366,12 @@ begin
     Y:=(V00*(1-DX)+V10*DX)*(1-DZ)+(V01*(1-DX)+V11*DX)*DZ
   else if not ResolveEdge(Best,X,Z,LX,LZ,ReferenceY,Y)then begin
     { A nearby pixel is not proof of contact across a sharp edge or a hole. }
-    Inc(FMisses);Exit;
+    Inc(FMisses);Exit(Fallback);
   end;
   Result:=Abs(Y)<1e19;
-  if Result then Inc(FHits) else Inc(FMisses);
+  if Result then Inc(FHits) else begin
+    Inc(FMisses);Result:=Fallback;
+  end;
 end;
 procedure TOsmGpuGround.Compare(const CpuY,GpuY:Single);
 var D:Double;
@@ -421,7 +451,9 @@ begin
       if Length(P.Bins)=0 then P.Build(P.Geometry,P.FirstCurb);
       glGenBuffers(1,@P.Buffer);glBindBuffer(GL_SHADER_STORAGE_BUFFER,P.Buffer);
       glBufferData(GL_SHADER_STORAGE_BUFFER,P.BufferBytes,@P.Bins[0],GL_STATIC_DRAW);
-      P.Bins:=nil;
+      { Keep this shared spatial index for pending-cache contact reads.
+        Dropping it here caused a full tile index rebuild on the UI thread
+        at the very first wheel query outside a completed GPU patch. }
     end;
   end;
   Result:=AllReady and(Tile.Parts.Count>0);
@@ -533,6 +565,8 @@ begin
   Result:=Format('mode=%s tiles=%d patches=%d hits=%d misses=%d submitted=%d completed=%d cpu_bytes=%d gpu_index_bytes=%d compared=%d mean_error_m=%.6f max_error_m=%.6f over_2cm=%d edges=%d edge_misses=%d render_ms=%.3f render_mean_ms=%.3f render_max_ms=%.3f gpu_mean_ms=%.3f gpu_max_ms=%.3f prepared_shapes=%d prepare_total_ms=%.3f prepare_max_ms=%.3f error=%s',
     [GpuGroundModeName,FTiles.Count,FPatches.Count,FHits,FMisses,FSubmitted,FCompleted,Cpu,Gpu,FCompared,
     FErrorSum/Max(1,FCompared),FErrorMax,FOver2cm,FEdges,FEdgeMisses,FRenderMs,FRenderTotalMs/Max(1,FRenderCalls),FRenderMaxMs,FGpuMs/Max(1,FCompleted),FGpuMaxMs,FPreparedShapes,FPrepareMs,FPrepareMaxMs,FError]);
+  Result:=Result+Format(' fallback_calls=%d fallback_hits=%d fallback_mean_ms=%.6f fallback_max_ms=%.3f',
+    [FFallbackCalls,FFallbackHits,FFallbackMs/Max(1,FFallbackCalls),FFallbackMaxMs]);
 end;
 function GpuGroundModeName:string;
 const Names:array[TGpuGroundMode]of string=('cpu','compare','gpu');

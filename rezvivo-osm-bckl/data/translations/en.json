@@ -1,4 +1,6 @@
 {
+  "Trainer gradient sensitivity": "Trainer gradient sensitivity",
+  "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.": "100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.",
   "Hairstyle": "Hairstyle",
   "No hair": "No hair",
   "Short crop": "Short crop",
@@ -1493,5 +1495,21 @@
   "Front view": "Front",
   "Side view": "Side",
   "Rear view": "Rear",
-  "Drag to rotate · Wheel to zoom": "Drag to rotate · Wheel to zoom"
+  "Drag to rotate · Wheel to zoom": "Drag to rotate · Wheel to zoom",
+  "Wheel circumference (mm)": "Wheel circumference (mm)",
+  "Preparing riders": "Preparing riders",
+  "Companion": "Companion",
+  "Passing cyclist": "Passing cyclist",
+  "World shadows": "World shadows",
+  "RTX reflections": "RTX reflections",
+  "Raster": "Raster",
+  "Cached trees": "Cached trees",
+  "RTX (experimental)": "RTX (experimental)",
+  "Fit bike to rider": "Fit bike to rider",
+  "Fitting bicycle...": "Fitting bicycle...",
+  "Bike fit applied and saved. You can fine-tune it below.": "Bike fit applied and saved. You can fine-tune it below.",
+  "Closest bike fit saved. This model has limited adjustment for these body proportions.": "Closest bike fit saved. This model has limited adjustment for these body proportions.",
+  "Could not fit this bicycle. Choose a model with frame size data.": "Could not fit this bicycle. Choose a model with frame size data.",
+  "Cached tree silhouettes are faster. RTX requires a ray-tracing GPU; unsupported hardware uses raster shadows.": "Cached tree silhouettes are faster. RTX requires a ray-tracing GPU; unsupported hardware uses raster shadows.",
+  "Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.": "Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows."
 }

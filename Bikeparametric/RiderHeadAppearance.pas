@@ -1,7 +1,7 @@
 unit RiderHeadAppearance;
 {$mode objfpc}{$H+}
 interface
-uses Classes,X3DNodes,X3DFields,CastleVectors,fpjson,TripoRig,RiderFace;
+uses RiderShaderSharing, Classes,X3DNodes,X3DFields,CastleVectors,fpjson,TripoRig,RiderFace;
 type
   TRiderHeadwear=(rhwNone,rhwHelmet,rhwBandana,rhwCap);
   TRiderBeard=(rbNone,rbStubble,rbShort,rbFull,rbGoatee);
@@ -286,7 +286,7 @@ begin
       'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=0.70;}'+#10+
       RiderHairLightShader;
   end;
-  E.SetParts([V,F]);Sh.Appearance:=App;
+  E.SetParts([V,F]);ShareRiderEffect(E);Sh.Appearance:=App;
 end;
 
 procedure TRiderHeadAppearance.Follow(const Matrix:TMatrix4);

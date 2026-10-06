@@ -1,7 +1,7 @@
 unit RiderFabricShader;
 {$mode objfpc}{$H+}
 interface
-uses X3DNodes, X3DFields, CastleVectors;
+uses RiderShaderSharing, X3DNodes, X3DFields, CastleVectors;
 type
   TRiderFabric = class
   private
@@ -234,7 +234,7 @@ begin
     Breath:=TSFFloat.Create(Eff,True,'riderSurfaceAmount',0);Eff.AddCustomField(Breath);
     SetLength(FBreathFields,Length(FBreathFields)+1);FBreathFields[High(FBreathFields)]:=Breath;
     V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=RiderSurfaceMotionVS;
-    Eff.SetParts([V]);App.FdEffects.Add(Eff);
+    Eff.SetParts([V]);ShareRiderEffect(Eff);App.FdEffects.Add(Eff);
     Exit;
   end;
   { The broad reflection remains visible after yarn detail is filtered out.
@@ -331,7 +331,7 @@ begin
   SetLength(FReachFields,Length(FReachFields)+1);FReachFields[High(FReachFields)]:=Reach;
   V:=TEffectPartNode.Create;V.ShaderType:=stVertex;V.Contents:=RiderSurfaceMotionVS+FabricVS;
   F:=TEffectPartNode.Create;F.ShaderType:=stFragment;F.Contents:=FabricFS;
-  Eff.SetParts([V,F]);App.FdEffects.Add(Eff);
+  Eff.SetParts([V,F]);ShareRiderEffect(Eff);App.FdEffects.Add(Eff);
 end;
 
 constructor TRiderFabric.Create(Root:TX3DNode;Height:Single);

@@ -1160,7 +1160,7 @@ begin
   end;
 
   PrevSmooth := FSmoothedGroundY;
-  if not FSmoothedGroundYValid then
+  if FState.WheelContactAtOrigin or not FSmoothedGroundYValid then
   begin
     FSmoothedGroundY := AvgGroundY;
     FSmoothedGroundYValid := true;
@@ -1317,7 +1317,7 @@ begin
   AvgGroundY := ((FrontGroundY - FState.FrontWheelContactOffset)
               +  (RearGroundY  - FState.RearWheelContactOffset)) / 2;
 
-  if not FSmoothedGroundYValid then
+  if FState.WheelContactAtOrigin or not FSmoothedGroundYValid then
   begin
     FSmoothedGroundY := AvgGroundY;
     FSmoothedGroundYValid := true;
@@ -1520,6 +1520,13 @@ var
 begin
   if not Assigned(FState) then Exit;
   FState.TargetModelPitch := FState.CurrentGroundPitch;
+  if FState.WheelContactAtOrigin then begin
+    { Height and pitch describe the SAME pair of tyre contacts. Filtering
+      pitch independently leaves one wheel below the road and the other
+      hanging in the air. Rider/body damping remains in body dynamics. }
+    FState.CurrentModelPitch:=FState.TargetModelPitch;
+    Exit;
+  end;
   MaxChange := PitchSmoothness * DeltaTime;
   Diff := FState.TargetModelPitch - FState.CurrentModelPitch;
 

@@ -23,7 +23,7 @@ unit AppSettings;
 interface
 
 uses
-  Classes, SysUtils, syncobjs, GameGraphicsOptions, GameAudioOptions;
+  Classes, SysUtils, Math, syncobjs, GameGraphicsOptions, GameAudioOptions;
 
 type
   {$M+}
@@ -45,6 +45,8 @@ type
     FAdapters: TStringList;
     { Simulation uses the selected route by default. An optional independent
       FIT is retained when simulation is disabled or route mode is selected. }
+    FWheelCircumferenceMm: Integer;
+    FTrainerGradeSensitivity: Integer;
     FSimulationFitPath: string;
     FSimulationEnabled: Boolean;
     FSimulationUseRoute: Boolean;
@@ -122,6 +124,10 @@ type
     { Adapter is identified by composite key "<transport>:<adapter_key>".
       Если ключа нет в settings — возвращаем True (adapter включен по
       умолчанию, чтобы новый стик не оказался отключён). }
+    function GetWheelCircumferenceMm: Integer;
+    procedure SetWheelCircumferenceMm(Value: Integer);
+    function GetTrainerGradeSensitivity: Integer;
+    procedure SetTrainerGradeSensitivity(Value: Integer);
     function GetAdapterEnabled(const AKey: string): Boolean;
     procedure SetAdapterEnabled(const AKey: string; AEnabled: Boolean);
 
@@ -214,11 +220,15 @@ type
     property GraphicsTextures: Integer index Ord(goTextures) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsHair: Integer index Ord(goHair) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsSoftening: Integer index Ord(goSoftening) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsWorldShadows: Integer index Ord(goWorldShadows) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsRtxReflections: Integer index Ord(goRtxReflections) read GetGraphicsOption write SetGraphicsOption;
     { Доступ через RTTI (MCP property_get/property_set). Запись идёт через
       существующие сеттеры — они же сохраняют settings.json на диск, так
       что RTTI-set не обходит персистентность. }
     property SimulationFitPath: string
       read GetSimulationFitPath write SetSimulationFitPath;
+    property TrainerGradeSensitivity: Integer
+      read GetTrainerGradeSensitivity write SetTrainerGradeSensitivity;
     property SimulationEnabled: Boolean
       read GetSimulationEnabled write SetSimulationEnabled;
     property SimulationUseRoute: Boolean read GetSimulationUseRoute write SetSimulationUseRoute;
@@ -338,7 +348,9 @@ begin
   FLock := TCriticalSection.Create;
   FAdapters := TStringList.Create;
   FAdapters.CaseSensitive := True;
+  FWheelCircumferenceMm := 2105;
   FSimulationFitPath := '';
+  FTrainerGradeSensitivity := 100;
   FSimulationEnabled := False;
   FSimulationUseRoute := True;
   FSelectedMapUrl := '';
@@ -447,6 +459,8 @@ begin
       Root := GetJSON(S.Text);
       try
         if not (Root is TJSONObject) then Exit;
+        FWheelCircumferenceMm:=EnsureRange(TJSONObject(Root).Get('wheel_circumference_mm',2105),500,4000);
+        FTrainerGradeSensitivity:=EnsureRange(TJSONObject(Root).Get('trainer_grade_sensitivity',100),0,100);
         AdaptersObj := TJSONObject(Root).Find('adapters');
         if (AdaptersObj <> nil) and (AdaptersObj is TJSONObject) then
         begin
@@ -581,6 +595,8 @@ begin
   try
     AdaptersJson := TJSONObject.Create;
     Root.Add('adapters', AdaptersJson);
+    Root.Add('wheel_circumference_mm',FWheelCircumferenceMm);
+    Root.Add('trainer_grade_sensitivity',FTrainerGradeSensitivity);
 
     for I := 0 to FAdapters.Count - 1 do
     begin
@@ -673,6 +689,38 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+function TAppSettings.GetWheelCircumferenceMm: Integer;
+begin
+  FLock.Enter;
+  try Result:=FWheelCircumferenceMm finally FLock.Leave end;
+end;
+
+procedure TAppSettings.SetWheelCircumferenceMm(Value: Integer);
+begin
+  Value:=EnsureRange(Value,500,4000);
+  FLock.Enter;
+  try
+    if Value=FWheelCircumferenceMm then Exit;
+    FWheelCircumferenceMm:=Value; SaveToFile;
+  finally FLock.Leave end;
+end;
+
+function TAppSettings.GetTrainerGradeSensitivity: Integer;
+begin
+  FLock.Enter;
+  try Result:=FTrainerGradeSensitivity finally FLock.Leave end;
+end;
+
+procedure TAppSettings.SetTrainerGradeSensitivity(Value: Integer);
+begin
+  Value:=EnsureRange(Value,0,100);
+  FLock.Enter;
+  try
+    if Value=FTrainerGradeSensitivity then Exit;
+    FTrainerGradeSensitivity:=Value;SaveToFile;
+  finally FLock.Leave end;
 end;
 
 function TAppSettings.GetAdapterEnabled(const AKey: string): Boolean;

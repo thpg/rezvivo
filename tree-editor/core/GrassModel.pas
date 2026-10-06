@@ -81,13 +81,17 @@ begin
     ' uvec2 c=uvec2(ivec2(floor(p))); vec2 f=fract(p); f=f*f*(3.0-2.0*f);'+#10+
     ' return mix(mix(gcGrassHash(c,mask),gcGrassHash(c+uvec2(1,0),mask),f.x),'+#10+
     ' mix(gcGrassHash(c+uvec2(0,1),mask),gcGrassHash(c+uvec2(1,1),mask),f.x),f.y); }'+#10+
-    'float gcGrassSurface(vec2 p,float footprint){'+#10+
+    'vec3 gcGrassSurface(vec2 p,float footprint){'+#10+
     ' float fine=1.0-smoothstep(0.10,0.4,footprint);'+#10+
     ' float coarse=1.0-smoothstep(1.0,4.0,footprint);'+#10+
     ' float result=1.0;'+#10+
     ' if(fine>0.0)result+=0.30*(gcGrassNoise(p*4.0,1023u)-0.5)*fine;'+#10+
     ' if(coarse>0.0)result+=0.15*(gcGrassNoise(p*0.5,127u)-0.5)*coarse;'+#10+
-    ' return result+0.16*(gcGrassNoise(p*0.0625,15u)-0.5); }'+#10+
+    { The same broad soil/moisture variation on blades, cards and base terrain:
+      a LOD switch cannot reveal a different green or shift the patch boundary. }
+    ' float moisture=gcGrassNoise(p*0.0625,15u);'+#10+
+    ' vec3 patch=mix(vec3(1.13,0.98,0.80),vec3(0.91,0.96,1.04),smoothstep(0.23,0.77,moisture));'+#10+
+    ' return patch*(result+0.28*(moisture-0.5))*vec3(1.0,0.96,1.02); }'+#10+
     'float gcSlopeRockMask(vec2 p,float normalUp){'+#10+
     ' float up=clamp(abs(normalUp),0.0,1.0);'+#10+
     ' if(up>=0.88)return 0.0; if(up<=0.44)return 1.0;'+#10+
