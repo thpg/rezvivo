@@ -2,11 +2,15 @@
 
 <img src="rezvivo-osm-bckl/data/branding/rezvivo.png" alt="REZVIVO logo" width="104">
 
-**Ride real places. Explore imagined worlds. Train your way.**
+**Train, or simply explore the world in 3D.**
 
-REZVIVO is an indoor cycling simulator built with Free Pascal and Castle Game
-Engine. It combines real-world routes generated from OpenStreetMap and elevation
-data with handcrafted Dream Worlds, smart-trainer integration and interval training.
+REZVIVO is an open-source app for indoor cycling and exploring OpenStreetMap in
+3D. Train on your smart trainer, or choose a place on the map and walk, cycle or
+fly using your keyboard. You can explore without a trainer or a prepared route.
+
+Terrain, roads, buildings, water and vegetation are generated from OSM and
+elevation data, with map tiles loaded as you move. Handcrafted Dream Worlds and
+interval workouts offer more ways to ride.
 
 [Website](https://rezvivo.com) · [Download for Windows](https://rezvivo.com/download) ·
 [Report an issue on the website](https://rezvivo.com/feedback) or
@@ -14,8 +18,11 @@ data with handcrafted Dream Worlds, smart-trainer integration and interval train
 
 ## Features
 
-- **Real World:** routes with terrain, roads, buildings, water and vegetation
-  generated from map data. Import routes or create them on the map.
+- **Free exploration:** start from a point on the map, walk or run, cycle with
+  keyboard power controls, or use free flight to look around.
+- **3D OSM streaming:** terrain, roads, buildings, water and vegetation generated
+  from map and elevation data. Nearby areas load as you move. Import routes or
+  create them on the map when you want to follow a planned ride.
 - **Dream World:** a castle island, a lighthouse island, a forested mountain,
   a futuristic district, a red canyon and an environment showcase.
 - **Interval training:** original built-in workouts, power targets, live intensity
@@ -28,7 +35,8 @@ data with handcrafted Dream Worlds, smart-trainer integration and interval train
 - **Bike fitting:** adjustable avatars, riding positions and parametric bicycles,
   with automatic frame sizing and saddle, stem and spacer adjustment.
 
-REZVIVO is in **alpha**. The source build currently targets **Windows x86-64**;
+Built with Free Pascal and Castle Game Engine, REZVIVO is in **alpha**.
+The source build currently targets **Windows x86-64**;
 graphics performance and device compatibility are still being refined.
 For the ready-to-use application, visit the [download page](https://rezvivo.com/download).
 
