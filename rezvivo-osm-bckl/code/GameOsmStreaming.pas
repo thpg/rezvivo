@@ -62,6 +62,7 @@ type
     FOrigin:     TLatLon;
     FRoute:      TRouteLatLonArray;
     FActive:     Boolean;
+    FPointStart: Boolean;
     FFitLoad: TFitLoadProfile;
     procedure ApplyFitLoad(APath: TGamePath; Snapped: Boolean);
 
@@ -98,6 +99,7 @@ type
       const ACacheRoot: string = '';
       const ARoutesFolder: string = '';
       const ASelectedFit: string = ''): Boolean;
+    function StartAtLocation(const Geo: TLatLon; AViewport: TCastleViewport): Boolean;
     procedure SetFitLoadReference(Fit: TFitFile);
 
     { Запустить асинхронную привязку маршрута к дорожной сети OSM.
@@ -397,6 +399,26 @@ begin
      FSession.GeoToLocal(FRoute[High(FRoute)]).ToString]));
 end;
 
+function TGameOsmStreaming.StartAtLocation(const Geo: TLatLon;
+  AViewport: TCastleViewport): Boolean;
+var Config: TStudioSettings;
+begin
+  Result:=False;
+  if FActive or (AViewport=nil) then Exit;
+  FPointStart:=True;FOrigin:=Geo;FViewport:=AViewport;
+  SetLength(FRoute,1);FRoute[0]:=Geo;
+  Config:=BuildSettings('');Config.GenerateRouteOnly:=False;
+  Config.FitHeightCorrection:=False;
+  FSession:=TOsm3dStreamingSession.Create(Config,Geo,@HandleStreamLog);
+  AViewport.Items.Add(FSession.Map);
+  FSession.Map.ShowFitPoints:=False;FSession.Map.ShowFitPointsSnapped:=False;
+  { No synthetic FIT, route snap or corridor warmup. Stream at the camera,
+    and hold movement until the exact starting surface has loaded. }
+  FSession.Map.WarmupHoldRider:=False;
+  AViewport.Camera.SetView(Vector3(0,40,10),Vector3(0,-0.8,-1),Vector3(0,1,0));
+  FActive:=True;Result:=True;
+end;
+
 procedure TGameOsmStreaming.BeginRouteSnap;
 begin
   if not FActive then Exit;
@@ -428,7 +450,7 @@ end;
 
 function TGameOsmStreaming.RoutePrepDone: Boolean;
 begin
-  Result := FActive and (FSession <> nil) and FSession.Map.RoutePrepDone;
+  Result := FActive and (FSession <> nil) and (FPointStart or FSession.Map.RoutePrepDone);
 end;
 
 function TGameOsmStreaming.RouteStartGroundLoading: Boolean;
@@ -670,6 +692,13 @@ begin
   if APath = nil then Exit;
   if not FActive then Exit;
   if FSession = nil then Exit;
+  if FPointStart then begin
+    SetLength(LocalPts,2);SetLength(LocalWidths,2);
+    LocalPts[0]:=Vector3(0,0,0);LocalPts[1]:=Vector3(0,0,-10);
+    LocalWidths[0]:=0;LocalWidths[1]:=0;
+    APath.SetLevelScene(nil);APath.LoadFromMemory(LocalPts,LocalWidths);
+    Exit(2);
+  end;
 
   { Выбор источника точек: снапнутый трек (если запрошен и готов) или
     сырой FIT-маршрут. Снап ещё не готов → откатываемся на сырой.

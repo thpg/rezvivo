@@ -7,9 +7,9 @@ uses Classes, fpjson, CastleUIControls, CastleControls, CastleKeysMouse,
   GameMenuTheme, GameUiNavigation;
 
 type
-  { One conversation window for the menu, a 3D ride and workout-only mode.
-    Pushing this view does not pause the services underneath it. }
-  TViewAssistant = class(TCastleView)
+  { A non-modal conversation panel, outside the view stack. The current menu
+    or ride remains the active view while the user works with the assistant. }
+  TViewAssistant = class(TCastleUserInterface)
   private
     FPanel: TMenuPanel;
     FTitle, FConnection, FInterval, FError, FHint: TCastleLabel;
@@ -30,6 +30,11 @@ type
     FLastLanguage, FDraft, FVoiceState, FVoiceNotice: String;
     FConnectionNotice: String;
     FClosing, FNeedFocus, FVoiceCancelledForFocus: Boolean;
+    FKeyboardActive: Boolean;
+    FPanelButtons: TCastleMouseButtons;
+    procedure BuildControls;
+    function OwnsKeyboard: Boolean;
+    procedure ReleaseKeyboard;
     procedure ClickSend(Sender: TObject);
     procedure ClickClose(Sender: TObject);
     procedure ClickDisconnect(Sender: TObject);
@@ -48,10 +53,10 @@ type
     procedure BuildMessages(const ToBottom: Boolean);
     procedure Layout;
   public
-    procedure Start; override;
-    procedure Stop; override;
-    procedure Pause; override;
-    procedure Resume; override;
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
+    procedure Open(const AContainer: TCastleContainer);
+    procedure Close;
     procedure Resize; override;
     procedure Update(const SecondsPassed: Single; var HandleInput: Boolean); override;
     function PreviewPress(const Event: TInputPressRelease): Boolean; override;
@@ -63,6 +68,7 @@ type
 
 procedure ShowAssistant(const Container: TCastleContainer);
 procedure DismissAssistant(const Container: TCastleContainer);
+function AssistantVisible(const Container: TCastleContainer): Boolean;
 
 implementation
 
@@ -72,11 +78,15 @@ uses SysUtils, Math, CastleWindow, CastleVectors, UiTranslations,
 const AssistantSeparator: String = ' · ';
 var AssistantView: TViewAssistant;
 
+function AssistantVisible(const Container: TCastleContainer): Boolean;
+begin
+  Result := (Container <> nil) and (AssistantView <> nil) and
+    AssistantView.Exists and (AssistantView.Container = Container);
+end;
+
 procedure DismissAssistant(const Container: TCastleContainer);
 begin
-  if (Container <> nil) and (AssistantView <> nil) and
-    (Container.PendingFrontView = AssistantView) then
-    AssistantView.ClickClose(nil);
+  if AssistantVisible(Container) then AssistantView.Close;
 end;
 
 procedure ShowAssistant(const Container: TCastleContainer);
@@ -86,40 +96,57 @@ begin
     AssistantView := TViewAssistant.Create(Application);
     AssistantView.Name := 'AssistantView';
   end;
-  if Container.PendingFrontView <> AssistantView then begin
-    Container.ForceCaptureInput := nil;
-    Container.PushView(AssistantView);
-  end;
+  if not AssistantVisible(Container) then AssistantView.Open(Container);
 end;
 
-procedure TViewAssistant.Start;
-var Shade: TCastleRectangleControl;
-  function Button(const ControlName, Text: String; Handler: TNotifyEvent): TMenuButton;
-  begin
-    Result := TMenuButton.Create(FreeAtStop); Result.Name := ControlName;
-    Result.AutoSize := False; Result.AutoIcon := False;
-    BindUiText(Result, Text); Result.OnClick := Handler; FPanel.InsertFront(Result);
-  end;
+constructor TViewAssistant.Create(AOwner: TComponent);
 begin
   inherited;
-  SyncAssistantContext(True);SyncDraftContext;
-  FClosing := False; FNeedFocus := True; FLiveElapsed := 0;
+  FullSize := True; KeepInFront := True; Exists := False;
+end;
+
+destructor TViewAssistant.Destroy;
+begin
+  FreeAndNil(FSnapshot); FreeAndNil(FMessages); FreeAndNil(FLocalStatus);
+  inherited;
+end;
+
+procedure TViewAssistant.Open(const AContainer: TCastleContainer);
+begin
+  if Container <> AContainer then begin
+    if Container <> nil then Container.Controls.Remove(Self);
+    AContainer.Controls.InsertFront(Self);
+  end;
+  AContainer.ForceCaptureInput := nil;
+  SyncAssistantContext(True); SyncDraftContext;
+  Exists := True; FClosing := False; FNeedFocus := True;
+  FKeyboardActive := True; FPanelButtons := []; FLiveElapsed := 0;
   FContentWidth := -1; FRevision := High(QWord); FLastLanguage := UiLanguage;
   FVoiceRevision := High(QWord); FVoiceElapsed := 0;
   FVoiceState := 'idle'; FVoiceNotice := ''; FVoiceCancelledForFocus := False;
   FLocalElapsed := 0; FConnectionNotice := '';
-  Shade := TCastleRectangleControl.Create(FreeAtStop);
-  Shade.FullSize := True; Shade.Color := Vector4(0.01, 0.025, 0.04, 0.28);
-  InsertBack(Shade);
-  FPanel := TMenuPanel.Create(FreeAtStop); FPanel.Name := 'AssistantPanel';
+  if FPanel = nil then BuildControls;
+  FInput.Text := FDraft;
+  RefreshLocalConnection; Layout; RefreshConversation; RefreshLiveStatus; RefreshVoice;
+end;
+
+procedure TViewAssistant.BuildControls;
+  function Button(const ControlName, Text: String; Handler: TNotifyEvent): TMenuButton;
+  begin
+    Result := TMenuButton.Create(Self); Result.Name := ControlName;
+    Result.AutoSize := False; Result.AutoIcon := False;
+    BindUiText(Result, Text); Result.OnClick := Handler; FPanel.InsertFront(Result);
+  end;
+begin
+  FPanel := TMenuPanel.Create(Self); FPanel.Name := 'AssistantPanel';
   FPanel.Color := MenuBackground; InsertFront(FPanel);
-  FTitle := TMenuLabel.Create(FreeAtStop); BindUiText(FTitle, 'Assistant');
+  FTitle := TMenuLabel.Create(Self); BindUiText(FTitle, 'Assistant');
   FTitle.CustomFont := MenuFont(True); FPanel.InsertFront(FTitle);
-  FConnection := TMenuLabel.Create(FreeAtStop); FConnection.Name := 'AssistantConnection';
+  FConnection := TMenuLabel.Create(Self); FConnection.Name := 'AssistantConnection';
   FPanel.InsertFront(FConnection);
-  FInterval := TMenuLabel.Create(FreeAtStop); FInterval.Name := 'AssistantWorkoutStatus';
+  FInterval := TMenuLabel.Create(Self); FInterval.Name := 'AssistantWorkoutStatus';
   FInterval.Color := MenuMuted; FPanel.InsertFront(FInterval);
-  FScroll := TMenuScrollView.Create(FreeAtStop); FScroll.Name := 'AssistantHistory';
+  FScroll := TMenuScrollView.Create(Self); FScroll.Name := 'AssistantHistory';
   FPanel.InsertFront(FScroll);
   FClose := Button('AssistantClose', 'Close', @ClickClose); FClose.Style := mbGhost;
   FDisconnect := Button('AssistantDisconnect', 'Disconnect agent', @ClickDisconnect);
@@ -127,19 +154,19 @@ begin
   FAllowConnection := Button('AssistantAllowConnection', 'Enable connection', @ClickAllowConnection);
   FCopyConnection := Button('AssistantCopyConnection', 'Copy connection command', @ClickCopyConnection);
   FCopyConnection.Style := mbGhost;
-  FConnectionHelp := TMenuLabel.Create(FreeAtStop); FConnectionHelp.Html := False;
+  FConnectionHelp := TMenuLabel.Create(Self); FConnectionHelp.Html := False;
   FConnectionHelp.Name := 'AssistantConnectionHelp'; FConnectionHelp.Color := MenuMuted;
   FPanel.InsertFront(FConnectionHelp);
   FLatest := Button('AssistantLatest', 'Latest messages', @ClickLatest); FLatest.Style := mbGhost;
   FLatest.Exists := False;
-  FInput := TMenuEdit.Create(FreeAtStop); FInput.Name := 'AssistantMessage';
+  FInput := TMenuEdit.Create(Self); FInput.Name := 'AssistantMessage';
   FInput.MaxLength := 4096; FInput.Text := FDraft;
   BindUiText(FInput, 'Write to the assistant...', 'Placeholder');
   FInput.OnChange := @InputChanged; FPanel.InsertFront(FInput);
   FSend := Button('AssistantSend', 'Send', @ClickSend); FSend.Style := mbPrimary;
-  FError := TMenuLabel.Create(FreeAtStop); FError.Name := 'AssistantMessageStatus';
+  FError := TMenuLabel.Create(Self); FError.Name := 'AssistantMessageStatus';
   FError.Color := MenuMuted; FPanel.InsertFront(FError);
-  FHint := TMenuLabel.Create(FreeAtStop);
+  FHint := TMenuLabel.Create(Self);
   BindUiText(FHint, 'Enter to send · Esc to close'); FHint.Color := MenuMuted;
   FPanel.InsertFront(FHint);
   FMicrophone := Button('AssistantMicrophone', 'Microphone', @ClickMicrophone);
@@ -147,47 +174,50 @@ begin
   FReadReplies.Toggle := True;
   FStopSpeech := Button('AssistantStopSpeech', 'Stop voice', @ClickStopSpeech);
   FStopSpeech.Style := mbGhost;
-  FVoiceInputStatus := TMenuLabel.Create(FreeAtStop);
+  FVoiceInputStatus := TMenuLabel.Create(Self);
   FVoiceInputStatus.Name := 'AssistantVoiceInputStatus'; FVoiceInputStatus.Html := False;
   FVoiceInputStatus.Color := MenuMuted; FPanel.InsertFront(FVoiceInputStatus);
-  FVoiceOutputStatus := TMenuLabel.Create(FreeAtStop);
+  FVoiceOutputStatus := TMenuLabel.Create(Self);
   FVoiceOutputStatus.Name := 'AssistantVoiceOutputStatus'; FVoiceOutputStatus.Html := False;
   FVoiceOutputStatus.Color := MenuMuted; FPanel.InsertFront(FVoiceOutputStatus);
-  FVoiceMeter := TCastleRectangleControl.Create(FreeAtStop);
+  FVoiceMeter := TCastleRectangleControl.Create(Self);
   FVoiceMeter.Name := 'AssistantMicrophoneLevel'; FVoiceMeter.Color := Vector4(0.12, 0.2, 0.24, 1);
   FVoiceMeter.Exists := False; FPanel.InsertFront(FVoiceMeter);
-  FVoiceLevel := TCastleRectangleControl.Create(FreeAtStop);
+  FVoiceLevel := TCastleRectangleControl.Create(Self);
   FVoiceLevel.Color := MenuAccent; FVoiceLevel.Anchor(hpLeft); FVoiceLevel.Anchor(vpBottom);
   FVoiceMeter.InsertFront(FVoiceLevel);
-  FKeyboard := TUiKeyboardNavigation.Create(FreeAtStop); InsertFront(FKeyboard);
-  RefreshLocalConnection; Layout; RefreshConversation; RefreshLiveStatus; RefreshVoice;
+  FKeyboard := TUiKeyboardNavigation.Create(Self); InsertFront(FKeyboard);
 end;
 
-procedure TViewAssistant.Stop;
+procedure TViewAssistant.Close;
 begin
+  if FClosing then Exit;
+  FClosing := True; Exists := False; FPanelButtons := [];
   CancelAssistantVoiceInput;
   if FInput <> nil then FDraft := FInput.Text;
+  ReleaseKeyboard;
+  if Container <> nil then Container.ReleaseCapture(Self);
+end;
+
+function TViewAssistant.OwnsKeyboard: Boolean;
+var C: TCastleUserInterface;
+begin
+  Result := False;
+  if not Exists or FClosing or (Container = nil) then Exit;
+  C := Container.ForceCaptureInput;
+  if C = nil then Exit(FKeyboardActive);
+  while (C <> nil) and (C <> Self) do C := C.Parent;
+  Result := C = Self;
+end;
+
+procedure TViewAssistant.ReleaseKeyboard;
+begin
+  FNeedFocus := False; FKeyboardActive := False;
   if FKeyboard <> nil then FKeyboard.Clear;
   if (Container <> nil) and (Container.ForceCaptureInput = FInput) then
     Container.ForceCaptureInput := nil;
-  FreeAndNil(FSnapshot); FreeAndNil(FMessages); FreeAndNil(FLocalStatus);
-  inherited;
-  FPanel := nil; FInput := nil; FScroll := nil; FKeyboard := nil;
-  FMicrophone := nil; FReadReplies := nil; FStopSpeech := nil;
-  FAllowConnection := nil; FCopyConnection := nil; FConnectionHelp := nil;
+  if FInput <> nil then FInput.Focused := False;
 end;
-
-procedure TViewAssistant.Pause;
-begin
-  CancelAssistantVoiceInput;
-  if FInput <> nil then FDraft := FInput.Text;
-  if (Container <> nil) and (Container.ForceCaptureInput = FInput) then
-    Container.ForceCaptureInput := nil;
-  inherited;
-end;
-
-procedure TViewAssistant.Resume;
-begin inherited; FNeedFocus := True; FVoiceRevision := High(QWord); end;
 
 procedure TViewAssistant.Layout;
 var S, W, H, HeaderExtra: Single;
@@ -283,7 +313,7 @@ begin
   S := Max(0.65, Min(1, UIScale));
   AtBottom := FScroll.ScrollMax - FScroll.Scroll < 24 / S;
   OldScroll := FScroll.Scroll;
-  FreeAndNil(FMessages); FMessages := TComponent.Create(FreeAtStop);
+  FreeAndNil(FMessages); FMessages := TComponent.Create(Self);
   W := Max(100, FScroll.Width - 18 / S); Y := 0;
   Messages := FSnapshot.Arrays['messages'];
   if Messages.Count = 0 then AddMessage(UiText('Your assistant'),
@@ -471,7 +501,7 @@ begin
     This prevents acknowledging a new revision before reading its result. }
   Data := AssistantVoice.Snapshot;
   try
-  if Connected and not FClosing and (Container.PendingFrontView = Self) and
+  if Connected and not FClosing and Exists and
     AssistantVoice.TakeTranscript(Transcript) then begin
     Transcript := Trim(Transcript);
     if Transcript <> '' then begin
@@ -486,7 +516,7 @@ begin
       if Length(FInput.Text) > 4096 then
         FVoiceNotice := 'Voice text added. Shorten the draft before sending.'
       else FVoiceNotice := 'Voice text added. Review it and press Send.';
-      FNeedFocus := True;
+      FNeedFocus := OwnsKeyboard;
     end else FVoiceNotice := 'No speech recognized. The draft was not changed.';
   end;
     FVoiceRevision := AssistantVoice.Revision;
@@ -603,9 +633,7 @@ end;
 
 procedure TViewAssistant.ClickClose(Sender: TObject);
 begin
-  if FClosing then Exit; FClosing := True;
-  AssistantVoice.CancelInput;
-  Container.ForceCaptureInput := nil; Container.PopView(Self);
+  Close;
 end;
 
 procedure TViewAssistant.ClickDisconnect(Sender: TObject);
@@ -623,7 +651,6 @@ procedure TViewAssistant.Update(const SecondsPassed: Single; var HandleInput: Bo
 begin
   inherited;
   if FClosing then Exit;
-  if Container.FrontView <> Self then Exit;
   AssistantVoice.Update;
   if Container.Focused then FVoiceCancelledForFocus := False;
   if not Container.Focused and not FVoiceCancelledForFocus and ((FVoiceState = 'waiting_output') or
@@ -650,14 +677,27 @@ begin
   if FLiveElapsed >= 1 then begin FLiveElapsed := 0; RefreshLiveStatus; end;
   FLatest.Exists := FScroll.ScrollMax - FScroll.Scroll > 24 / Max(0.65, Min(1, UIScale));
   FHint.Exists := not FLatest.Exists or (FPanel.Width >= 480 / Max(0.65, Min(1, UIScale)));
-  if FNeedFocus and (Container.FrontView = Self) then begin
-    FNeedFocus := False; FInput.Focused := True; Container.ForceCaptureInput := FInput;
+  if FNeedFocus then begin
+    FNeedFocus := False; FKeyboardActive := True;
+    FInput.Focused := True; Container.ForceCaptureInput := FInput;
   end;
-  HandleInput := False;
+  if OwnsKeyboard or FPanel.RenderRect.Contains(Container.MousePosition) then HandleInput := False;
 end;
 
 function TViewAssistant.PreviewPress(const Event: TInputPressRelease): Boolean;
 begin
+  if Event.EventType = itMouseButton then begin
+    if not FPanel.RenderRect.Contains(Event.Position) then ReleaseKeyboard
+    else begin
+      FKeyboardActive := True;
+      if FKeyboard <> nil then FKeyboard.Clear;
+      Container.ForceCaptureInput := nil;
+      if FInput.RenderRect.Contains(Event.Position) then begin
+        FInput.Focused := True; Container.ForceCaptureInput := FInput;
+      end;
+    end;
+  end;
+  if not OwnsKeyboard then Exit(inherited);
   if Event.IsKey(keyEscape) then begin ClickClose(nil); Exit(True); end;
   if Event.IsKey(keyEnter) and (Container.ForceCaptureInput = FInput) then begin ClickSend(nil); Exit(True); end;
   if (FKeyboard <> nil) and FKeyboard.Handle(Event, Self) then Exit(True);
@@ -665,11 +705,31 @@ begin
 end;
 
 function TViewAssistant.Press(const Event: TInputPressRelease): Boolean;
-begin inherited; Result := True; end;
+begin
+  Result := inherited;
+  if Event.EventType = itKey then Result := Result or OwnsKeyboard
+  else if FPanel.RenderRect.Contains(Event.Position) then begin
+    Result := True;
+    if Event.EventType = itMouseButton then Include(FPanelButtons, Event.MouseButton);
+  end;
+end;
 function TViewAssistant.Release(const Event: TInputPressRelease): Boolean;
-begin inherited; Result := True; end;
+begin
+  Result := inherited;
+  if Event.EventType = itKey then Result := Result or OwnsKeyboard
+  else begin
+    Result := Result or FPanel.RenderRect.Contains(Event.Position);
+    if Event.EventType = itMouseButton then begin
+      Result := Result or (Event.MouseButton in FPanelButtons);
+      Exclude(FPanelButtons, Event.MouseButton);
+    end;
+  end;
+end;
 function TViewAssistant.Motion(const Event: TInputMotion): Boolean;
-begin inherited; Result := True; end;
+begin
+  FPanelButtons := FPanelButtons * Event.Pressed;
+  Result := inherited or (FPanelButtons <> []) or FPanel.RenderRect.Contains(Event.Position);
+end;
 
 procedure TViewAssistant.RenderOverChildren;
 begin inherited; if FKeyboard <> nil then FKeyboard.Render; end;

@@ -62,12 +62,15 @@ type
     function HasAnyData: Boolean;
   public
     { Параметры симуляции (используются в SetSimulation) }
+    ManualPower:Single; { -1: sensors; keyboard input is display-only, never measured work. }
+    ManualCadence:Single;
     UserWeight: Single;   { кг, по умолчанию 75 }
     BikeWeight: Single;   { кг, по умолчанию 10 }
 
     constructor Create;
     destructor Destroy; override;
     function ReadMeasuredPower: TMeasuredPower;
+    function ReadSensorPower: TMeasuredPower;
     procedure UpdatePowerMetrics(const SecondsPassed: Single;
       const Accounting: TActivityAccounting; const WallSeconds:Single);
 
@@ -143,6 +146,7 @@ end;
 
 procedure TBLEHudUpdater.Reset;
 begin
+  ManualPower:=-1;ManualCadence:=0;
   FPowerMetrics.Reset; FPowerAvailable:=False;
   if FLabels.LabelWork<>nil then begin
     DailyTraining.EndRide;DailyTraining.BeginRide;
@@ -221,6 +225,13 @@ end;
 { ── Хелперы чтения сенсоров ── }
 
 function TBLEHudUpdater.ReadMeasuredPower: TMeasuredPower;
+begin
+  { A parked FIT is not work performed while riding with keyboard power. }
+  if ManualPower>=0 then Result:=Default(TMeasuredPower)
+  else Result:=ReadSensorPower;
+end;
+
+function TBLEHudUpdater.ReadSensorPower: TMeasuredPower;
 begin
   if Assigned(DeviceService) and Assigned(DeviceService.Power) and
      DeviceService.Power.HasData then
@@ -425,13 +436,16 @@ begin
   { Считываем данные сенсоров один раз }
   Pwr := GetPower;
   Cad := GetCadence;
+  if ManualPower>=0 then begin Pwr:=ManualPower;Cad:=ManualCadence end;
   Spd := GetSpeedKmh;
   HRVal := GetHeartRate;
   DataValid := HasAnyData;
 
   // Match the displayed power, including the existing stopped-cadence rule.
   if FLabels.WheelPower<>nil then
-    if (FFtp>0) and FPowerAvailable and (FPowerMetrics.AveragePower>=0.5) then
+    if (ManualPower>=0) and(FFtp>0) then
+      FLabels.WheelPower.TargetPosition:=ZonePosition(ManualPower*100/FFtp,FPowerBounds)
+    else if (FFtp>0) and FPowerAvailable and (FPowerMetrics.AveragePower>=0.5) then
       FLabels.WheelPower.TargetPosition:=ZonePosition(FPowerMetrics.AveragePower*100.0/FFtp,FPowerBounds)
     else FLabels.WheelPower.Selected:=-1;
   if FLabels.WheelHeart<>nil then
@@ -440,7 +454,9 @@ begin
       FLabels.WheelHeart.TargetPosition:=ZonePosition(HRVal,FHeartBounds)
     else FLabels.WheelHeart.Selected:=-1;
   if FLabels.WheelCadence<>nil then
-    if (Cad>0) and Assigned(DeviceService) and Assigned(DeviceService.Cadence) and
+    if (ManualPower>=0)and(Cad>0)then
+      FLabels.WheelCadence.TargetPosition:=ZonePosition(Cad,FCadenceBounds)
+    else if (Cad>0) and Assigned(DeviceService) and Assigned(DeviceService.Cadence) and
        DeviceService.Cadence.HasData and (DeviceService.Cadence.DataAgeSec<=3) then
       FLabels.WheelCadence.TargetPosition:=ZonePosition(Cad,FCadenceBounds)
     else FLabels.WheelCadence.Selected:=-1;
@@ -460,7 +476,8 @@ begin
     FLabels.LabelSpeed.Caption := FloatToStrF(S.CurrentSpeed * 3.6, ffFixed, 7, 1, FNumberFormat);
 
   if Assigned(FLabels.LabelPower) then
-    if Assigned(DeviceService.Power) and DeviceService.Power.HasData and
+    if ManualPower>=0 then FLabels.LabelPower.Caption:=IntToStr(Round(ManualPower))
+    else if Assigned(DeviceService.Power) and DeviceService.Power.HasData and
        (DeviceService.Power.DataAgeSec<3) then FLabels.LabelPower.Caption:=IntToStr(Round(Pwr))
     else FLabels.LabelPower.Caption:='—';
   if Assigned(FLabels.LabelWork) then

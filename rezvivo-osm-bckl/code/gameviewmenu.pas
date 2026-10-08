@@ -24,7 +24,7 @@ uses GameMenuTheme,
   Classes, SysUtils, fpjson, WorkoutFile, GameViewStart,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleKeysMouse, GameGlobeMap,
-  GameMenuTile,GameUiNavigation,GameRideRoomsUI,
+  GameMenuTile,GameUiNavigation,GameRideRoomsUI,GameTravel,GameTravelSelector,GameExploreMap,
   GameViewMapEditor,   { TRoutesPage — встроенная страница «Маршруты» }
   GameViewDevices,     { TDevicesPage — встроенная страница «Устройства» }
   GameViewBikeFit,     { TBikeFitPage — встроенная страница «Байкфит» }
@@ -50,6 +50,15 @@ type
     FGlobe: TGlobeMap;
     FNavBackground: TCastleRectangleControl;
     FTopBar:TCastleRectangleControl;
+    FTravelSelector:TTravelSelector;
+    FWorldModeBar:TCastleHorizontalGroup;
+    FWorldTrack,FWorldExplore:TMenuButton;
+    FExplorePage:TExplorePage;
+    procedure TravelChanged(Sender:TObject);
+    procedure WorldModeChanged(Sender:TObject);
+    procedure ShowWorldMode;
+    procedure LaunchExplore(Sender:TObject);
+  private
     FVersionButton:TMenuButton;
     FResumeButton, FEndRideButton, FDevicesSummary: TMenuButton;
     FSessionLabel: TCastleLabel;
@@ -180,6 +189,8 @@ type
     function Press(const Event: TInputPressRelease): Boolean; override;
     procedure ReturnToRide;
     procedure QuickRide;
+    procedure SelectTravelMode(Mode:TTravelMode);
+    procedure StartExploration(Lat,Lon:Double);
     procedure ResumeActivity(Activity:TJSONObject);
     procedure StartWorkout(Plan:TWorkoutFile;ReferenceWatts:Double;TrainingOnly:Boolean=False);
     procedure StartEditorWorkout(Plan:TWorkoutFile;ReferenceWatts:Double);
@@ -211,6 +222,7 @@ type
     property DreamPage:TDreamWorldPage read FDreamPage;
     property Globe: TGlobeMap read FGlobe;
     property RoutesPage: TRoutesPage read FRoutesPage;
+    property ExplorePage: TExplorePage read FExplorePage;
     procedure OpenCloudRoute(const FileName:String;AutoRide:Boolean=False);
 
     { Открыть вкладку по имени ('routes','devices','bikefit','events',
@@ -349,6 +361,8 @@ begin
     CanvasBackground.FullSize:=True;CanvasBackground.Color:=MenuBackground;
     InsertBack(CanvasBackground);
   end;
+  FTravelSelector:=TTravelSelector.Create(FreeAtStop);
+  FTravelSelector.OnChange:=@TravelChanged;InsertFront(FTravelSelector);
   FDevicesSummary:=TMenuButton.Create(FreeAtStop);FDevicesSummary.Name:='MenuDevicesStatus';
   FDevicesSummary.AutoSize:=False;FDevicesSummary.AutoIcon:=False;
   FDevicesSummary.OnClick:=@ClickDevices;InsertFront(FDevicesSummary);
@@ -390,6 +404,15 @@ begin
 
   FPageHost.Border.Bottom := 0;
   InsertFront(FPageHost);
+  FWorldModeBar:=TCastleHorizontalGroup.Create(FreeAtStop);FWorldModeBar.Spacing:=8;
+  FWorldModeBar.Anchor(hpLeft,8);FWorldModeBar.Anchor(vpTop,-2);FWorldModeBar.Exists:=False;
+  FPageHost.InsertFront(FWorldModeBar);
+  FWorldTrack:=TMenuButton.Create(FreeAtStop);FWorldTrack.Name:='WorldFollowTrack';
+  FWorldTrack.AutoIcon:=False;BindUiText(FWorldTrack,'Follow track');FWorldTrack.OnClick:=@WorldModeChanged;
+  FWorldModeBar.InsertFront(FWorldTrack);
+  FWorldExplore:=TMenuButton.Create(FreeAtStop);FWorldExplore.Name:='WorldFreeExplore';
+  FWorldExplore.AutoIcon:=False;FWorldExplore.Tag:=1;BindUiText(FWorldExplore,'Free exploration');
+  FWorldExplore.OnClick:=@WorldModeChanged;FWorldModeBar.InsertFront(FWorldExplore);
   FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;FTileAssistant:=nil;
   FSchedulePage:=nil;FTileSchedule:=nil;
   FRoutesPage := nil;
@@ -557,7 +580,7 @@ begin
   if FVersionButton<>nil then begin FVersionButton.FontSize:=12/S;FVersionButton.Anchor(hpLeft,22/S);FVersionButton.Anchor(vpTop,-64/S);end;
   if FPageHost<>nil then begin
     FPageHost.Border.Left:=PageLeft;
-    if SessionUnderneath then FPageHost.Border.Top:=116/S else FPageHost.Border.Top:=80/S;
+    if SessionUnderneath then FPageHost.Border.Top:=160/S else FPageHost.Border.Top:=124/S;
     FPageHost.Border.Right:=24/S;
     if FTopBar<>nil then FTopBar.Height:=FPageHost.Border.Top;
   end;
@@ -576,16 +599,17 @@ begin
     FDevicesSummary.Height:=40/S;FDevicesSummary.FontSize:=14/S;
     FDevicesSummary.Anchor(hpRight,-270/S);FDevicesSummary.Anchor(vpTop,-16/S);
   end;
+  if FTravelSelector<>nil then begin FTravelSelector.Anchor(hpLeft,PageLeft);FTravelSelector.Anchor(vpTop,-16/S) end;
   if FRoomButton<>nil then begin
     FRoomButton.Width:=220/S;FRoomButton.Height:=40/S;FRoomButton.FontSize:=15/S;
-    FRoomButton.Anchor(hpLeft,PageLeft);FRoomButton.Anchor(vpTop,-16/S);
+    FRoomButton.Anchor(hpLeft,PageLeft);FRoomButton.Anchor(vpTop,-64/S);
   end;
   if FResumeButton<>nil then begin
     FResumeButton.Width:=190/S;FResumeButton.Height:=40/S;FResumeButton.FontSize:=16/S;
-    FResumeButton.Anchor(hpLeft,PageLeft);FResumeButton.Anchor(vpTop,-64/S);
+    FResumeButton.Anchor(hpLeft,PageLeft);FResumeButton.Anchor(vpTop,-108/S);
     FEndRideButton.Width:=190/S;FEndRideButton.Height:=40/S;FEndRideButton.FontSize:=16/S;
-    FEndRideButton.Anchor(hpRight,-16/S);FEndRideButton.Anchor(vpTop,-64/S);
-    FSessionLabel.FontSize:=14/S;FSessionLabel.Anchor(hpLeft,PageLeft+205/S);FSessionLabel.Anchor(vpTop,-76/S);
+    FEndRideButton.Anchor(hpRight,-16/S);FEndRideButton.Anchor(vpTop,-108/S);
+    FSessionLabel.FontSize:=14/S;FSessionLabel.Anchor(hpLeft,PageLeft+205/S);FSessionLabel.Anchor(vpTop,-120/S);
     FSessionLabel.MaxWidth:=Max(60,EffectiveWidth-PageLeft-425/S);
   end;
   if ButtonQuit<>nil then begin
@@ -679,6 +703,7 @@ begin
   FProfilePane:=nil;FProfileButton:=nil;FProfileLabelName:=nil;FProfileLabelDetail:=nil;
   FTileCol:=nil;FTileRoutes:=nil;FTileDream:=nil;FTileDevices:=nil;
   FTileBikeFit:=nil;FTileTraining:=nil;FTileProfile:=nil;FTileEvents:=nil;
+  FTravelSelector:=nil;FWorldModeBar:=nil;FWorldTrack:=nil;FWorldExplore:=nil;FExplorePage:=nil;
   FResumeButton:=nil;FEndRideButton:=nil;FDevicesSummary:=nil;FSessionLabel:=nil;FNavBackground:=nil;FTopBar:=nil;
   FVersionButton:=nil;
   FRoomButton:=nil;FRoomView:=nil;
@@ -799,6 +824,7 @@ begin
     разом не будет). }
   FitPath := SelectedFitPath;
   if (FRoutesPage = nil) or (FRoutesPage.SelectedFitPath = '') then Exit;
+  ViewPlay.PrepareRouteTravel;
   RememberRideMap(rmkReal,FitPath);
   FAutoRoute:=False;
 
@@ -816,7 +842,7 @@ begin
   end;
 
   { Свежий запуск (первый заезд или после «Стоп»): полный Start. }
-  ViewPlay.PrepareDreamWorld(nil);
+  ViewPlay.PrepareDreamWorld(nil);ViewPlay.PrepareRouteTravel;
   ViewPlay.CurrentFitPath := FitPath;   { пусто = дефолтный мир, без стриминга }
   ApplyPendingWorkout;
   Container.View := ViewPlay;
@@ -897,6 +923,7 @@ begin TogglePage(FRouteCreatorPage,TRouteCreatorPage,FTileRoutes);end;
 
 procedure TViewMenu.OpenCloudRoute(const FileName:String;AutoRide:Boolean);
 begin
+  SelectTravelMode(travelBicycle);Settings.ExploreBicycle:=False;
   ShowRoutesPage;FRoutesPage.OpenLibraryFile(FileName);
   FAutoRoute:=AutoRide and FileExists(FileName);
 end;
@@ -922,6 +949,8 @@ procedure TViewMenu.HideEmbeddedPage;
   end;
 
 begin
+  if FWorldModeBar<>nil then FWorldModeBar.Exists:=False;
+  if FExplorePage<>nil then begin FExplorePage.HideMap;FExplorePage.Exists:=False end;
   if Assigned(FRoutesPage) and FRoutesPage.Exists then
   begin
     if FAutoRoute then FreeAndNil(FPendingWorkout);
@@ -981,14 +1010,67 @@ begin
   if Assigned(ATile) then ATile.Selected := True;
 end;
 
+procedure TViewMenu.SelectTravelMode(Mode:TTravelMode);
+begin
+  Settings.TravelMode:=Mode;
+  if FTravelSelector<>nil then FTravelSelector.Refresh;
+  TravelChanged(nil);
+end;
+procedure TViewMenu.StartExploration(Lat,Lon:Double);
+begin
+  Settings.SetExploreStart(Lat,Lon);LaunchExplore(nil);
+end;
+
+procedure TViewMenu.ShowWorldMode;
+begin
+  FWorldModeBar.Exists:=True;
+  FWorldTrack.Enabled:=Settings.TravelMode=travelBicycle;
+  SelectMenuButton(FWorldTrack,(Settings.TravelMode=travelBicycle) and not Settings.ExploreBicycle);
+  SelectMenuButton(FWorldExplore,not FWorldTrack.Enabled or Settings.ExploreBicycle);
+end;
+procedure TViewMenu.TravelChanged(Sender:TObject);
+var InWorld,InFit:Boolean;
+begin
+  InWorld:=((FRoutesPage<>nil)and FRoutesPage.Exists)or((FExplorePage<>nil)and FExplorePage.Exists);
+  InFit:=(FBikeFitPage<>nil)and FBikeFitPage.Exists;
+  if RideUnderneath then ViewPlay.ChangeTravelMode(Settings.TravelMode);
+  if InWorld then begin HideEmbeddedPage;ClickRoutes(nil) end;
+  if InFit then begin HideEmbeddedPage;ClickBikeFit(nil) end;
+end;
+procedure TViewMenu.WorldModeChanged(Sender:TObject);
+begin
+  Settings.ExploreBicycle:=TComponent(Sender).Tag=1;
+  HideEmbeddedPage;ClickRoutes(nil);
+end;
+procedure TViewMenu.LaunchExplore(Sender:TObject);
+begin
+  if not CanLaunchRide or not Settings.ExploreStartSet then Exit;
+  HideEmbeddedPage;
+  ViewPlay.PrepareExploration(Settings.ExploreLat,Settings.ExploreLon,Settings.TravelMode);
+  if RideUnderneath then begin
+    ViewPlay.ResetRideToExploration;Container.PopView;
+  end else Container.View:=ViewPlay;
+end;
+
 procedure TViewMenu.ClickRoutes(Sender: TObject);
 begin
+  if (Settings.TravelMode<>travelBicycle) or Settings.ExploreBicycle then begin
+    HideEmbeddedPage;
+    if FExplorePage=nil then begin
+      FExplorePage:=TExplorePage.Create(FreeAtStop);FExplorePage.Border.Top:=48;
+      FExplorePage.OnStart:=@LaunchExplore;FPageHost.InsertFront(FExplorePage);
+    end;
+    FExplorePage.Exists:=True;FExplorePage.ShowMap;ShowWorldMode;
+    if FGlobeCredit<>nil then FGlobeCredit.Exists:=True;
+    if FTileRoutes<>nil then FTileRoutes.Selected:=True;
+    Exit;
+  end;
   { Страница «Маршруты» — встроенная: показывается справа внутри
     главного меню, а не отдельным полноэкранным вью. }
   if FRoutesPage = nil then
   begin
     FRoutesPage := TRoutesPage.Create(FreeAtStop);
-    FRoutesPage.Globe := FGlobe;
+    FRoutesPage.Globe := FGlobe;FRoutesPage.Border.Top:=48;
     { Кнопка «Ехать» на странице — запуск заезда по выбранному FIT. }
     FRoutesPage.OnLaunchRide := @LaunchSelectedRide;
     { Кнопка «Стоп» — полное завершение заезда (teardown play-сессии). }
@@ -1007,7 +1089,7 @@ begin
   FRoutesPage.Exists := True;
   if FGlobeCredit<>nil then FGlobeCredit.Exists:=True;
   if FGlobe<>nil then begin FGlobe.FullSize:=True;FGlobe.Anchor(hpLeft);FGlobe.Anchor(vpBottom);FGlobe.Exists:=True;FGlobe.SetActive(True);end;
-  FRoutesPage.PageShown;
+  FRoutesPage.PageShown;ShowWorldMode;
   if Assigned(FTileRoutes) then FTileRoutes.Selected := True;
 end;
 
@@ -1123,6 +1205,10 @@ begin
 end;
 procedure TViewMenu.QuickRide;
 begin
+  if (Settings.TravelMode<>travelBicycle) or Settings.ExploreBicycle then begin
+    if Settings.ExploreStartSet then LaunchExplore(nil) else ShowRoutesPage;
+    Exit;
+  end;
   RideHistory.CancelResume;
   FreeAndNil(FPendingWorkout);LoadLastMap;
 end;
@@ -1149,7 +1235,9 @@ end;
 procedure TViewMenu.StartWorkout(Plan:TWorkoutFile;ReferenceWatts:Double;TrainingOnly:Boolean);
 var CopyPlan:TWorkoutFile;
 begin
-  if Plan=nil then Exit;CopyPlan:=Plan.Clone;FreeAndNil(FPendingWorkout);FPendingWorkout:=CopyPlan;
+  if Plan=nil then Exit;
+  if Settings.TravelMode<>travelBicycle then SelectTravelMode(travelBicycle);
+  CopyPlan:=Plan.Clone;FreeAndNil(FPendingWorkout);FPendingWorkout:=CopyPlan;
   FPendingReference:=ReferenceWatts;
   if TrainingOnly then begin
     if not CanLaunchRide then begin FreeAndNil(FPendingWorkout);Exit;end;
@@ -1207,7 +1295,7 @@ begin
     RememberRideMap(rmkReal,Route);
     HideEmbeddedPage;
     if RideUnderneath then begin ViewPlay.ResetRideToFit(Route);Container.PopView;end
-    else begin ViewPlay.PrepareDreamWorld(nil);ViewPlay.CurrentFitPath:=Route;Container.View:=ViewPlay;end;
+    else begin ViewPlay.PrepareDreamWorld(nil);ViewPlay.PrepareRouteTravel;ViewPlay.CurrentFitPath:=Route;Container.View:=ViewPlay;end;
   end else begin
     RememberRideMap(rmkDream,Activity.Get('world',FirstRideWorldId));QuickRide;
   end;
@@ -1314,6 +1402,7 @@ end;
 
 procedure TViewMenu.LanguageChanged(Sender: TObject);
 begin
+  if FTravelSelector<>nil then FTravelSelector.Refresh;
   BuildProfilePane;
 end;
 

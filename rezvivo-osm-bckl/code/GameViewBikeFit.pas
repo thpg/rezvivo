@@ -12,7 +12,7 @@ unit GameViewBikeFit;
 
 interface
 
-uses RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
+uses GameTravel, RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
   Classes, SysUtils, Math, fpjson,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
@@ -23,6 +23,8 @@ uses RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadA
 type
   TBikeFitPage = class(TMenuEmbeddedPage)
   private
+    FOnFootPreview,FOnFootFramed:Boolean;
+    FWalkPreviewSpeed:Single;
     FDesign:      TCastleDesign;
     FLabelTitle:  TCastleLabel;
     FLabelStatus: TCastleLabel;
@@ -370,6 +372,9 @@ begin
   FSelSize := -1;
   FSelPose := 0;
   FPopupKind := PopupNone;
+  FOnFootPreview:=Settings.TravelMode<>travelBicycle;FOnFootFramed:=False;
+  FWalkPreviewSpeed:=0;
+  if FOnFootPreview and(FSection=0)then FSection:=1;
   FCadenceRpm := 80;
   FPreviewEffortPct := 70;
   FFitSeatExt := 150;
@@ -952,6 +957,15 @@ begin
     Exit;
   end;
   if AVp = nil then Exit;
+  if FOnFootPreview then begin
+    Radius:=CurrentBody.HeightCm/100;
+    BoxCenter:=Vector3(0,Radius*0.5,0);
+    Dir:=Vector3(-0.35,-0.08,-1).Normalize;
+    Dist:=Radius*1.5;
+    AVp.Camera.SetView(BoxCenter-Dir*Dist,Dir,DefaultCamUp);
+    FNavResult.ModelBox:=Box3D(Vector3(-0.5,0,-0.4),Vector3(0.5,Radius,0.4));
+    Exit;
+  end;
   Box := AVp.Items.BoundingBox;
   if Box.IsEmpty then
   begin
@@ -1067,6 +1081,9 @@ begin
     FReleasePreviewPending := False;
     Exit;
   end;
+  FOnFootPreview:=Settings.TravelMode<>travelBicycle;FOnFootFramed:=False;
+  FWalkPreviewSpeed:=0;
+  if FOnFootPreview and(FSection=0)then FSection:=1;
   if FLabelTitle <> nil then
     FLabelTitle.Exists := False;
   if FButtonBack <> nil then
@@ -1135,7 +1152,7 @@ begin
       end;
   if (FSelSize < 0) and (FSizeNames.Count > 0) then FSelSize := 0;
 
-  if Assigned(ViewPlay) and ViewPlay.SessionAlive and ViewMenu.RideUnderneath then
+  if (Settings.TravelMode<>travelFlight) and Assigned(ViewPlay) and ViewPlay.SessionAlive and ViewMenu.RideUnderneath then
     AttachLiveRide
   else
     FDirtyResult := True;
@@ -1144,7 +1161,8 @@ begin
   FBtnEffortDown.Enabled := not FLiveRide;
   FBtnEffortUp.Enabled := not FLiveRide;
   if FCadenceCaption <> nil then
-    if FLiveRide then BindUiText(FCadenceCaption, 'Ride cadence')
+    if FOnFootPreview then BindUiText(FCadenceCaption,'Walking speed')
+    else if FLiveRide then BindUiText(FCadenceCaption, 'Ride cadence')
     else BindUiText(FCadenceCaption, 'Cadence (preview)');
   UpdateLabels;
 end;
@@ -1805,7 +1823,8 @@ begin
     FLblPose.Caption := Format(UiText('Pose: %s  (%d/%d)'),
       [PoseName, FSelPose + 1, Max(1, FPoseNames.Count)]);
   if FLblCadence <> nil then
-    FLblCadence.Caption := Format(UiText('%d rpm'), [Round(FCadenceRpm)]);
+    if FOnFootPreview then FLblCadence.Caption:=Format('%.1f km/h',[FWalkPreviewSpeed*3.6])
+    else FLblCadence.Caption := Format(UiText('%d rpm'), [Round(FCadenceRpm)]);
   if FLblEffort <> nil then
     FLblEffort.Caption := IntToStr(Round(CurrentEffortPct)) + '%';
   if FLblSeatH <> nil then
@@ -2764,6 +2783,18 @@ begin
     FDyeBtns[I].Anchor(hpLeft,6+(I mod 2)*(W-28)/2);
     FDyeBtns[I].Anchor(vpTop,-(34+(I div 2)*44)/S);
   end;
+  if FOnFootPreview then begin
+    FSectionButtons[0].Exists:=False;
+    FSectionButtons[1].Width:=(W-24)/2;FSectionButtons[1].Anchor(hpLeft,8);
+    FSectionButtons[2].Width:=(W-24)/2;FSectionButtons[2].Anchor(hpLeft,W/2+4);
+    FBikeControls.Exists:=False;FEffortControls.Exists:=False;
+    FFitOverlay.Exists:=False;
+    FBtnKneeDown.Parent.Exists:=False;FBtnAnkleDown.Parent.Exists:=False;
+    FBodyRows.ScrollArea.Height:=278/S;
+    FDyeBtns[7].Exists:=False;FDyeBtns[8].Exists:=False;
+  end else begin
+    FSectionButtons[0].Exists:=True;FDyeBtns[7].Exists:=True;FDyeBtns[8].Exists:=True;
+  end;
   LayoutHairList;
 end;
 
@@ -2793,12 +2824,13 @@ begin
     if FFitSaveDelay<=0 then begin FFitSaveDelay:=5;ClickApply(nil);end;
   end;
   if FPosePrev<>nil then begin
-    FPosePrev.Exists:=not FLiveRide and not FHairOverlay.Exists;
+    FPosePrev.Exists:=not FOnFootPreview and not FLiveRide and not FHairOverlay.Exists;
     FPoseNext.Exists:=FPosePrev.Exists;FPoseToggle.Exists:=FPosePrev.Exists;
-    FLblPose.Exists:=not FHairOverlay.Exists;
+    FLblPose.Exists:=not FOnFootPreview and not FHairOverlay.Exists;
   end;
   if FLiveRide then
   begin
+    if FOnFootPreview then begin FWalkPreviewSpeed:=Abs(ViewPlay.RideSpeed);UpdateLabels;Exit end;
     if (Round(FCadenceRpm) <> Round(ViewPlay.RideCadence)) or
        (Round(FLastLiveEffortPct) <> Round(CurrentEffortPct)) then
     begin
@@ -2810,6 +2842,13 @@ begin
   end;
   if FResultBike <> nil then
   begin
+    if FOnFootPreview then begin
+      FResultBike.AnimateOnFoot(SecondsPassed,FWalkPreviewSpeed,0);
+      if FResultBike.HasTripoRider and not FOnFootFramed then begin
+        FOnFootFramed:=True;FitCameraToItems(FVpResult);
+      end;
+      Exit;
+    end;
     FResultBike.AnimateFrame(SecondsPassed);
     if FPoseAuto and(FPoseNames.Count > 1)then
     begin
@@ -2825,6 +2864,7 @@ end;
 
 procedure TBikeFitPage.ClickCadenceDown(Sender: TObject);
 begin
+  if FOnFootPreview then begin FWalkPreviewSpeed:=Max(0,FWalkPreviewSpeed-0.2);UpdateLabels;Exit end;
   if FLiveRide then Exit;
   FCadenceRpm := Max(0, FCadenceRpm - 10);
   ApplyPreviewAnimation;
@@ -2833,6 +2873,7 @@ end;
 
 procedure TBikeFitPage.ClickCadenceUp(Sender: TObject);
 begin
+  if FOnFootPreview then begin FWalkPreviewSpeed:=Min(6,FWalkPreviewSpeed+0.2);UpdateLabels;Exit end;
   if FLiveRide then Exit;
   FCadenceRpm := Min(160, FCadenceRpm + 10);
   ApplyPreviewAnimation;

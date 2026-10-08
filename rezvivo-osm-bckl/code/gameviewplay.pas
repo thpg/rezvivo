@@ -12,7 +12,7 @@ unit GameViewPlay;
 
 interface
 
-uses Classes,fpjson,
+uses Classes,fpjson,GameTravel,Osm3dGeoMath,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleKeysMouse, CastleViewport, CastleScene, CastleVectors, CastleCameras,
   CastleTransform, CastleInputs, CastleThirdPersonNavigation, CastleDebugTransform,
@@ -82,6 +82,18 @@ type
   private
     Enemies: TEnemyList;
 
+    FTravelMode:TTravelMode;
+    FFreeExplore,FPointExplore:Boolean;
+    FExploreStart:TLatLon;
+    FKeyboardPower:Single;
+    FKeyboardPowerSelected,FKeyboardPowerActive:Boolean;
+    FExploreHint:TCastleLabel;
+    FExploreInputOverride:Boolean;
+    FExploreSteer,FExplorePowerAxis,FExploreWalkAxis:Single;
+    FWalkHold:THeldMovement;
+    procedure ConfigureTravel;
+    procedure UpdateTravelInput(Dt:Single;AllowInput:Boolean);
+  private
     FOfflineWorld: TGameWorld;
     FOfflineAvatar: TPhysicalAgent;
     FOfflineController: TPlayerAgentController;
@@ -462,6 +474,7 @@ type
     procedure Start; override;
     procedure OpenMenu;
     procedure BikeFitChanged;
+    function RideSpeed: Single;
     function RideCadence: Single;
     procedure Stop; override;
     procedure Render; override;
@@ -550,6 +563,14 @@ type
       AFitPath, путь райдера/бота перечитать и поставить их на старт.
       Зовётся из меню («Ехать») и MCP, когда SessionAlive. }
     procedure ResetRideToFit(const AFitPath: String);
+    procedure ChangeTravelMode(Mode:TTravelMode);
+    procedure PrepareRouteTravel;
+    procedure PrepareExploration(Lat,Lon:Double;Mode:TTravelMode);
+    procedure ResetRideToExploration;
+    procedure SetExploreInput(PowerAxis,Steer,WalkAxis:Single;OverrideInput:Boolean);
+    function TravelDiagnostics:TJSONObject;
+    property TravelMode:TTravelMode read FTravelMode;
+    property FreeExploration:Boolean read FFreeExplore;
     procedure PrepareDreamWorld(AWorld:TDreamWorld;AVisual:TDreamWorldVisual=nil);
     procedure ResetRideToDream(AWorld:TDreamWorld;AVisual:TDreamWorldVisual);
     property DreamWorld:TDreamWorld read FDreamWorld;
@@ -1031,8 +1052,194 @@ end;
 constructor TViewPlay.Create(AOwner: TComponent);
 begin
   inherited;
+  FTravelMode:=travelBicycle;
   FAtlasWorldShadows := True;
   DesignUrl := 'castle-data:/gameviewplay.castle-user-interface';
+end;
+
+procedure TViewPlay.ChangeTravelMode(Mode:TTravelMode);
+begin
+  if not TravelAvailable(Mode) or not SessionAlive or(FTravelMode=Mode)then Exit;
+  { Keep the current world and position. Route following resumes only on an
+    explicit route launch; changing vehicle must not snap back onto the FIT. }
+  if FFocusMode then SetTrainingFocus(False);
+  FTravelMode:=Mode;FFreeExplore:=True;ClearSimReplay;
+  if HasActiveState then begin
+    FActiveAvatarAgent.State.CurrentSpeed:=0;
+    FActiveAvatarAgent.State.AppliedPowerWatts:=0;
+    FActiveAvatarAgent.State.MovementVelocity:=Vector3(0,0,0);
+    FActiveAvatarAgent.Physics.ResetTrackingAfterTeleport;
+  end;
+  ConfigureTravel;
+end;
+procedure TViewPlay.PrepareRouteTravel;
+begin FFreeExplore:=False;FPointExplore:=False;FTravelMode:=travelBicycle end;
+procedure TViewPlay.PrepareExploration(Lat,Lon:Double;Mode:TTravelMode);
+begin
+  if not TravelAvailable(Mode) then raise EArgumentException.Create('Transport is not available');
+  if IsNan(Lat) or IsInfinite(Lat) or IsNan(Lon) or IsInfinite(Lon) or
+    (Abs(Lat)>85) or (Abs(Lon)>180) then raise EArgumentException.Create('Invalid starting point');
+  FreeAndNil(FNextDreamVisual);FreeAndNil(FNextDreamWorld);
+  FFreeExplore:=True;FPointExplore:=True;FTravelMode:=Mode;
+  FExploreStart:=TLatLon.Make(Lat,Lon);FCurrentFitPath:='';
+end;
+procedure TViewPlay.ResetRideToExploration;
+begin ResetRideWorld('',nil,nil) end;
+procedure TViewPlay.SetExploreInput(PowerAxis,Steer,WalkAxis:Single;OverrideInput:Boolean);
+begin
+  FExploreInputOverride:=OverrideInput;
+  FExplorePowerAxis:=EnsureRange(PowerAxis,-1,1);FExploreSteer:=EnsureRange(Steer,-1,1);
+  FExploreWalkAxis:=EnsureRange(WalkAxis,-1,1);
+end;
+function TViewPlay.TravelDiagnostics:TJSONObject;
+begin
+  Result:=TJSONObject.Create(['mode',TravelIds[FTravelMode],'free',FFreeExplore,
+    'point_start',FPointExplore,'keyboard_power',FKeyboardPower,'preparing',RidePreparationHeld]);
+  Result.Add('keyboard_power_active',FKeyboardPowerActive);
+  Result.Add('power_sensor_valid',(FBLEHud<>nil)and FBLEHud.ReadSensorPower.Valid);
+  Result.Add('simulation_active',Assigned(DeviceService)and DeviceService.IsSimulationActive);
+  Result.Add('input_override',FExploreInputOverride);
+  Result.Add('camera_mode',Ord(FCameraMode));
+  if Container<>nil then begin
+    Result.Add('focused',Container.Focused);
+    Result.Add('front_view',Container.FrontView=Self);
+    Result.Add('input_captured',Container.ForceCaptureInput<>nil);
+  end;
+  if HasActiveState then begin
+    Result.Add('x',FActiveAvatarAgent.State.WorldPosition.X);
+    Result.Add('y',FActiveAvatarAgent.State.WorldPosition.Y);
+    Result.Add('z',FActiveAvatarAgent.State.WorldPosition.Z);
+    Result.Add('speed',FActiveAvatarAgent.State.CurrentSpeed);
+    Result.Add('distance',FActiveAvatarAgent.State.CumulativeDistance);
+    Result.Add('steer',FActiveAvatarAgent.State.TravelSteering);
+    Result.Add('forward_x',FActiveAvatarAgent.State.ForwardDir.X);
+    Result.Add('forward_z',FActiveAvatarAgent.State.ForwardDir.Z);
+    Result.Add('camera_y',MainViewport.Camera.Translation.Y);
+    Result.Add('avatar_visible',(FBikeInstance<>nil)and FBikeInstance.Group.Exists);
+  end;
+end;
+procedure TViewPlay.ConfigureTravel;
+begin
+  FKeyboardPower:=0;FExploreInputOverride:=False;
+  FKeyboardPowerSelected:=False;FKeyboardPowerActive:=False;
+  FWalkHold:=Default(THeldMovement);
+  if FBLEHud<>nil then begin FBLEHud.ManualPower:=-1;FBLEHud.ManualCadence:=0 end;
+  if HasActiveState then begin
+    FActiveAvatarAgent.State.FreeTravel:=FFreeExplore;
+    FActiveAvatarAgent.State.Walking:=FTravelMode=travelWalk;
+    FActiveAvatarAgent.State.TravelSteering:=0;
+    FActiveAvatarAgent.State.TravelBrake:=0;
+    FActiveAvatarAgent.State.TravelTargetSpeed:=0;
+    ApplyWheelProbeFromBike;
+    if FTravelMode=travelWalk then FActiveAvatarAgent.Physics.SetWheelProbeHalfSpan(0.18);
+    if FFreeExplore then begin
+      FActiveAvatarAgent.State.TrafficMoveConstraint:=nil;
+      FActiveAvatarAgent.State.TrafficHeadingConstraint:=nil;
+      FActiveAvatarAgent.State.LaneOffset:=0;
+      FActiveAvatarAgent.State.SlopeQuery:=FActiveAvatarAgent.State.GroundQuery;
+    end;
+  end;
+  if FLocalBots<>nil then FLocalBots.SetRenderEnabled(FPerfRiders and not FFreeExplore);
+  if FRemoteRiders<>nil then FRemoteRiders.SetRidersVisible(FPerfRiders and not FFreeExplore);
+  if FBikeInstance<>nil then begin
+    FBikeInstance.OnFoot:=FTravelMode=travelWalk;
+    FBikeInstance.Group.Exists:=FPerfRiders and(FTravelMode<>travelFlight);
+    if FTravelMode=travelWalk then FBikeInstance.AnimateOnFoot(0,0,Pi/2);
+  end;
+  if FFreeExplore then begin
+    FActivePlayerController.SetDesiredPower(0);FActivePlayerController.SetAutoMove(False);
+    if FTravelMode=travelFlight then begin
+      SetCameraMode(pcmFree);
+      if HasActiveState then MainViewport.Camera.SetView(
+        FActiveAvatarAgent.State.WorldPosition+Vector3(0,12,10),
+        Vector3(0,-0.25,-1).Normalize,Vector3(0,1,0));
+    end
+    else begin SetCameraMode(pcmThirdPerson);SetChaseCamera(True,4.5,2.0,0,1.0) end;
+  end else SetCameraMode(pcmCinematic);
+  if FExploreHint=nil then begin
+    FExploreHint:=TMenuLabel.Create(FreeAtStop);FExploreHint.Name:='ExploreControls';
+    FExploreHint.FontSize:=14;FExploreHint.Color:=White;
+    FExploreHint.Anchor(hpMiddle);FExploreHint.Anchor(vpBottom,16);InsertFront(FExploreHint);
+  end;
+  FExploreHint.Exists:=FFreeExplore;
+  if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=FTravelMode=travelBicycle;
+  if FFocusButton<>nil then FFocusButton.Exists:=FTravelMode=travelBicycle;
+  if FLocalBotLoading<>nil then FLocalBotLoading.Exists:=not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready;
+  if (FTravelMode<>travelBicycle) and(FWorkoutHud<>nil) then begin
+    FWorkoutHud.ReleaseTrainer;WorkoutPlayer.Stop;FWorkoutHud.Exists:=False;
+  end;
+end;
+procedure TViewPlay.UpdateTravelInput(Dt:Single;AllowInput:Boolean);
+var PowerAxis,Steer,WalkAxis,WalkStart:Single;KeyState:TKeysPressed;
+  Sensor,Simulated,Fast,SimPaused:Boolean;SimCurrent,SimTotal:Integer;
+begin
+  if not FFreeExplore or not HasActiveState then begin FWalkHold:=Default(THeldMovement);Exit end;
+  PowerAxis:=0;Steer:=0;WalkAxis:=0;Fast:=False;
+  if FExploreInputOverride then begin
+    PowerAxis:=FExplorePowerAxis;Steer:=FExploreSteer;WalkAxis:=FExploreWalkAxis;
+  end else if AllowInput and(Container<>nil)and(Container.FrontView=Self)and
+    Container.Focused and(Container.ForceCaptureInput=nil)and(FCameraMode<>pcmFree)then begin
+    KeyState:=Container.Pressed;
+    if KeyState[keyW]or KeyState[keyArrowUp]or KeyState[keyEqual]or KeyState[keyNumpadPlus]then PowerAxis:=1;
+    if KeyState[keyS]or KeyState[keyArrowDown]or KeyState[keyMinus]or KeyState[keyNumpadMinus]then PowerAxis:=-1;
+    if KeyState[keyA]or KeyState[keyArrowLeft]then Steer:=1;
+    if KeyState[keyD]or KeyState[keyArrowRight]then Steer:=Steer-1;
+    if KeyState[keyW]or KeyState[keyArrowUp]then WalkAxis:=1;
+    if KeyState[keyS]or KeyState[keyArrowDown]then WalkAxis:=-1;
+    Fast:=KeyState[keyShift];
+  end;
+  FActiveAvatarAgent.State.TravelSteering:=Steer;
+  if (FTravelMode<>travelWalk)or RidePreparationHeld then WalkAxis:=0;
+  if WalkAxis>0 then begin
+    WalkStart:=1.4;if Fast then WalkStart:=3.6;
+    FActiveAvatarAgent.State.TravelTargetSpeed:=HeldMovementSpeed(FWalkHold,WalkAxis,Dt,WalkStart,5.5,6);
+  end else begin
+    FWalkHold:=Default(THeldMovement);
+    WalkStart:=1.4;if Fast then WalkStart:=2.0;
+    FActiveAvatarAgent.State.TravelTargetSpeed:=WalkAxis*WalkStart;
+  end;
+  Sensor:=(FBLEHud<>nil)and FBLEHud.ReadSensorPower.Valid and(FTravelMode=travelBicycle);
+  Simulated:=Assigned(DeviceService)and DeviceService.IsSimulationActive;
+  if Simulated and FKeyboardPowerSelected then begin
+    DeviceService.SimPlayerInfo(SimPaused,SimCurrent,SimTotal);
+    if not SimPaused then FKeyboardPowerSelected:=False; { explicit FIT resume }
+  end;
+  { A real power meter owns cycling. Explicit keyboard input can take over
+    FIT playback, including a paused FIT; it must use the real-time clock. }
+  if Sensor and not Simulated then FKeyboardPowerSelected:=False
+  else if (FTravelMode=travelBicycle)and(PowerAxis<>0)and not RidePreparationHeld then begin
+    if Simulated and not FKeyboardPowerSelected then begin
+      DeviceService.SimSetPaused(True);ClearSimReplay;
+    end;
+    FKeyboardPowerSelected:=True;
+  end;
+  FKeyboardPowerActive:=(FTravelMode=travelBicycle)and
+    ((not Sensor and not Simulated) or (Simulated and FKeyboardPowerSelected));
+  if FKeyboardPowerActive then begin
+    FKeyboardPower:=KeyboardPower(FKeyboardPower,PowerAxis,Dt);
+    FActivePlayerController.SetDesiredPower(FKeyboardPower);
+    FActiveAvatarAgent.State.AppliedPowerWatts:=FKeyboardPower;
+  end;
+  if FTravelMode<>travelBicycle then begin
+    FKeyboardPower:=0;FActivePlayerController.SetDesiredPower(0);
+    FActiveAvatarAgent.State.AppliedPowerWatts:=0;
+  end;
+  if FKeyboardPowerActive and(FKeyboardPower<=0)then
+    FActiveAvatarAgent.State.TravelBrake:=3
+  else FActiveAvatarAgent.State.TravelBrake:=0;
+  FBLEHud.ManualPower:=-1;FBLEHud.ManualCadence:=0;
+  if FKeyboardPowerActive then begin
+    FBLEHud.ManualPower:=FKeyboardPower;
+    if FKeyboardPower>0 then FBLEHud.ManualCadence:=EnsureRange(55+FKeyboardPower*0.1,55,115);
+  end;
+  FActivePlayerController.SetAutoMove(not RidePreparationHeld and(FTravelMode<>travelFlight));
+  if FOsmPrepHold then FExploreHint.Caption:=UiText('Loading the ground at the selected point...')
+  else case FTravelMode of
+    travelWalk:FExploreHint.Caption:=UiText('Walk: W/S or arrows; A/D to turn; hold forward to run; Shift to speed up');
+    travelFlight:FExploreHint.Caption:=UiText('Fly: WASD, Q/E for height; hold to accelerate; drag to look');
+    else FExploreHint.Caption:=UiText('Steer: A/D or arrows. Power: W/S or +/-. Zero power brakes.')+
+      '  '+IntToStr(Round(FActiveAvatarAgent.State.AppliedPowerWatts))+' W';
+  end;
 end;
 
 procedure TViewPlay.LoadAgentPath(APath: TGamePath);
@@ -1793,6 +2000,19 @@ begin
     FOsmPrepHold:=False;
     Logger.Info('[DreamWorld] Loaded '+FDreamWorld.Id+'; local baked geometry, no OSM requests');Exit;
   end;
+  if FPointExplore then begin
+    FOsmStreaming:=TGameOsmStreaming.Create;
+    if not FOsmStreaming.StartAtLocation(FExploreStart,MainViewport) then
+      raise Exception.Create('Could not start the map');
+    FOsmPrepHold:=True;FOsmPrepHoldLogTick:=0;FOsmPrepGroundSince:=0;FOsmPrepRaised:=False;
+    FOsmPrepResumeAutoMove:=False;
+    if SceneLevel<>nil then begin
+      SceneLevel.Load(nil,True);SceneLevel.Translation:=Vector3(0,0,0);
+      SceneLevel.Rotation:=Vector4(0,1,0,0);SceneLevel.Scale:=Vector3(1,1,1);
+    end;
+    if SceneRoadBarrier<>nil then SceneRoadBarrier.Exists:=False;
+    Exit;
+  end;
   if FCurrentFitPath = '' then Exit;          { FIT не выбран — дефолтный мир }
   if not Assigned(MainViewport) then
   begin
@@ -2288,7 +2508,7 @@ begin
   FFocusMode:=Value;FCameraDragging:=False;
   MainViewport.Exists:=not Value;FFocusPanel.Exists:=Value;
   if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=not Value;
-  FFocusPanel.SyncWindow(Value and(Container.PendingFrontView=Self));
+  FFocusPanel.SyncWindow(Value and(Container.PendingFrontView=Self) and not AssistantVisible(Container));
   if FWorkoutHud<>nil then FWorkoutHud.FocusMode:=Value;
   if Value then BindUiText(FFocusButton,'Return to 3D')
   else begin
@@ -3193,7 +3413,7 @@ begin
   { ── Apply PBR terrain texture ──
     Для стриминга (выбран FIT) пропускаем: террейн стримится из Osm3d.
     Для дефолтной карты — ApplyTerrainTexture по дизайновому SceneLevel. }
-  if (FCurrentFitPath = '')and(FDreamWorld=nil) then
+  if (FCurrentFitPath = '')and(FDreamWorld=nil)and not FPointExplore then
     ApplyTerrainTexture
   else
     Logger.Info('[ViewPlay] ' + 'StreamingMap: ApplyTerrainTexture пропущен (террейн стримится)');
@@ -3201,7 +3421,7 @@ begin
   { ── Preload terrain texture variants for ' \ cycling ──
     Для стриминга пропускаем: переключение текстур террейна к тайлам
     Osm3d не применяется. }
-  if (FCurrentFitPath = '')and(FDreamWorld=nil) then
+  if (FCurrentFitPath = '')and(FDreamWorld=nil)and not FPointExplore then
   begin
     ScanTerrainTextureFolders;
     PreloadTerrainTextures;
@@ -3316,6 +3536,19 @@ begin
   { MCP: мир/велосипед/стриминг/камера созданы — публикуем их как
     объекты 'world'/'bike'/'osm'/'camera'. No-op без --mcp-stdio. }
   McpRegisterPlayObjects;
+  if Assigned(ThirdPersonNavigation) then begin
+    { Camera navigation must never translate/rotate the avatar hierarchy. }
+    ThirdPersonNavigation.Input_Forward.Assign(keyNone);
+    ThirdPersonNavigation.Input_Backward.Assign(keyNone);
+    ThirdPersonNavigation.Input_LeftRotate.Assign(keyNone);
+    ThirdPersonNavigation.Input_RightRotate.Assign(keyNone);
+    ThirdPersonNavigation.Input_LeftStrafe.Assign(keyNone);
+    ThirdPersonNavigation.Input_RightStrafe.Assign(keyNone);
+    ThirdPersonNavigation.Input_Crouch.Assign(keyNone);
+    ThirdPersonNavigation.Input_Run.Assign(keyNone);
+    ThirdPersonNavigation.Input_Jump.Assign(keyNone);
+  end;
+  ConfigureTravel;
   SceneLifecycleLog('=== TViewPlay.Start END ===');
 end;
 
@@ -3324,6 +3557,7 @@ var
   I: Integer;
 begin
   if FFocusMode then SetTrainingFocus(False);
+  FExploreHint:=nil;
   FFocusPanel:=nil;FFocusButton:=nil;FKeyboard:=nil;
   MotionTrace.Stop;
   if Assigned(DeviceService) then DeviceService.OnSimSeek:=nil;
@@ -3550,7 +3784,7 @@ end;
 
 function TViewPlay.RidePreparationHeld:Boolean;
 begin
-  Result:=FOsmPrepHold or ((FLocalBots<>nil)and not FLocalBots.Ready);
+  Result:=FOsmPrepHold or (not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready);
 end;
 
 procedure TViewPlay.SpawnBotOffline(APower: Single);
@@ -3764,7 +3998,7 @@ begin
   if FDreamWorld<>nil then begin Title:=FDreamWorld.Title;WorldName:=FDreamWorld.Id;end;
   if Title='' then Title:=UiText('Free ride');
   if WorldName<>'' then RememberRideMap(rmkDream,WorldName)
-  else RememberRideMap(rmkReal,FCurrentFitPath);
+  else if not FPointExplore then RememberRideMap(rmkReal,FCurrentFitPath);
   RideHistory.BeginRide(Title,FCurrentFitPath,WorldName);
   if HasActiveState then RideHistory.RebaseDistance(FActiveAvatarAgent.State.CumulativeDistance);
   if WorkoutPlayer.Plan<>nil then RideHistory.SetWorkout(WorkoutPlayer.Plan.Name,WorkoutPlayer.Plan.Url);
@@ -3802,7 +4036,7 @@ end;
 procedure TViewPlay.SaveActivityCheckpoint;
 var O:TJSONObject;
 begin
-  if RidePreparationHeld or not HasActiveState or not RideHistory.CheckpointDue then Exit;
+  if FFreeExplore or RidePreparationHeld or not HasActiveState or not RideHistory.CheckpointDue then Exit;
   O:=CaptureRidePosition(FActiveAvatarAgent);
   O.Add('training_focus',FFocusMode);
   if DeviceService.IsSimulationActive then begin
@@ -3850,6 +4084,10 @@ begin
       FBikeInstance.TripoAnkleFlex);
 end;
 
+function TViewPlay.RideSpeed: Single;
+begin
+  Result:=0;if HasActiveState then Result:=FActiveAvatarAgent.State.CurrentSpeed;
+end;
 function TViewPlay.RideCadence: Single;
 begin
   Result := 0;
@@ -4007,11 +4245,11 @@ begin
 end;
 
 procedure TViewPlay.PrepareDreamWorld(AWorld:TDreamWorld;AVisual:TDreamWorldVisual);
-begin FreeAndNil(FNextDreamVisual);FreeAndNil(FNextDreamWorld);FNextDreamWorld:=AWorld;FNextDreamVisual:=AVisual;FCurrentFitPath:='';end;
+begin FreeAndNil(FNextDreamVisual);FreeAndNil(FNextDreamWorld);FNextDreamWorld:=AWorld;FNextDreamVisual:=AVisual;FCurrentFitPath:='';FPointExplore:=False;FTravelMode:=Settings.TravelMode;FFreeExplore:=FTravelMode<>travelBicycle;end;
 procedure TViewPlay.ResetRideToDream(AWorld:TDreamWorld;AVisual:TDreamWorldVisual);
-begin ResetRideWorld('',AWorld,AVisual);end;
+begin FPointExplore:=False;FTravelMode:=Settings.TravelMode;FFreeExplore:=FTravelMode<>travelBicycle;ResetRideWorld('',AWorld,AVisual);end;
 procedure TViewPlay.ResetRideToFit(const AFitPath:String);
-begin ResetRideWorld(AFitPath,nil,nil);end;
+begin PrepareRouteTravel;ResetRideWorld(AFitPath,nil,nil);end;
 procedure TViewPlay.ResetRideWorld(const AFitPath:String;AWorld:TDreamWorld;AVisual:TDreamWorldVisual);
 var
   I: Integer;
@@ -4150,6 +4388,7 @@ begin
 
   ProfileLogLine('=== ResetRideToFit: new route armed ===');
   McpRegisterPlayObjects;
+  ConfigureTravel;
   SceneLifecycleLog('=== TViewPlay.ResetRideToFit END ===');
 end;
 
@@ -4252,11 +4491,11 @@ begin
   { Exists всего корня BikeParametric (байк+райдер+тени), а не только
     TripoShowRider — иначе скрывался лишь человек, байк продолжал рисоваться. }
   if Assigned(FBikeInstance) then
-    FBikeInstance.Group.Exists := AOn;
+    FBikeInstance.Group.Exists := AOn and(FTravelMode<>travelFlight);
   if Assigned(FBotBikes) then
     for I := 0 to FBotBikes.Count - 1 do
       if FBotBikes[I]<>nil then TBikeInstance(FBotBikes[I]).Group.Exists := AOn;
-  if FLocalBots<>nil then FLocalBots.SetRenderEnabled(AOn);
+  if FLocalBots<>nil then FLocalBots.SetRenderEnabled(AOn and not FFreeExplore);
   if Assigned(FRemoteRiders) then
     FRemoteRiders.SetRidersVisible(AOn);
   { Теневая плоскость аватара: при скрытых райдерах пробы не нужны. }
@@ -4440,14 +4679,16 @@ begin
     MotionTrace.BeginFrame(SecondsPassed);
     FActiveAvatarAgent.TracePosition(mtBegin);
   end;
-  if (FLocalBots<>nil)and not FLocalBots.Ready then begin
+  if not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready then begin
     FLocalBots.PrepareNext;
     FLocalBotLoading.Caption:=UiText('Preparing riders')+' '+IntToStr(FLocalBots.PreparedCount)+'/'+IntToStr(LocalBotCount);
     FLocalBotLoading.Exists:=not FLocalBots.Ready;
   end;
+  UpdateTravelInput(SecondsPassed,HandleInput);
   PhysDt:=AdvanceSimFrame(SecondsPassed);
+  if FFreeExplore and(FTravelMode<>travelBicycle) then PhysDt:=SecondsPassed;
   if RidePreparationHeld then PhysDt:=0;
-  if FFocusPanel<>nil then FFocusPanel.SyncWindow(FFocusMode and(Container.PendingFrontView=Self));
+  if FFocusPanel<>nil then FFocusPanel.SyncWindow(FFocusMode and(Container.PendingFrontView=Self) and not AssistantVisible(Container));
   MotionTrace.Row[3] := PhysDt;
   if SecondsPassed>0 then MainViewport.Items.TimeScale:=PhysDt/SecondsPassed;
   FreezeDiagSetLocation('TViewPlay.Update: before inherited');
@@ -4519,12 +4760,14 @@ begin
         движение остаётся на удержании; ESC/меню доступны. }
       WuRelease  := False;
       WuPlaceErr := '';
-      if FOsmStreaming.RoutePrepDone and FOsmStreaming.SnapReady then
+      if FOsmStreaming.RoutePrepDone and (FPointExplore or FOsmStreaming.SnapReady) then
       begin
         { Ставим райдера только на готовую землю. Таймаут сообщает об
           ошибке, но не разрешает старт в пустоте. }
         if FOsmStreaming.RouteStartGroundY(WuGroundY) then
           WuRelease := True
+        else if (FTravelMode=travelFlight) and not FOsmStreaming.RouteStartGroundLoading then
+        begin WuGroundY:=0;WuRelease:=True end
         else if FOsmPrepGroundSince <> High(QWord) then
         begin
           { A cached route may snap immediately while a large city scene
@@ -4563,7 +4806,7 @@ begin
         if FBotAgents <> nil then
           for I := 0 to FBotAgents.Count - 1 do
             TPhysicalAgent(FBotAgents[I]).InitializeAtStart(WuGroundY);
-        ArrangeLocalRidersAtStart;
+        if not FFreeExplore then ArrangeLocalRidersAtStart;
         { Transfer streaming back to the camera only after moving it into
           the new world. Normal camera ticks use simulation time and remain
           stopped while the FIT player is paused. }
@@ -4576,6 +4819,8 @@ begin
           end;
           FCinematicCam.ResetAtTarget;
         end;
+        if FTravelMode=travelFlight then
+          MainViewport.Camera.SetView(Vector3(0,WuGroundY+12,10),Vector3(0,-0.25,-1).Normalize,Vector3(0,1,0));
         FOsmStreaming.NotifyRiderPlaced(WuPlaceErr);
 
         if Assigned(FActivePlayerController) and
@@ -4608,7 +4853,7 @@ begin
         if GetTickCount64 >= FOsmPrepHoldLogTick then
         begin
           FOsmPrepHoldLogTick := GetTickCount64 + 5000;
-          if FOsmStreaming.RoutePrepDone and FOsmStreaming.SnapReady then
+          if FOsmStreaming.RoutePrepDone and (FPointExplore or FOsmStreaming.SnapReady) then
             Logger.Info('[ViewPlay] StreamingMap: плоская карта — '
               + 'ждём землю под стартом (GroundYAt)…')
           else
@@ -4658,14 +4903,15 @@ begin
     Физика читает DesiredPower+AutoMove контроллера, оверлей — сенсоры.
     Раньше push был только у симуляции и стоял ПОСЛЕ физики — аватар
     стоял, а мощность/каденс на HUD уже были. }
-  if Assigned(FBLEHud) then
+  if Assigned(FBLEHud) and(FTravelMode=travelBicycle)and not FKeyboardPowerActive then
     FBLEHud.UpdateBLETelemetry(FActiveAvatarAgent);
   if Assigned(FActivePlayerController) and HasActiveState then
   begin
-    if Assigned(FBLEHud) and FBLEHud.BLEDataValid then
+    if Assigned(FBLEHud) and(FTravelMode=travelBicycle) and
+      not FKeyboardPowerActive then
       FActivePlayerController.SetDesiredPower(
         FActiveAvatarAgent.State.AppliedPowerWatts);
-    if (not RidePreparationHeld) and Assigned(FBLEHud) and FBLEHud.BLEDataValid and
+    if (FTravelMode=travelBicycle) and (not RidePreparationHeld) and Assigned(FBLEHud) and FBLEHud.ReadMeasuredPower.Valid and
        (FActiveAvatarAgent.State.AppliedPowerWatts > 0) then
       FActivePlayerController.SetAutoMove(True);
   end;
@@ -4692,12 +4938,15 @@ begin
   try
     if (not RidePreparationHeld) and (PhysDt>0) then
     begin
+      if FFreeExplore then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
+      else begin
       if FLocalBots<>nil then FLocalBots.BeforePhysics(PhysDt);
       UpdateRiderTraffic(FLaneManager,PhysDt);
       if Assigned(FLoopbackSession) then
         FLoopbackSession.Update(PhysDt, FixedTimeStep, PhysSteps)
       else if Assigned(FOfflineWorld) then
         FOfflineWorld.Update(PhysDt, FixedTimeStep, PhysSteps);
+      end;
     end;
   except
     on E: Exception do
@@ -4717,31 +4966,18 @@ begin
 
   { 1b. Стриминговая карта: один раз перестроить путь на снапнутый
         трек, когда асинхронная привязка к дорожной сети завершится. }
-  CheckOsmRouteSnap;
+  if not FFreeExplore then CheckOsmRouteSnap;
   { 1c. Когда снап готов — прикрепить OSM-ширины к пути и настроить
         менеджер полос на реальную (переменную) ширину дороги. }
-  ApplySnapWidthsAndLanes;
+  if not FFreeExplore then ApplySnapWidthsAndLanes;
 
   { 2. BLE }
-  FBLEHud.UpdateBLETelemetry(FActiveAvatarAgent);
   { Ватты — вход физики; скорость — её результат. Скорость маховика
     тренажёра / запись скорости FIT не учитывает дорогу этой игры.
     Подмешивание её после шага физики гасило ускорение от мощности
     и спуска, а на подъёме могло двигать байк даже без педалирования. }
-    if not Assigned(FWorkoutHud) or not FWorkoutHud.ControlsTrainer then
+    if (FTravelMode=travelBicycle) and (not Assigned(FWorkoutHud) or not FWorkoutHud.ControlsTrainer) then
       FBLEHud.UpdateBLETrainerControl(FActiveAvatarAgent, SecondsPassed);
-
-  { Физика читает DesiredPower/AutoMove из контроллера. FIT-сим кормит
-    те же слоты сенсоров, что живой тренажёр — отдельных веток нет. }
-  if Assigned(FActivePlayerController) and HasActiveState then
-  begin
-    if FBLEHud.BLEDataValid then
-      FActivePlayerController.SetDesiredPower(
-        FActiveAvatarAgent.State.AppliedPowerWatts);
-    if (not RidePreparationHeld) and FBLEHud.BLEDataValid and
-       (FActiveAvatarAgent.State.AppliedPowerWatts > 0) then
-      FActivePlayerController.SetAutoMove(True);
-  end;
 
 
   T3 := Timer;
@@ -4753,7 +4989,7 @@ begin
     rider init is killing the process, this catch will show it. }
   FreezeDiagSetLocation('TViewPlay.Update: Relay UpdateRelayClient');
   try
-    FRemoteRiders.UpdateRelayClient(PhysDt,
+    if not FFreeExplore then FRemoteRiders.UpdateRelayClient(PhysDt,
       FActiveAvatarAgent,
       FBLEHud.BLEDataValid,
       FBLEHud.BLEData, FOsmPrepHold);
@@ -4782,6 +5018,7 @@ begin
       MCP chase overrides all ring modes while active. }
     if FChaseCamActive then
     begin
+      ThirdPersonNavigation.Exists := False;
       if ThirdPersonNavigation.Avatar <> nil then
         ThirdPersonNavigation.Avatar := nil;
       if Assigned(FCinematicCam) then
@@ -4799,7 +5036,9 @@ begin
          and Assigned(MainViewport.Camera) and Assigned(Container) then
       begin
         FFreeCam.Camera := MainViewport.Camera;
-        FFreeCam.Update(Container.Pressed, SecondsPassed);
+        if not FOsmPrepHold and (Container.FrontView=Self)and Container.Focused and(Container.ForceCaptureInput=nil) then
+          FFreeCam.Update(Container.Pressed, SecondsPassed)
+        else FFreeCam.ResetMovement;
       end;
     end
     else if Assigned(FCinematicCam) and FCinematicCam.Enabled then
@@ -4879,7 +5118,7 @@ begin
     visibly stutter. AnimateFrame(SecondsPassed) uses the instance's
     captured params and an internal elapsed-time accumulator.
     FPerfAnim=False (MCP perf.set) — весь блок пропускается. }
-  if not FFocusMode and (PhysDt>0) and FPerfAnim and Assigned(FBikeInstance) then
+  if not FFocusMode and (FTravelMode=travelBicycle) and (PhysDt>0) and FPerfAnim and Assigned(FBikeInstance) then
   begin
     { Каденс → шатун, скорость → колёса: покадрово и без гейта RideClient —
       иначе в соло-заезде UpdateRiderList не бежит и аватар не педалирует.
@@ -4887,6 +5126,9 @@ begin
       его кормит). БЕЗ гейта BLEDataValid: HasAnySensor может быть ложным
       при живом симе, а BLEData сама даёт 0 при отсутствии данных. }
     LocalCadence := FBLEHud.BLEData.InstantCadence;
+    if FKeyboardPowerActive then
+      if FKeyboardPower>0 then LocalCadence:=Round(EnsureRange(55+FKeyboardPower*0.1,55,115))
+      else LocalCadence:=0;
     if LocalCadence > 0 then
       CrankInt := 60.0 / LocalCadence
     else
@@ -4936,13 +5178,18 @@ begin
 
   { Frozen poses still move with the physical agent. Keep their sun aligned
     without running IK, deformation or GPU animation updates. }
+  if (FTravelMode=travelWalk)and(FBikeInstance<>nil)and HasActiveState then begin
+    SceneAvatar.Rotation:=Vector4(0,1,0,ModelBaseYRotation);
+    if FPerfAnim then FBikeInstance.AnimateOnFoot(PhysDt,FActiveAvatarAgent.State.CurrentSpeed,Pi/2,
+      Tan(DegToRad(EnsureRange(FActiveAvatarAgent.State.CurrentGroundPitch,-45,45))));
+  end;
   if not FFocusMode and (PhysDt>0) and not FPerfAnim and Assigned(FBikeInstance) then
     FBikeInstance.AnimateFrame(Single(0));
 
   T4c := Timer;   { TEMP-DIAG: конец AnimateFrame аватара }
 
   { Боты на общем пайплайне: без AnimateFrame их Tripo-райдер не позируется. }
-  if not FFocusMode and (PhysDt>0) then
+  if not FFreeExplore and not FFocusMode and (PhysDt>0) then
   begin
     UpdateBotPoseManagers(PhysDt);
     AnimateBotBikes(PhysDt);
@@ -4981,7 +5228,7 @@ begin
   SensorLog.RecordingEnabled:=not DeviceService.IsSimulationActive or
     (DeviceService.SimPositionSec>=FSimAccountedUntil);
   SensorLog.UseActivityClock;
-  if Assigned(FWorkoutHud) then FWorkoutHud.Step(MetricsDt,not RidePreparationHeld,Container.FrontView=Self);
+  if Assigned(FWorkoutHud) and(FTravelMode=travelBicycle) then FWorkoutHud.Step(MetricsDt,not RidePreparationHeld,Container.FrontView=Self);
   Accounting:=Default(TActivityAccounting);
   AccountingPaused:=False;
   if DeviceService.IsSimulationActive then
@@ -4989,12 +5236,12 @@ begin
   if HasActiveState then begin
     { One measured-power snapshot feeds the journal, activity and daily totals.
       A traffic stop does not stop pedalling; cadence is an independent sensor. }
-    Accounting:=ActivityAccounting(not RidePreparationHeld and not RideHistory.RestoreNeeded,
+    Accounting:=ActivityAccounting((FTravelMode=travelBicycle) and not RidePreparationHeld and not RideHistory.RestoreNeeded,
       AccountingPaused,WorkoutPlayer.State in[wsReady,wsRunning,wsPaused],
       WorkoutPlayer.State=wsRunning,FActiveAvatarAgent.State.CurrentSpeed,FBLEHud.ReadMeasuredPower);
     SensorLog.SetSessionState(Accounting.Running,WorkoutPlayer.JournalLap,
       EnsureRange(Round(WorkoutPlayer.TargetWatts),0,65535));
-    if not RidePreparationHeld and not RideHistory.RestoreNeeded then begin
+    if (FTravelMode=travelBicycle) and not RidePreparationHeld and not RideHistory.RestoreNeeded then begin
       LogRec:=FBLEHud.BLEData;
       LogRec.InstantPower:=JournalPower(Accounting.Power);
       LogRec.InstantSpeed:=FActiveAvatarAgent.State.CurrentSpeed*3.6;
@@ -5003,9 +5250,9 @@ begin
     end;
   end;
   UpdateRideAudio(SecondsPassed,PhysDt>0);
-  if (FWorkoutGates=nil) and (WorkoutPlayer.Plan<>nil) and HasActiveState then
+  if not FFreeExplore and (FWorkoutGates=nil) and (WorkoutPlayer.Plan<>nil) and HasActiveState then
     FWorkoutGates:=TWorkoutGates.Create(FreeAtStop,MainViewport.Items);
-  if(FWorkoutGates<>nil)and not FFocusMode then
+  if(FWorkoutGates<>nil)and not FFocusMode and not FFreeExplore then
     FWorkoutGates.Step(WorkoutPlayer,FActiveAvatarAgent,PhysDt,not RidePreparationHeld);
   if HasActiveState then
     RideHistory.Step(MetricsDt,FActiveAvatarAgent.State.CumulativeDistance,
@@ -5143,7 +5390,9 @@ end;
 procedure TViewPlay.ApplyCameraMode;
 begin
   FCameraDragging:=False;
+  if FFreeCam<>nil then FFreeCam.ResetMovement;
   ThirdPersonNavigation.MouseLook:=False;
+  if FTravelMode=travelFlight then FCameraMode:=pcmFree;
   case FCameraMode of
     pcmCinematic:
       begin
@@ -5176,6 +5425,12 @@ end;
 
 procedure TViewPlay.CycleCameraMode;
 begin
+  if FTravelMode=travelFlight then Exit;
+  if FFreeExplore then begin
+    if FCameraMode=pcmFree then begin SetCameraMode(pcmThirdPerson);SetChaseCamera(True,4.5,2,0,1) end
+    else SetCameraMode(pcmFree);
+    Exit;
+  end;
   case FCameraMode of
     pcmCinematic:   FCameraMode := pcmThirdPerson;
     pcmThirdPerson: FCameraMode := pcmFree;
@@ -5218,7 +5473,7 @@ begin
     if Assigned(ThirdPersonNavigation) then
     begin
       ThirdPersonNavigation.Avatar := nil;
-      ThirdPersonNavigation.Exists := True;
+      ThirdPersonNavigation.Exists := False;
     end;
     ApplyChaseCameraFrame;
   end
@@ -5415,6 +5670,9 @@ var
 begin
   Result := inherited;
   if Result then Exit;
+  if FFreeExplore and (Event.EventType=itKey) and
+    (Event.Key in [keyW,keyS,keyA,keyD,keyArrowUp,keyArrowDown,keyArrowLeft,keyArrowRight,
+      keyEqual,keyMinus,keyNumpadPlus,keyNumpadMinus]) then Exit(True);
   if(Container.ForceCaptureInput=nil)and MatchRideCommand(Event,Command)then begin
     if Command=rcFocus then begin ClickTrainingFocus(nil);Exit(True);end;
     if ExecuteRideCommand(Command)then Exit(True);
@@ -5746,7 +6004,8 @@ function TViewPlay.ReplaySimCamera(var CameraDt: Single): Boolean;
 var Frame: TSimCameraFrame; Time: Double;
 begin
   Result:=False;
-  if not FSimCameraReplaying or (FSimHistory=nil) then Exit;
+  if not FSimCameraReplaying or (FSimHistory=nil) or FKeyboardPowerActive or
+    (FTravelMode<>travelBicycle) then Exit;
   Time:=DeviceService.SimPositionSec;
   if DeviceService.IsSimulationActive and FSimHistory.CameraTrack.Sample(Time,Frame) then begin
     ShowSimCameraFrame(Frame); Exit(True);
@@ -5761,6 +6020,7 @@ procedure TViewPlay.CaptureSimCamera;
 var Frame,Previous: TSimCameraFrame; State: TCameraReplayState; DT: Double;
 begin
   if (FSimHistory=nil) or FSimCameraReplaying or RidePreparationHeld or
+    FKeyboardPowerActive or(FTravelMode<>travelBicycle)or
     not HasActiveState or not DeviceService.IsSimulationActive then Exit;
   Frame:=Default(TSimCameraFrame);
   Frame.Seconds:=DeviceService.SimPositionSec;
@@ -5856,6 +6116,7 @@ var C: TSimCheckpoint; I: Integer;
   end;
 begin
   if (FSimHistory=nil) or RidePreparationHeld or (not HasActiveState) or
+    FKeyboardPowerActive or(FTravelMode<>travelBicycle)or
     (not DeviceService.IsSimulationActive) or (FActiveAvatarAgent.Path.PointCount<2) then Exit;
   if not FSimHistory.NeedsSample(DeviceService.SimPositionSec) then Exit;
   if FSimHistory.Count=0 then begin
@@ -5936,7 +6197,8 @@ function TViewPlay.AdvanceSimFrame(RealSeconds: Single): Single;
 var SimActive,Paused,HoldFrame: Boolean; CurSec,TotalSec: Integer;
 begin
   Result:=RealSeconds;
-  SimActive:=Assigned(DeviceService) and DeviceService.IsSimulationActive;
+  SimActive:=(FTravelMode=travelBicycle) and not FKeyboardPowerActive and
+    Assigned(DeviceService) and DeviceService.IsSimulationActive;
   HoldFrame:=False;
   if SimActive then begin
     if FSimLoopSerial<>DeviceService.SimLoopSerial then ClearSimReplay;
@@ -6020,7 +6282,7 @@ var SimActive,Paused: Boolean; CurSec,TotalSec: Integer; Rate: Single;
 begin
   if FSimPanel=nil then Exit;
   SimActive:=Assigned(DeviceService) and DeviceService.SimPlayerInfo(Paused,CurSec,TotalSec);
-  FSimPanel.Exists:=Settings.GetSimulationEnabled and not FFocusMode;
+  FSimPanel.Exists:=Settings.GetSimulationEnabled and not FFocusMode and(FTravelMode=travelBicycle);
   if not FSimPanel.Exists then Exit;
   if Assigned(FWorkoutHud) and FWorkoutHud.Exists then
     FSimPanel.Anchor(vpBottom,FWorkoutHud.EffectiveHeight+12)

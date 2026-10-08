@@ -3,6 +3,7 @@ unit GameCrashReports;
 interface
 uses Classes, SysUtils;
 procedure StartCrashReports;
+procedure RefreshCrashDiagnostics;
 procedure EnableCrashUpload(const ApiBase:String);
 procedure CaptureCrash(E:Exception);
 procedure MarkClientCleanExit;
@@ -11,7 +12,7 @@ function RedactClientLog(const Text:String):String;
 
 implementation
 uses SyncObjs,fpjson,jsonparser,CustApp,CastleWindow,DebugLog,GameBuildInfo,
-  GameHttpClient{$ifdef MSWINDOWS},Windows{$endif};
+  GameHttpClient,GameMachineInfo{$ifdef MSWINDOWS},Windows{$endif};
 
 type
   TCrashUpload=class(TThread)
@@ -67,28 +68,44 @@ begin
   finally Lines.Free;end;
 end;
 
-function ReadText(const FileName:String;MaxBytes:Integer):String;
+function ReadText(const FileName:String;MaxBytes:Integer;FromStart:Boolean=False):String;
 var F:TFileStream;N:Int64;
 begin
   Result:='';F:=TFileStream.Create(FileName,fmOpenRead or fmShareDenyNone);
   try
-    N:=F.Size;if N>MaxBytes then begin F.Position:=N-MaxBytes;N:=MaxBytes;end;
+    N:=F.Size;if N>MaxBytes then begin
+      if not FromStart then F.Position:=N-MaxBytes;
+      N:=MaxBytes;
+    end;
     SetLength(Result,N);if N>0 then F.ReadBuffer(Result[1],N);
   finally F.Free;end;
 end;
 
 procedure SaveJson(const FileName:String;Obj:TJSONObject);
-var S:String;F:TFileStream;
+{$ifdef MSWINDOWS}
+const MoveFileWriteThrough=$00000008; { MOVEFILE_WRITE_THROUGH, absent in FPC 3.2.2 headers }
+{$endif}
+var S:String;F:TFileStream;Saved:Boolean;
 begin
   S:=Obj.AsJSON;F:=TFileStream.Create(FileName+'.tmp',fmCreate);
   try if S<>''then F.WriteBuffer(S[1],Length(S));finally F.Free;end;
-  if not RenameFile(FileName+'.tmp',FileName)then begin
+  {$ifdef MSWINDOWS}
+  { The marker is refreshed after GL initialization. Windows RenameFile cannot
+    replace an existing destination; leave the previous complete marker intact
+    until the new snapshot has been written and closed. }
+  Saved:=MoveFileExW(PWideChar(UTF8Decode(FileName+'.tmp')),
+    PWideChar(UTF8Decode(FileName)),MOVEFILE_REPLACE_EXISTING or MoveFileWriteThrough);
+  {$else}
+  Saved:=RenameFile(FileName+'.tmp',FileName);
+  {$endif}
+  if not Saved then begin
     SysUtils.DeleteFile(FileName+'.tmp');raise Exception.Create('Cannot save diagnostic report');
   end;
 end;
 
-procedure QueueReport(const Id,LogFile,Version,Message:String;Build:Integer);
-var J:TJSONObject;Text,Target,Oldest:String;SR:TSearchRec;Count:Integer;OldTime:LongInt;
+procedure QueueReport(const Id,LogFile,Version,Message,Machine:String;Build:Integer);
+const TailLimit=768*1024;MachineLimit=64*1024;MessageLimit=32*1024;
+var J:TJSONObject;Text,Target,Oldest,Info,LogTail:String;SR:TSearchRec;Count:Integer;OldTime:LongInt;
 begin
   Target:=ClientDiagnosticsDir+Id+'.report.json';if FileExists(Target)then Exit;
   Count:=0;Oldest:='';OldTime:=High(LongInt);
@@ -97,9 +114,25 @@ begin
       Inc(Count);if SR.Time<OldTime then begin OldTime:=SR.Time;Oldest:=SR.Name;end;
     until FindNext(SR)<>0;finally SysUtils.FindClose(SR);end;
   if(Count>=20)and(Oldest<>'')then SysUtils.DeleteFile(ClientDiagnosticsDir+Oldest);
-  Text:='';
-  try if FileExists(LogFile)then Text:=ReadText(LogFile,768*1024);except end;
-  Text:=RedactClientLog(Message+#10+Text);
+  LogTail:='';Info:=Copy(Machine,1,MachineLimit);
+  try
+    if FileExists(LogFile)then begin
+      LogTail:=ReadText(LogFile,TailLimit);
+      { Old clients did not persist a snapshot. If their log was truncated,
+        preserve its startup section too; never substitute this launch's GPU. }
+      if(Info='')and(Length(LogTail)>=TailLimit)then
+        Info:='[Legacy session: original startup log]'+#10+ReadText(LogFile,MachineLimit,True);
+    end;
+  except { A missing or unreadable log must not discard the hardware snapshot. }
+  end;
+  if Info=''then Info:='[Machine snapshot unavailable in this session]';
+  Info:=Copy(RedactClientLog(Info),1,MachineLimit);
+  LogTail:=RedactClientLog(LogTail);
+  if Length(LogTail)>TailLimit then
+    Delete(LogTail,1,Length(LogTail)-TailLimit);
+  Text:=Copy(RedactClientLog(Message),1,MessageLimit)+#10+
+    '========== machine diagnostics =========='+#10+Info+#10+
+    '========== session log (tail, up to 768 KiB) =========='+#10+LogTail;
   J:=TJSONObject.Create(['report_id',Id,'build',Build,'version',Version,
     'message',Copy(RedactClientLog(Message),1,1800),'log',Text]);
   try SaveJson(Target,J);finally J.Free;end;
@@ -126,12 +159,12 @@ begin
   try repeat
     Path:=ClientDiagnosticsDir+SR.Name;J:=nil;
     try
-      J:=GetJSON(ReadText(Path,32768));
+      J:=GetJSON(ReadText(Path,256*1024,True));
       if J is TJSONObject then begin
         O:=TJSONObject(J);
         if not ProcessRunning(O.Get('pid',0))then begin
           QueueReport(O.Get('report_id',NewId),O.Get('log',''),O.Get('version','unknown'),
-            'Previous session ended unexpectedly',O.Get('build',0));
+            'Previous session ended unexpectedly',O.Get('machine',''),O.Get('build',0));
           SysUtils.DeleteFile(Path);
         end;
       end;
@@ -140,16 +173,27 @@ begin
   until FindNext(SR)<>0;finally SysUtils.FindClose(SR);end;
 end;
 
-procedure StartCrashReports;
+procedure RefreshCrashDiagnostics;
 var J:TJSONObject;
+begin
+  if Marker=''then Exit;
+  try
+    { FPC returns SizeUInt (QWord on Win64); fpjson's array-of-const
+      constructor does not support vtQWord. A PID fits in signed Int64. }
+    J:=TJSONObject.Create(['report_id',SessionId,'pid',Int64(GetProcessID),'log',GetLogFileName,
+      'build',ClientBuild,'version',ClientVersion,
+      'machine',Copy(RedactClientLog(MachineDiagnosticsSnapshot),1,64*1024)]);
+    try SaveJson(Marker,J);finally J.Free;end;
+  except on E:Exception do Logger.Warning('[CrashReport] Machine snapshot deferred: '+E.ClassName);end;
+end;
+
+procedure StartCrashReports;
 begin
   if Hook<>nil then Exit;
   try
     ForceDirectories(ClientDiagnosticsDir);RecoverReports;
     SessionId:=NewId;Marker:=ClientDiagnosticsDir+SessionId+'.running.json';
-    J:=TJSONObject.Create(['report_id',SessionId,'pid',GetProcessID,'log',GetLogFileName,
-      'build',ClientBuild,'version',ClientVersion]);
-    try SaveJson(Marker,J);finally J.Free;end;
+    RefreshCrashDiagnostics;
     Hook:=TCrashHook.Create;Hook.Previous:=Application.OnException;Application.OnException:=@Hook.Handle;
   except on E:Exception do Logger.Warning('[CrashReport] Initialization failed: '+E.ClassName);end;
 end;
@@ -169,7 +213,8 @@ begin
     Logger.Error('[CrashReport] '+RedactClientLog(Text));Logger.FlushNow;
     ForceDirectories(ClientDiagnosticsDir);
     if SessionId=''then SessionId:=NewId;
-    QueueReport(SessionId,GetLogFileName,ClientVersion,Text,ClientBuild);Reported:=True;
+    QueueReport(SessionId,GetLogFileName,ClientVersion,Text,
+      MachineDiagnosticsSnapshot,ClientBuild);Reported:=True;
   except { Never replace the original exception with a reporting failure. }
   end;
   Capturing:=False;

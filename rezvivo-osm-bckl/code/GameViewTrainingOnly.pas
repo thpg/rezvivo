@@ -126,7 +126,7 @@ var Dt,Speed:Double;Accounting:TActivityAccounting;Data:TTrainerDataRecord;
     Paused,Simulation:Boolean;Cur,Total:Integer;Snapshot:TJSONObject;
 begin
   if not FAlive then Exit;
-  FPanel.SyncWindow(Container.PendingFrontView=Self);
+  FPanel.SyncWindow((Container.PendingFrontView=Self) and not AssistantVisible(Container));
   inherited;
   Dt:=SecondsPassed;Paused:=False;
   Simulation:=(DeviceService<>nil)and DeviceService.IsSimulationActive;

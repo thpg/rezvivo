@@ -314,9 +314,12 @@ begin
     V:=((C.Z-A.Z)*(X-C.X)+(A.X-C.X)*(Z-C.Z))/Den;
     if(U<-0.00001)or(V<-0.00001)or(U+V>1.00001)then Continue;
     H:=U*A.Y+V*B.Y+(1-U-V)*C.Y;Distance:=Abs(H-ReferenceY);
-    { Surfaces within 8 cm belong to the same contact level; prefer the top
-      paving over the terrain underneath, without jumping between storeys. }
-    if not Result or(Distance<Best-0.08)or((Abs(Distance-Best)<=0.08)and(H>Y))then begin
+    { Baked road embankments can cover the base terrain by ~60 cm. That
+      buried terrain is not another traversable storey. Merge close support
+      levels upwards, regardless of triangle order; retain nearest-height
+      selection for bridges/tunnels with real clearance. }
+    if Result and(H<Y)and(Y-H<=0.75)then Continue;
+    if not Result or(Distance<Best-0.08)or((H>Y)and(H-Y<=0.75))then begin
       Y:=H;Best:=Distance;Result:=True;
     end;
   end;

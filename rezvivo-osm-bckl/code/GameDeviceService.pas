@@ -308,6 +308,7 @@ uses Math,
 constructor TGameDeviceService.Create;
 var
   K: TSensorKind;
+  IsolatedHardware: Boolean;
 begin
   inherited Create;
 
@@ -325,6 +326,9 @@ begin
 
   FManager := TDeviceManager.Create;
 
+  IsolatedHardware:=(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
+    (GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1');
+  if not IsolatedHardware then begin
   if WinRTBLEAvailable then
   begin
     FManager.RegisterProvider(TWinRTBLEProvider.Create);
@@ -340,6 +344,7 @@ begin
     Logger.Info('[DeviceService] ANT+ provider registered (stick present)')
   else
     Logger.Info('[DeviceService] ANT+ provider registered (no stick)');
+  end;
 
   { Sim provider регистрируется всегда — он сам ничего не эмитит,
     пока в Settings не выбран FIT-файл и Settings.SimulationEnabled=True

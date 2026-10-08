@@ -564,6 +564,7 @@ type
 
     { Pose API. Delta is a rotation in the joint's OWN (rest-oriented) frame;
       a zero/identity delta leaves the joint in its bind orientation. }
+    procedure SyncProceduralPose(ShoulderRight:Single=0;ShoulderLeft:Single=0);
     procedure ResetPose;
     { Re-send rest rotations so TSkinNode rebuilds joint matrices even when
       the values are unchanged (CGE skips Changed on assign-equal). }
@@ -7279,6 +7280,22 @@ begin
   FHelmetNode.Rotation := (SQ * HelmetBindWithPitch).ToAxisAngle;
   FHelmetNode.Translation :=
     SQ.Rotate(BindT) + Vector3(S.Data[3, 0], S.Data[3, 1], S.Data[3, 2]);
+end;
+
+procedure TTripoRiderScene.SyncProceduralPose(ShoulderRight:Single;ShoulderLeft:Single);
+var J: Integer; Q: TTripoVec4;
+begin
+  if FRig=nil then Exit;
+  FShoulderRoundDeg:=0;
+  FScapulaProtraction[0]:=ShoulderRight;FScapulaProtraction[1]:=ShoulderLeft;
+  FRig.ComputePose;
+  for J:=0 to FRig.JointCount-1 do begin
+    Q:=FRig.DeltaQuat(J);SetJointDelta(J,Quaternion(Vector4(Q.X,Q.Y,Q.Z,Q.W)));
+  end;
+  { Native skinning and pose correctives must consume the same gait frame.
+    Otherwise a knee retains the last cycling bend while its bones straighten. }
+  if FCorrectives<>nil then FCorrectives.UpdateCpuPose;
+  ApplyHelmetFollow;
 end;
 
 procedure TTripoRiderScene.ResetPose;

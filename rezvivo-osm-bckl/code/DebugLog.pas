@@ -60,8 +60,7 @@ implementation
 
 uses
   CastleLog, CastleApplicationProperties, CastleURIUtils, CastleGLUtils,
-  Osm3dStudioLog
-  {$ifdef MSWINDOWS}, Windows{$endif};
+  Osm3dStudioLog, GameMachineInfo;
 
 procedure Osm3dToCge(Level: Osm3dStudioLog.TLogLevel; const Msg: string);
 begin
@@ -95,49 +94,10 @@ begin
   if B then Result := 'yes' else Result := 'no';
 end;
 
-function FormatBytes(N: QWord): string;
-begin
-  if N >= QWord(1024) * 1024 * 1024 then
-    Result := Format('%.1f GiB', [N / (1024.0 * 1024.0 * 1024.0)])
-  else if N >= QWord(1024) * 1024 then
-    Result := Format('%.1f MiB', [N / (1024.0 * 1024.0)])
-  else
-    Result := Format('%d B', [N]);
-end;
-
-{$ifdef MSWINDOWS}
-type
-  TMemStatusEx = record
-    dwLength: DWORD;
-    dwMemoryLoad: DWORD;
-    ullTotalPhys: QWord;
-    ullAvailPhys: QWord;
-    ullTotalPageFile: QWord;
-    ullAvailPageFile: QWord;
-    ullTotalVirtual: QWord;
-    ullAvailVirtual: QWord;
-    ullAvailExtendedVirtual: QWord;
-  end;
-
-function GlobalMemoryStatusEx(var Buf: TMemStatusEx): BOOL; stdcall;
-  external 'kernel32.dll' name 'GlobalMemoryStatusEx';
-
-function ReadCpuName: string;
-begin
-  Result := Trim(SysUtils.GetEnvironmentVariable('PROCESSOR_IDENTIFIER'));
-  if Result = '' then
-    Result := Trim(SysUtils.GetEnvironmentVariable('PROCESSOR_ARCHITECTURE'));
-end;
-{$endif}
-
 procedure DumpEnvironment;
 var
   I: Integer;
   DataPath: string;
-  {$ifdef MSWINDOWS}
-  SI: TSystemInfo;
-  MS: TMemStatusEx;
-  {$endif}
 begin
   WritelnLog('Env', '========== environment ==========');
   WritelnLog('Env', 'App: ' + ApplicationProperties.ApplicationName +
@@ -162,32 +122,10 @@ begin
   end else
     WritelnLog('Env', 'Args: (none)');
 
-  {$ifdef MSWINDOWS}
-  try
-    GetSystemInfo(SI);
-    WritelnLog('Env', Format('CPU: %d logical, page=%d',
-      [SI.dwNumberOfProcessors, SI.dwPageSize]));
-    WritelnLog('Env', 'CPU name: ' + ReadCpuName);
-    FillChar(MS, SizeOf(MS), 0);
-    MS.dwLength := SizeOf(MS);
-    if GlobalMemoryStatusEx(MS) then
-    begin
-      WritelnLog('Env', 'RAM total: ' + FormatBytes(MS.ullTotalPhys) +
-        '  avail: ' + FormatBytes(MS.ullAvailPhys) +
-        Format('  load=%d%%', [MS.dwMemoryLoad]));
-      WritelnLog('Env', 'Pagefile total: ' + FormatBytes(MS.ullTotalPageFile) +
-        '  avail: ' + FormatBytes(MS.ullAvailPageFile));
-    end;
-  except
-    on E: Exception do
-      WritelnWarning('Env', 'Win32 hardware query failed: ' + E.Message);
-  end;
-  {$else}
-  WritelnLog('Env', 'CPU/RAM: non-Windows, see OS tools');
-  {$endif}
+  WritelnLog('Env', MachineInformation);
 
   try
-    WritelnLog('Env', 'Disk free (exe drive): ' + FormatBytes(DiskFree(0)));
+    WritelnLog('Env', 'Disk free (exe drive): ' + FormatDiagnosticBytes(DiskFree(0)));
   except
     on E: Exception do
       WritelnWarning('Env', 'DiskFree failed: ' + E.Message);
@@ -197,10 +135,13 @@ begin
 end;
 
 procedure DumpEnvironmentGpu;
+var Info: string;
 begin
   WritelnLog('GPU', '========== GPU / GL ==========');
   try
-    WritelnLog('GPU', GLInformationString);
+    Info := GLInformationString;
+    SetMachineGraphicsInformation(Info);
+    WritelnLog('GPU', Info);
   except
     on E: Exception do
       WritelnWarning('GPU', 'Query failed: ' + E.Message);
@@ -220,22 +161,34 @@ var
 
 procedure EnsureCgeLog;
 var
-  Dir: string;
+  Name: string;
+  function WritableLog(const Dir:string):string;
+  var Probe:TFileStream;
+  begin
+    Result:='';
+    try
+      if not DirectoryExists(Dir) and not ForceDirectories(Dir) then Exit;
+      Result:=IncludeTrailingPathDelimiter(Dir)+Name;
+      Probe:=TFileStream.Create(Result,fmCreate or fmShareDenyNone);
+      Probe.Free;
+    except
+      Result:='';
+    end;
+  end;
 begin
   if not GStarted then
   begin
-    Dir := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'log';
-    if not DirectoryExists(Dir) then
-    begin
-      try
-        ForceDirectories(Dir);
-      except
-        Dir := ExtractFilePath(ParamStr(0));
-      end;
-    end;
     if LogFileName = '' then
-      LogFileName := IncludeTrailingPathDelimiter(Dir) +
-        FormatDateTime('yyyy-mm-dd_hh-nn-ss', Now) + '.log';
+    begin
+      Name:=FormatDateTime('yyyy-mm-dd_hh-nn-ss',Now)+'.log';
+      LogFileName:=WritableLog(ExtractFilePath(ParamStr(0))+'log');
+      { Program Files and other read-only installation folders are valid.
+        Check the actual write, not just whether the directory exists. }
+      if LogFileName='' then
+        LogFileName:=WritableLog(IncludeTrailingPathDelimiter(GetAppConfigDir(False))+'log');
+      if LogFileName='' then
+        LogFileName:=WritableLog(IncludeTrailingPathDelimiter(GetTempDir(False))+'REZVIVO-log');
+    end;
     LogTimePrefix := ltTime;
   end;
 

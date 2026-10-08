@@ -930,7 +930,7 @@ end;
 function TCustomActorPhysics.ApplyRouteLoadProfile: Boolean;
 var Grade,Station,Height:Single;
 begin
-  Result:=(FState<>nil) and (FPath<>nil) and
+  Result:=(FState<>nil) and not FState.FreeTravel and (FPath<>nil) and
     FPath.FitLoadAtPosition(FPath.Position,Grade,Station,Height);
   if not Result then Exit;
   { This is the complete load, not a correction clamped to the sign or
@@ -1020,7 +1020,7 @@ begin
     change trainer grade by seven percentage points. A forward-only or
     speed-dependent baseline shifts crests and modulates load with speed. }
   { Two points define a straight road, not a cyclic out-and-back corner. }
-  if (FPath <> nil) and (FPath.PointCount >= 3) then
+  if not FState.FreeTravel and (FPath <> nil) and (FPath.PointCount >= 3) then
   begin
     Center := FPath.RoadCenterAt(FPath.Position);
     Back := FPath.Position; Ahead := FPath.Position;
@@ -1604,6 +1604,7 @@ begin
 
   BrakeForceN := 0;
   if FControlInput <> nil then BrakeForceN := FControlInput^.BrakeForceN;
+  if FState.FreeTravel then BrakeForceN:=Max(BrakeForceN,FState.TravelBrake*FState.AvatarMass);
   Result := ComputeCyclingAcceleration(
     FState.AppliedPowerWatts,
     FState.CurrentSpeed,

@@ -23,7 +23,7 @@ unit AppSettings;
 interface
 
 uses
-  Classes, SysUtils, Math, syncobjs, GameGraphicsOptions, GameAudioOptions;
+  Classes, SysUtils, Math, syncobjs, GameGraphicsOptions, GameAudioOptions, GameTravel;
 
 type
   {$M+}
@@ -51,6 +51,9 @@ type
     FSimulationEnabled: Boolean;
     FSimulationUseRoute: Boolean;
     FSelectedRoutePath: string;
+    FTravelMode: TTravelMode;
+    FExploreBicycle, FExploreStartSet: Boolean;
+    FExploreLat, FExploreLon: Double;
     FOnSimulationChanged: TNotifyEvent;
     { Выбранная пользователем карта из библиотеки в главном меню.
       Хранится URL (`castle-data:/maps/<dir>/map.json`) либо '' для
@@ -140,6 +143,9 @@ type
     procedure SetSimulationEnabled(AEnabled: Boolean);
     function GetSimulationUseRoute: Boolean;
     procedure SetSimulationUseRoute(AValue: Boolean);
+    procedure SetTravelMode(Value: TTravelMode);
+    procedure SetExploreBicycle(Value: Boolean);
+    procedure SetExploreStart(Lat, Lon: Double);
     function GetSelectedRoutePath: string;
     procedure SetSelectedRoutePath(const APath: string);
     function EffectiveSimulationFitPath: string;
@@ -232,6 +238,11 @@ type
     property SimulationEnabled: Boolean
       read GetSimulationEnabled write SetSimulationEnabled;
     property SimulationUseRoute: Boolean read GetSimulationUseRoute write SetSimulationUseRoute;
+    property TravelMode: TTravelMode read FTravelMode write SetTravelMode;
+    property ExploreBicycle: Boolean read FExploreBicycle write SetExploreBicycle;
+    property ExploreStartSet: Boolean read FExploreStartSet;
+    property ExploreLat: Double read FExploreLat;
+    property ExploreLon: Double read FExploreLon;
     property SelectedRoutePath: string read GetSelectedRoutePath write SetSelectedRoutePath;
     property SelectedMapUrl: string
       read GetSelectedMapUrl write SetSelectedMapUrl;
@@ -351,6 +362,7 @@ begin
   FWheelCircumferenceMm := 2105;
   FSimulationFitPath := '';
   FTrainerGradeSensitivity := 100;
+  FTravelMode:=travelBicycle;FExploreLat:=55.75;FExploreLon:=37.62;
   FSimulationEnabled := False;
   FSimulationUseRoute := True;
   FSelectedMapUrl := '';
@@ -499,6 +511,14 @@ begin
         begin
           FSelectedMapUrl := TJSONObject(UiObj).Get('selected_map_url', '');
           FSelectedRoutePath := TJSONObject(UiObj).Get('selected_route_path', '');
+          try FTravelMode:=ParseTravel(TJSONObject(UiObj).Get('travel_mode','bicycle'));
+          except FTravelMode:=travelBicycle end;
+          FExploreBicycle:=TJSONObject(UiObj).Get('explore_bicycle',False);
+          FExploreStartSet:=TJSONObject(UiObj).Get('explore_start_set',False);
+          FExploreLat:=TJSONObject(UiObj).Get('explore_lat',55.75);
+          FExploreLon:=TJSONObject(UiObj).Get('explore_lon',37.62);
+          FExploreStartSet:=FExploreStartSet and not IsNan(FExploreLat) and not IsNan(FExploreLon) and
+            (Abs(FExploreLat)<=85) and (Abs(FExploreLon)<=180);
           FOcclusionCulling := TJSONObject(UiObj).Get('occlusion_culling', True);
           FTrainingFocusOnTop := TJSONObject(UiObj).Get('training_focus_on_top', True);
           FProceduralTrees := TJSONObject(UiObj).Get('procedural_trees', True);
@@ -626,6 +646,10 @@ begin
       GraphicsJson.Add(AudioKeys[AudioOption], FAudio[AudioOption]);
     UiJson.Add('selected_map_url', FSelectedMapUrl);
     UiJson.Add('selected_route_path', FSelectedRoutePath);
+    UiJson.Add('travel_mode',TravelIds[FTravelMode]);
+    UiJson.Add('explore_bicycle',FExploreBicycle);
+    UiJson.Add('explore_start_set',FExploreStartSet);
+    UiJson.Add('explore_lat',FExploreLat);UiJson.Add('explore_lon',FExploreLon);
     UiJson.Add('occlusion_culling', FOcclusionCulling);
     UiJson.Add('training_focus_on_top', FTrainingFocusOnTop);
     if FGraphicsPreviewActive then
@@ -851,6 +875,28 @@ begin
     SaveToFile;
   finally FLock.Leave end;
   if Assigned(FOnSimulationChanged) then FOnSimulationChanged(Self);
+end;
+
+procedure TAppSettings.SetTravelMode(Value: TTravelMode);
+begin
+  if not TravelAvailable(Value) then Exit;
+  FLock.Enter;
+  try if FTravelMode=Value then Exit;FTravelMode:=Value;SaveToFile finally FLock.Leave end;
+end;
+procedure TAppSettings.SetExploreBicycle(Value: Boolean);
+begin
+  FLock.Enter;
+  try if FExploreBicycle=Value then Exit;FExploreBicycle:=Value;SaveToFile finally FLock.Leave end;
+end;
+procedure TAppSettings.SetExploreStart(Lat, Lon: Double);
+begin
+  if IsNan(Lat) or IsInfinite(Lat) or IsNan(Lon) or IsInfinite(Lon) or
+    (Abs(Lat)>85) or (Abs(Lon)>180) then raise EArgumentException.Create('Invalid starting point');
+  FLock.Enter;
+  try
+    if FExploreStartSet and (FExploreLat=Lat) and (FExploreLon=Lon) then Exit;
+    FExploreLat:=Lat;FExploreLon:=Lon;FExploreStartSet:=True;SaveToFile;
+  finally FLock.Leave end;
 end;
 
 function TAppSettings.GetSelectedRoutePath: string;

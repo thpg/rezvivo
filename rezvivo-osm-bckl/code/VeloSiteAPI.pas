@@ -582,7 +582,9 @@ begin
   TestBase:=GetEnvironmentVariable('REZVIVO_TEST_API');
   TestAuth:=GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE');
   if (Copy(TestBase,1,17)='http://127.0.0.1:') and (TestAuth<>'') then
-  begin FBaseUrl:=ExcludeTrailingPathDelimiter(TestBase);FHostChecked:=True;FAuthFile:=TestAuth;end;
+  begin FBaseUrl:=ExcludeTrailingPathDelimiter(TestBase);FHostChecked:=True;FAuthFile:=TestAuth;end
+  else if (TestAuth<>'') and (GetEnvironmentVariable('REZVIVO_TEST_EMPTY_AUTH')='1') then
+    FAuthFile:=TestAuth; { Exercise the real API as a fresh, signed-out installation. }
 
   LoadTokens;
 

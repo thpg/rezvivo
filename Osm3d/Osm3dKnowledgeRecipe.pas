@@ -17,6 +17,7 @@ type
     FCoverage: specialize TDictionary<Int64,TPhotoTileCoverage>;
     FHash: string;
     FWorkflow:TJSONObject;
+    procedure ClearCatalog;
     procedure LoadCatalog(Catalog: TJSONObject; Grid: TGeoTileGrid);
   public
     constructor Create(const CacheRoot: string; Grid: TGeoTileGrid);
@@ -42,7 +43,7 @@ implementation
 uses Math, MD5, Osm3dTileKnowledge, Osm3dKnowledgeContext, Osm3dKnowledgeOsm,
   Osm3dPhotoSources, Osm3dFacadeLayout, Osm3dSceneMaterials, Osm3dBuildingMassing, Osm3dArchitecture, Osm3dCompoundRoof,
   Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,
-  Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts;
+  Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts,CastleLog;
 const RecipeVersion = 1;
   CatalogMaxBytes = 16*1024*1024;
 
@@ -186,7 +187,7 @@ begin
   if Result.IsEmpty then raise ETileKnowledge.Create('Local plants require an explicit boundary');
 end;
 
-procedure ValidateTarget(T: TJSONObject);
+procedure ValidateTarget(T: TJSONObject; Normalize: Boolean = False);
 var Kind,Hash,S,Canonical,Category: string; Id: Int64; I,K: Integer; Tags: TJSONObject;
   J: TJSONData; B,LocalBox: TLatLonBox; V: Double;
 begin
@@ -225,7 +226,9 @@ begin
     else J:=TJSONString.Create(S);
     try
       Canonical:=CanonicalValue(K,J,KnowledgeProperties[K].UnitName);
-      if S<>Canonical then raise ETileKnowledge.Create('Noncanonical recipe value');
+      if S<>Canonical then
+        if Normalize then Tags.Strings[Tags.Names[I]]:=Canonical
+        else raise ETileKnowledge.Create('Noncanonical recipe value: '+T.Get('id','')+' / '+Tags.Names[I]);
     finally J.Free end;
   end;
   if (Tags.Find(ARCHITECTURE_TAG)<>nil) and
@@ -479,22 +482,85 @@ begin
   finally Client.Free;Store.Free end;
 end;
 
+{ Catalogs are optional, shared by installations of different client versions.
+  Revalidate and normalize compatible values in the snapshot, never rewrite
+  authored evidence. Unsupported/broken targets fall back to the original OSM.
+  Publication (FromCatalog) deliberately retains strict validation. }
+procedure PrepareCachedCatalog(Catalog:TJSONObject);
+var Entries,Entry,Target:TJSONObject; Targets:TJSONArray; I,J,Skipped:Integer;
+begin
+  Entries:=AsObject(Catalog.Find('tiles'),'tiles');Skipped:=0;
+  for I:=Entries.Count-1 downto 0 do begin
+    try
+      Entry:=AsObject(Entries.Items[I],'recipe entry');
+      if Entry.Get('recipe_version',0)<>RecipeVersion then
+        raise ETileKnowledge.Create('Unsupported compiled recipe version');
+      Targets:=AsArray(Entry.Find('targets'),'recipe targets');
+    except
+      on E:EOutOfMemory do raise;
+      on E:Exception do begin
+        WritelnLog('PhotoRecipes','Skipping cached tile '+Entries.Names[I]+': '+E.Message);
+        Entries.Delete(I);Continue;
+      end;
+    end;
+    for J:=Targets.Count-1 downto 0 do begin
+      Target:=nil;
+      try
+        Target:=AsObject(Targets.Items[J],'recipe target');ValidateTarget(Target,True);
+      except
+        on E:EOutOfMemory do raise;
+        on E:Exception do begin
+          Inc(Skipped);
+          if (Skipped<=8) and (Target<>nil) then
+            WritelnLog('PhotoRecipes','Skipping cached '+Target.Get('id','')+': '+E.Message);
+          Targets.Delete(J);
+        end;
+      end;
+    end;
+  end;
+  if Skipped>0 then WritelnLog('PhotoRecipes',Format('%d incompatible cached targets omitted; using base OSM for them',[Skipped]));
+end;
+
+procedure TKnowledgeRecipeSnapshot.ClearCatalog;
+var I:Integer;
+begin
+  if FTargets<>nil then for I:=0 to FTargets.Count-1 do FTargets.Objects[I].Free;
+  FreeAndNil(FTargets);FreeAndNil(FTileHashes);FreeAndNil(FCoverage);FHash:='';
+end;
+
 constructor TKnowledgeRecipeSnapshot.Create(const CacheRoot: string; Grid: TGeoTileGrid);
 var Catalog: TJSONObject;
 begin
-  inherited Create; Catalog:=ReadCatalog(CatalogPath(CacheRoot));
-  try ExcludeRejectedRecipeTargets(CacheRoot,Catalog);LoadCatalog(Catalog,Grid) finally Catalog.Free end;
-  if Grid<>nil then FWorkflow:=PhotoPipelineTileIndex(CacheRoot,Grid.Zoom,Grid.EdgePx);
+  inherited Create;Catalog:=nil;
+  try
+    try
+      Catalog:=ReadCatalog(CatalogPath(CacheRoot));
+      PrepareCachedCatalog(Catalog);
+      ExcludeRejectedRecipeTargets(CacheRoot,Catalog);LoadCatalog(Catalog,Grid);
+    except
+      on E:EOutOfMemory do raise;
+      on E:Exception do begin
+        WritelnLog('PhotoRecipes','Optional photo catalog unavailable; using base OSM: '+E.Message);
+        ClearCatalog;FreeAndNil(Catalog);
+        Catalog:=TJSONObject.Create(['schema_version',RecipeVersion,'tiles',TJSONObject.Create]);
+        LoadCatalog(Catalog,Grid);
+      end;
+    end;
+  finally Catalog.Free end;
+  if Grid<>nil then
+    try FWorkflow:=PhotoPipelineTileIndex(CacheRoot,Grid.Zoom,Grid.EdgePx)
+    except
+      on E:EOutOfMemory do raise;
+      on E:Exception do WritelnLog('PhotoRecipes','Optional workflow index unavailable: '+E.Message);
+    end;
 end;
 
 constructor TKnowledgeRecipeSnapshot.FromCatalog(Catalog: TJSONObject; Grid: TGeoTileGrid);
 begin inherited Create; LoadCatalog(Catalog,Grid) end;
 
 destructor TKnowledgeRecipeSnapshot.Destroy;
-var I: Integer;
 begin
-  if FTargets<>nil then for I:=0 to FTargets.Count-1 do FTargets.Objects[I].Free;
-  FTargets.Free; FTileHashes.Free;FCoverage.Free;FWorkflow.Free; inherited;
+  ClearCatalog;FWorkflow.Free; inherited;
 end;
 
 function TKnowledgeRecipeSnapshot.TileWorkflow(const Tile:TGeoTileId):TJSONObject;

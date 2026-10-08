@@ -15,6 +15,7 @@ type
       вдоль движения, привязаны к осевой пути → едут вместе с
       велосипедом. No-op, когда отладка выключена. }
     procedure UpdateRoadDebugLines;
+    procedure FreeTravelStep(const Dt: Single);
   public
     procedure Initialize; override;
     procedure FixedStep(const FixedDelta: Single); override;
@@ -78,6 +79,53 @@ begin
     FActor.RigidBody.Exists := false;
 end;
 
+procedure TKinematicActorPhysics.FreeTravelStep(const Dt: Single);
+var Wanted, Safe, Dir: TVector3; Turn, Accel, OldSpeed, LengthBefore: Single;
+begin
+  if Dt<=0 then Exit;
+  ApplyControlInput;
+  if not FState.AutoMove then Exit;
+  if Assigned(FState.GroundQuery) and not GroundPlacementValid then begin
+    FState.CurrentSpeed:=0;FState.MovementVelocity:=Vector3(0,0,0);Exit;
+  end;
+  CaptureCameraRelativeState;
+  FState.SimulationTime:=FState.SimulationTime+Dt;
+  FState.LaneOffset:=0;FState.CurrentRoadWidth:=0;
+  OldSpeed:=FState.CurrentSpeed;
+  if FState.Walking then begin
+    Accel:=EnsureRange((FState.TravelTargetSpeed-OldSpeed)*5,-5,3);
+    Turn:=FState.TravelSteering*1.8;
+  end else begin
+    Accel:=CalculateAcceleration(Dt);
+    { Bicycle steering: large handlebar angle at low speed, bounded lateral
+      acceleration at speed. Rear tyre follows the integrated heading. }
+    Turn:=FState.TravelSteering*Min(1.25,FState.CurrentSpeed*0.55);
+    Turn:=EnsureRange(Turn,-5/Max(1,FState.CurrentSpeed),5/Max(1,FState.CurrentSpeed));
+  end;
+  if FState.Walking then FState.CurrentSpeed:=EnsureRange(OldSpeed+Accel*Dt,-2,6)
+  else FState.CurrentSpeed:=EnsureRange(OldSpeed+Accel*Dt,0,MaxSpeed);
+  Dir:=RotatePointAroundAxis(Vector4(0,1,0,Turn*Dt),FState.ForwardDir);
+  SmoothRotateToDirection(Dir,Dt);
+  Wanted:=FState.ForwardDir*(FState.CurrentSpeed*Cos(DegToRad(FState.CurrentGroundPitch))*Dt);
+  Safe:=ConstrainGroundMovement(FState.WorldPosition,Wanted);
+  LengthBefore:=Wanted.Length;
+  if Safe.LengthSqr+1e-12<Wanted.LengthSqr then FState.CurrentSpeed:=Min(OldSpeed,FState.CurrentSpeed);
+  Dir:=FState.WorldPosition+Safe;
+  if Assigned(FState.PositionConstraint) then
+    if FState.PositionConstraint(Dir.X,Dir.Z) then begin
+      { Reject a step through a solid building; do not teleport to its far edge. }
+      Dir:=FState.WorldPosition;FState.CurrentSpeed:=0;
+    end;
+  Safe:=Dir-FState.WorldPosition;
+  FState.MovementVelocity:=Safe/Dt;
+  FState.WorldPosition:=Dir;
+  if LengthBefore>1e-7 then FState.CumulativeDistance:=FState.CumulativeDistance+
+    Abs(FState.CurrentSpeed)*Dt*Min(1,Safe.Length/LengthBefore);
+  UpdateTrajectoryFromRealVelocity(Dt);
+  FActor.Transform.Translation:=Vector3(Dir.X,FActor.Transform.Translation.Y,Dir.Z);
+  RestoreCameraRelativeState;
+end;
+
 procedure TKinematicActorPhysics.FixedStep(const FixedDelta: Single);
 var
   Accel, MoveDist, TanFull, TanXZ, MoveScale: Single;
@@ -110,6 +158,7 @@ begin
     if DiagOn then Logger.Info('[KinDiag] ' + 'EXIT: FState=nil');
     Exit;
   end;
+  if FState.FreeTravel then begin FreeTravelStep(FixedDelta);Exit end;
   if not Assigned(FPath) then
   begin
     if DiagOn then Logger.Info('[KinDiag] ' + 'EXIT: FPath=nil');

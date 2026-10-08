@@ -103,6 +103,9 @@ end;
 
 procedure ApplicationInitialize;
 begin
+  { Capture the active renderer before initializing services and scene shaders. }
+  DumpEnvironmentGpu;
+  RefreshCrashDiagnostics;
   ConfigureProgramShaderCache;
   { Scene lifecycle tracing opens and flushes a file for every scene. Keep
     the diagnostic available without charging normal streaming for it. }
@@ -128,7 +131,6 @@ begin
   if not Assigned(DeviceService) then
     DeviceService := TGameDeviceService.Create;
   DeviceService.EnableContinuousScan;
-  DumpEnvironmentGpu;
   DumpEnvironmentDevices;
   Logger.Info('[Devices] ANT+ stick present: ' +
     BoolToStr(DeviceService.ANTStickPresent, True));

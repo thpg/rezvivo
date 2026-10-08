@@ -41,6 +41,7 @@ Write-IfChanged (Join-Path $projectRoot 'code/GameBuildInfo.pas') ($unitTemplate
 $resource = Join-Path $projectRoot 'rezvivo-version.rc'
 $resourceText = @"
 MAINICON ICON "data/branding/rezvivo.ico"
+1 24 "rezvivo-windows.manifest"
 
 1 VERSIONINFO
 FILEVERSION $($numbers -join ',')

@@ -29,7 +29,7 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion, RiderDynamics, RiderHandGrip,
+  RiderMotion, RiderDynamics, RiderHandGrip, AvatarGait,
   RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
@@ -401,6 +401,9 @@ type
 
   TBikeInstance = class
   private
+    FOnFoot, FOnFootSavedGpu: Boolean;
+    FOnFootPhase: Single;
+    FOnFootDynamics: TGaitDynamicsState;
     FOwner: TComponent;
     FGroup: TCastleTransform;
     { ЕДИНАЯ сцена байка: весь байк (рама/колёса/шатун/райдер) + райдер GLB +
@@ -782,6 +785,9 @@ type
     { Pack the current Tripo* posture fields into a pose record. }
     function GroundShadowMap: TGeneratedShadowMapNode;
     procedure SetGroundShadowReceiver(const Enabled: Boolean);
+    procedure SetOnFoot(Value: Boolean);
+    procedure AnimateOnFoot(Dt, Speed: Single; Facing: Single = 0; GroundSlope: Single = 0);
+    property OnFoot: Boolean read FOnFoot write SetOnFoot;
     procedure SetRiderEffort(Intensity: Single);
     procedure SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
       RoadPitchDeg:Single=0);
@@ -1197,7 +1203,7 @@ var
 
 implementation
 
-uses RiderRuntimeAudit,
+uses RiderRuntimeAudit, BikeSeatSurface,
   CastleRenderOptions, RiderPoseCatalog, TripoRig,
   CastleShapes,
   CastleSceneCore,  { SceneLifecycleLog — сборка/освобождение составной сцены райдера }
@@ -2937,6 +2943,60 @@ begin
   Result := FBaseCrankCycle;
 end;
 
+procedure TBikeInstance.SetOnFoot(Value: Boolean);
+begin
+  if FOnFoot=Value then Exit;
+  FOnFoot:=Value;
+  FOnFootDynamics:=Default(TGaitDynamicsState);
+  ResetRiderDynamics(FBodyDynamics);
+  if Value then begin
+    FOnFootSavedGpu:=FGpuAnim;SetGpuAnim(False);FOnFootPhase:=0;
+    if FTripoRider<>nil then FTripoRider.SetSkinnedAnimationShaders(True);
+    if (FTripoRider<>nil) and (FBikeContainer<>nil) then
+      FTripoRider.Scene.RootNode.RemoveChildren(FBikeContainer);
+  end else begin
+    if (FTripoRider<>nil) and (FBikeContainer<>nil) then
+      FTripoRider.Scene.RootNode.AddChildren(FBikeContainer);
+    SetGpuAnim(FOnFootSavedGpu);FPhaseStarted:=False;
+  end;
+end;
+
+procedure TBikeInstance.AnimateOnFoot(Dt, Speed: Single; Facing,GroundSlope: Single);
+var Frame: TGaitFrame; Scale, Amount, Yaw, Direction, Effort, RunBlend: Single; Offset: TVector3;
+begin
+  if not HasTripoRider then Exit;
+  SetOnFoot(True);
+  if not FAnimationEnabled then Exit;
+  Dt:=EnsureRange(Dt,0,0.1);Direction:=1;if Speed<0 then Direction:=-1;
+  Speed:=EnsureRange(Abs(Speed),0,8);
+  Scale:=AvatarGaitScale(FTripoRider.Rig);
+  Amount:=EnsureRange(Speed/Max(0.45*Scale,0.01),0,1);
+  Amount:=Amount*Amount*(3-2*Amount);
+  RunBlend:=EnsureRange((Speed/Max(Scale,0.1)-2.0)/1.1,0,1);
+  RunBlend:=RunBlend*RunBlend*(3-2*RunBlend);
+  FOnFootPhase:=Frac(FOnFootPhase+Direction*Dt*GaitFrequency(Speed,Scale,Speed>2.5,RunBlend)*Amount);
+  if FOnFootPhase<0 then FOnFootPhase:=FOnFootPhase+1;
+  PoseAvatarGait(FTripoRider.Rig,FOnFootPhase,Speed,Speed>2.5,Frame,RunBlend,GroundSlope);
+  FTripoRider.SyncProceduralPose(Frame.ShoulderProtraction[1],Frame.ShoulderProtraction[0]);
+  { The gait uses the authored rig's axes. Convert its forward vector to
+    the host's desired horizontal heading, keeping sole contact at Y=0. }
+  Yaw:=ArcTan2(Frame.Forward.X,Frame.Forward.Z)-Facing;
+  Offset:=RotatePointAroundAxis(Vector4(0,1,0,-Yaw),
+    Vector3(Frame.Offset.X,Frame.Offset.Y,Frame.Offset.Z));
+  FTripoRider.Scene.Scale:=Vector3(1,1,1);
+  FTripoRider.Scene.Rotation:=Vector4(0,1,0,-Yaw);
+  FTripoRider.Scene.Translation:=Offset;
+  Effort:=EnsureRange(0.15+Speed*0.18,0.15,1.2);
+  AdvanceGaitDynamics(FOnFootDynamics,Frame,Effort,FBodyParameters.Composition,Dt);
+  if (FTripoRider.Correctives<>nil)and(FTripoRider.Correctives.Body<>nil)then
+    FTripoRider.Correctives.Body.SetDynamicsFrame(FOnFootDynamics.Frame,
+      TMatrix4.Identity,TVector3.Zero,Default(TSeatSurface),0);
+  AdvanceRiderBreathing(FBreathLoad,FBreathPhase,Dt,Effort);
+  FTripoRider.UpdateAppearance(Dt,Speed,Effort,FOnFootPhase,FBreathPhase,FBreathLoad);
+  ApplyWorldSunToShadow;
+  FTripoRider.EnsureNativeSkinReady;
+end;
+
 procedure TBikeInstance.AnimateFrame(ElapsedSec: Double);
 var I: Integer;
     T0c, T1c: TTimerResult;   { TEMP-DIAG }
@@ -2948,7 +3008,7 @@ begin
   { BuildYield pumps the UI while subgroups are replaced. Do not collect or
     animate nodes from that temporary graph: they may be freed by the next
     build step. Invalidate-on-entry alone cannot protect such cached nodes. }
-  if FBuildDepth > 0 then Exit;
+  if (FBuildDepth > 0) or FOnFoot then Exit;
   CountRiderWork(rwBikeFrame);
   ApplyWorldSunToShadow;   { the agent may have turned since the last frame }
   if not FAnimationEnabled then Exit;
@@ -4025,7 +4085,7 @@ begin
   end;
   FVisSwitch.AddChildren(VisGroup);
   Root.AddChildren(FVisSwitch);
-  Root.AddChildren(FBikeContainer);
+  if not FOnFoot then Root.AddChildren(FBikeContainer);
 
   { Сцена райдера становится рендер-сценой — с теми же настройками, что
     были у конструкторской сцены байка. Collides/Pickable копируем со
@@ -4357,6 +4417,16 @@ function TBikeInstance.BodyDynamicsDebugJson:TJSONObject;
 var I:Integer;A:TJSONArray;
 begin
   Result:=TJSONObject.Create;Result.Add('enabled',FBodyDynamicsEnabled);
+  Result.Add('on_foot',FOnFoot);
+  if FOnFoot then begin
+    Result.Add('phase',FOnFootPhase);
+    Result.Add('seat_load_n',TJSONArray.Create([0,0]));
+    A:=TJSONArray.Create;Result.Add('muscles',A);
+    for I:=0 to RD_MUSCLES-1 do A.Add(FOnFootDynamics.Frame.Muscle[I]);
+    A:=TJSONArray.Create;Result.Add('tissue_m',A);
+    for I:=0 to 3 do A.Add(FOnFootDynamics.Frame.Tissue[I]);
+    Exit;
+  end;
   Result.Add('steps',Int64(FBodyDynamics.Steps));Result.Add('time',FBodyDynamics.Time);
   Result.Add('remainder',FBodyDynamics.Remainder);
   Result.Add('total_lean_deg',FBodyDynamics.Frame.TotalLeanDeg);

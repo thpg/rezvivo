@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses GameTravel,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -459,6 +459,37 @@ begin
   AResult.Add('fps_real',Application.MainWindow.Fps.RealFps);
 end;
 
+procedure CmdTravelSelect(const AParams:TJSONObject;AResult:TJSONObject);
+var Mode:TTravelMode;
+begin
+  Mode:=ParseTravel(AParams.Get('mode','bicycle'));
+  EnsureMenuVisible;ViewMenu.SelectTravelMode(Mode);
+  AResult.Add('mode',TravelIds[Settings.TravelMode]);
+end;
+procedure CmdExploreStart(const AParams:TJSONObject;AResult:TJSONObject);
+var Mode:TTravelMode;
+begin
+  Mode:=ParseTravel(AParams.Get('mode',TravelIds[Settings.TravelMode]));
+  if(AParams.Find('lat')=nil)or(AParams.Find('lon')=nil)then raise Exception.Create('lat and lon required');
+  EnsureMenuVisible;ViewMenu.SelectTravelMode(Mode);
+  Settings.ExploreBicycle:=True;
+  ViewMenu.StartExploration(AParams.Floats['lat'],AParams.Floats['lon']);
+  AResult.Add('ok',True);
+end;
+procedure CmdExploreState(const AParams:TJSONObject;AResult:TJSONObject);
+begin
+  AResult.Add('travel',ViewPlay.TravelDiagnostics);
+  AResult.Add('selection',TJSONObject.Create(['mode',TravelIds[Settings.TravelMode],
+    'point_set',Settings.ExploreStartSet,'lat',Settings.ExploreLat,'lon',Settings.ExploreLon]));
+end;
+procedure CmdExploreInput(const AParams:TJSONObject;AResult:TJSONObject);
+begin
+  if not ViewPlay.SessionAlive or not ViewPlay.FreeExploration then raise Exception.Create('No free exploration session');
+  ViewPlay.SetExploreInput(AParams.Get('power_axis',0.0),AParams.Get('steer',0.0),
+    AParams.Get('walk_axis',0.0),AParams.Get('enabled',True));
+  AResult.Add('ok',True);
+end;
+
 procedure CmdDreamStart(const AParams:TJSONObject;AResult:TJSONObject);
 begin
   if Application.MainWindow.Container.CurrentFrontView<>ViewMenu then raise Exception.Create('Open Dream World first');
@@ -571,7 +602,7 @@ begin
     путь, что у кнопки «Ехать» при живой сессии. }
   if ViewPlay.SessionAlive then
   begin
-    ViewPlay.ResetRideToFit(P);
+    ViewPlay.PrepareRouteTravel;ViewPlay.ResetRideToFit(P);
     if (C.ViewStackCount >= 2) and
        (C.ViewStack[C.ViewStackCount - 1] = ViewMenu) and
        (C.ViewStack[C.ViewStackCount - 2] = ViewPlay) then
@@ -590,7 +621,7 @@ begin
     raise Exception.Create(
       'play view already active — switch away first (app.switch_view menu)');
   ViewPlay.PrepareDreamWorld(nil);
-  ViewPlay.CurrentFitPath := P;
+  ViewPlay.PrepareRouteTravel;ViewPlay.CurrentFitPath := P;
   C.View := ViewPlay;
   AResult.Add('ok', True);
   AResult.Add('fit', P);
@@ -2488,6 +2519,13 @@ begin
     '{"type":"object","properties":{"labels":{"type":"boolean"}}}', @CmdUiInspect);
   RegisterMcpCommand('dream.inspect','Inspect baked Dream World preview or active ride.',
     '{"type":"object","properties":{"open":{"type":"boolean"},"select":{"type":"integer"},"x":{"type":"number"},"z":{"type":"number"},"y":{"type":"number"}}}',@CmdDreamInspect);
+  RegisterMcpCommand('travel.select','Select transport in the menu; walking, bicycle or flight.',
+    '{"type":"object","properties":{"mode":{"enum":["walk","bicycle","flight"]}},"required":["mode"]}',@CmdTravelSelect);
+  RegisterMcpCommand('explore.start','Explore the world from a geographic point without a FIT route.',
+    '{"type":"object","properties":{"mode":{"enum":["walk","bicycle","flight"]},"lat":{"type":"number"},"lon":{"type":"number"}},"required":["lat","lon"]}',@CmdExploreStart);
+  RegisterMcpCommand('explore.state','Read transport, manual effort, position, speed and loading state.','',@CmdExploreState);
+  RegisterMcpCommand('explore.input','Set held exploration controls. enabled=false releases to the keyboard. Sensor power takes priority.',
+    '{"type":"object","properties":{"enabled":{"type":"boolean"},"power_axis":{"type":"number","minimum":-1,"maximum":1},"steer":{"type":"number","minimum":-1,"maximum":1},"walk_axis":{"type":"number","minimum":-1,"maximum":1}}}',@CmdExploreInput);
   RegisterMcpCommand('dream.start','Start the currently loaded Dream World.','',@CmdDreamStart);
   RegisterMcpCommand('ride.start',
     'Switch to the play view (starting it if needed) and start rider ' +

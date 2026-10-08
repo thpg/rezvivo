@@ -1,7 +1,7 @@
 {
-  "version": "0.3.0-alpha.1",
-  "build": 7,
-  "file_version": "0.3.0.7",
+  "version": "0.3.1-alpha.1",
+  "build": 8,
+  "file_version": "0.3.1.8",
   "channel": "alpha",
-  "notes": "Add photo-informed world tiles with persistent knowledge, reusable architecture components, and source-photo comparison in OSM3D Studio. Add the in-game Assistant with a shared MCP interface for application, ride and workout control. Support resumable photo-processing jobs, source filtering and cached downloads. Improve tile geometry validation and large MCP message handling."
+  "notes": "Fix startup and logging in Windows paths containing non-ASCII characters. Recover from incompatible optional photo caches so FIT rides can generate their OSM world. Add free walking, running, keyboard-powered cycling and flight; improve body motion, soft-tissue response and ground contact. Keep the Assistant from blocking unrelated UI input and include machine and graphics details in crash reports."
 }

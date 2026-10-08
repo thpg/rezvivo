@@ -425,7 +425,7 @@ begin
   if not Assigned(FActor.Transform) then Exit;
   if not Assigned(FState) then Exit;
   if not FState.AutoMove then Exit;
-  if FState.CurrentSpeed < 0.001 then Exit;
+  if Abs(FState.CurrentSpeed) < 0.001 then Exit;
 
   Remaining := FState.AccumulatedTime;
   if Remaining <= 0 then Exit;

@@ -159,6 +159,10 @@ type
     WorldPosition: TVector3;
     { Physical XZ velocity, excluding collision/route/network corrections. }
     MovementVelocity: TVector3;
+    { Open-world controls. The same contact/acceleration pipeline is used,
+      with no route carrot, lane pull or endpoint turnaround. }
+    FreeTravel, Walking: Boolean;
+    TravelSteering, TravelTargetSpeed, TravelBrake: Single;
     PositionConstraint: TPositionConstraint;
     ForwardDir: TVector3;
     CurrentYawRad: Single;
