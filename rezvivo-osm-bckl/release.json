@@ -1,7 +1,7 @@
 {
-  "version": "0.2.4-alpha.1",
-  "build": 6,
-  "file_version": "0.2.4.6",
+  "version": "0.3.0-alpha.1",
+  "build": 7,
+  "file_version": "0.3.0.7",
   "channel": "alpha",
-  "notes": "Add one-click bicycle fitting for the avatar: frame size, saddle height and setback, stem length and headset spacers. Fix modelled handlebar adjustment and saddle contact. Improve local bot riding, device compatibility, workout auto-pause, building materials and rendering performance. Add optional RTX shadows and reflections, road puddles, and improved world and rider shadow receivers."
+  "notes": "Add photo-informed world tiles with persistent knowledge, reusable architecture components, and source-photo comparison in OSM3D Studio. Add the in-game Assistant with a shared MCP interface for application, ride and workout control. Support resumable photo-processing jobs, source filtering and cached downloads. Improve tile geometry validation and large MCP message handling."
 }
