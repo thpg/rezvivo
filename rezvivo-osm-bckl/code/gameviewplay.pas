@@ -1,4 +1,4 @@
-﻿unit GameViewPlay;
+unit GameViewPlay;
 
 { ВНИМАНИЕ: файл собран из снапшота проекта. В нём ещё присутствуют ветки
   дефолтного X3D-террейна (текстуры/road-модель). Изменения относительно
@@ -290,7 +290,7 @@ type
       к /log, в отличие от FBotPanel). Ряды: 2 ряда FX-тумблеров +
       ряд perf-тумблеров (земля/райдер/анимация/тень). }
     FFxPanel: TCastleRectangleControl;
-    FMenuButton: TCastleButton;
+    FMenuButton, FAssistantButton: TCastleButton;
     FFxBtnTerr, FFxBtnRidr, FFxBtnAnim, FFxBtnShad, FFxBtnWorldShad, FFxBtnRoad, FFxBtnOcclusion: TCastleButton;
     FFxBtnTrees, FFxBtnTreeSeason: TCastleButton;
     { Ряд 4: FIT path spheres (red raw / green snapped) on streaming map. }
@@ -347,6 +347,7 @@ type
     procedure OnBotAddClick(Sender: TObject);
     procedure OnBotRemoveClick(Sender: TObject);
     procedure ClickMenu(Sender: TObject);
+    procedure ClickAssistant(Sender: TObject);
     procedure ClickFinishWorkoutRide(Sender:TObject);
     procedure BeginActivityRecord;
     procedure RestoreActivityRecord;
@@ -601,7 +602,7 @@ implementation
 
 uses RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
-  GameActivityAccounting, GameMenuTheme, GameViewMenu, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
+  GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
   Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap;
 
@@ -2839,6 +2840,10 @@ begin
   FMenuButton.Anchor(vpTop, -278);
   FMenuButton.OnClick := @ClickMenu;
   InsertFront(FMenuButton);
+  FAssistantButton:=TMenuButton.Create(FreeAtStop);FAssistantButton.Name:='RideAssistant';
+  FAssistantButton.AutoSize:=False;TMenuButton(FAssistantButton).AutoIcon:=False;
+  BindUiText(FAssistantButton,'Assistant');FAssistantButton.OnClick:=@ClickAssistant;
+  InsertFront(FAssistantButton);
   FFocusButton:=TMenuButton.Create(FreeAtStop);BindUiText(FFocusButton,'Training focus');
   FFocusButton.Name:='RideTrainingFocus';
   FFocusButton.AutoSize:=False;FFocusButton.Width:=180;FFocusButton.Height:=44;FFocusButton.FontSize:=15;
@@ -3443,6 +3448,7 @@ begin
   FFxPanel := nil;
   FSimPanel := nil;
   FMenuButton := nil;
+  FAssistantButton := nil;
   FWorkoutHud := nil;
   FRideMetricsHud:=nil;
   LabelSpeed:=nil; LabelPower:=nil; LabelCorr:=nil;
@@ -3719,10 +3725,16 @@ begin
     FFocusButton.Width:=180/S;FFocusButton.Height:=44/S;FFocusButton.FontSize:=15/S;
     FFocusButton.Anchor(hpLeft,12/S);FFocusButton.Anchor(vpTop,-(MenuTop+52)/S);
   end;
+  if FAssistantButton<>nil then begin
+    FAssistantButton.Width:=136/S;FAssistantButton.Height:=44/S;FAssistantButton.FontSize:=15/S;
+    FAssistantButton.Anchor(hpLeft,160/S);FAssistantButton.Anchor(vpTop,-MenuTop/S);
+  end;
   if FFocusMode and(FMenuButton<>nil)and(FFocusButton<>nil)then begin
     FMenuButton.Width:=100/S;FMenuButton.Height:=34/S;FMenuButton.FontSize:=13/S;
     FFocusButton.Width:=210/S;FFocusButton.Height:=34/S;FFocusButton.FontSize:=13/S;
     FFocusButton.Anchor(hpRight,-12/S);FFocusButton.Anchor(vpTop,-12/S);
+    FAssistantButton.Width:=136/S;FAssistantButton.Height:=28/S;FAssistantButton.FontSize:=13/S;
+    FAssistantButton.Anchor(hpRight,-12/S);FAssistantButton.Anchor(vpTop,-52/S);
   end;
   UpdateRiderListVisibility;
 end;
@@ -3805,6 +3817,16 @@ begin OpenMenu;ViewMenu.FinishRide;end;
 procedure TViewPlay.ClickMenu(Sender: TObject);
 begin
   OpenMenu;
+end;
+
+procedure TViewPlay.ClickAssistant(Sender: TObject);
+begin
+  if Container.PendingFrontView <> Self then Exit;
+  if FFocusPanel<>nil then FFocusPanel.SyncWindow(False);
+  FCameraDragging := False;
+  Container.ReleaseCapture(Self);
+  Container.ReleaseCapture(ThirdPersonNavigation);
+  ShowAssistant(Container);
 end;
 
 procedure TViewPlay.OpenMenu;
@@ -4785,7 +4807,7 @@ begin
       { Detach navigation from avatar — prevents it from overriding camera }
       if ThirdPersonNavigation.Avatar <> nil then
         ThirdPersonNavigation.Avatar := nil;
-  
+
       ThirdPersonNavigation.Exists := False;
       FCinematicCam.ClearNearby;
       if Assigned(AvatarTransform) then
@@ -4814,7 +4836,7 @@ begin
       ThirdPersonNavigation.Avatar := SceneAvatar;
       ThirdPersonNavigation.Exists := True;
     end;
-  
+
     { 3a-cam2. Manual (following) camera terrain clamp: the third-person
       navigation orbits the avatar with NO terrain awareness — on a slope the
       "behind + above the rider" point lands INSIDE the hillside. Lift the

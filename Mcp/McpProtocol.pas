@@ -18,14 +18,25 @@ interface
 uses SysUtils, Classes, fpjson;
 
 type
+  IMcpDispatchGuard=interface
+    ['{8277B3B3-7C3F-4D04-B93A-9D0796179D5A}']
+    procedure Cancel;
+    procedure Check;
+    procedure SetBeforeDispatch(const Value:TNotifyEvent);
+  end;
   TMcpSession = class
   private
     FServerName, FServerVersion: String;
+    FGuard:IMcpDispatchGuard;
+    procedure SetBeforeDispatch(const Value:TNotifyEvent);
     function HandleRpc(AReq: TJSONObject): TJSONObject;
     function BuildToolsList: TJSONObject;
     function CallTool(const AName: String; AArgs: TJSONObject): TJSONObject;
   public
     constructor Create(const AServerName, AServerVersion: String);
+    destructor Destroy;override;
+    procedure Cancel;
+    property OnBeforeDispatch:TNotifyEvent write SetBeforeDispatch;
     { Handles one parsed JSON-RPC payload (single message object or a batch
       array). Returns the response to send back (caller frees), or nil when
       there is nothing to reply (notifications). Takes ownership of nothing:
@@ -35,7 +46,33 @@ type
 
 implementation
 
-uses jsonparser, McpCommon, McpRegistry, McpRtti, McpBridge;
+uses jsonparser, McpCommon, McpRegistry, McpRtti, McpBridge, McpJsonString;
+
+type
+  TMcpDispatchGuard=class(TInterfacedObject,IMcpDispatchGuard)
+  private
+    FCancelled:LongInt;
+    FBefore:TNotifyEvent;
+  public
+    procedure Cancel;
+    procedure Check;
+    procedure SetBeforeDispatch(const Value:TNotifyEvent);
+  end;
+procedure TMcpDispatchGuard.Cancel;
+begin InterlockedExchange(FCancelled,1) end;
+procedure TMcpDispatchGuard.Check;
+begin
+  if InterlockedCompareExchange(FCancelled,0,0)<>0 then raise EMcpError.Create('MCP session closed');
+  if Assigned(FBefore) then FBefore(Self);
+end;
+procedure TMcpDispatchGuard.SetBeforeDispatch(const Value:TNotifyEvent);
+begin FBefore:=Value end;
+procedure TMcpSession.SetBeforeDispatch(const Value:TNotifyEvent);
+begin FGuard.SetBeforeDispatch(Value) end;
+procedure TMcpSession.Cancel;
+begin FGuard.Cancel end;
+destructor TMcpSession.Destroy;
+begin Cancel;FGuard:=nil;inherited end;
 
 const
   JRPC_PARSE_ERROR      = -32700;
@@ -49,6 +86,7 @@ begin
   inherited Create;
   FServerName := AServerName;
   FServerVersion := AServerVersion;
+  FGuard:=TMcpDispatchGuard.Create;
 end;
 
 function MakeError(AId: TJSONData; ACode: Integer; const AMessage: String): TJSONObject;
@@ -181,7 +219,7 @@ begin
   AData.Free;
   Item := TJSONObject.Create;
   Item.Add('type', 'text');
-  Item.Add('text', Text);
+  Item.Add('text', TMcpJSONString.Create(Text));
   Content.Add(Item);
 end;
 
@@ -206,20 +244,23 @@ end;
   the request payload or the caller's stack). }
 
 type
-  TObjectsListTask = class(TMcpTask)
+  TSessionTask=class(TMcpTask)
+  public Guard:IMcpDispatchGuard;
+  end;
+  TObjectsListTask = class(TSessionTask)
   public
     Items: TJSONArray;  { output; caller steals on success }
     procedure Execute; override;
   end;
 
-  TDescribeTask = class(TMcpTask)
+  TDescribeTask = class(TSessionTask)
   public
     Obj: TObject;
     Items: TJSONArray;  { output; caller steals }
     procedure Execute; override;
   end;
 
-  TGetTask = class(TMcpTask)
+  TGetTask = class(TSessionTask)
   public
     Obj: TObject;
     Path: String;
@@ -227,7 +268,7 @@ type
     procedure Execute; override;
   end;
 
-  TSetTask = class(TMcpTask)
+  TSetTask = class(TSessionTask)
   public
     Obj: TObject;
     Path: String;
@@ -237,7 +278,7 @@ type
     procedure Execute; override;
   end;
 
-  TCommandTask = class(TMcpTask)
+  TCommandTask = class(TSessionTask)
   public
     Cmd: TMcpCommand;
     Params: TJSONObject;  { owned clone of the request arguments }
@@ -252,6 +293,7 @@ var
   L: TStringList;
   I: Integer;
 begin
+  Guard.Check;
   Items := TJSONArray.Create;
   L := TStringList.Create;
   try
@@ -265,12 +307,14 @@ end;
 
 procedure TDescribeTask.Execute;
 begin
+  Guard.Check;
   Items := TJSONArray.Create;
   McpDescribeObject(Obj, Items);
 end;
 
 procedure TGetTask.Execute;
 begin
+  Guard.Check;
   Res := McpGetPropJson(Obj, Path);
 end;
 
@@ -290,6 +334,7 @@ end;
 
 procedure TSetTask.Execute;
 begin
+  Guard.Check;
   McpSetPropJson(Obj, Path, Value);
 end;
 
@@ -313,6 +358,7 @@ end;
 
 procedure TCommandTask.Execute;
 begin
+  Guard.Check;
   Cmd.Handler(Params, ResObj);
 end;
 
@@ -348,6 +394,7 @@ begin
       if SameText(AName, 'objects_list') then
       begin
         LTask := TObjectsListTask.Create;
+        LTask.Guard:=FGuard;
         try
           if not McpRunTask(LTask) then
           begin
@@ -372,6 +419,7 @@ begin
         if Obj = nil then
           Exit(ToolError('Unknown object "' + ObjName + '" — see objects_list'));
         DTask := TDescribeTask.Create;
+        DTask.Guard:=FGuard;
         DTask.Obj := Obj;
         try
           if not McpRunTask(DTask) then
@@ -396,6 +444,7 @@ begin
         if Obj = nil then
           Exit(ToolError('Unknown object "' + ObjName + '" — see objects_list'));
         GTask := TGetTask.Create;
+        GTask.Guard:=FGuard;
         GTask.Obj := Obj;
         GTask.Path := Path;
         try
@@ -423,6 +472,7 @@ begin
         if Obj = nil then
           Exit(ToolError('Unknown object "' + ObjName + '" — see objects_list'));
         STask := TSetTask.Create(Obj, Path, AArgs.Find('value'));
+        STask.Guard:=FGuard;
         try
           if not McpRunTask(STask) then
           begin
@@ -442,6 +492,7 @@ begin
       if Cmd <> nil then
       begin
         CTask := TCommandTask.Create(Cmd, AArgs);
+        CTask.Guard:=FGuard;
         try
           { 60 s: команды уровня ride.load_fit (reset сессии) и
             ride.stop_full (teardown) синхронно гоняют разборку/сборку

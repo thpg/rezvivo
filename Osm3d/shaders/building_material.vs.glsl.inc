@@ -20,6 +20,9 @@
   '    vBldNormalOS = bldNormal;' + #10 +
   '    vBldMetric = bldInfo.xy;' + #10 +
   '    vBldSeed = bldInfo.zw;' + #10 +
+  '    // Exact RGB24 + bounded surface payload in baked architectural meshes.' + #10 +
+  '    // Flat transport avoids interpolation of packed integers at long range.' + #10 +
+  '    if (bldUV.y <= -1000000.0) vBldSeed = bldUV;' + #10 +
   '    // Subtract before interpolation; never reconstruct distant geometry by' + #10 +
   '    // undoing the camera rotation in the fragment shader.' + #10 +
   '    vBldShadowPosition = (castle_ModelMatrix * vertex_object).xyz - gc_rider_camera;' + #10 +

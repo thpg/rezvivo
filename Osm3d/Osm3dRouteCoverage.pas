@@ -5,12 +5,16 @@ uses Classes, SysUtils, Osm3dGeoMath, Osm3dGeoTileGrid, Osm3dMapUtils;
 const ROUTE_SNAP_MARGIN_M = 60.0;
 function RouteCoverageTiles(Grid:TGeoTileGrid;const Route:TRouteLatLonArray;
   MarginM:Double;Cancel:TThread=nil):TGeoTileIdArray;
+function ClipRouteSegment(const P0,P1:TLatLon;const B:TLatLonBox;
+  out A,C:TLatLon):Boolean;
 implementation
 uses Generics.Collections;
 type TThreadAccess=class(TThread);
-function SegmentHitsBox(const P0, P1: TLatLon; const B: TLatLonBox): Boolean;
+function ClipRouteSegment(const P0, P1: TLatLon; const B: TLatLonBox;
+  out A,C:TLatLon): Boolean;
 var
   T0, T1, DLat, DLon: Double;
+  CA,CB:TLatLon;
 
   function Clip(P, Q: Double): Boolean;
   var
@@ -41,13 +45,18 @@ begin
     and Clip(-DLat, P0.Lat - B.MinLat)
     and Clip( DLat, B.MaxLat - P0.Lat)
     and (T0 <= T1);
+  if Result then begin
+    CA:=TLatLon.Make(P0.Lat+DLat*T0,P0.Lon+DLon*T0);
+    CB:=TLatLon.Make(P0.Lat+DLat*T1,P0.Lon+DLon*T1);
+    A:=CA; C:=CB;
+  end;
 end;
 
 
 function RouteCoverageTiles(Grid:TGeoTileGrid;const Route:TRouteLatLonArray;
   MarginM:Double;Cancel:TThread):TGeoTileIdArray;
 var Seen:specialize TDictionary<Int64,TGeoTileId>;A:TGeoTileIdArray;
-    B:TLatLonBox;T:TGeoTileId;Lo,Hi:TGeoTileId;I,J,N:Integer;K:Int64;
+    B:TLatLonBox;T:TGeoTileId;Lo,Hi:TGeoTileId;I,J,N:Integer;K:Int64;P0,P1:TLatLon;
   procedure Check;
   begin if(Cancel<>nil)and TThreadAccess(Cancel).Terminated then raise EAbort.Create('Route check cancelled');end;
   procedure Sort(L,R:Integer);
@@ -78,7 +87,7 @@ begin
       A:=Grid.TilesCovering(B);
       for J:=0 to High(A)do begin
         T:=A[J];K:=T.ToKey;
-        if not Seen.ContainsKey(K)and SegmentHitsBox(Route[I],Route[I+1],Grid.TileBox(T).ExpandMeters(MarginM))then Seen.Add(K,T);
+        if not Seen.ContainsKey(K)and ClipRouteSegment(Route[I],Route[I+1],Grid.TileBox(T).ExpandMeters(MarginM),P0,P1)then Seen.Add(K,T);
       end;
     end;
     SetLength(Result,Seen.Count);N:=0;

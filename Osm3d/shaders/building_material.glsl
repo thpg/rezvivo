@@ -11,6 +11,7 @@ uniform float u_bld_cell_inset;
 uniform vec3 u_bld_fallback_rgb[U_BLD_MAT_COUNT];
 uniform float u_bld_metallic[U_BLD_MAT_COUNT];
 uniform float u_bld_tint_amount[U_BLD_MAT_COUNT];
+uniform vec3 u_bld_photo_tints[32];
 uniform vec3 gc_SunDirToward;
 uniform vec3 u_sky_zenith;
 uniform vec3 u_sky_horizon;
@@ -99,11 +100,59 @@ vec3 bldRoom(vec2 p, vec3 ray, float roomSeed, float detail)
 
 void bldEvaluate(const vec3 toCamera)
 {
+    if (vBldSeed.y <= -1000000.0) {
+        // Authored components share this material and all its shadow/reflection
+        // hooks. No atlas lookups and no procedural windows painted over them.
+        float rgb=floor(vBldSeed.x+0.25);
+        vec3 paint=vec3(floor(rgb/65536.0),mod(floor(rgb/256.0),256.0),mod(rgb,256.0))/255.0;
+        float surfaceBits=floor(-vBldSeed.y-1000000.0+0.25);
+        float surface=floor(surfaceBits/65536.0);
+        bldRoughness=max(0.05,mod(surfaceBits,256.0)/255.0);
+        bldMetallic=mod(floor(surfaceBits/256.0),256.0)/255.0;
+        bldView=normalize(toCamera);
+        vec3 N=normalize(vBldNormalOS);
+        if (dot(N,bldView)<0.0) N=-N;
+        bldNormal=N;bldCavity=1.0;bldEnvironment=vec3(0);
+        if (surface<0.5) {
+            // Metre-scale variation anchored to the house, not world hashes or
+            // frame time. Keep trim paint consistent across adjacent pieces.
+            float weather=bldNoise(vBldMetric*.31);
+            paint*=0.97+0.05*weather;
+        }
+        if (surface>1.5 && surface<2.5) {
+            // Horizontal timber siding for authored walls, with the same PBR,
+            // shadow and reflection path as the other architectural surfaces.
+            float row=vBldMetric.y/0.16;
+            float aa=max(fwidth(row),0.002);
+            float seam=1.0-smoothstep(0.015,0.045+aa,min(fract(row),1.0-fract(row)));
+            seam*=1.0-smoothstep(0.35,1.0,aa);
+            float grain=bldNoise(vBldMetric*vec2(.8,22.0));
+            paint*=0.94+0.10*grain-0.24*seam;
+            bldCavity=1.0-0.16*seam;
+        }
+        bldAlbedo=gc_SRGBtoLINEAR(paint);
+        if (surface>0.5 && surface<1.5) {
+            vec3 reflected=reflect(-bldView,N);
+            vec3 sky=mix(u_sky_ground,u_sky_horizon,smoothstep(-.12,.10,reflected.y));
+            sky=mix(sky,u_sky_zenith,smoothstep(.10,.70,reflected.y));
+            float fresnel=.04+.96*pow(1.0-max(0.0,dot(bldView,N)),5.0);
+            rzBldRequest=vec4(N*.5+.5,1.0);
+            // Opaque recessed pane: no alpha sorting, no sky leaking through
+            // the shell. Reflection uses the same RTX request as atlas glass.
+            bldEnvironment=rzEnvironment(gc_SRGBtoLINEAR(sky))*fresnel*u_bld_reflect_strength+
+                gc_SRGBtoLINEAR(paint)*(.20*(1.0-fresnel));
+            bldAlbedo*=.035;bldMetallic=0.0;
+        }
+        return;
+    }
     int matId = int(clamp(floor(vBldMatId+0.5),0.0,15.0));
     bool wall = matId < 6 || matId >= 12;
-    bool house = vBldSeed.x > 0.5;
+    float houseSeed = mod(vBldSeed.x,65536.0);
+    int photoTint = int(clamp(floor(vBldSeed.x/65536.0),0.0,31.0));
+    bool house = houseSeed > 0.5;
     bool facade = wall && vBldSeed.y >= 131072.0;
     bool entrance = facade && mod(floor(vBldSeed.y/65536.0),2.0)>0.5;
+    bool authored = facade && vBldSeed.y >= 262144.0;
     vec2 paneLo = (matId==1 || matId==4) ? vec2(0.3203125,0.2109375) : vec2(0.30859375,0.224609375);
     vec2 paneHi = (matId==1 || matId==4) ? vec2(0.6796875,0.787109375) : vec2(0.693359375,0.77734375);
     vec2 baseUV = vBldUV;
@@ -144,7 +193,7 @@ void bldEvaluate(const vec3 toCamera)
     bldView = V;
     if (dot(N,V)<0.0) { N=-N; B=-B; }
 
-    vec2 seed = vec2(mod(vBldSeed.x,251.0),floor(vBldSeed.x/251.0));
+    vec2 seed = vec2(mod(houseSeed,251.0),floor(houseSeed/251.0));
     float age = house ? mix(0.06,0.80,bldHash(seed+3.1)) : 0.0;
     float upkeep = bldHash(seed+7.3);
     age *= mix(0.45,1.0,smoothstep(0.18,0.65,upkeep));
@@ -164,6 +213,15 @@ void bldEvaluate(const vec3 toCamera)
     }
     float nonGlass = 1.0-glass;
     color *= mix(vec3(1),u_bld_fallback_rgb[matId],u_bld_tint_amount[matId]);
+    if (wall && photoTint>0) {
+        // Colour and material are independent. Preserve the material's relief
+        // and tonal variation; leave glass and the window frames unchanged.
+        vec2 inside = smoothstep(paneLo-0.035-aa,paneLo-0.035+aa,uv)*
+                      (1.0-smoothstep(paneHi+0.035-aa,paneHi+0.035+aa,uv));
+        float paint = nonGlass*(1.0-inside.x*inside.y);
+        float tone = clamp(dot(color,vec3(0.2126,0.7152,0.0722))/0.72,0.35,1.3);
+        color = mix(color,u_bld_photo_tints[photoTint]*tone,paint);
+    }
     if (house) {
         // Paint batches differ subtly between houses. Never dirty every wall equally.
         vec3 tint = mix(vec3(0.91,0.94,0.98),vec3(1.02,0.99,0.94),bldHash(seed+1.7));
@@ -174,8 +232,8 @@ void bldEvaluate(const vec3 toCamera)
         float footing = max(0.0,vBldMetric.x);
         float eave = max(0.0,vBldMetric.y);
         float buildingHeight = vBldMetric.x+vBldMetric.y;
-        float family = mod(floor(vBldSeed.x+0.5),4.0);
-        if (facade) {
+        float family = mod(floor(houseSeed+0.5),4.0);
+        if (facade && !authored) {
             // A house-wide construction system, rather than independent
             // random marks on each window. All lines filter in screen space.
             float rowEdge = min(uv.y,1.0-uv.y);
@@ -225,7 +283,7 @@ void bldEvaluate(const vec3 toCamera)
             if (entrance && runoffCell.x==0.0 && runoffCell.y==0.0) streak=0.0;
             // Per-pane frame paint. Derivative smoothing avoids thin-line shimmer.
             float frame = bldRectangle(uv,paneLo-vec2(0.035,0.025),paneHi+vec2(0.035,0.025),aa)*nonGlass;
-            color = mix(color,bldFrameColor(vBldSeed.x),frame);
+            color = mix(color,bldFrameColor(houseSeed),frame);
             float edge = min(min(uv.x-paneLo.x,paneHi.x-uv.x),
                              min(uv.y-paneLo.y,paneHi.y-uv.y));
             bldCavity *= 1.0-0.28*(1.0-smoothstep(0.0,0.055,edge))*glass;
@@ -269,11 +327,11 @@ void bldEvaluate(const vec3 toCamera)
             panelAA.x *= leaves;
             float panel = bldRectangle(panelUV,vec2(0.15,0.09),vec2(0.85,0.41),panelAA);
             panel += bldRectangle(panelUV,vec2(0.15,0.56),vec2(0.85,0.91),panelAA);
-            vec3 paint = bldFrameColor(vBldSeed.x)*vec3(0.57,0.60,0.61);
+            vec3 paint = bldFrameColor(houseSeed)*vec3(0.57,0.60,0.61);
             paint *= 0.83+0.17*panel;
             float handle = bldRectangle(panelUV,vec2(0.74,0.465),vec2(0.87,0.485),panelAA);
             paint = mix(paint,vec3(0.60,0.61,0.58),handle*detail);
-            color = mix(color,bldFrameColor(vBldSeed.x),door);
+            color = mix(color,bldFrameColor(houseSeed),door);
             color = mix(color,paint,innerDoor);
             // Remove the old pane's reflection and mullion normals as well as
             // its color; otherwise the window remains visible through the door.

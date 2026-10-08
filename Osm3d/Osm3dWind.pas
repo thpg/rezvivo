@@ -58,6 +58,7 @@ var
   uWindTime. Cheap; safe to call many times per frame from many renderers. }
 { Negative time returns to the normal real-time clock. Main thread only. }
 procedure WindSetPlaybackTime(Seconds: Single);
+function WindPlaybackTime:Single;
 function WindNow: Single;
 
 { Current base wind speed — base range remapped by a slow value-noise over time
@@ -150,6 +151,8 @@ end;
 
 procedure WindSetPlaybackTime(Seconds: Single);
 begin FPlaybackTime:=Seconds end;
+function WindPlaybackTime:Single;
+begin Result:=FPlaybackTime end;
 
 function WindNow: Single;
 begin

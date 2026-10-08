@@ -48,7 +48,7 @@ function RoadMaterialDebug: string;
 
 implementation
 
-uses Math, Generics.Collections, IniFiles, CastleGL, CastleApplicationProperties,
+uses RenderComplexity, Math, Generics.Collections, IniFiles, CastleGL, CastleApplicationProperties,
   CastleTimeUtils, CastleLog,
   CastleRenderOptions, CastleInternalRenderer, CastleRendererInternalShader,
   CastleRendererInternalTextureEnv, Osm3dRenderInstanced;
@@ -121,7 +121,7 @@ end;
 function RoadMaterialSamplingGLSL: string;
 begin
   Result := RoadMaterialGLSL +
-    'uniform float rp_mode;' + #10 +
+    'uniform float rp_mode, rz_complexity;' + #10 +
     'uniform sampler2D rp_color, rp_normal, rp_table, rp_height;' + #10 +
     'varying vec4 vRoadCoord, vRoadStyle;' + #10 +
     'vec4 rp_laneLayout(vec4 coord, vec4 style) {' + #10 +
@@ -151,6 +151,7 @@ begin
     '  float surfaceHeight=0.0;' + #10 +
     '  vec2 detailP=p;' + #10 +
     '  float refine=cached ? 1.0-smoothstep(0.012,0.04,max(footprint.x,footprint.y)) : 1.0;' + #10 +
+    '  if (cached && rz_complexity<1.5) refine=0.0;' + #10 +
     '  if (cached) {' + #10 +
     '    int page=int(entry.x)-1;' + #10 +
     '    vec2 cell=vec2(float(page%8),float(page/8));' + #10 +
@@ -162,7 +163,7 @@ begin
     '    // page apron covers the bounded offset across page boundaries.' + #10 +
     '    float reliefFade=1.0-smoothstep(0.025,0.09,max(footprint.x,footprint.y));' + #10 +
     '    surfaceHeight=textureGrad(rp_height,at,gx,gy).r;' + #10 +
-    '    if(reliefFade>0.0) {' + #10 +
+    '    if(reliefFade>0.0 && rz_complexity>2.5) {' + #10 +
     '      vec2 ray=clamp(viewTS.yx/max(abs(viewTS.z),0.25),vec2(-3.0),vec2(3.0))*reliefFade;' + #10 +
     '      vec2 metricToAtlas=vec2(1.0/16.0,1.0/width)*(240.0/2048.0);' + #10 +
     '      vec2 shift=ray*surfaceHeight*metricToAtlas;' + #10 +
@@ -184,6 +185,7 @@ begin
     '    normalData.xy=mix(normalData.xy,rp_gradientNormal(heightGradient)*0.5+0.5,refine);' + #10 +
     '    normalData.zw=mix(normalData.zw,vec2(1.0-relief.y,relief.z),refine);' + #10 +
     '  }' + #10 +
+    '  if(rz_complexity<0.5)normalData.xy=vec2(0.5);' + #10 +
     '  rp_finish(p,width,style,footprint,rp_laneLayout(coord,style),color,normalData);' + #10 +
     '}' + #10;
 end;
@@ -281,6 +283,7 @@ const Names: array[0..4] of string = ('rp_color','rp_normal','rp_table','rp_layo
 var N: TRoadTextureNode; I: Integer;
 begin
   inherited;
+  AttachRenderComplexity(Self,rdWorld);
   FMode := TSFFloat.Create(Self,True,'rp_mode',Ord(CurrentMode));
   AddCustomField(FMode);
   for I:=0 to 4 do

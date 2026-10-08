@@ -22,6 +22,7 @@ type
     Handle: Integer;
     Seed: Single;
     MatId: Integer;
+    FirstSegment:Integer;
   end;
 
 // Old carve caches kept metric UVs but lost the road ID. Recover one owner
@@ -111,11 +112,14 @@ var
   RequestsByKey: specialize TDictionary<QWord,Integer>;
   Pair: specialize TPair<Int64,TWayInfo>;
   Keys: array of Int64;
+  NextSegment:array of Integer;
   W: TWayInfo; Seg: TTileRoadSeg;
   I,K,M,RI,Block,N,F,B,Tri,E,V0,V1,Profile,AreaRow,V2: Integer;
   Id: Int64; Key:QWord;
   UV:TVector2; P:TVector3;
   T,S,Span,MinS,MaxS,S0,S1,DS,Lo,Hi:Single;
+  ActualWidth,BestDistance,Distance,DX,DZ,Along:Single;
+  LocalP:TVector3; SegmentIndex:Integer;
   EdgeStart,EdgeEnd,AreaA,AreaB,AreaC:TVector3;
   MinT,MaxT:Single;
   Coord,Style:array of Single;
@@ -148,15 +152,22 @@ begin
   RequestsByKey:=specialize TDictionary<QWord,Integer>.Create;
   Puddles:=TRoadPuddleCollector.Create;
   try
+    if Model<>nil then SetLength(NextSegment,Model.RoadSegCount);
     if Model<>nil then
       for I:=0 to Model.RoadSegCount-1 do
       begin
         Seg:=Model.RoadSegs[I];
-        if Ways.ContainsKey(Seg.WayId) then Continue;
+        if Ways.TryGetValue(Seg.WayId,W) then begin
+          NextSegment[I]:=W.FirstSegment;W.FirstSegment:=I;Ways[Seg.WayId]:=W;Continue;
+        end;
         W:=Default(TWayInfo);
         W.Width:=Seg.Width;
         W.MinUV:=1e20; W.MaxUV:=-1e20;
-        W.Surface:=Seg.Surface;
+        W.Surface:=Seg.Surface;W.FirstSegment:=I;NextSegment[I]:=-1;
+        if (Seg.Surface.WidthStart>0) and (Seg.Surface.Layout.Count>0) then begin
+          W.Width:=2*Seg.Surface.Layout.Edge;
+          for K:=0 to Seg.Surface.Layout.Count-1 do W.Width+=Seg.Surface.Layout.Widths[K];
+        end;
         Ways.Add(Seg.WayId,W);
       end;
     for I:=0 to Composite.VertexCount-1 do
@@ -266,10 +277,24 @@ begin
       UV:=Composite.UVOf(I);
       Span:=W.Surface.UVMax-W.Surface.UVMin;
       if Span<=0.001 then Continue;
-      T:=((UV.X-W.Surface.UVMin)/Span-0.5)*W.Width;
+      ActualWidth:=W.Width;
+      if (W.Surface.WidthStart>0) and (Model<>nil) then begin
+        LocalP:=P-TileOrigin;LocalP.X:=LocalP.X/EastScale;
+        SegmentIndex:=W.FirstSegment;BestDistance:=1e30;
+        while SegmentIndex>=0 do begin
+          Seg:=Model.RoadSegs[SegmentIndex];DX:=Seg.X1-Seg.X0;DZ:=Seg.Z1-Seg.Z0;
+          Along:=EnsureRange(((LocalP.X-Seg.X0)*DX+(LocalP.Z-Seg.Z0)*DZ)/Max(0.0001,DX*DX+DZ*DZ),0,1);
+          Distance:=Sqr(LocalP.X-Seg.X0-DX*Along)+Sqr(LocalP.Z-Seg.Z0-DZ*Along);
+          if Distance<BestDistance then begin
+            BestDistance:=Distance;ActualWidth:=RoadWidthAt(Seg.Surface,Seg.Width,Along);
+          end;
+          SegmentIndex:=NextSegment[SegmentIndex];
+        end;
+      end;
+      T:=((UV.X-W.Surface.UVMin)/Span-0.5)*ActualWidth;
       S:=UV.Y*W.Surface.UVScale;
       Coord[I*4]:=S; Coord[I*4+1]:=T;
-      Coord[I*4+2]:=W.Width; Coord[I*4+3]:=W.Handle;
+      Coord[I*4+2]:=ActualWidth; Coord[I*4+3]:=W.Handle;
       Style[I*4]:=W.Surface.ForwardLanes;
       Style[I*4+1]:=W.Surface.BackwardLanes;
       Style[I*4+2]:=W.Surface.Marked+2*(M-23)+16*W.Surface.Condition;

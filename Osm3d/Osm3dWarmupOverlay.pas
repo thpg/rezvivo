@@ -49,6 +49,7 @@ uses UiTranslations,
   Osm3dGeoMath,
   Osm3dGeoTileGrid,
   Osm3dCacheHTTPFetcher,
+  Osm3dKnowledgeRecipe,
   Osm3dImageCodecLock;
 
 const
@@ -130,6 +131,7 @@ type
     State: TWarmupTileState;
     BarHeight: Single;        { measured label plus padding, local UI pixels }
     LabelDirty: Boolean;
+    PhotoSummary: string;
   end;
 
   TRasterTile = record
@@ -218,7 +220,8 @@ type
       толкаются по индексу), маршрут для линии, HTTP-фетчер подложки
       (nil = без растра, останется тёмный фон). }
     procedure ShowWarmup(AGrid: TGeoTileGrid; const ATiles: TGeoTileIdArray;
-      const ARoute: TRouteLatLonArray; AHttp: THTTPFetcherWithCache);
+      const ARoute: TRouteLatLonArray; AHttp: THTTPFetcherWithCache;
+      ARecipes:TKnowledgeRecipeSnapshot=nil);
     procedure HideWarmup;
     { CPU join only, after HideWarmup on the main thread; no UI/GL disposal. }
     procedure JoinBackgroundStop;
@@ -276,7 +279,7 @@ type
 implementation
 
 uses
-  StrUtils, Osm3dFlatMap, CastleGLUtils;   { DrawRectangle / DrawPrimitive2D / pmLineStrip }
+  StrUtils, Osm3dFlatMap, CastleGLUtils, Osm3dPhotoStatusText;
 
 { ── TWarmupRasterThread ───────────────────────────────────────────── }
 
@@ -404,12 +407,14 @@ end;
 
 procedure TOsm3dWarmupOverlay.ShowWarmup(AGrid: TGeoTileGrid;
   const ATiles: TGeoTileIdArray; const ARoute: TRouteLatLonArray;
-  AHttp: THTTPFetcherWithCache);
+  AHttp: THTTPFetcherWithCache;ARecipes:TKnowledgeRecipeSnapshot);
 var
   I, K, N, Step, X0, X1, Y0, Y1, RX, RY: Integer;
   MX, MY: Double;
   Box: TLatLonBox;
   L: TCastleLabel;
+  Coverage:TPhotoTileCoverage;
+  WorkflowText:string;
 begin
   HideWarmup;
   FreeRaster;                       { прежний поток не должен видеть новый растр }
@@ -433,6 +438,18 @@ begin
     FTiles[I].State.Pct   := 0;
     FTiles[I].State.HPct  := 0;
     FTiles[I].State.Done  := False;
+    FTiles[I].PhotoSummary:='';
+    if ARecipes<>nil then begin
+      Coverage:=ARecipes.TileCoverage(ATiles[I]);
+      if Coverage.Buildings+Coverage.Roads+Coverage.Plants+Coverage.Details>0 then
+        FTiles[I].PhotoSummary:=Format(UiText('Photo: buildings %d, roads %d, plants %d, details %d'),
+          [Coverage.Buildings,Coverage.Roads,Coverage.Plants,Coverage.Details]);
+      WorkflowText:=PhotoWorkflowCaption(ARecipes.TileWorkflow(ATiles[I]));
+      if WorkflowText<>'' then begin
+        if FTiles[I].PhotoSummary<>'' then FTiles[I].PhotoSummary+=LineEnding;
+        FTiles[I].PhotoSummary+=WorkflowText;
+      end;
+    end;
     if I = 0 then
     begin
       FMercMin := FTiles[I].M0;
@@ -501,7 +518,7 @@ begin
   begin
     L := TCastleLabel.Create(Self);
     L.Color := Vector4(1, 1, 1, 0.95);
-    L.Caption := '';
+    L.Caption := FTiles[I].PhotoSummary;
     L.Alignment := hpMiddle;
     L.LineSpacing := 1;
     L.Anchor(hpMiddle);
@@ -643,6 +660,7 @@ begin
   end
   else
     Txt := '';
+  if FTiles[AIndex].PhotoSummary<>'' then Txt:=Txt+LineEnding+FTiles[AIndex].PhotoSummary;
   if L.Caption <> Txt then
   begin
     L.Caption := Txt;
@@ -676,6 +694,7 @@ begin
   if ADone then Txt := '100%'
   else if AHPct < 0 then Txt := UiText('Reading roads')
   else Txt := Format(UiText('roads %d%%'), [Max(0, Min(100, AHPct))]);
+  if FTiles[AIndex].PhotoSummary<>'' then Txt:=Txt+LineEnding+FTiles[AIndex].PhotoSummary;
   if L.Caption <> Txt then
   begin
     L.Caption := Txt;

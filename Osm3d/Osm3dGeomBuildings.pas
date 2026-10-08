@@ -25,9 +25,9 @@ uses
   CastleVectors,
   CastleImages,
   Osm3dGeoMath,
-  Osm3dGeomMesh,
-  Osm3dGeomUtils,
-  Osm3dOsmData,
+  Osm3dGeomMesh, Osm3dFacadeLayout, Osm3dArchitecture, Osm3dCompoundRoof, Osm3dArchitectureVoids,
+  Osm3dGeomUtils, Osm3dGroundOpenings,
+  Osm3dOsmData, Osm3dBuildingParts,
   Osm3dOsmTagUtils,
   Osm3dHeightmap,
   Osm3dGeomTerrain,
@@ -42,6 +42,8 @@ type
     shadow builder. Owned by the caller; the array slot is freed when
     the caller releases the array. }
   TBuildingShadowCaster = record
+    GroundOpenings: TBuildingGroundOpenings; { Ground-level passage/niche XZ rings;
+      transient like Footprint. Shadows retain the uncut outer silhouette. }
     Footprint: array of TVector3;   { CCW-from-above (OSM3D),
                                       Y unused (Footprint[i].Y may be 0 or BaseY) }
     BaseY:     Single;              { ground attachment level (top of foundation) }
@@ -149,8 +151,8 @@ type
 
   { Inner rings (courtyards) to cut OUT of a roof. X/Z live in the same world
     space as a footprint; Y is ignored (BuildFlat forces it to EaveY). }
-  TRoofHoleRing  = array of TVector3;
-  TRoofHoleArray = array of TRoofHoleRing;
+  TRoofHoleRing  = TArchitectureVoidRing;
+  TRoofHoleArray = TArchitectureVoidRings;
 
   { Параметры на вход builder'у. Все builder'ы принимают один и
     тот же тип, чтобы caller мог свободно dispatch'ить по shape. }
@@ -404,6 +406,8 @@ type
       texture's plain V=0 band — the same trick the foundation strip
       below already uses — so no window panes appear. Set by Build. }
     NoWindows:        Boolean;
+    FacadeLayouts: TFacadeLayouts;
+    Architecture: TArchFacades;
     Skirt:            TRoofSkirt;            { if HasSkirt — sub-walls are added beneath the overhang }
   end;
 
@@ -501,6 +505,7 @@ type
         the outer footprint and cut out of a FLAT roof (forces rsFlat). nil
         for a plain building way. }
       const AInnerChains: TInt64ArrayArray;
+      out ExtraCasters:TBuildingShadowCasters;
       { Диагностический per-roof лог. Если <> nil, Build дописывает одну
         строку на крышу: адрес дома, форма (задумано→итог), габариты
         эмитированной геометрии крыши против bbox футпринта и маркер
@@ -526,7 +531,18 @@ function RoofShapeName(Shape: TRoofShape): string;
 
 implementation
 
-uses Osm3dGenerationProgress;
+uses Osm3dGenerationProgress, fpjson, jsonparser, Osm3dBuildingMassing;
+
+function SameClosedPhotoRing(const A,B:array of Int64):Boolean;
+var I,J:Integer;Found:Boolean;
+begin
+  Result:=False;if (Length(A)<4) or (Length(A)<>Length(B)) then Exit;
+  for I:=0 to High(A)-1 do begin
+    Found:=False;for J:=0 to High(B)-1 do if A[I]=B[J] then begin Found:=True;Break end;
+    if not Found then Exit;
+  end;
+  Result:=True;
+end;
 
 var
   { Уникализатор имени roof_debug_*.log при параллельной сборке блоков.
@@ -1269,6 +1285,7 @@ begin
     an O(n^2) reallocation chain over a roof's vertices. }
   if Result >= Length(Geom.Vertices) then
     SetLength(Geom.Vertices, Result * 2 + 16);
+  V := Default(TRoofVertex); { source identity is stamped by the owning mesh }
   V.Position := Pos;
   V.Normal   := Norm;
   V.UV       := UV;
@@ -3347,6 +3364,11 @@ begin
       NormB := VecNormalize(NormB);
     end;
 
+    if (Length(P.Architecture)>0) and
+      EmitArchitecturalWall(P.Architecture,Floor[I],Floor[Next],FaceN,P.EaveY,Target) then Continue;
+    if not P.NoWindows and EmitFacadeWall(P.FacadeLayouts,Floor[I],Floor[Next],FaceN,
+      P.EaveY,TilesV,Target) then Continue;
+
     { 4 quad vertices: bottom-left (vertexA, floor), bottom-right
       (vertexB, floor), top-right (vertexB, eave), top-left (vertexA, eave).
       UV: U = 0..TilesU along the edge; V = 0..TilesV vertically. }
@@ -4271,6 +4293,7 @@ class procedure TBuildingBuilderExt.Build(Way: TOSMWay; Dataset: TOSMDataset;
   var CasterOut: TBuildingShadowCaster;
   out HasCaster: Boolean;
   const AInnerChains: TInt64ArrayArray;
+  out ExtraCasters:TBuildingShadowCasters;
   ADbg: TStrings = nil);
 var
   Verts2D: array of TVector3;
@@ -4318,6 +4341,13 @@ var
   InnerOK: Boolean;
   BadV: TBooleanArray;
   RingClamped: Boolean;
+  MassingJSON:TJSONData;
+  Architecture:TArchitectureRecipe;
+  ArchitectureCasters:TArchCasters;
+  CompoundRecipe:TCompoundRoofRecipe;
+  CompoundDomain:TMesh;
+  HasCompoundRoof,CompoundBuilt:Boolean;
+  AC,AK:Integer;
   { ── Диагностика v2 ────────────────────────────────────────────────
     Стены: диапазон эмита + bbox + эскейп (ловит шпиль ВЫШЕ конька и
     улёт юбки вбок — то, что крышный bbox не видит). Крыша: счётчики
@@ -4338,13 +4368,16 @@ var
   { ── Стены внутреннего двора ── }
   CourtParams: TWallParams;
   CArea: Single;
+  FacadeJSON:TJSONData;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1085);{$ENDIF}
   PaletteIdx := 0;
   WallsTarget := nil;
   RoofsTarget := nil;
   HasCaster := False;
+  ExtraCasters:=nil;
   CasterOut.Footprint := nil;
+  CasterOut.GroundOpenings := nil;
   CasterOut.BaseY := 0;
   CasterOut.GroundY := 0;
   CasterOut.MaxY := 0;
@@ -4518,6 +4551,11 @@ begin
     spans only the roof band (minHeight = height − roofHeight, set below)
     and the walls call is skipped. }
   OnlyRoof := (Way.Tags.GetLower('building') = 'roof');
+  HasCompoundRoof:=Way.Tags.Get(COMPOUND_ROOF_TAG)<>'';
+  if HasCompoundRoof then begin
+    FacadeJSON:=GetJSON(Way.Tags.Get(COMPOUND_ROOF_TAG));
+    try CompoundRecipe:=ParseCompoundRoof(FacadeJSON) finally FacadeJSON.Free end;
+  end;
 
   { Explicit height tag (if present). Use ParseHeight with sentinel
     default = -1 so we can detect "missing". ParseHeight returns
@@ -4555,7 +4593,16 @@ begin
   if Length(InnerRings) > 0 then Shape := rsFlat;
 
   if Shape = rsFlat then
-    RoofH := 0
+  begin
+    RoofH := 0;
+    { An authored roof assembly can replace the unsupported pitched roof
+      around a courtyard. Keep its observed eave datum: flattening the roof
+      must not raise the walls by roof:height and bury an eave-anchored gable.
+      Unauthored buildings retain the established fallback. }
+    if (Length(InnerRings)>0) and (Way.Tags.Get(ARCHITECTURE_TAG)<>'') and
+      (ParseRoofShape(Way.Tags)<>rsFlat) then
+      RoofH:=TBuildingBuilder.ParseRoofHeight(Way.Tags);
+  end
   else
   begin
     RoofH := TBuildingBuilder.ParseRoofHeight(Way.Tags);
@@ -4656,6 +4703,14 @@ begin
   RidgeY := BaseY + (TotalHeight - MinH);
   if EaveY  < BaseY  then EaveY  := BaseY;
   if RidgeY <= EaveY then RidgeY := EaveY;
+  if HasCompoundRoof then begin
+    { Layout heights share the building base datum; roof:height must never
+      be added a second time or raise the observed facade into the gable. }
+    EaveY:=BaseY+CompoundRecipe.Eave;
+    RidgeY:=BaseY+CompoundRoofMaxHeight(CompoundRecipe);
+    RoofH:=RidgeY-EaveY;
+    TotalHeight:=RidgeY-GroundY;
+  end;
 
   SetLength(Footprint, N);
   for I := 0 to N - 1 do
@@ -4672,6 +4727,17 @@ begin
   RoofsTarget := AllMeshes.Roofs[PaletteIdx];
   WallsTarget.CurrentOsmId := Way.Id;
   RoofsTarget.CurrentOsmId := Way.Id;
+
+  if (Way.Tags.Get(BUILDING_MASSING_TAG)<>'') and (Length(InnerRings)=0) then begin
+    MassingJSON:=GetJSON(Way.Tags.Get(BUILDING_MASSING_TAG));
+    try
+      if EmitColonnade(ParseBuildingMassing(MassingJSON),Verts2D,Projection,
+        GroundY,FoundationBottomY,TotalHeight,WallsTarget,ExtraCasters) then begin
+        Inc(Stat.Total); Inc(Stat.PerShape[rsFlat]); Exit;
+      end;
+      if Assigned(LogProc) then LogProc(Format('building %d: authored massing does not fit footprint/height; using OSM envelope',[Way.Id]));
+    finally MassingJSON.Free end;
+  end;
 
   DefaultSkirtParams(Shape, SkirtOverhangM, SkirtDropM);
   { A floating roof has no walls for an overhang sub-wall to anchor to —
@@ -4693,12 +4759,13 @@ begin
   SanitizeFootprintRing(RoofParams.Footprint);
   FillOMBBInRoofParams(RoofParams, RoofParams.Footprint);
 
-  WasSkeleton := ShapeUsesSkeleton(Shape);
+  WasSkeleton := (not HasCompoundRoof) and ShapeUsesSkeleton(Shape);
   IntendedShape := Shape;   { форма ДО фолбэков — для диагностического лога }
 
   { Call individual builder directly (bypassing TRoofBuilder.BuildRoof's
     internal fallback) so we can detect real success/failure for stats.}
-  case Shape of
+  if HasCompoundRoof then RoofGeom:=TRoofBuilder.BuildFlat(RoofParams)
+  else case Shape of
     rsFlat:        RoofGeom := TRoofBuilder.BuildFlat(RoofParams);
     rsPyramidal:   RoofGeom := TRoofBuilder.BuildPyramidal(RoofParams);
     rsSkillion:    RoofGeom := TRoofBuilder.BuildSkillion(RoofParams);
@@ -4743,7 +4810,7 @@ begin
   if not RoofGeom.Valid then
     RoofGeom := TRoofBuilder.BuildFlat(RoofParams);
 
-  if (SkirtOverhangM > 0) and (Shape <> rsFlat) and (Shape <> rsDome) and (Shape <> rsOnion) then
+  if (not HasCompoundRoof) and (SkirtOverhangM > 0) and (Shape <> rsFlat) and (Shape <> rsDome) and (Shape <> rsOnion) then
   begin
     { Sanitised footprint — keeps the skirt overhang in-bounds too. }
     GenerateRoofSkirt(RoofGeom, RoofParams.Footprint, EaveY, SkirtOverhangM, SkirtDropM);
@@ -4752,9 +4819,23 @@ begin
 
   VertsBefore := RoofsTarget.VertexCount;
   TrisBefore  := RoofsTarget.TriangleCount;
+  CompoundBuilt:=False;
+  if HasCompoundRoof then begin
+    CompoundDomain:=TMesh.Create;
+    try
+      ApplyRoofGeometryToMesh(RoofGeom,CompoundDomain,False);
+      CompoundBuilt:=EmitCompoundRoof(CompoundRecipe,Projection,CompoundDomain,BaseY,WallsTarget);
+    finally CompoundDomain.Free end;
+    if CompoundBuilt then begin
+      { Roof paint uses the architectural material channel in the same
+        palette batch. Remove the default deck and end walls completely. }
+      RoofGeom:=EmptyRoofGeometry;RoofGeom.Valid:=True;
+    end else if Assigned(LogProc) then
+      LogProc(Format('building %d: compound roof exceeded bounds/cost; retained clipped flat roof',[Way.Id]));
+  end;
   { A circular dome sits on a closed roof deck. A rectangular/irregular
     footprint otherwise leaves the corners open between dome and facade. }
-  if (Shape in [rsDome, rsOnion]) and BuilderValid and not RejectedByBounds then
+  if (not CompoundBuilt) and (Shape in [rsDome, rsOnion]) and BuilderValid and not RejectedByBounds then
     ApplyRoofGeometryToMesh(TRoofBuilder.BuildFlat(RoofParams), RoofsTarget, FlipWinding);
   ApplyRoofGeometryToMesh(RoofGeom, RoofsTarget, FlipWinding);
   VertsAdded := RoofsTarget.VertexCount - VertsBefore;
@@ -4769,6 +4850,25 @@ begin
   { streets-gl isBuildingHasWindows → blank facade for the listed
     building types (garage/shed/silo/…) and explicit window=no. }
   WallParams.NoWindows := not BuildingHasWindows(Way.Tags);
+  WallParams.FacadeLayouts:=nil;
+  WallParams.Architecture:=nil;
+  if Way.Tags.Get(ARCHITECTURE_TAG)<>'' then begin
+    FacadeJSON:=GetJSON(Way.Tags.Get(ARCHITECTURE_TAG));
+    try Architecture:=ParseArchitecture(FacadeJSON) finally FacadeJSON.Free end;
+    ProjectArchitecture(Architecture,Projection,Verts2D,InnerRings);
+    AC:=0;
+    for AK:=0 to High(Architecture.Passages) do
+      if Architecture.Passages[AK].Bottom+Architecture.Passages[AK].Height<EaveY-BaseY-0.02 then begin
+        Architecture.Passages[AC]:=Architecture.Passages[AK];Inc(AC);
+      end;
+    SetLength(Architecture.Passages,AC);
+    WallParams.Architecture:=Architecture.Facades;
+  end;
+  if Way.Tags.Get(FACADE_LAYOUT_TAG)<>'' then begin
+    FacadeJSON:=GetJSON(Way.Tags.Get(FACADE_LAYOUT_TAG));
+    try WallParams.FacadeLayouts:=ParseFacadeLayouts(FacadeJSON) finally FacadeJSON.Free end;
+    ProjectFacadeLayouts(WallParams.FacadeLayouts,Projection,Way.Id);
+  end;
   SetLength(WallParams.Footprint, N);
   for I := 0 to N - 1 do
   begin
@@ -4806,6 +4906,8 @@ begin
       IM := Length(InnerRings[IC]);
       if IM < 3 then Continue;
       CourtParams := WallParams;
+      CourtParams.FacadeLayouts:=nil;
+      CourtParams.Architecture:=nil;
       SetLength(CourtParams.Footprint, IM);   { copy-on-write: своё кольцо }
       CArea := 0;
       for IK := 0 to IM - 1 do
@@ -4856,6 +4958,37 @@ begin
 
   Inc(Stat.Total);
   Inc(Stat.PerShape[Shape]);
+
+  { Components are baked into the same palette mesh, retaining picking ids,
+    tile clipping and the ordinary shadow/RTX path. No runtime object per part. }
+  if (not OnlyRoof) and (Length(Architecture.Facades)>0) then begin
+    EmitArchitecturalParts(Architecture,BaseY,EaveY,RidgeY,WallsTarget,ArchitectureCasters);
+    SetLength(ExtraCasters,Length(ArchitectureCasters));
+    for AC:=0 to High(ArchitectureCasters) do begin
+      SetLength(ExtraCasters[AC].Footprint,4);
+      for AK:=0 to 3 do ExtraCasters[AC].Footprint[AK]:=ArchitectureCasters[AC].Corners[AK];
+      ExtraCasters[AC].BaseY:=ArchitectureCasters[AC].BaseY;
+      ExtraCasters[AC].MaxY:=ArchitectureCasters[AC].MaxY;
+      ExtraCasters[AC].GroundY:=MinGroundY;
+      { Grounded columns/solid parts obstruct route fitting; an overhead
+        portico or decorative steps preserve the ground beneath them. }
+      ExtraCasters[AC].KeepGroundUnder:=not ArchitectureCasters[AC].BlocksGround;
+    end;
+  end;
+
+  if (not OnlyRoof) and (Length(Architecture.Passages)>0) then begin
+    if not CarveArchitecturePassages(Architecture.Passages,BaseY,EaveY,FoundationBottomY,
+      WallsTarget,WVertsBefore,WTrisBefore) then Architecture.Passages:=nil;
+    for AC:=0 to High(Architecture.Passages) do if Architecture.Passages[AC].Bottom<0.01 then begin
+      AK:=Length(CasterOut.GroundOpenings);SetLength(CasterOut.GroundOpenings,AK+1);
+      SetLength(CasterOut.GroundOpenings[AK],4);
+      for I:=0 to 3 do CasterOut.GroundOpenings[AK][I]:=PassageGroundCorner(Architecture.Passages[AC],I);
+    end;
+    { Columns/decor carved by this same void cannot re-introduce a phantom
+      obstacle or terrain hole through their coarse component envelopes. }
+    for AC:=0 to High(ExtraCasters) do ExtraCasters[AC].GroundOpenings:=CasterOut.GroundOpenings;
+    WVertsAdded:=WallsTarget.VertexCount-WVertsBefore;WTrisAdded:=WallsTarget.TriangleCount-WTrisBefore;
+  end;
 
   { ── Per-roof диагностический лог (ADbg <> nil) ─────────────────────
     Считаем РЕАЛЬНЫЙ габарит эмитированной геометрии крыши прямо из
@@ -5211,6 +5344,7 @@ var
   RoofDbgOutliers: Integer;
   DbgLn: Integer;
   DbgSummaryN: Integer;   { сводных строк (крыш) — без строк дампа/шапки }
+  Parts:TBuildingPartSelection;
 
   { Per-building emit: pre-resolve palette, snapshot per-palette mesh sizes,
     Build(), then shadow-caster + tile-anchor bookkeeping from the emitted
@@ -5222,6 +5356,7 @@ var
     PaletteIdx, J, K: Integer;
     Caster: TBuildingShadowCaster;
     HasCaster: Boolean;
+    ExtraCasters:TBuildingShadowCasters;
     { Per-building snapshot of mesh sizes before Build() — the diff after
       gives the triangle/vertex range belonging to this one building. }
     PreWallsTri, PreWallsVert: array[0..BUILDING_PALETTE_SIZE - 1] of Integer;
@@ -5243,7 +5378,7 @@ var
 
       TBuildingBuilderExt.Build(AWay, Dataset, HM, Projection, TerrainSampler, PaletteIdx,
             Result,
-            Stat, LogProc, SampledCount, Caster, HasCaster, AInnerChains, RoofDbg);
+            Stat, LogProc, SampledCount, Caster, HasCaster, AInnerChains, ExtraCasters, RoofDbg);
 
       if HasCaster then
       begin
@@ -5255,6 +5390,13 @@ var
         end;
         ShadowCasters[CasterCount] := Caster;
         Inc(CasterCount);
+      end;
+
+      for K:=0 to High(ExtraCasters) do begin
+        if CasterCount>=CasterCap then begin
+          CasterCap:=Max(64,CasterCap*2); SetLength(ShadowCasters,CasterCap);
+        end;
+        ShadowCasters[CasterCount]:=ExtraCasters[K]; Inc(CasterCount);
       end;
 
       { Anchor lives OUTSIDE the HasCaster gate — Build() can emit walls+roofs
@@ -5405,6 +5547,7 @@ var
       Caster.BaseY   := gy;
       Caster.GroundY := gy - BUILDING_FOUNDATION_LIFT_M;
       Caster.MaxY    := gy + h;
+      Caster.GroundOpenings := nil;
       Caster.KeepGroundUnder := False;   { локальный record — поле не обнуляется само }
       if CasterCount >= CasterCap then
       begin
@@ -5482,7 +5625,9 @@ begin
       [BuildingsInDataset, WithShapeTag]));
   end;
 
+  Parts:=nil;
   try
+    Parts:=TBuildingPartSelection.Create(Dataset);
     { plain building ways — the building tag lives on the way itself.
       Шардирование по Id: детерминированное разбиение для BuildAllParallel;
       AShardCount=1 (дефолт) — прежний однопоточный полный проход. }
@@ -5491,7 +5636,8 @@ begin
       if (GenerationProgressContext.Cancel <> nil) and
          GenerationProgressContext.Cancel^ then Break;
       if (AShardCount <= 1) or (Way.Id mod AShardCount = AShard) then
-        if (Way.Tags.HasKey('building') or IsCoolingTower(Way.Tags) or IsChimney(Way.Tags) or IsTower(Way.Tags)) and Way.IsClosed then
+        if (Way.Tags.HasKey('building') or Parts.PartVisible('way',Way.Id) or IsCoolingTower(Way.Tags) or IsChimney(Way.Tags) or IsTower(Way.Tags)) and Way.IsClosed and
+          not Parts.Hidden('way',Way.Id) then
           ProcessBuildingWay(Way, nil);
     end;
 
@@ -5532,7 +5678,8 @@ begin
       if Rel = nil then Continue;
       if (AShardCount > 1) and (Rel.Id mod AShardCount <> AShard) then Continue;
       if Rel.Tags.GetLower('type') <> 'multipolygon' then Continue;
-      if not Rel.Tags.HasKey('building') then Continue;
+      if Parts.Hidden('relation',Rel.Id) then Continue;
+      if not Rel.Tags.HasKey('building') and not Parts.PartVisible('relation',Rel.Id) then Continue;
 
       { collect outer-role member ways (empty role defaults to outer). }
       RelOuterN := 0;
@@ -5550,7 +5697,7 @@ begin
           here so we don't double-build it (open member ways can't collide:
           the way loop's IsClosed check already skips them). }
         if RelMemWay.IsClosed and
-           (RelMemWay.Tags.HasKey('building') or IsCoolingTower(RelMemWay.Tags) or IsChimney(RelMemWay.Tags) or IsTower(RelMemWay.Tags)) then
+           (RelMemWay.Tags.HasKey('building') or Parts.PartVisible('way',RelMemWay.Id) or IsCoolingTower(RelMemWay.Tags) or IsChimney(RelMemWay.Tags) or IsTower(RelMemWay.Tags)) then
           Continue;
         if RelOuterN >= Length(RelOuterWays) then
           SetLength(RelOuterWays, RelOuterN * 2 + 8);
@@ -5607,6 +5754,18 @@ begin
             SynthWay.NodeRefs[RelTi] := RelChains[RelCi][RelTi];
           for RelTi := 0 to Rel.Tags.Count - 1 do
             SynthWay.Tags.Add(Rel.Tags.Keys[RelTi], Rel.Tags.Values[RelTi]);
+          { A confirmed photo may refine a single closed outer ring. Preserve
+            the relation's holes and defaults; do not tint every other ring. }
+          for RelMi:=0 to High(RelOuterWays) do begin
+            RelMemWay:=RelOuterWays[RelMi];
+            if not RelMemWay.IsClosed or not RelMemWay.Tags.HasKey('rezvivo:photo_building') or
+              (Length(RelMemWay.NodeRefs)<>Length(SynthWay.NodeRefs)) then Continue;
+            if not SameClosedPhotoRing(SynthWay.NodeRefs,RelMemWay.NodeRefs) then Continue;
+            SynthWay.Id:=RelMemWay.Id;
+            for RelTi:=0 to RelMemWay.Tags.Count-1 do
+              SynthWay.Tags.Add(RelMemWay.Tags.Keys[RelTi],RelMemWay.Tags.Values[RelTi]);
+            Break;
+          end;
           if SynthWay.IsClosed then
           begin
             RelAssignedCount := 0;
@@ -5638,8 +5797,10 @@ begin
     Result.TileAnchors := nil;
     ShadowCasters := nil;
     RoofDbg.Free;   { nil-safe }
+    Parts.Free;
     raise;
   end;
+  Parts.Free;
 
   SetLength(ShadowCasters, CasterCount);
   SetLength(Result.TileAnchors, AnchorCount);

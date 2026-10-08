@@ -16,7 +16,7 @@ uses
   TypInfo,
   Math,
   CastleVectors, Osm3dShadowReceiver,
-  CastleImages, Osm3dManholeData,
+  CastleImages, Osm3dManholeData, Osm3dFacadeLayout,
   Osm3dGeoMath, Osm3dRoadSurface,
   Osm3dGeomMesh,
   Osm3dGeoTileGrid,
@@ -178,6 +178,8 @@ type
     function GetRoadSeg(I: Integer): TTileRoadSeg;
   public
     TileId:  TGeoTileId;
+    FacadeLayouts:TFacadeLayouts;
+    BuildingTints:TBuildingTints;
     Origin:  TLatLon;       { local-projection origin for the mesh coords }
     Box:     TLatLonBox;    { geographic bounds of the tile }
     GenHash: string;        { generator / source-data hash }
@@ -329,11 +331,11 @@ function RoadSegmentToFrame(const S: TTileRoadSeg; const Center: TVector3;
   ScaleX: Double): TTileRoadSeg;
 
 implementation
-uses TreeModel;
+uses TreeModel, fpjson, jsonparser;
 
 function RoadSegmentToFrame(const S: TTileRoadSeg; const Center: TVector3;
   ScaleX: Double): TTileRoadSeg;
-var DX, DZ, Len2, FrameLen2: Double;
+var DX, DZ, Len2, FrameLen2,Factor: Double;
 begin
   Result := S;
   Result.X0 := S.X0 * ScaleX + Center.X;
@@ -343,8 +345,11 @@ begin
   DX := S.X1 - S.X0; DZ := S.Z1 - S.Z0;
   Len2 := Sqr(DX) + Sqr(DZ);
   FrameLen2 := Sqr(DX * ScaleX) + Sqr(DZ);
-  if FrameLen2 > 1e-12 then
-    Result.Width := S.Width * ScaleX * Sqrt(Len2 / FrameLen2);
+  if FrameLen2 > 1e-12 then begin
+    Factor:=ScaleX*Sqrt(Len2/FrameLen2);Result.Width:=S.Width*Factor;
+    Result.Surface.WidthStart:=S.Surface.WidthStart*Factor;
+    Result.Surface.WidthEnd:=S.Surface.WidthEnd*Factor;
+  end;
 end;
 
 function MaterialName(K: TSceneMaterialKind): string;
@@ -481,6 +486,8 @@ begin
   SetLength(FRoadSegs, 0);
   ModelInstances:=nil;
   Manholes:=nil;
+  FacadeLayouts:=nil;
+  BuildingTints:=nil;
   { BUILDING_OBSTACLE }
   SetLength(BuildingObstacles, 0);
   FMeshCount := 0;
@@ -933,6 +940,7 @@ var
   RunStr: string;
   NewRun: Boolean;
   Bytes: UTF8String;
+  FacadesJSON:TJSONData;
 
   procedure WriteShape(const R: TTileMeshRec);
   var
@@ -1212,12 +1220,17 @@ begin
     begin
       CurWay := Model.RoadSegs[I].WayId;
       J := I + 1;
-      while (J < Model.RoadSegCount) and (Model.RoadSegs[J].WayId = CurWay) do
+      while (J < Model.RoadSegCount) and (Model.RoadSegs[J].WayId = CurWay) and
+        (Model.RoadSegs[I].Surface.WidthStart=0) and (Model.RoadSegs[J].Surface.WidthStart=0) do
         Inc(J);
       SB.Append('<O3DRoad id="');
       SB.Append(IntToStr(CurWay));
       SB.Append('" w="');
       AppendNum(SB, Model.RoadSegs[I].Width, DEC_UV);
+      if Model.RoadSegs[I].Surface.WidthStart>0 then begin
+        SB.Append('" widths="');AppendNum(SB,Model.RoadSegs[I].Surface.WidthStart,6);
+        SB.Append(' ');AppendNum(SB,Model.RoadSegs[I].Surface.WidthEnd,6);
+      end;
       { BRIDGE_SNAP: flag first seg of way as representative (all segs of
         a bridge way share IsBridge from AppendBridgeSegs). }
       if Model.RoadSegs[I].IsBridge then
@@ -1292,6 +1305,18 @@ begin
         end;
         SB.Append('"/>'); SB.Append(LineEnding);
       end;
+    if Length(Model.FacadeLayouts)>0 then begin
+      FacadesJSON:=FacadeLayoutsJSON(Model.FacadeLayouts,True);
+      try SB.Append('<O3DFacades data="'); SB.Append(XmlEsc(FacadesJSON.AsJSON));
+        SB.Append('"/>'); SB.Append(LineEnding);
+      finally FacadesJSON.Free end;
+    end;
+    if Length(Model.BuildingTints)>0 then begin
+      FacadesJSON:=BuildingTintsJSON(Model.BuildingTints);
+      try SB.Append('<O3DBuildingTints data="'); SB.Append(XmlEsc(FacadesJSON.AsJSON));
+        SB.Append('"/>'); SB.Append(LineEnding);
+      finally FacadesJSON.Free end;
+    end;
     SB.Append('</Scene>'); SB.Append(LineEnding);
     SB.Append('</X3D>');   SB.Append(LineEnding);
 
@@ -1353,6 +1378,7 @@ var
   DocState: TDocumentState;
   SeenFormat, SeenTile, SeenGen, SeenOrigin, SeenBox: Boolean;
   InFaceSet, SeenFaceSet: Boolean;
+  FacadesJSON:TJSONData;
 
   { current <Shape> accumulator }
   HaveShape: Boolean;
@@ -1748,6 +1774,13 @@ var
         end;
       end;
     end;
+    W:=ParseDoubleArray(GetAttr(Line,'widths'));
+    if (Length(W)=2) and (np=2) then begin
+      if (W[0]<0.5) or (W[1]<0.5) or (W[0]>60) or (W[1]>60) then
+        raise Exception.Create('Invalid O3DRoad endpoint widths');
+      R.Surface.WidthStart:=W[0];R.Surface.WidthEnd:=W[1];
+      R.Width:=Max(R.Width,Max(W[0],W[1]));
+    end;
     Rn := ParseDoubleArray(GetAttr(Line, 'r'));
     if Length(Rn) = 0 then
     begin
@@ -1897,7 +1930,17 @@ begin
       else if LineIsTag(L, '<O3DRoadSeg') then
         HandleRoadSeg(L)
       else if LineIsTag(L, '<O3DBuildingObs') then
-        HandleBuildingObs(L);   { BUILDING_OBSTACLE }
+        HandleBuildingObs(L)   { BUILDING_OBSTACLE }
+      else if LineIsTag(L, '<O3DFacades ') then begin
+        Require(Length(Model.FacadeLayouts)=0,'duplicate facade layout');
+        FacadesJSON:=GetJSON(GetAttr(L,'data'));
+        try Model.FacadeLayouts:=ParseFacadeLayouts(FacadesJSON,True) finally FacadesJSON.Free end;
+      end
+      else if LineIsTag(L, '<O3DBuildingTints ') then begin
+        Require(Length(Model.BuildingTints)=0,'duplicate building tints');
+        FacadesJSON:=GetJSON(GetAttr(L,'data'));
+        try Model.BuildingTints:=ParseBuildingTints(FacadesJSON) finally FacadesJSON.Free end;
+      end;
       { Unknown extensions remain supported inside the document. This
         reader accepts the line-oriented cache format written above. }
     end;

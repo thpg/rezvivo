@@ -18,7 +18,7 @@ uses
   Osm3dGeoTileGrid,
   Osm3dTileX3D,
   Osm3dBuildingObstacleIndex,
-  Osm3dStudioSettings
+  Osm3dStudioSettings, Osm3dKnowledgeRecipe
   {$IFDEF TILE_MEM_PROFILE}, Osm3dTileMemProfile, Osm3dMemCensus{$ENDIF}
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ;
@@ -30,6 +30,7 @@ type
   private
     FRootDir:   string;       { '<root>/o3dt/v1/<genHash>/E<edge>/' }
     FGenHash:   string;
+    FRecipes: TKnowledgeRecipeSnapshot;
     FTextFormat: Boolean;
     FGrid:      TGeoTileGrid;
     FLock:      TCriticalSection;
@@ -51,6 +52,7 @@ type
 
     function ZoneDir(const T: TGeoTileId): string;
     function FormatPath(const T: TGeoTileId; TextFormat: Boolean): string;
+    function ExpectedHash(const T: TGeoTileId): string;
     procedure EnsureIndex;    { lazy one-time disk scan }
     procedure WriteRoadSidecar(const AX3dPath: string; Model: TTileModel);
     procedure Log(const AMsg: string);
@@ -78,7 +80,7 @@ type
       (TX=BX*BlockSize, TY=BY*BlockSize); путь строится по его quadkey, чтобы
       не вводить зависимость от Osm3dGeoTileBlock. Расширение '.ptex.png' —
       не пересекается с .x3d/.prev. }
-    function BlockTexPath(const ANWTile: TGeoTileId): string;
+    function BlockTexPath(const ANWTile: TGeoTileId; BlockSize: Integer = 0): string;
 
     { True if a cached file for T exists on disk. }
     function Has(const T: TGeoTileId): Boolean;
@@ -114,13 +116,14 @@ type
     function TilesCovering(const Box: TLatLonBox): TGeoTileIdArray;
 
     property Grid:    TGeoTileGrid read FGrid;
+    property Recipes: TKnowledgeRecipeSnapshot read FRecipes;
     property GenHash: string       read FGenHash;
     property RootDir: string       read FRootDir;
   end;
 
 implementation
 
-uses md5, Osm3dTileBinary, Osm3dTileCacheSupport;
+uses Math, md5, Osm3dTileBinary, Osm3dTileCacheSupport;
 
 {$IFDEF MSWINDOWS}
 { MoveFileExW с REPLACE_EXISTING: объявляем сами (паттерн Osm3dWorkerPool),
@@ -208,6 +211,7 @@ begin
   {$IFDEF TILE_MEM_PROFILE}
   MemProbeAdd(Self, 'tile-index', mkRAM, @MemoryBytes);
   {$ENDIF}
+  FRecipes := TKnowledgeRecipeSnapshot.Create(ARootDir, FGrid);
   FHasCalls   := 0;
   FLog        := nil;
 
@@ -233,6 +237,7 @@ begin
   {$IFDEF TILE_MEM_PROFILE}MemProbeRemove(Self);{$ENDIF}
   FIndex.Free;
   FLock.Free;
+  FRecipes.Free;
   FGrid.Free;
   inherited;
 end;
@@ -263,16 +268,30 @@ begin
   Result := FormatPath(T, FTextFormat);
 end;
 
+function TGeoTileCache.ExpectedHash(const T: TGeoTileId): string;
+var H: string;
+begin
+  H:=FRecipes.TileHash(T); Result:=FGenHash;
+  if H<>'' then Result:=Result+'-k'+H;
+end;
+
 function TGeoTileCache.FormatPath(const T: TGeoTileId; TextFormat: Boolean): string;
+var H: string;
 begin
   Result := ZoneDir(T) + TGeoTileGrid.QuadKey(T);
+  H:=FRecipes.TileHash(T); if H<>'' then Result:=Result+'.k'+H;
   if TextFormat then Result := Result + '.x3d' else Result := Result + '.o3dt';
 end;
 
-function TGeoTileCache.BlockTexPath(const ANWTile: TGeoTileId): string;
+function TGeoTileCache.BlockTexPath(const ANWTile: TGeoTileId; BlockSize: Integer): string;
+var H: string;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1409);{$ENDIF}
-  Result := ZoneDir(ANWTile) + TGeoTileGrid.QuadKey(ANWTile) + '.ptex.png';
+  if BlockSize<1 then BlockSize:=GEO_BLOCK_SIZE;
+  H:=FRecipes.BlockHash(ANWTile,BlockSize);
+  Result := ZoneDir(ANWTile) + TGeoTileGrid.QuadKey(ANWTile);
+  if H<>'' then Result:=Result+'.k'+H;
+  Result:=Result+'.ptex.png';
 end;
 
 procedure TGeoTileCache.Log(const AMsg: string);
@@ -409,7 +428,7 @@ begin
     try
       if TextFormat then M := TTileX3D.LoadFile(Path)
       else M := TTileBinary.LoadFile(Path);
-      if (M.GenHash <> FGenHash) or not M.TileId.Equals(T) then
+      if (M.GenHash <> ExpectedHash(T)) or not M.TileId.Equals(T) then
       begin FreeAndNil(M); Continue end;
     except
       on E: Exception do
@@ -445,7 +464,7 @@ begin
 
   { Stamp identity so a file is always self-describing. }
   Model.TileId  := T;
-  Model.GenHash := FGenHash;
+  Model.GenHash := ExpectedHash(T);
 
   Path := PathFor(T);
   Dir  := ExtractFilePath(Path);
@@ -459,7 +478,9 @@ begin
       'Cannot create tile directory: %s', [Dir]);
 
   T0 := GetTickCount64;
-  CreateGUID(G); TmpPath := Path + '.' + GUIDToString(G) + '.tmp';
+  { A recipe suffix adds 34 characters. Keep the unique temporary name short
+    so an otherwise valid cache path does not exceed Windows MAX_PATH. }
+  CreateGUID(G); TmpPath := Dir + GUIDToString(G) + '.tmp';
   try
     if FTextFormat then TTileX3D.SaveFile(TmpPath, Model)
     else TTileBinary.SaveFile(TmpPath, Model);
@@ -513,7 +534,7 @@ procedure TGeoTileCache.WriteRoadSidecar(const AX3dPath: string;
   Model: TTileModel);
 const
   MAGIC: array[0..3] of AnsiChar = 'O3RS';   { Osm3d Road Segments }
-  VER = 2;   { v2: + IsBridge byte per seg (BRIDGE_SNAP) }
+  VER = 3;   { v3: + two float32 endpoint widths; v1/v2 still readable }
 var
   FS: TFileStream;
   Tmp, Dst: string;
@@ -526,7 +547,7 @@ var
   G: TGUID;
 begin
   Dst := AX3dPath + '.roads';
-  CreateGUID(G); Tmp := Dst + '.' + GUIDToString(G) + '.tmp';
+  CreateGUID(G); Tmp := ExtractFilePath(Dst) + GUIDToString(G) + '.tmp';
   FS := TFileStream.Create(Tmp, fmCreate);
   try
     FS.WriteBuffer(MAGIC, SizeOf(MAGIC));
@@ -546,6 +567,7 @@ begin
       FS.WriteBuffer(Seg.WayId, 8);
       if Seg.IsBridge then BFlag := 1 else BFlag := 0;
       FS.WriteBuffer(BFlag, 1);   { BRIDGE_SNAP }
+      FS.WriteBuffer(Seg.Surface.WidthStart,4);FS.WriteBuffer(Seg.Surface.WidthEnd,4);
     end;
   finally
     FS.Free;
@@ -582,7 +604,7 @@ begin
   try
     M := TTileBinary.LoadFile(Path, [tblRoads]);
     try
-      if (M.GenHash <> FGenHash) or not M.TileId.Equals(T) then Exit;
+      if (M.GenHash <> ExpectedHash(T)) or not M.TileId.Equals(T) then Exit;
       AOrigin := M.Origin; SetLength(ASegs, M.RoadSegCount);
       for I := 0 to High(ASegs) do ASegs[I] := M.RoadSegs[I];
       Exit(True);
@@ -600,14 +622,15 @@ begin
       FS.ReadBuffer(V32, 4);
       Ver := V32;
       { v1 = no IsBridge; v2 = +1 byte IsBridge per seg (BRIDGE_SNAP). }
-      if (Ver <> 1) and (Ver <> 2) then Exit;
+      if (Ver < 1) or (Ver > 3) then Exit;
       FS.ReadBuffer(LatD, 8);
       FS.ReadBuffer(LonD, 8);
       AOrigin := TLatLon.Make(LatD, LonD);
       FS.ReadBuffer(N, 4);
       if (N < 0) or (N > 10 * 1000 * 1000) then Exit;
       if ((Ver = 1) and (FS.Size-FS.Position <> Int64(N)*28)) or
-         ((Ver = 2) and (FS.Size-FS.Position <> Int64(N)*29)) then Exit;
+         ((Ver = 2) and (FS.Size-FS.Position <> Int64(N)*29)) or
+         ((Ver = 3) and (FS.Size-FS.Position <> Int64(N)*37)) then Exit;
       SetLength(ASegs, N);
       for I := 0 to N - 1 do
       begin
@@ -624,6 +647,15 @@ begin
         end
         else
           ASegs[I].IsBridge := False;
+        if Ver>=3 then begin
+          FS.ReadBuffer(ASegs[I].Surface.WidthStart,4);FS.ReadBuffer(ASegs[I].Surface.WidthEnd,4);
+          if IsNan(ASegs[I].Surface.WidthStart) or IsInfinite(ASegs[I].Surface.WidthStart) or
+             IsNan(ASegs[I].Surface.WidthEnd) or IsInfinite(ASegs[I].Surface.WidthEnd) or
+             (ASegs[I].Surface.WidthStart<0) or (ASegs[I].Surface.WidthEnd<0) or
+             ((ASegs[I].Surface.WidthStart=0) xor (ASegs[I].Surface.WidthEnd=0)) or
+             (Max(ASegs[I].Surface.WidthStart,ASegs[I].Surface.WidthEnd)>ASegs[I].Width+0.001) then
+            raise EGeoTileCacheError.Create('Invalid road endpoint widths');
+        end;
       end;
       Result := True;
     finally
@@ -653,7 +685,7 @@ begin
       begin
         M := TTileBinary.LoadFile(Path, [tblBuildings]);
         try
-          if (M.GenHash <> FGenHash) or not M.TileId.Equals(T) then Continue;
+          if (M.GenHash <> ExpectedHash(T)) or not M.TileId.Equals(T) then Continue;
           AOrigin := M.Origin; AObstacles := M.BuildingObstacles;
         finally M.Free end;
       end;

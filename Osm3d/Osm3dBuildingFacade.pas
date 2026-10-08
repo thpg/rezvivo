@@ -6,7 +6,7 @@ unit Osm3dBuildingFacade;
 interface
 
 uses SysUtils, Math, FGL, CastleVectors, X3DNodes,
-  Osm3dGroundComposite, Osm3dStaticGeometry, Osm3dGpuGround;
+  Osm3dGroundComposite, Osm3dStaticGeometry, Osm3dGpuGround, Osm3dFacadeLayout, Osm3dArchitecture;
 
 const
   BUILDING_DETAIL_MAX_TRIANGLES = 65536;
@@ -31,6 +31,7 @@ type
     MinUV, MaxUV: TVector2;
     Area: Double;
     House, Material: Integer;
+    Authored:Integer; { layout index, -1 = automatic }
     Seed: Single;
     Entrance: Boolean;
     function Rectangular: Boolean;
@@ -47,8 +48,11 @@ type
     DetailVertices: TBuildingDetailVertices;
     DetailIndices: TBuildingDetailIndices;
     HouseCount: Integer;
+    AuthoredBalconies, AuthoredCornices:Integer;
+    PhotoTintColors:array of TVector3;
     constructor Create(Mesh: TGroundCompositeMesh; BuildDetails: Boolean;
-      Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0);
+      Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0;
+      const Layouts:TFacadeLayouts=nil; const Tints:TBuildingTints=nil);
     procedure AttachInfo(Geometry: TIndexedFaceSetNode);
     function DetailGeometry: TIndexedFaceSetNode;
     function DetailGeometries: TBuildingDetailGeometryArray;
@@ -72,6 +76,8 @@ type
     EntranceRise: Single;
     FacadeCount: Integer;
     BaseY, EaveY: Single;
+    Authored:Boolean;
+    TintSlot:Integer;
   end;
   THouses = array of THouse;
 
@@ -100,7 +106,7 @@ var A: Double;
 begin
   A := (MaxUV.X-MinUV.X) * (MaxUV.Y-MinUV.Y);
   Result := (A > 0.5) and (MaxUV.Y-MinUV.Y >= 0.9) and
-    (Abs(Area-A) < Max(0.005, A*0.002)) and (MinUV.Y >= -0.02);
+    (Abs(Area-A) < Max(0.005, A*0.002)) and ((Authored>=0) or (MinUV.Y >= -0.02));
 end;
 
 procedure WindowPaneBounds(Material: Integer; out Lo, Hi: TVector2);
@@ -134,7 +140,7 @@ begin
 end;
 
 constructor TBuildingFacadeData.Create(Mesh: TGroundCompositeMesh; BuildDetails: Boolean;
-  Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single);
+  Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single; const Layouts:TFacadeLayouts; const Tints:TBuildingTints);
 var
   Houses: THouses;
   FacadeScale: array of Single;
@@ -142,7 +148,7 @@ var
   Faces: TFaceMap;
   VertexHouse, VertexFace: array of Integer;
   I, J, K, H, F, M, A, B, C, N, UCell, VCell, AddedWindows, WindowLimit: Integer;
-  Eligible, RemainingBoxes, RemainingHouses, Pass: Integer;
+  Eligible, RemainingBoxes, RemainingHouses, Pass, AuthoredHouses: Integer;
   Id: Int64;
   P, P0, E1, E2, TU, TV, O, NN, Rel: TVector3;
   UV0, UV1, UV2, D1, D2: TVector2;
@@ -152,18 +158,95 @@ var
   Frame: TBuildingFacadeFrame;
   DV, DI, DVCapacity, DICapacity: Integer;
   HouseLimit, HasDoor: Boolean;
+  TintCount:Integer;
+
+  function TintSlotFor(AnId:Int64):Integer;
+  var I,J:Integer; C:TVector3; D,Best:Single;
+  begin
+    Result:=0;
+    for I:=0 to High(Tints) do if Tints[I].OsmId=AnId then begin
+      C:=Vector3(((Tints[I].Color shr 16) and 255)/255.0,
+        ((Tints[I].Color shr 8) and 255)/255.0,(Tints[I].Color and 255)/255.0);
+      Best:=1e30;
+      for J:=1 to TintCount-1 do begin
+        D:=(C-PhotoTintColors[J]).LengthSqr;
+        if D<Best then begin Best:=D; Result:=J end;
+      end;
+      if (Best>0.000001) and (TintCount<32) then begin
+        Result:=TintCount; PhotoTintColors[Result]:=C; Inc(TintCount);
+      end;
+      Exit;
+    end;
+  end;
+
+  procedure Box(const Facade:TBuildingFacadeFrame; X0,Y0,X1,Y1,Z0,Z1:Single;
+    const Col:TVector3; Rough:Single; Permanent:Boolean=False); forward;
+
+  procedure AuthoredDetails(LayoutIndex:Integer);
+  var L:TFacadeLayout; Face:TBuildingFacadeFrame;
+      I,J,Bay,FloorIndex:Integer; LeftU,RightU,StartU,EndU,Cursor,FH,Base,Top,Y,X,HalfW,Depth,PostX:Single;
+      Found:Boolean; Pos,Ax,Low,High:TVector3;
+  begin
+    L:=Layouts[LayoutIndex]; Ax:=L.Axis; Found:=False; LeftU:=1e30; RightU:=-1e30;
+    Base:=1e30; Top:=-1e30; FH:=4;
+    Pos:=Vector3(L.A.X+GroundX,0,L.A.Y+GroundZ);
+    for I:=0 to Length(Frames)-1 do if Frames[I].Authored=LayoutIndex then begin
+      Face:=Frames[I]; H:=Face.House; FH:=Face.V.Y;
+      Low:=Face.Origin+Face.U*Face.MinUV.X+Face.V*Face.MinUV.Y;
+      High:=Face.Origin+Face.U*Face.MaxUV.X+Face.V*Face.MaxUV.Y;
+      LeftU:=Min(LeftU,TVector3.DotProduct(Low-Pos,Ax));
+      RightU:=Max(RightU,TVector3.DotProduct(High-Pos,Ax));
+      Base:=Min(Base,Low.Y); Top:=Max(Top,High.Y); Found:=True;
+    end;
+    if not Found then Exit;
+    Face.Origin:=Vector3(Pos.X,Base,Pos.Z); Face.U:=Ax; Face.V:=Vector3(0,FH,0); Face.Normal:=L.Normal;
+    { Long cornices use one closed box, not a box at every window. }
+    for I:=0 to Length(L.Cornices)-1 do begin
+      Y:=L.Cornices[I]*FH;
+      if (Y<0.20) or (Base+Y>Top+0.02) then Continue;
+      if (Houses[H].DetailTriangles+12>Houses[H].DetailBudget) or (DI div 4+12>BUILDING_DETAIL_MAX_TRIANGLES) then Break;
+      Depth:=0.22; if Abs(Base+Y-Top)<0.1 then Depth:=0.38;
+      Box(Face,LeftU,Y-0.20,RightU,Min(Y,Top-Base),0.006,Depth,Vector3(0.66,0.61,0.52),0.87,True);
+      Inc(AuthoredCornices);
+    end;
+    Cursor:=LeftU;
+    while Cursor<RightU-0.001 do begin
+      L.BayAt(Cursor+0.00002,Bay,StartU,EndU);
+      X:=(StartU+EndU)*0.5; HalfW:=(EndU-StartU)*L.BalconyWidth*0.5; Depth:=L.BalconyDepth;
+      { The tile owning the bay centre emits the complete balcony. No torn
+        railings at a clipped tile edge, and no duplicate neighbour geometry. }
+      if (X>=LeftU-0.00001) and (X<RightU-0.00001) then
+        for FloorIndex:=1 to 23 do if (L.Bays[Bay].BalconyFloors and (LongWord(1) shl FloorIndex))<>0 then begin
+          Y:=(FloorIndex-L.Bays[Bay].FloorShift+0.224609375)*FH-0.08;
+          if (Base+Y+0.85>=Top) then Continue;
+          if (Houses[H].DetailTriangles+120>Houses[H].DetailBudget) or (DI div 4+120>BUILDING_DETAIL_MAX_TRIANGLES) then Exit;
+          Box(Face,X-HalfW,Y-0.14,X+HalfW,Y,0.006,Depth,Vector3(0.57,0.54,0.47),0.9,True);
+          Box(Face,X-HalfW-0.025,Y+0.78,X+HalfW+0.025,Y+0.84,Depth-0.11,Depth+0.025,Vector3(0.63,0.60,0.53),0.7,True);
+          Box(Face,X-HalfW-0.025,Y+0.78,X-HalfW+0.11,Y+0.84,0.006,Depth,Vector3(0.63,0.60,0.53),0.7,True);
+          Box(Face,X+HalfW-0.11,Y+0.78,X+HalfW+0.025,Y+0.84,0.006,Depth,Vector3(0.63,0.60,0.53),0.7,True);
+          for J:=0 to 5 do begin
+            PostX:=X-HalfW+0.055+(2*HalfW-0.11)*J/5;
+            Box(Face,PostX-0.055,Y,PostX+0.055,Y+0.78,Depth-0.10,Depth,Vector3(0.52,0.49,0.43),0.85,True);
+          end;
+          Inc(AuthoredBalconies);
+        end;
+      Cursor:=EndU;
+    end;
+  end;
 
   procedure SetInfo(Index: Integer; X, Y, Seed, FaceSeed: Single);
   begin
     Info[Index*4] := X;
     Info[Index*4+1] := Y;
-    Info[Index*4+2] := Seed;
+    { Keep the 16-bit identity intact; the high bits select a small uniform
+      palette. No extra attribute or per-vertex memory for authored colours. }
+    Info[Index*4+2] := Seed+Houses[VertexHouse[Index]].TintSlot*65536;
     Info[Index*4+3] := FaceSeed;
   end;
 
   procedure Box(const Facade: TBuildingFacadeFrame;
     X0, Y0, X1, Y1, Z0, Z1: Single; const Col: TVector3; Rough: Single;
-    Permanent:Boolean=False);
+    Permanent:Boolean);
   var
     Points: array[0..7] of TVector3;
     NX, NY, NZ, Anchor, Axis: TVector3;
@@ -269,6 +352,7 @@ var
 
 begin
   inherited Create;
+  SetLength(PhotoTintColors,32); TintCount:=1;
   if Mesh=nil then Exit;
   Houses:=nil;
   Ids:=TIdMap.Create; Faces:=TFaceMap.Create;
@@ -289,6 +373,7 @@ begin
         Houses[H].PrimaryFace:=-1;
         Houses[H].EntranceFace:=-1; Houses[H].EntranceRise:=1e30;
         Houses[H].Seed:=BuildingStableSeed(Id);
+        Houses[H].TintSlot:=TintSlotFor(Id);
         { Zero identifies generated/non-building geometry: no invented houses. }
         if Id=0 then Houses[H].Seed:=0;
         Ids.Add(Id,H);
@@ -305,6 +390,7 @@ begin
     begin
       A:=Mesh.Indices[I*3]; B:=Mesh.Indices[I*3+1]; C:=Mesh.Indices[I*3+2];
       M:=Mesh.MatIdOf(A); H:=VertexHouse[A];
+      if IsArchitectureUV(Mesh.UVOf(A)) then Continue;
       if not IsWall(M) or (Houses[H].Seed=0) or
         (VertexHouse[B]<>H) or (VertexHouse[C]<>H) or
         (Mesh.MatIdOf(B)<>M) or (Mesh.MatIdOf(C)<>M) then Continue;
@@ -331,6 +417,12 @@ begin
         Frames[F].Origin:=O; Frames[F].U:=TU; Frames[F].V:=TV; Frames[F].Normal:=NN;
         Frames[F].MinUV:=UV0; Frames[F].MaxUV:=UV0;
         Frames[F].House:=H; Frames[F].Material:=M;
+        Frames[F].Authored:=-1;
+        for J:=0 to High(Layouts) do
+          if (Layouts[J].OsmId=Mesh.OsmIdOf(A)) and
+            Layouts[J].Matches(P0+E1*0.333333+E2*0.333333,NN,GroundX,GroundZ) then begin
+            Frames[F].Authored:=J; Houses[H].Authored:=True; Break;
+          end;
         { Stable under scene-origin translation. Orientation and origin both
           participate, so parallel facades do not repeat the same rooms. }
         Frames[F].Seed:=BuildingStableSeed(Trunc(Houses[H].Seed)*Int64(104729)+
@@ -353,6 +445,7 @@ begin
     SetLength(FacadeScale,Length(Frames));
     for F:=0 to High(Frames) do begin
       FacadeScale[F]:=1; Frame:=Frames[F]; H:=Frame.House;
+      if Frame.Authored>=0 then Continue;
       if not Frame.Rectangular or (Abs(Frame.MinUV.X)>0.001) or
         (Abs(Frame.MaxUV.X-Round(Frame.MaxUV.X))>0.001) or (Frame.MaxUV.X<1) then Continue;
       Height:=Houses[H].MaxP.Y-Houses[H].MinP.Y;
@@ -375,10 +468,10 @@ begin
       H:=Frames[F].House;
       Width:=(Frames[F].MaxUV.X-Frames[F].MinUV.X)*Frames[F].U.Length;
       Height:=(Frames[F].MaxUV.Y-Frames[F].MinUV.Y)*Frames[F].V.Y;
-      if Frames[F].Rectangular and (Frames[F].MinUV.Y<0.02) then
+      if Frames[F].Rectangular and ((Frames[F].Authored>=0) or (Frames[F].MinUV.Y<0.02)) then
       begin
         Inc(Houses[H].FacadeCount);
-        Houses[H].BaseY:=Min(Houses[H].BaseY,Frames[F].Origin.Y);
+        Houses[H].BaseY:=Min(Houses[H].BaseY,Frames[F].Origin.Y+Frames[F].MinUV.Y*Frames[F].V.Y);
         Houses[H].EaveY:=Max(Houses[H].EaveY,Frames[F].Origin.Y+Frames[F].MaxUV.Y*Frames[F].V.Y);
         if (Width>=2) and (Height>=2.3) then
         begin
@@ -388,7 +481,7 @@ begin
             Houses[H].PrimaryFace:=F;
         end;
       end;
-      if Frames[F].Rectangular and (Frames[F].MinUV.Y<0.02) and
+      if (Frames[F].Authored<0) and Frames[F].Rectangular and (Frames[F].MinUV.Y<0.02) and
         (Frames[F].MinUV.X<0.02) and (Width>5) and (Height>2.3) and (Height<25) and
         (Frames[F].U.Length>=1.35) and (Frames[F].MaxUV.X>=1.0) and
         ((Ground<>nil) or not Houses[H].Entrance) then
@@ -411,16 +504,23 @@ begin
     for I:=0 to Mesh.VertexCount-1 do
     begin
       H:=VertexHouse[I]; P:=Mesh.PositionOf(I); F:=VertexFace[I];
-      if not IsWall(Mesh.MatIdOf(I)) then
+      if IsArchitectureUV(Mesh.UVOf(I)) then begin
+        { Stable local metric coordinates for architectural paint/stone.
+          Payload is forwarded directly by the vertex shader. No automatic
+          windows, invented entrance or duplicate near-detail geometry. }
+        NN:=Mesh.NormalOf(I);Rel:=P-Houses[H].MinP;
+        SetInfo(I,Rel.X*NN.Z-Rel.Z*NN.X,Rel.Y,Houses[H].Seed,0);
+      end else if not IsWall(Mesh.MatIdOf(I)) then
         SetInfo(I,P.X-Houses[H].MinP.X,P.Z-Houses[H].MinP.Z,Houses[H].Seed,0)
       else if F>=0 then
       begin
         { Foundation and wall share a physical datum: no new horizontal seam.
           Bits 16/17 select entrance/window facade; the low 16 bits stay stable. }
         if Frames[F].Rectangular then
-          SetInfo(I,P.Y-Frames[F].Origin.Y,
+          SetInfo(I,P.Y-(Frames[F].Origin.Y+Frames[F].MinUV.Y*Frames[F].V.Y),
             Frames[F].Origin.Y+Frames[F].MaxUV.Y*Frames[F].V.Y-P.Y,
-            Houses[H].Seed,Frames[F].Seed+Ord(Frames[F].Entrance)*65536+131072)
+            Houses[H].Seed,Frames[F].Seed+Ord(Frames[F].Entrance)*65536+131072+
+              Ord(Frames[F].Authored>=0)*FACADE_AUTHORED_BIT)
         else
           SetInfo(I,P.Y-Houses[H].BaseY,Houses[H].EaveY-P.Y,Houses[H].Seed,Frames[F].Seed);
       end
@@ -433,14 +533,28 @@ begin
       Small tiles keep full trim; dense ones retain a few larger silhouette cues. }
     RemainingBoxes:=BUILDING_DETAIL_MAX_TRIANGLES div 12;
     RemainingHouses:=Eligible;
+    AuthoredHouses:=0;
     for H:=0 to High(Houses) do
-      if Houses[H].PrimaryFace>=0 then
+      if (Houses[H].PrimaryFace>=0) and Houses[H].Authored then Inc(AuthoredHouses);
+    for H:=0 to High(Houses) do
+      if (Houses[H].PrimaryFace>=0) and Houses[H].Authored then begin
+        { A dense Moscow tile can have thousands of houses. Reserving even
+          three boxes for each would starve every accepted landmark. Reserve
+          at least half for automatic houses while prioritising authored work. }
+        N:=Min(8192 div 12,RemainingBoxes div Max(2,AuthoredHouses+1));
+        Houses[H].DetailBudget:=N*12;
+        Dec(RemainingBoxes,N); Dec(RemainingHouses); Dec(AuthoredHouses);
+      end;
+    for H:=0 to High(Houses) do
+      if (Houses[H].PrimaryFace>=0) and not Houses[H].Authored then
       begin
-        N:=Min(BUILDING_DETAIL_PER_HOUSE div 12,RemainingBoxes div Max(1,RemainingHouses));
+        N:=BUILDING_DETAIL_PER_HOUSE div 12;
+        N:=Min(N,RemainingBoxes div Max(1,RemainingHouses));
         Houses[H].DetailBudget:=N*12;
         Dec(RemainingBoxes,N); Dec(RemainingHouses);
       end;
     DV:=0; DI:=0; DVCapacity:=0; DICapacity:=0;
+    for I:=0 to High(Layouts) do AuthoredDetails(I);
     { A shorter entrance wall must get its ground contact BEFORE trim on the
       primary facade consumes the house budget. }
     for F:=0 to High(Frames) do if Frames[F].Entrance then EntranceSteps(Frames[F]);
@@ -448,6 +562,7 @@ begin
     for F:=0 to High(Frames) do
     begin
       Frame:=Frames[F]; H:=Frame.House;
+      if Frame.Authored>=0 then Continue;
       if (Pass=0)<>(Houses[H].PrimaryFace=F) then Continue;
       if Houses[H].DetailTriangles>=Houses[H].DetailBudget then Continue;
       if not Frame.Rectangular then Continue;
@@ -613,7 +728,7 @@ begin
         Inc(AtV,24); Inc(AtI,48); B:=Next[B];
       end;
       Result[C]:=MakeDetailGeometry(V,IX);
-      if TVector3.Equals(V[0].Position,V[0].Anchor) then Result[C].X3DName:='BuildingEntrances';
+      if TVector3.Equals(V[0].Position,V[0].Anchor) then Result[C].X3DName:='BuildingStructure';
     end;
   finally Cells.Free end;
 end;

@@ -12,7 +12,7 @@ type
   TWaterLevelEdge = record A,B: TScatterPoint; end;
   TWaterLevelRoad = record
     A,B: TScatterPoint;
-    HalfWidth,Len: Single;
+    HalfWidth,HalfWidth0,HalfWidth1,Len: Single;
     FordA,FordB: Boolean;
   end;
   TWaterLevelAxis = record
@@ -453,9 +453,11 @@ begin
        Ford(Way.Tags) or (Way.Tags.GetLower('area')='yes') then Continue;
     Params:=TRoadBuilder.ParseRoadParams(Way.Tags);
     if (Params.Kind=rkNone) or (Params.Kind=rkRailway) then Continue;
-    Road.HalfWidth:=Params.Width*0.5;
-    R:=Road.HalfWidth+ROAD_SHOULDER+ROAD_WATER_BLEND;
     for I:=1 to High(Way.NodeRefs) do begin
+      Road.HalfWidth0:=WayNodeWidth(Way,I-1,Params.Width)*0.5;
+      Road.HalfWidth1:=WayNodeWidth(Way,I,Params.Width)*0.5;
+      Road.HalfWidth:=Max(Road.HalfWidth0,Road.HalfWidth1);
+      R:=Road.HalfWidth+ROAD_SHOULDER+ROAD_WATER_BLEND;
       A:=Dataset.FindNode(Way.NodeRefs[I-1]);B:=Dataset.FindNode(Way.NodeRefs[I]);
       if (A=nil) or (B=nil) then Continue;
       P:=NodePlanePos(Dataset,A,FProjection);Road.A.X:=P.X;Road.A.Z:=P.Z;
@@ -488,7 +490,8 @@ begin
   if (CX<0) or (CZ<0) or (CX>=FCols) or (CZ>=FRows) then Exit;
   for K:=0 to High(FRoadGrid[CZ*FCols+CX]) do begin
     Road:=@FRoads[FRoadGrid[CZ*FCols+CX][K]];
-    D:=DistanceToSegment(X,Z,Road^.A,Road^.B,T)-Road^.HalfWidth-ROAD_SHOULDER;
+    D:=DistanceToSegment(X,Z,Road^.A,Road^.B,T);
+    D-=Road^.HalfWidth0+(Road^.HalfWidth1-Road^.HalfWidth0)*T+ROAD_SHOULDER;
     if D>=ROAD_WATER_BLEND then Continue;
     if D<=0 then W:=1 else begin F:=D/ROAD_WATER_BLEND;W:=1-F*F*(3-2*F);end;
     { A node-tagged ford opens only its crossing, not the entire OSM way. }

@@ -649,6 +649,8 @@ var
   Node: TOSMNode;
   PCenter: TVector3;
   HalfW: Single;
+  HalfWidths: TRibbonWidthArray;
+  WidthOffset:Integer;
   Center: TRibbonVertexArray;
   SpV1x, SpV1z, SpV2x, SpV2z, SpL1, SpL2: Single;
   Edges: TRibbonEdgePointArray;
@@ -794,6 +796,15 @@ begin
   N := Length(Refs);
   if N < 2 then Exit;
   HalfW := Width * 0.5;
+  WidthOffset:=0;
+  if Way.HasPhotoProfile then begin
+    while (WidthOffset<Length(Way.NodeRefs)) and (Way.NodeRefs[WidthOffset]<>Refs[0]) do Inc(WidthOffset);
+    SetLength(HalfWidths,N);
+    for I:=0 to N-1 do begin
+      HalfWidths[I]:=WayNodeWidth(Way,WidthOffset+I,Width)*0.5;
+      HalfW:=Max(HalfW,HalfWidths[I]);
+    end;
+  end;
 
   { Tag the ribbon's vertices with the OSM way id (both emitters go through AddVertex, which stamps
     CurrentOsmId; the id survives the terrain clip since it copies whole vertex records). Reset in
@@ -899,7 +910,7 @@ begin
     with mitre/bevel/round joints, then route to ProjectRibbonFromEdges (terrain-clipped) or
     EmitFlatQuadsFromEdges (no-sampler fallback). Smoothing + joint logic lives in Osm3dGeomRoadJoints. }
   BuildSmoothRibbonEdges(Center, HalfW, Edges, Stats,
-    CR_DEFAULT_CHORD_ERR_M, NoFillet);
+    CR_DEFAULT_CHORD_ERR_M, NoFillet, HalfWidths);
 
   if Length(Edges) < 2 then Exit;
 
@@ -1121,9 +1132,14 @@ begin
             if (NA = nil) or (NB = nil) then Continue;
             PA := NodePlanePos(FDataset, NA, FProjection);   { int-first }
             PB := NodePlanePos(FDataset, NB, FProjection);
-            PushSeg(PA, PB, Job.Params.Width, Job.Way.Id);
+            PushSeg(PA, PB, Max(WayNodeWidth(Job.Way,NI,Job.Params.Width),
+              WayNodeWidth(Job.Way,NI+1,Job.Params.Width)), Job.Way.Id);
             with FSegs[FSegCnt-1].Surface do
             begin
+              if Job.Way.HasPhotoProfile then begin
+                WidthStart:=WayNodeWidth(Job.Way,NI,Job.Params.Width);
+                WidthEnd:=WayNodeWidth(Job.Way,NI+1,Job.Params.Width);
+              end;
               Layout := Job.Params.Layout;
               ForwardLanes := Job.Params.LanesForward;
               BackwardLanes := Job.Params.LanesBackward;
@@ -1272,6 +1288,7 @@ var
 
   function CompatParams(ja, jb: Integer): Boolean;
   begin
+    if Jobs[ja].Way.HasPhotoProfile or Jobs[jb].Way.HasPhotoProfile then Exit(False);
     with Jobs[ja].Params do
       Result := (Kind = Jobs[jb].Params.Kind)
         and (Material = Jobs[jb].Params.Material)
@@ -1618,7 +1635,7 @@ begin
       end;
 
     if Assigned(LogProc) then
-      LogProc(Format('road centerline segments: %d (%d jobs, %d workers, %.1f s)',
+      LogProc(Format('road centerline segments: %d (%d jobs, %d workers, %0.1f s)',
         [segTotal, JobCount, NumWorkers, (Now - TStart) * 86400]));
 
     { осевые мостов — только в снап-слой (IsBridge=True) }

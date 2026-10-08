@@ -55,15 +55,29 @@ type
     const URL: string; const Bytes: TBytes;
     const ContentType: string): string of object;
 
+  { Optional normalization of successful network bodies before validation and
+    persistence (e.g. removing echoed API credentials from pagination URLs). }
+  TResponseFilter = procedure(Sender: TObject; const URL: string;
+    var Bytes: TBytes) of object;
+
+  { Optional platform transport for public GET only. Return False without
+    doing I/O to retain the default backend. Cache, validation, size limits,
+    progress and retry policy stay owned by this fetcher. No credentials are
+    passed and authenticated requests never invoke this hook. }
+  TPublicGetTransport = function(const URL:string; ConnectMs,ReadMs:Integer;
+    Response:TStream;ResponseHeaders:TStrings;out Status:Integer):Boolean of object;
+
   THTTPFetcherWithCache = class
   private
     FCache:           TCacheBase;
     FOwnsCache:       Boolean;
     FUserAgent:       string;
+    FAuthenticationHeaderName: string;
     FMaxRetries:      Integer;
     FRetryBaseMs:     Integer;
     FRetryMaxMs:      Integer;
     FTimeoutMs:       Integer;
+    FMaxResponseBytes: Int64;
     FAbortAll:        Boolean;
     { Живые клиенты DoHttp — для teardown-отмены: из другого потока им
       выставляется Terminated + ужатые таймауты, и застрявшие фазы чтения
@@ -79,12 +93,15 @@ type
     FOnCacheHit:        TCacheHitEvent;
     FOnError:           TFetchErrorEvent;
     FOnValidate:        TResponseValidator;
+    FOnPrepareResponse: TResponseFilter;
+    FPublicGetTransport: TPublicGetTransport;
 
     function MakeKey(const URL, Method: string; const Body: TBytes;
                      const CacheKeyOverride: string): string;
     function HashBytes(const B: TBytes): string;
     function DoHttp(const URL, Method, ContentType: string;
-                    const Body: TBytes; ConnectTimeoutLimitMs, AttemptLimit: Integer): TFetchResult;
+                    const Body: TBytes; ConnectTimeoutLimitMs, AttemptLimit: Integer;
+                    const Authorization: string = ''): TFetchResult;
     function DoAuthenticatedOSM(const URL, Method: string; const Body: TBytes;
       ConnectTimeoutLimitMs: Integer): TFetchResult;
     function CheckOsmAbort: Boolean;
@@ -96,7 +113,9 @@ type
                            const Body: TBytes;
                            const CacheKeyOverride: string;
                            ConnectTimeoutLimitMs: Integer = 0;
-                           AttemptLimit: Integer = 0): TFetchResult;
+                           AttemptLimit: Integer = 0;
+                           const Authorization: string = '';
+                           BypassCache: Boolean = False): TFetchResult;
   public
     constructor Create(ACache: TCacheBase; AOwnsCache: Boolean = False);
     destructor  Destroy; override;
@@ -114,6 +133,12 @@ type
 
     function GetUrl(const URL: string; ConnectTimeoutLimitMs: Integer = 0;
       AttemptLimit: Integer = 0): TFetchResult;
+    { Stable public-resource key, independent of expiring download URLs.
+      Credentials go only into a request header, never the cache key.
+      Authenticated requests do not follow redirects. }
+    function GetUrlWithKey(const URL, CacheKey: string;
+      const Authorization: string = ''; ConnectTimeoutLimitMs: Integer = 0;
+      AttemptLimit: Integer = 0; BypassCache: Boolean = False): TFetchResult;
     procedure InvalidateGetUrl(const URL: string);
     { Только из кэша, без сети; валидатор чистит битые записи. }
     function GetUrlCachedOnly(const URL: string): TFetchResult;
@@ -134,10 +159,15 @@ type
 
     property Cache:       TCacheBase read FCache;
     property UserAgent:   string  read FUserAgent  write FUserAgent;
+    { Private photo clients also use X-API-Key. Credentials never redirect. }
+    property AuthenticationHeaderName: string read FAuthenticationHeaderName write FAuthenticationHeaderName;
     property MaxRetries:  Integer read FMaxRetries write FMaxRetries;
     property RetryBaseMs: Integer read FRetryBaseMs write FRetryBaseMs;
     property RetryMaxMs:  Integer read FRetryMaxMs  write FRetryMaxMs;
     property TimeoutMs:   Integer read FTimeoutMs  write FTimeoutMs;
+    property PublicGetTransport:TPublicGetTransport read FPublicGetTransport write FPublicGetTransport;
+    { 0 keeps the existing unlimited behaviour. Configure before workers start. }
+    property MaxResponseBytes: Int64 read FMaxResponseBytes write FMaxResponseBytes;
 
     property ProgressMinBytes:      Int64 read FProgressMinBytes      write FProgressMinBytes;
     property ProgressMinIntervalMs: Int64 read FProgressMinIntervalMs write FProgressMinIntervalMs;
@@ -155,6 +185,7 @@ type
 
     property OnValidateResponse: TResponseValidator
       read FOnValidate write FOnValidate;
+    property OnPrepareResponse: TResponseFilter read FOnPrepareResponse write FOnPrepareResponse;
   end;
 
 { Процессный замок на МУТАЦИЮ конфигурации фетчеров (TimeoutMs/MaxRetries/
@@ -198,6 +229,33 @@ threadvar
   TLS_CurLastReportTime:  TDateTime;
   TLS_CurLastReportBytes: Int64;
 
+type
+  EResponseTooLarge = class(Exception);
+  TCheckedHttpOutput=class(TStream)
+  private
+    FTarget:TStream;
+    FOwner:THTTPFetcherWithCache;
+    FHeaders:TStrings;
+  public
+    constructor Create(ATarget:TStream;AOwner:THTTPFetcherWithCache;AHeaders:TStrings);
+    function Write(const Buffer;Count:LongInt):LongInt;override;
+    function Read(var Buffer;Count:LongInt):LongInt;override;
+    function Seek(const Offset:Int64;Origin:TSeekOrigin):Int64;override;
+  end;
+
+constructor TCheckedHttpOutput.Create(ATarget:TStream;AOwner:THTTPFetcherWithCache;AHeaders:TStrings);
+begin inherited Create;FTarget:=ATarget;FOwner:=AOwner;FHeaders:=AHeaders end;
+function TCheckedHttpOutput.Write(const Buffer;Count:LongInt):LongInt;
+begin
+  { Enforce the limit BEFORE growing the buffer, including unknown lengths. }
+  FOwner.InternalDataReceived(nil,StrToInt64Def(Trim(FHeaders.Values['Content-Length']),0),FTarget.Position+Count);
+  Result:=FTarget.Write(Buffer,Count);
+end;
+function TCheckedHttpOutput.Read(var Buffer;Count:LongInt):LongInt;
+begin Result:=FTarget.Read(Buffer,Count) end;
+function TCheckedHttpOutput.Seek(const Offset:Int64;Origin:TSeekOrigin):Int64;
+begin Result:=FTarget.Seek(Offset,Origin) end;
+
 class function TFetchResult.Failure(const AErr: string;
                                     AStatusCode: Integer): TFetchResult;
 begin
@@ -222,6 +280,7 @@ begin
   FRetryBaseMs := 500;
   FRetryMaxMs  := 15000;
   FTimeoutMs   := 30000;
+  FMaxResponseBytes := 0;
   FAbortAll    := False;
   FProgressMinBytes      := 256 * 1024;
   FProgressMinIntervalMs := 1000;
@@ -328,6 +387,9 @@ begin
     всплывёт в DoHttp и попытка завершится неудачей, ретраи пропустятся. }
   if FAbortAll then
     raise EAbort.Create('fetch aborted (teardown)');
+  if (FMaxResponseBytes > 0) and
+     ((CurrentPos > FMaxResponseBytes) or (ContentLength > FMaxResponseBytes)) then
+    raise EResponseTooLarge.Create('HTTP response exceeds configured size limit');
   if not Assigned(FOnNetworkProgress) then Exit;
   if TLS_CurURL = '' then Exit;
 
@@ -418,7 +480,8 @@ end;
 
 function THTTPFetcherWithCache.DoHttp(const URL, Method, ContentType: string;
                                       const Body: TBytes;
-                                      ConnectTimeoutLimitMs, AttemptLimit: Integer): TFetchResult;
+                                      ConnectTimeoutLimitMs, AttemptLimit: Integer;
+                                      const Authorization: string): TFetchResult;
 var
   Client:      TFPHTTPClient;
   Response:    TBytesStream;
@@ -431,6 +494,9 @@ var
   ElapsedMs:   Int64;
   PartialSize: Int64;
   BackoffMs:   Integer;
+  UsedTransport:Boolean;
+  TransportHeaders:TStringList;
+  TransportOutput:TCheckedHttpOutput;
   {$ifdef REZVIVO_STARTUP_TIMING}
   TimingStart: QWord;
   {$endif}
@@ -455,7 +521,11 @@ begin
   end;
   try
     Client.AddHeader('User-Agent', FUserAgent);
-    Client.AllowRedirect  := True;
+    Client.AllowRedirect  := Authorization = '';
+    if Authorization <> '' then begin
+      if SameText(FAuthenticationHeaderName,'X-API-Key') then Client.AddHeader('X-API-Key',Authorization)
+      else Client.AddHeader('Authorization', Authorization);
+    end;
     Client.ConnectTimeout := FTimeoutMs;
     { A per-request cap lets endpoint failover skip a dead connection quickly,
       without shortening query execution/read time or mutating a shared fetcher. }
@@ -479,6 +549,7 @@ begin
       end;
       Response := TBytesStream.Create;
       RequestBody := nil;
+      TransportHeaders:=nil;TransportOutput:=nil;UsedTransport:=False;StatusCode:=0;
       try
         if Assigned(FOnNetworkRequest) then
           FOnNetworkRequest(Self, URL, Method, Length(Body));
@@ -493,7 +564,21 @@ begin
 
         try
           if Method = 'GET' then
-            Client.Get(URL, Response)
+          begin
+            if (Authorization='') and Assigned(FPublicGetTransport) then
+            begin
+              TransportHeaders:=TStringList.Create;TransportHeaders.NameValueSeparator:=':';
+              TransportOutput:=TCheckedHttpOutput.Create(Response,Self,TransportHeaders);
+              { Mark the attempted transport before calling it so an
+                exception never reads a stale status from the unused client. }
+              UsedTransport:=True;
+              UsedTransport:=FPublicGetTransport(URL,Client.ConnectTimeout,FTimeoutMs,
+                TransportOutput,TransportHeaders,StatusCode);
+              if UsedTransport then InternalDataReceived(nil,
+                StrToInt64Def(Trim(TransportHeaders.Values['Content-Length']),0),Response.Size);
+            end;
+            if not UsedTransport then Client.Get(URL, Response);
+          end
           else if Method = 'POST' then
           begin
             RequestBody := TBytesStream.Create(Body);
@@ -518,8 +603,9 @@ begin
           end;
           { FPC Post accepts any status unless explicitly checked. A valid
             JSON/PNG error body must never become a successful cache entry. }
-          if(Client.ResponseStatusCode<200)or(Client.ResponseStatusCode>=300)then
-            raise Exception.CreateFmt('HTTP %d',[Client.ResponseStatusCode]);
+          if not UsedTransport then StatusCode:=Client.ResponseStatusCode;
+          if(StatusCode<200)or(StatusCode>=300)then
+            raise Exception.CreateFmt('HTTP %d',[StatusCode]);
           ElapsedMs := MilliSecondsBetween(Now, StartTime);
 
           Result.Success := True;
@@ -529,9 +615,14 @@ begin
             SetLength(Result.Data, Response.Size);
             Move(Response.Bytes[0], Result.Data[0], Response.Size);
           end;
-          Result.StatusCode  := Client.ResponseStatusCode;
-          Result.ContentType := Client.ResponseHeaders.Values['Content-Type'];
-          Result.ETag        := Client.ResponseHeaders.Values['ETag'];
+          Result.StatusCode  := StatusCode;
+          if UsedTransport then begin
+            Result.ContentType:=Trim(TransportHeaders.Values['Content-Type']);
+            Result.ETag:=Trim(TransportHeaders.Values['ETag']);
+          end else begin
+            Result.ContentType := Client.ResponseHeaders.Values['Content-Type'];
+            Result.ETag        := Client.ResponseHeaders.Values['ETag'];
+          end;
           Result.FromCache   := False;
           Result.ErrorMsg    := '';
 
@@ -543,6 +634,12 @@ begin
         except
           on E: Exception do
           begin
+            if E is EResponseTooLarge then
+            begin
+              if not UsedTransport then StatusCode:=Client.ResponseStatusCode;
+              Result := TFetchResult.Failure(E.Message, StatusCode);
+              Exit;
+            end;
             if Client.Terminated or FAbortAll then
             begin
               Result := TFetchResult.Failure('aborted');
@@ -558,7 +655,7 @@ begin
             end;
 
             ErrMsg := E.Message;
-            StatusCode := Client.ResponseStatusCode;
+            if not UsedTransport then StatusCode := Client.ResponseStatusCode;
 
             if Assigned(FOnError) then
               FOnError(Self, URL, ErrMsg, Attempt, PartialSize, ElapsedMs);
@@ -594,6 +691,7 @@ begin
         TLS_CurURL := '';
         TLS_CurMethod := '';
         RequestBody.Free;
+        TransportOutput.Free;TransportHeaders.Free;
         Response.Free;
       end;
     end;
@@ -616,7 +714,9 @@ function THTTPFetcherWithCache.FetchInternal(const URL, Method, ContentType: str
                                              const Body: TBytes;
                                              const CacheKeyOverride: string;
                                             ConnectTimeoutLimitMs: Integer;
-                                            AttemptLimit: Integer): TFetchResult;
+                                            AttemptLimit: Integer;
+                                            const Authorization: string;
+                                            BypassCache: Boolean): TFetchResult;
 var
   Key: string;
   Data: TBytes;
@@ -632,7 +732,7 @@ begin
     вызове). Раньше здесь возвращался отказ: отравленный ключ (например,
     HTML-заглушка CDN с кодом 200 вместо PNG) лечился только со СЛЕДУЮЩЕГО
     обращения, и потребитель до тех пор сидел на своём fallback'е. }
-  if (FCache <> nil) and FCache.Get(Key, Data, Meta) then
+  if not BypassCache and (FCache <> nil) and FCache.Get(Key, Data, Meta) then
   begin
     ValidateMsg := '';
     if Assigned(FOnValidate) then
@@ -656,9 +756,12 @@ begin
   end;
 
   NetworkStarted:=GetTickCount64;
-  Result := DoHttp(URL, Method, ContentType, Body, ConnectTimeoutLimitMs, AttemptLimit);
+  Result := DoHttp(URL, Method, ContentType, Body, ConnectTimeoutLimitMs, AttemptLimit, Authorization);
   AuditMapRequest(URL,Method,Result.StatusCode,Length(Result.Data),GetTickCount64-NetworkStarted);
   if not Result.Success then Exit;
+
+  if Assigned(FOnPrepareResponse) then
+    FOnPrepareResponse(Self, URL, Result.Data);
 
   if Assigned(FOnValidate) then
   begin
@@ -686,6 +789,18 @@ function THTTPFetcherWithCache.GetUrl(const URL: string;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(59);{$ENDIF}
   Result := FetchInternal(URL, 'GET', '', nil, '', ConnectTimeoutLimitMs, AttemptLimit);
+end;
+
+function THTTPFetcherWithCache.GetUrlWithKey(const URL, CacheKey: string;
+  const Authorization: string; ConnectTimeoutLimitMs, AttemptLimit: Integer;
+  BypassCache: Boolean): TFetchResult;
+begin
+  if CacheKey = '' then
+    Exit(TFetchResult.Failure('An explicit cache key is required'));
+  if (Pos(#13, Authorization) > 0) or (Pos(#10, Authorization) > 0) then
+    Exit(TFetchResult.Failure('Invalid authorization header'));
+  Result := FetchInternal(URL, 'GET', '', nil, CacheKey,
+    ConnectTimeoutLimitMs, AttemptLimit, Authorization, BypassCache);
 end;
 
 procedure THTTPFetcherWithCache.InvalidateGetUrl(const URL: string);

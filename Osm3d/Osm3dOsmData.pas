@@ -84,11 +84,18 @@ type
   end;
 
   { Closed if NodeRefs[0] = NodeRefs[High] and Length >= 4. }
+  TOSMSingleArray = array of Single;
+  TOSMIdArray = array of Int64;
   TOSMWay = class
   public
     Id:       Int64;
     NodeRefs: array of Int64;
     Tags:     TOSMTags;
+
+    { Compiled once from reviewed photo knowledge, before every native builder.
+      NodeRefs remains the shared centreline; no renderer-only displacement. }
+    PhotoWidths: TOSMSingleArray;
+    HasPhotoProfile: Boolean;
 
     constructor Create(AId: Int64);
     destructor Destroy; override;
@@ -126,6 +133,8 @@ type
     FRelations:    TOSMRelationMap;
     FLatticeReady: Boolean;   { PrecomputeLattice вызван — LatticeX/Z валидны }
   public
+    { Set only by the immutable photo recipe snapshot, before lattice baking. }
+    HasLocalPhotoVegetation: Boolean;
     constructor Create;
     destructor Destroy; override;
 
@@ -182,8 +191,16 @@ type
   одна целочисленная истина плана на все категории. }
 function NodePlanePos(ADataset: TOSMDataset; ANode: TOSMNode;
   AProjection: TLocalProjection; AElevation: Double = 0): TVector3;
+function WayNodeWidth(Way:TOSMWay; Index:Integer; DefaultWidth:Single):Single; inline;
 
 implementation
+
+function WayNodeWidth(Way:TOSMWay; Index:Integer; DefaultWidth:Single):Single;
+begin
+  Result:=DefaultWidth;
+  if (Way<>nil) and (Index>=0) and (Index<Length(Way.PhotoWidths)) then
+    Result:=Way.PhotoWidths[Index];
+end;
 
 constructor TOSMTags.Create;
 begin

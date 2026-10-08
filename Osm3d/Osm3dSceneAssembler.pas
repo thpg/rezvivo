@@ -42,7 +42,7 @@ uses
   Osm3dWaterShader,
   Osm3dCompositeShader,
   Osm3dBuildingTextures,
-  Osm3dBuildingComposite,
+  Osm3dBuildingComposite, Osm3dFacadeLayout, Osm3dArchitecture,
   Osm3dGeomFences,
   Osm3dFenceComposite,
   Osm3dGeomPlates,
@@ -5662,6 +5662,42 @@ var
     Result.X3DName := 'AtlasBuilding_' + IntToStr(Ord(MK));
   end;
 
+  { Resource-free fallback for architectural payloads. Normally the shared
+    composite shader handles them. If an atlas cannot be created, keep their
+    authored colours instead of sampling a texture at packed integer UVs.
+    One extra batch per existing palette, never a shape per component. }
+  function ExtractArchitectureFallback(Mesh:TMesh):TShapeNode;
+  var V:TMeshVertexArray;Idx:TMeshIndexArray;Arch,Ordinary,Dest:TMesh;
+      Remap:array of Integer;Colors:array of TVector3;I,J,K,A,B,C:Integer;
+      RGB:Cardinal;Found:Boolean;Geo:TIndexedFaceSetNode;Col:TColorNode;
+      App:TAppearanceNode;Mat:TPhysicalMaterialNode;
+  begin
+    Result:=nil;V:=Mesh.Vertices;Found:=False;
+    for I:=0 to High(V) do if IsArchitectureUV(V[I].UV) then begin Found:=True;Break end;
+    if not Found then Exit;
+    Idx:=Mesh.Indices;Arch:=TMesh.Create;Ordinary:=TMesh.Create;
+    try
+      SetLength(Remap,Length(V));for I:=0 to High(Remap) do Remap[I]:=-1;
+      for I:=0 to Length(Idx) div 3-1 do begin
+        if IsArchitectureUV(V[Idx[I*3]].UV) then Dest:=Arch else Dest:=Ordinary;
+        for J:=0 to 2 do begin
+          K:=Idx[I*3+J];if Remap[K]<0 then Remap[K]:=Dest.AddVertex(V[K]);
+        end;
+        A:=Remap[Idx[I*3]];B:=Remap[Idx[I*3+1]];C:=Remap[Idx[I*3+2]];Dest.AddTriangle(A,B,C);
+      end;
+      Mesh.AdoptGeometry(Ordinary.Vertices,Ordinary.Indices);
+      V:=Arch.Vertices;SetLength(Colors,Length(V));
+      for I:=0 to High(V) do begin
+        RGB:=Round(V[I].UV.X);Colors[I]:=Vector3((RGB shr 16)/255,((RGB shr 8) and 255)/255,(RGB and 255)/255);
+      end;
+      Geo:=TMeshToX3D.CreateGeometry(Arch,True,uvNone);
+      Col:=TColorNode.Create;Col.SetColor(Colors);Geo.Color:=Col;Geo.ColorPerVertex:=True;
+      Mat:=TPhysicalMaterialNode.Create;Mat.BaseColor:=Vector3(1,1,1);Mat.Metallic:=0;Mat.Roughness:=0.75;
+      App:=TAppearanceNode.Create;App.Material:=Mat;
+      Result:=TShapeNode.Create;Result.Geometry:=Geo;Result.Appearance:=App;Result.X3DName:='ArchitectureFallback';
+    finally Arch.Free;Ordinary.Free end;
+  end;
+
   { Rebuild a per-tile TGroundCompositeMesh from a cached mesh record's
     geometry + matId stream, shifting vertices from the tile's
     conventional frame into this chunk's local frame (Delta). }
@@ -6051,6 +6087,8 @@ var
           end
           else
           begin
+            BShape:=ExtractArchitectureFallback(PlainCopy);
+            if BShape<>nil then begin Result.AddChildren(BShape);PushLod(LodBld,LodBldN,BShape) end;
             BShape := BuildBuildingShapeCached(PlainCopy,
               Rec.Material, uvWallVertical, Pal, False);
             if BShape <> nil then
@@ -6184,7 +6222,8 @@ var
         if (BldComp <> nil) and (BldComp.TriangleCount > 0) then
         begin
           BldShape := BuildBuildingCompositeShape(BldComp,
-            ACache.BuildAtlas, -ASunDir, BldDetailCollision, nil, GpuGround, Delta.X, Delta.Z);
+            ACache.BuildAtlas, -ASunDir, BldDetailCollision, nil, GpuGround, Delta.X, Delta.Z,
+            ScaleFacadeLayouts(Mdl.FacadeLayouts,AKx),Mdl.BuildingTints);
           if BldShape <> nil then
           begin
             BldShape.X3DName := 'AtlasBuildingComposite';

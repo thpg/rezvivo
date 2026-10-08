@@ -5,6 +5,9 @@
 **/castle-engine-output/
 **/units/
 **/__pycache__/
+**/tests/artifacts/
+/Osm3d/lib/
+/Osm3d/backup/
 **/users/
 **/profiles/
 **/cache/

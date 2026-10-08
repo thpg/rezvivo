@@ -34,7 +34,7 @@ uses
   Osm3dStudioLog,
   Osm3dStudioSettings,
   Osm3dFitHeightLayer,
-  Osm3dTileStreamer
+  Osm3dTileStreamer, Osm3dKnowledgeRecipe
   {$IFDEF TILE_MEM_PROFILE}, Osm3dTileMemProfile{$ENDIF}
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ;
@@ -52,6 +52,7 @@ type
     FOverpass:    TOverpassClient;        { shared OSM provider, not owned }
     FSettings:   TStudioSettings;         { frozen snapshot }
     FGenHash:    string;
+    FRecipes: TKnowledgeRecipeSnapshot; { borrowed from the cache; immutable }
     FEdgeMeters: Double;
     FBlockSize:  Integer;
     FSunDir:     TVector3;
@@ -122,6 +123,7 @@ type
 
     { Diagnostic log sink (not owned); also passed to TGeometryBuilder. Written from
       worker threads — TCallbackLogTarget marshals safely. }
+    property Recipes: TKnowledgeRecipeSnapshot read FRecipes write FRecipes;
     property LogTarget: TLogTarget read FLog write FLog;
     { Прогресс-колбэк (фазы). Ставит хост (карта) — обновляет фазу в стримере. }
     property OnPhase: TBlockPhaseEvent read FOnPhase write FOnPhase;
@@ -493,6 +495,11 @@ begin
         Dataset := FOverpass.GetRegion(AHaloBox)
       else
         Dataset := TOSMDataset.Create;   { nothing requested -> empty set }
+      { Photo refinements belong to the source dataset, before every builder
+        (terrain, roads, lane graph, plants). Buildings may be disabled. }
+      if (FRecipes<>nil) and
+        (GenBuildings or GenRoads or GenTrees or GenLanduse or GenWaterways) then
+        FRecipes.Apply(Dataset,AHaloBox);
       Log('OSM data ready');
 
       if Cancelled then Exit;
@@ -647,6 +654,8 @@ begin
       end;
       SetLength(Result.Tiles, KeptN);
       BakeWaterScales(Chunk.Dataset, BlockOrigin, SLat, Result.Tiles);
+      if FRecipes<>nil then
+        for I:=0 to KeptN-1 do FRecipes.BakeFacades(Result.Tiles[I],SLat);
       {$IFDEF TILE_MEM_PROFILE}
       for I := 0 to KeptN - 1 do
         if Result.Tiles[I] <> nil then

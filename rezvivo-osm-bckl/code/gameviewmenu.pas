@@ -73,7 +73,7 @@ type
     FHistoryPage:THistoryPage;
     FSchedulePage:TSchedulePage;
     FTileSchedule:TMenuTile;
-    FTileHome,FTileHistory:TMenuTile;
+    FTileHome,FTileHistory,FTileAssistant:TMenuTile;
     FPendingWorkout:TWorkoutFile;
     FPendingReference:Double;
     FLaunchPane:TCastleRectangleControl;
@@ -86,6 +86,7 @@ type
     FChildReturnTab:String;
     procedure ClickHome(Sender:TObject);
     procedure ClickHistory(Sender:TObject);
+    procedure ClickAssistant(Sender:TObject);
     procedure ClickSchedule(Sender:TObject);
     procedure LoadLastMap;
     procedure ApplyPendingWorkout;
@@ -95,7 +96,7 @@ type
     procedure CloseDevicePrompt;
     procedure ContinueWorkoutLaunch;
   private
-    FTileCol:    TCastleUserInterface;   
+    FTileCol:    TCastleUserInterface;
     FRoutesPage: TRoutesPage;
     FDevicesPage: TDevicesPage;
     FBikeFitPage: TBikeFitPage;
@@ -135,7 +136,7 @@ type
     FLastLayoutH:   Single;
 
     procedure BuildTiles;
-    
+
     procedure LayoutTiles;
     { Скрыть текущую встроенную страницу (если открыта). }
     procedure HideEmbeddedPage;
@@ -228,7 +229,7 @@ implementation
 
 uses UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
   Math, GameDeviceSensor, GameDeviceTypes, CastleApplicationProperties, CastleWindow, CastleLog, CastleURIUtils,
-  GameViewPlay,GameViewTrainingOnly,
+  GameViewPlay,GameViewTrainingOnly,GameAssistantUI,
   GameViewLogin,
   GameDreamWorldScene, AppSettings, VeloSiteAPI, GameDeviceService, GameUserData, GameWorkoutPlayer, GameRideHistory, DebugLog, GameLocalization, GameRouteLibraryData, Osm3dDreamWorld,GameRideCommands,GameRideRooms;
 
@@ -386,10 +387,10 @@ begin
   FPageHost.Border.Left   := TILE_W + 24;
   FPageHost.Border.Top    := 80; { account header must never cover a page }
   FPageHost.Border.Right  := 8;
-  
+
   FPageHost.Border.Bottom := 0;
   InsertFront(FPageHost);
-  FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;
+  FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;FTileAssistant:=nil;
   FSchedulePage:=nil;FTileSchedule:=nil;
   FRoutesPage := nil;
   FDreamPage := nil;
@@ -477,7 +478,7 @@ begin
   Col.Spacing := TILE_GAP;
   Col.Anchor(hpLeft, 8);
   Col.Anchor(vpTop, -64);
-  
+
   FTileCol := Col;
   InsertFront(Col);
 
@@ -530,6 +531,8 @@ begin
     'castle-data:/menu/icons/events.png');
   FTileEvents.Exists:=False;
   FTileHistory:=MakeTile(T('My rides'),Vector4(0.4,0.5,0.6,1),@ClickHistory,'native:history');Col.InsertFront(FTileHistory);
+  FTileAssistant:=MakeTile('Assistant',MenuAccent,@ClickAssistant,'native:assistant');
+  FTileAssistant.Name:='MenuAssistant';Col.InsertFront(FTileAssistant);
 end;
 
 procedure TViewMenu.LayoutTiles;
@@ -543,9 +546,9 @@ begin
   if(EffectiveWidth<=0)or(EffectiveHeight<=0)then Exit;
   S:=Max(0.65,Min(1,UIScale));BottomInset:=8;
   TileW:=EnsureRange(EffectiveWidth*0.14,190/S,220/S);
-  TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-6*TILE_GAP)/7);
-  TileH:=Max(38/S,TileH);PageLeft:=TileW+40/S;
-  SizeTile(FTileHome);SizeTile(FTileHistory);SizeTile(FTileRoutes);SizeTile(FTileDream);SizeTile(FTileDevices);
+  TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-7*TILE_GAP)/8);
+  TileH:=Max(32/S,TileH);PageLeft:=TileW+40/S;
+  SizeTile(FTileHome);SizeTile(FTileHistory);SizeTile(FTileAssistant);SizeTile(FTileRoutes);SizeTile(FTileDream);SizeTile(FTileDevices);
   SizeTile(FTileSchedule);SizeTile(FTileBikeFit);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
   if FTileCol<>nil then begin FTileCol.Anchor(vpTop,-100/S);FTileCol.Anchor(hpLeft,12/S);end;
   if FTileProfile<>nil then begin FTileProfile.Anchor(hpLeft,12/S);FTileProfile.Anchor(vpBottom,BottomInset+58/S);end;
@@ -679,7 +682,7 @@ begin
   FResumeButton:=nil;FEndRideButton:=nil;FDevicesSummary:=nil;FSessionLabel:=nil;FNavBackground:=nil;FTopBar:=nil;
   FVersionButton:=nil;
   FRoomButton:=nil;FRoomView:=nil;
-  FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;
+  FStartPage:=nil;FHistoryPage:=nil;FTileHome:=nil;FTileHistory:=nil;FTileAssistant:=nil;
   FSchedulePage:=nil;FTileSchedule:=nil;
   FRoutesPage := nil;
   FDreamPage := nil;
@@ -1106,6 +1109,9 @@ begin
 end;
 procedure TViewMenu.ClickHistory(Sender:TObject);
 begin TogglePage(FHistoryPage,THistoryPage,FTileHistory);end;
+
+procedure TViewMenu.ClickAssistant(Sender:TObject);
+begin ShowAssistant(Container);end;
 procedure TViewMenu.LoadLastMap;
 var Kind:TRideMapKind;MapId:String;
 begin
@@ -1275,7 +1281,7 @@ begin
     Exit;
   end;
 
-  
+
   if (EffectiveWidth <> FLastLayoutW) or
      (EffectiveHeight <> FLastLayoutH) then
     LayoutTiles;
@@ -1296,7 +1302,7 @@ begin
       CloseDevicePrompt;ContinueWorkoutLaunch;Exit;
     end;
 
-  
+
   FProfilePollAccum := FProfilePollAccum + SecondsPassed;
   if FProfilePollAccum >= POLL_INTERVAL_SEC then
   begin

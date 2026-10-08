@@ -226,6 +226,7 @@ type
     LenInv:     Single;        { 1 / sqrt(LenSq) }
     HalfW:      Single;
     Width:      Single;
+    WidthStart,WidthEnd: Single;
     WayId:      Int64;
     { BRIDGE_SNAP: bridge/tunnel deck centerline. When a ground road sits
       under the same XZ span, prefer this way so attraction points stay on
@@ -272,7 +273,8 @@ type
       const RouteWays: TRouteWayIdArray): TBotCrossingArray; static;
     class function MakeSnapSegment(X0, Z0, X1, Z1, Width: Single;
       WayId: Int64; out Seg: TSnapSegment;
-      AIsBridge: Boolean = False): Boolean;
+      AIsBridge: Boolean = False;
+      AWidthStart:Single=0; AWidthEnd:Single=0): Boolean;
 
     { Core snap — operates on a pre-built segment array. Length(Result)
       = Length(Route); points that don't qualify are copied through
@@ -343,7 +345,8 @@ type
   TCellIndexArray = array of Integer;
 
 class function TRouteSnapper.MakeSnapSegment(X0, Z0, X1, Z1, Width: Single;
-  WayId: Int64; out Seg: TSnapSegment; AIsBridge: Boolean): Boolean;
+  WayId: Int64; out Seg: TSnapSegment; AIsBridge: Boolean;
+  AWidthStart,AWidthEnd:Single): Boolean;
 var
   Len: Single;
 begin
@@ -357,6 +360,8 @@ begin
   if Seg.LenSq < 0.01 then Exit(False);     { degenerate / duplicate }
   Len       := Sqrt(Seg.LenSq);
   Seg.LenInv := 1.0 / Len;
+  if (AWidthStart>0) and (AWidthEnd>0) then Width:=Max(AWidthStart,AWidthEnd);
+  Seg.WidthStart:=AWidthStart;Seg.WidthEnd:=AWidthEnd;
   Seg.Width  := Width;
   Seg.HalfW  := Width * 0.5;
   Seg.WayId  := WayId;
@@ -675,7 +680,8 @@ begin
         BRIDGE_SNAP: mark bridge/tunnel ways so ranking prefers the deck. }
       if not TRouteSnapper.MakeSnapSegment(
                PA.X, PA.Z, PB.X, PB.Z, Params.Width, Way.Id, S,
-               OsmWayIsBridge(Way.Tags) or OsmWayIsTunnel(Way.Tags)) then
+               OsmWayIsBridge(Way.Tags) or OsmWayIsTunnel(Way.Tags),
+               WayNodeWidth(Way,I,Params.Width),WayNodeWidth(Way,I+1,Params.Width)) then
         Continue;
 
       if Cnt >= Cap then
@@ -860,12 +866,15 @@ var
     { Point successfully snapped — expose the road's width so the rider
       can be lane-positioned along it. Off-road points keep width 0. }
     Widths[Idx] := Sp^.Width;
-    if Sp^.Width > SNAP_WIDE_THRESHOLD_M then
+    if (Sp^.WidthStart>0) and (Sp^.WidthEnd>0) then
+      Widths[Idx]:=Sp^.WidthStart+(Sp^.WidthEnd-Sp^.WidthStart)*
+        EnsureRange(((C.FootX-Sp^.X0)*Sp^.DX+(C.FootZ-Sp^.Z0)*Sp^.DZ)/Sp^.LenSq,0,1);
+    if Widths[Idx] > SNAP_WIDE_THRESHOLD_M then
     begin
       { Unit perpendicular (-DZ, DX) * LenInv. }
       PerpX      := -Sp^.DZ * Sp^.LenInv;
       PerpZ      :=  Sp^.DX * Sp^.LenInv;
-      HalfWInset := Sp^.HalfW - SNAP_WIDE_EDGE_OFFSET_M;
+      HalfWInset := Widths[Idx]*0.5 - SNAP_WIDE_EDGE_OFFSET_M;
       if HalfWInset < 0 then HalfWInset := 0;
       if C.SignedPerp >= 0 then Sign := 1 else Sign := -1;
       SnapX := C.FootX + Sign * HalfWInset * PerpX;
@@ -1199,14 +1208,14 @@ var
         Result := BestWay;
         if DbgOn then
           VoteNote[Idx] := Format(
-            'близ: w%d score=%.2f отрыв=%.2f cov=%.2f σ=%.2fм угол=%.1f°',
+            'близ: w%d score=%0.2f отрыв=%0.2f cov=%0.2f σ=%0.2fм угол=%0.1f°',
             [BestWay, Best, Best - Second, VBCov, VBSd, VBHead]);
       end
       else if DbgOn then
       begin
         if BestWay <> 0 then
           VoteNote[Idx] := Format(
-            'близ: воздержался — отрыв %.2f < %.2f (лидер w%d score=%.2f)',
+            'близ: воздержался — отрыв %0.2f < %0.2f (лидер w%d score=%0.2f)',
             [Best - Second, SNAP_FOLLOW_MARGIN, BestWay, Best])
         else
           VoteNote[Idx] := 'близ: ни одна way не прошла гейты';
@@ -1250,7 +1259,7 @@ var
       AFar   := True;
       if DbgOn then
         VoteNote[Idx] := Format(
-          'даль(до %.0fм): w%d score=%.2f отрыв=%.2f cov=%.2f σ=%.2fм угол=%.1f°',
+          'даль(до %0.0fм): w%d score=%0.2f отрыв=%0.2f cov=%0.2f σ=%0.2fм угол=%0.1f°',
           [SNAP_FOLLOW_FAR_M, BestWay, Best, Best - Second,
            VBCov, VBSd, VBHead]);
     end
@@ -1258,7 +1267,7 @@ var
     begin
       if BestWay <> 0 then
         VoteNote[Idx] := Format(
-          'даль: воздержался — отрыв %.2f < %.2f (лидер w%d)',
+          'даль: воздержался — отрыв %0.2f < %0.2f (лидер w%d)',
           [Best - Second, SNAP_FOLLOW_MARGIN, BestWay])
       else
         VoteNote[Idx] := 'нет сопровождаемой way (ни близ, ни даль)';
@@ -1709,13 +1718,13 @@ begin
         if DbgOn then
         begin
           if FollowFar[I] then
-            Note[I] := Format('голос(даль)→w%d d=%.1fм', [FW, RC.PerpDist])
+            Note[I] := Format('голос(даль)→w%d d=%0.1fм', [FW, RC.PerpDist])
           else
-            Note[I] := Format('голос→w%d d=%.1fм', [FW, RC.PerpDist]);
+            Note[I] := Format('голос→w%d d=%0.1fм', [FW, RC.PerpDist]);
         end;
       end
       else if DbgOn then
-        Note[I] := Format('голос w%d: сегмент не найден в %.0fм', [FW, FMaxD]);
+        Note[I] := Format('голос w%d: сегмент не найден в %0.0fм', [FW, FMaxD]);
     end;
 
     { EXIT HOLD (priority path = deck/exit ramp): no candidate, or only a
@@ -1730,7 +1739,7 @@ begin
         Best := RC;
         HasBest := True;
         if DbgOn then
-          Note[I] := Format('съезд-приоритет: держим w%d d=%.1fм (gap=%.0fм)',
+          Note[I] := Format('съезд-приоритет: держим w%d d=%0.1fм (gap=%0.0fм)',
             [PrevWayId, RC.PerpDist, GapSinceSnapM]);
         Inc(Stats.Sticky);
       end
@@ -1746,7 +1755,7 @@ begin
           begin
             if DbgOn then
               Note[I] := Format(
-                'съезд-приоритет: дорога w%d d=%.1fм > тротуар w%d d=%.1fм',
+                'съезд-приоритет: дорога w%d d=%0.1fм > тротуар w%d d=%0.1fм',
                 [PrevWayId, RC.PerpDist, Best.WayId, Best.PerpDist]);
             Best := RC;
             Inc(Stats.Sticky);
@@ -1756,7 +1765,7 @@ begin
         begin
           if DbgOn then
             Note[I] := Format(
-              'съезд-приоритет: w%d d=%.1fм > низ w%d d=%.1fм',
+              'съезд-приоритет: w%d d=%0.1fм > низ w%d d=%0.1fм',
               [PrevWayId, RC.PerpDist, Best.WayId, Best.PerpDist]);
           Best := RC;
           Inc(Stats.Sticky);
@@ -1774,7 +1783,7 @@ begin
         HasBest := True;
         if DbgOn then
           Note[I] := Format(
-            'gap-fill: w%d d=%.1fм w=%.1f (без угла)',
+            'gap-fill: w%d d=%0.1fм w=%0.1f (без угла)',
             [RC.WayId, RC.PerpDist, RC.Width]);
       end
       else
@@ -1790,7 +1799,7 @@ begin
       { Голос решителен — ставим снап на выбранную way, минуя липкость и
         гейт неоднозначности. }
       if DbgOn and (Note[I] = '') then
-        Note[I] := Format('голос+точечный w%d d=%.1fм', [Best.WayId, Best.PerpDist]);
+        Note[I] := Format('голос+точечный w%d d=%0.1fм', [Best.WayId, Best.PerpDist]);
       PlaceSnap(I, Best);
       PrevWayId     := Best.WayId;
       GapSinceSnapM := 0;
@@ -1829,7 +1838,7 @@ begin
       begin
         if DbgOn then
           Note[I] := Format(
-            'EXIT_PRIORITY: дорога w%d d=%.1fм срывает тротуар w%d d=%.1fм',
+            'EXIT_PRIORITY: дорога w%d d=%0.1fм срывает тротуар w%d d=%0.1fм',
             [Best.WayId, Best.PerpDist, PrevWayId, BestPrev.PerpDist]);
         { keep Best — do not sticky-hold footway }
       end
@@ -1839,15 +1848,15 @@ begin
         begin
           if BestPrev.IsBridge then
             Note[I] := Format(
-              'липкость(мост): держим w%d d=%.1fм (чужая w%d d=%.1fм, порог +%.1fм)',
+              'липкость(мост): держим w%d d=%0.1fм (чужая w%d d=%0.1fм, порог +%0.1fм)',
               [PrevWayId, BestPrev.PerpDist, Best.WayId, Best.PerpDist, StickyAdv])
           else if CandIsRoadway(BestPrev) then
             Note[I] := Format(
-              'липкость(дорога/съезд): держим w%d d=%.1fм (чужая w%d d=%.1fм +%.1fм)',
+              'липкость(дорога/съезд): держим w%d d=%0.1fм (чужая w%d d=%0.1fм +%0.1fм)',
               [PrevWayId, BestPrev.PerpDist, Best.WayId, Best.PerpDist, StickyAdv])
           else
             Note[I] := Format(
-              'липкость: держим w%d d=%.1fм (чужая w%d d=%.1fм не решает +%.1fм)',
+              'липкость: держим w%d d=%0.1fм (чужая w%d d=%0.1fм не решает +%0.1fм)',
               [PrevWayId, BestPrev.PerpDist, Best.WayId, Best.PerpDist, StickyAdv]);
         end;
         Best := BestPrev;
@@ -1869,7 +1878,7 @@ begin
           Best := Second;
         if DbgOn then
           Note[I] := Format(
-            'мост>низ: w%d d=%.1fм (отклонили ground/deck двойник w%d)',
+            'мост>низ: w%d d=%0.1fм (отклонили ground/deck двойник w%d)',
             [Best.WayId, Best.PerpDist,
              Second.WayId]);
       end
@@ -1879,7 +1888,7 @@ begin
           Best := Second;
         if DbgOn then
           Note[I] := Format(
-            'дорога>тротуар: w%d d=%.1fм (отклонили path w%d)',
+            'дорога>тротуар: w%d d=%0.1fм (отклонили path w%d)',
             [Best.WayId, Best.PerpDist, Second.WayId]);
       end
       else if CandIsRoadway(Best) then
@@ -1889,14 +1898,14 @@ begin
           worse than a 1 m lateral pick between two roadways. }
         if DbgOn then
           Note[I] := Format(
-            'дорога≈дорога: берём ближнюю w%d d=%.1fм (вторая w%d d=%.1fм)',
+            'дорога≈дорога: берём ближнюю w%d d=%0.1fм (вторая w%d d=%0.1fм)',
             [Best.WayId, Best.PerpDist, Second.WayId, Second.PerpDist]);
       end
       else
       begin
         if DbgOn then
           Note[I] := Format(
-            'неоднозначно: w%d %.1fм против w%d %.1fм (зазор < %.1fм)',
+            'неоднозначно: w%d %0.1fм против w%d %0.1fм (зазор < %0.1fм)',
             [Best.WayId, Best.PerpDist, Second.WayId, Second.PerpDist,
              SNAP_AMBIG_MIN_GAP_M]);
         Inc(Stats.Ambiguous);
@@ -1905,7 +1914,7 @@ begin
     end;
 
     if DbgOn and (Note[I] = '') then
-      Note[I] := Format('точечный w%d d=%.1fм', [Best.WayId, Best.PerpDist]);
+      Note[I] := Format('точечный w%d d=%0.1fм', [Best.WayId, Best.PerpDist]);
     PlaceSnap(I, Best);
     PrevWayId     := Best.WayId;
     GapSinceSnapM := 0;
@@ -1934,7 +1943,7 @@ begin
              FindWayCand(J, ChosenWay[I], SNAP_ISLAND_REJOIN_MAX_M, RC) then
           begin
             if DbgOn then
-              Note[J] := Note[J] + Format(' | остров→w%d d=%.1fм',
+              Note[J] := Note[J] + Format(' | остров→w%d d=%0.1fм',
                 [ChosenWay[I], RC.PerpDist]);
             PlaceSnap(J, RC);
             Inc(Stats.Rejoined);
@@ -1971,12 +1980,12 @@ begin
     try
       DbgL.Add('=== FIT SNAP DEBUG === ' +
         FormatDateTime('yyyy-mm-dd hh:nn:ss', Now));
-      DbgL.Add(Format('точек=%d  сегментов=%d  сетка=%dx%d ячейка=%.1fм',
+      DbgL.Add(Format('точек=%d  сегментов=%d  сетка=%dx%d ячейка=%0.1fм',
         [N, Length(Segs), Grid.Cols, Grid.Rows, Grid.CellSize]));
       DbgL.Add(Format(
-        'гейты: точечный<=%.0fм даль=%.0fм угол<=%.0f° липкость=%.1fм ' +
-        'зазор-неодн.=%.1fм остров<=%.0fм окно голоса=%.0fм отрыв=%.2f ' +
-        'дорога>тротуар=%.0fм съезд-hold=%.0fм forget=%.0fм',
+        'гейты: точечный<=%0.0fм даль=%0.0fм угол<=%0.0f° липкость=%0.1fм ' +
+        'зазор-неодн.=%0.1fм остров<=%0.0fм окно голоса=%0.0fм отрыв=%0.2f ' +
+        'дорога>тротуар=%0.0fм съезд-hold=%0.0fм forget=%0.0fм',
         [SNAP_POINT_MAX_PERP_M, SNAP_FOLLOW_FAR_M, SNAP_PARALLEL_MAX_ANGLE_DEG,
          SNAP_STICKY_ADVANTAGE_M, SNAP_AMBIG_MIN_GAP_M, SNAP_ISLAND_MAX_LEN_M,
          SNAP_FOLLOW_WINDOW_M, SNAP_FOLLOW_MARGIN,
@@ -2017,15 +2026,15 @@ begin
           if Length(IdxArr) = 0 then Continue;
           { осевая: старт первого сегмента, затем конец каждого сегмента }
           DP := Projection.Unproject(Segs[IdxArr[0]].X0, Segs[IdxArr[0]].Z0);
-          DLine := Format('%.6f,%.6f', [DP.Lat, DP.Lon]);
+          DLine := Format('%0.6f,%0.6f', [DP.Lat, DP.Lon]);
           DNodes := 1;
           for J := 0 to High(IdxArr) do
           begin
             DP := Projection.Unproject(Segs[IdxArr[J]].X1, Segs[IdxArr[J]].Z1);
-            DLine := DLine + Format(' %.6f,%.6f', [DP.Lat, DP.Lon]);
+            DLine := DLine + Format(' %0.6f,%0.6f', [DP.Lat, DP.Lon]);
             Inc(DNodes);
           end;
-          DbgL.Add(Format('w%d ширина=%.1fм узлов=%d: %s',
+          DbgL.Add(Format('w%d ширина=%0.1fм узлов=%d: %s',
             [WPair.Key, Segs[IdxArr[0]].Width, DNodes, DLine]));
         end;
       finally
@@ -2036,7 +2045,7 @@ begin
       { маршрут из фита }
       DbgL.Add('--- МАРШРУТ FIT ---');
       for I := 0 to N - 1 do
-        DbgL.Add(Format('%d: %.6f %.6f', [I, Route[I].Lat, Route[I].Lon]));
+        DbgL.Add(Format('%d: %0.6f %0.6f', [I, Route[I].Lat, Route[I].Lon]));
       DbgL.Add('');
 
       { решения: соседи + голос + итог }
@@ -2047,11 +2056,11 @@ begin
         for J := 0 to High(PtCands[I]) do
         begin
           if DLine <> '' then DLine := DLine + ' ';
-          DLine := DLine + Format('w%d:%.1f',
+          DLine := DLine + Format('w%d:%0.1f',
             [PtCands[I][J].WayId, PtCands[I][J].Perp]);
         end;
         if DLine = '' then DLine := 'нет way в ' +
-          Format('%.0f', [SNAP_FOLLOW_FAR_M]) + 'м';
+          Format('%0.0f', [SNAP_FOLLOW_FAR_M]) + 'м';
         if VoteNote[I] <> '' then
           DLine := DLine + ' | голос: ' + VoteNote[I];
         if Note[I] <> '' then
@@ -2062,7 +2071,7 @@ begin
           DLine := DLine + Format(' | w%d', [ChosenWay[I]]);
         { финальное состояние (остров мог переписать) }
         if ChosenWay[I] <> 0 then
-          DLine := DLine + Format(' => w%d ширина=%.1fм', [ChosenWay[I], Widths[I]])
+          DLine := DLine + Format(' => w%d ширина=%0.1fм', [ChosenWay[I], Widths[I]])
         else
           DLine := DLine + ' => не притянута';
         DbgL.Add(Format('%d: ', [I]) + DLine);
@@ -2096,7 +2105,7 @@ begin
     Log.Write(llInfo,
       Format('RouteSnapper: %d pts → %d edge, %d center, %d sticky-held, ' +
              '%d followed, %d re-joined, %d ambiguous, %d unchanged ' +
-             '(segments=%d, grid=%d×%d cell=%.1fm)',
+             '(segments=%d, grid=%d×%d cell=%0.1fm)',
         [Stats.Total, Stats.Edge, Stats.Center, Stats.Sticky, Stats.Followed,
          Stats.Rejoined, Stats.Ambiguous, Stats.Unchanged, Length(Segs),
          Grid.Cols, Grid.Rows, Grid.CellSize]));

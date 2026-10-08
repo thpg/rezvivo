@@ -11,7 +11,7 @@ type
   private
     FPanel:TTrainingFocusPanel;
     FHud:TWorkoutHud;
-    FMenu,FFinish:TMenuButton;
+    FMenu,FFinish,FAssistant:TMenuButton;
     FKeyboard:TUiKeyboardNavigation;
     FTelemetry:TBLEHudUpdater;
     FPlan:TWorkoutFile;
@@ -21,6 +21,7 @@ type
     FResumeSimPaused:Boolean;
     FSimLoop:Cardinal;
     procedure ClickMenu(Sender:TObject);
+    procedure ClickAssistant(Sender:TObject);
     procedure ClickFinish(Sender:TObject);
   public
     procedure Prepare(Plan:TWorkoutFile;Reference:Double);
@@ -38,7 +39,7 @@ type
 var ViewTrainingOnly:TViewTrainingOnly;
 implementation
 uses SysUtils,Math,fpjson,CastleVectors,UiTranslations,GameTrainingWindow,
-  GameViewMenu,GameDeviceService,GameWorkoutPlayer,GameUserData,GameRideHistory,
+  GameViewMenu,GameAssistantUI,GameDeviceService,GameWorkoutPlayer,GameUserData,GameRideHistory,
   GameDailyTraining,GameSensorLog,GameActivityAccounting,GameRideCommands,
   GameRouteLibraryData,TrainerData,RideUploadQueue,DebugLog;
 
@@ -61,6 +62,9 @@ begin
   FFinish:=TMenuButton.Create(FreeAtStop);FFinish.Name:='TrainingOnlyFinish';
   FFinish.AutoSize:=False;FFinish.AutoIcon:=False;BindUiText(FFinish,'Finish ride');
   FFinish.OnClick:=@ClickFinish;InsertFront(FFinish);
+  FAssistant:=TMenuButton.Create(FreeAtStop);FAssistant.Name:='TrainingOnlyAssistant';
+  FAssistant.AutoSize:=False;FAssistant.AutoIcon:=False;BindUiText(FAssistant,'Assistant');
+  FAssistant.OnClick:=@ClickAssistant;InsertFront(FAssistant);
   FKeyboard:=TUiKeyboardNavigation.Create(FreeAtStop);
   FTelemetry:=TBLEHudUpdater.Create;FTelemetry.SetLabels(Default(THudLabels));
   RideHistory.BeginRide(UiText('Training focus'),'',TrainingOnlyWorld);
@@ -102,7 +106,7 @@ begin
   if SensorLog.IsOpen then SensorLog.Close;
   if UploadQueue<>nil then UploadQueue.Scan;
   FreeAndNil(FTelemetry);
-  inherited;FPanel:=nil;FHud:=nil;FMenu:=nil;FFinish:=nil;FKeyboard:=nil;
+  inherited;FPanel:=nil;FHud:=nil;FMenu:=nil;FFinish:=nil;FAssistant:=nil;FKeyboard:=nil;
 end;
 
 procedure TViewTrainingOnly.Resize;
@@ -113,6 +117,8 @@ begin
   FMenu.Anchor(hpLeft,12/S);FMenu.Anchor(vpTop,-12/S);
   FFinish.Width:=210/S;FFinish.Height:=34/S;FFinish.FontSize:=13/S;
   FFinish.Anchor(hpRight,-12/S);FFinish.Anchor(vpTop,-12/S);
+  FAssistant.Width:=136/S;FAssistant.Height:=28/S;FAssistant.FontSize:=13/S;
+  FAssistant.Anchor(hpRight,-12/S);FAssistant.Anchor(vpTop,-52/S);
 end;
 
 procedure TViewTrainingOnly.Update(const SecondsPassed:Single;var HandleInput:Boolean);
@@ -170,6 +176,11 @@ begin
 end;
 procedure TViewTrainingOnly.ClickMenu(Sender:TObject);
 begin OpenMenu;end;
+procedure TViewTrainingOnly.ClickAssistant(Sender:TObject);
+begin
+  if Container.PendingFrontView<>Self then Exit;
+  FPanel.SyncWindow(False);ShowAssistant(Container);
+end;
 procedure TViewTrainingOnly.ClickFinish(Sender:TObject);
 begin OpenMenu;ViewMenu.FinishRide;end;
 function TViewTrainingOnly.Press(const Event:TInputPressRelease):Boolean;

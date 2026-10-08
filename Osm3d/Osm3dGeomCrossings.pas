@@ -13,7 +13,7 @@ function BuildCrossings(Data:TOSMDataset; Proj:TLocalProjection;
   out Stats:TCrossingStats; var Query:TGroundSurfaceQuery):TMesh;
 implementation
 uses Osm3dGenerationProgress, SysUtils, Math, Generics.Collections,
-  Osm3dRoadFurniture, Osm3dRoadCurbs;
+  Osm3dRoadFurniture, Osm3dRoadCurbs, Osm3dRoadSurface,Osm3dOsmTagUtils;
 type
   TIntList = specialize TList<Integer>;
   TGrid = specialize TObjectDictionary<Int64,TIntList>;
@@ -21,6 +21,7 @@ type
     Center,Along,Across:TVector3;
     Width,Depth:Single;
     RoadId,SourceId:Int64;
+    PhotoLocated:Boolean;
   end;
   TQuad = array[0..3] of TVector3;
 const GRID=64.0;BUMP_LENGTH_M=1.0;BUMP_ROAD_CLEARANCE=0.15;
@@ -48,6 +49,7 @@ var
   I,J,K,X,Z,CX,CZ,Best:Integer;L:TIntList;P,A,B,D,Q:TVector3;
   C:TCrossing;F,T,U,Dist,BestDist,Span,Lo,Hi:Single;Hit:TSurfaceHit;
   HasBumpBefore,HasBumpAfter:Boolean;
+  PhotoSigns:array of TOSMNode;
 
   procedure Insert(G:TGrid; X,Z,Value:Integer);
   var Items:TIntList; Id:Int64;
@@ -63,8 +65,10 @@ var
     NewC:=Default(TCrossing);NewC.Center:=Hit.Position;
     NewC.Along:=Vector3(Roads[Seg].X1-Roads[Seg].X0,0,Roads[Seg].Z1-Roads[Seg].Z0).Normalize;
     NewC.Across:=Vector3(NewC.Along.Z,0,-NewC.Along.X);
-    NewC.Width:=Roads[Seg].Width;NewC.Depth:=4;
+    NewC.Width:=RoadWidthAtPoint(Roads[Seg].Surface,Roads[Seg].Width,
+      Roads[Seg].X0,Roads[Seg].Z0,Roads[Seg].X1,Roads[Seg].Z1,Position.X,Position.Z);NewC.Depth:=4;
     NewC.RoadId:=Roads[Seg].WayId;NewC.SourceId:=Source;
+    if Data.FindNode(Source)<>nil then NewC.PhotoLocated:=Data.FindNode(Source).Tags.HasKey('rezvivo:photo_crossing');
     { Keep skew crossings on their mapped footway, while stripes remain
       parallel to vehicle travel. Reject a nearly parallel footpath. }
     if FootDirection.Length>0.01 then begin
@@ -222,6 +226,31 @@ var
     V[2]:=P0-Right*(Size*0.5)+Up;V[3]:=P0+Right*(Size*0.5)+Up;
     AddQuad(V,Back,False,True);
   end;
+  procedure Post(const Base:TVector3);
+  var J:Integer;A0,A1:Single;V:TQuad;
+  begin
+    for J:=0 to 7 do begin
+      A0:=J*Pi/4;A1:=(J+1)*Pi/4;
+      V[0]:=Base+Vector3(Cos(A1)*0.035,0,Sin(A1)*0.035);
+      V[1]:=Base+Vector3(Cos(A0)*0.035,0,Sin(A0)*0.035);
+      V[2]:=V[1]+Vector3(0,2.9,0);V[3]:=V[0]+Vector3(0,2.9,0);
+      AddQuad(V,SIGN_METAL,False);
+    end;
+  end;
+  procedure PhotoSign(Node:TOSMNode);
+  var Base,Right,Facing:TVector3;H:TSurfaceHit;Angle:Double;Cell:Integer;Kind:string;
+  begin
+    Base:=NodePlanePos(Data,Node,Proj);
+    if not Query.Sample(Base.X,Base.Z,H) or RoadSurface(H) then Exit;
+    Base:=H.Position;Angle:=DegToRad(ParseOSMMeters(Node.Tags.Get('direction')));
+    Facing:=Vector3(-Sin(Angle),0,Cos(Angle));Right:=Vector3(Facing.Z,0,-Facing.X);
+    Kind:=Node.Tags.Get('rezvivo:photo_sign');
+    if Kind='crossing_right' then Cell:=SIGN_CROSSING_RIGHT
+    else if Kind='crossing_left' then Cell:=SIGN_CROSSING_LEFT
+    else if Kind='bump_warning' then Cell:=SIGN_BUMP_WARNING else Cell:=SIGN_BUMP;
+    Result.CurrentOsmId:=Node.Id;Post(Base);
+    Board(Base+Vector3(0,2.5,0),Right,Facing,0.8,Cell,SIGN_METAL);Inc(Stats.Signs);
+  end;
   procedure Sign(Side:Integer;HasBump:Boolean);
   var Base,Right,Facing,BoardP:TVector3;H:TSurfaceHit;V:TQuad;
     J,ForwardStep,SideStep:Integer;A0,A1:Single;Found:Boolean;
@@ -243,14 +272,12 @@ var
     end;
     if not Found then Exit;
     Base:=H.Position;Result.CurrentOsmId:=C.SourceId;
-    { Eight-sided post, 7 cm diameter; all sign geometry shares the atlas. }
-    for J:=0 to 7 do begin
-      A0:=J*Pi/4;A1:=(J+1)*Pi/4;
-      V[0]:=Base+Vector3(Cos(A1)*0.035,0,Sin(A1)*0.035);
-      V[1]:=Base+Vector3(Cos(A0)*0.035,0,Sin(A0)*0.035);
-      V[2]:=V[1]+Vector3(0,2.9,0);V[3]:=V[0]+Vector3(0,2.9,0);
-      AddQuad(V,SIGN_METAL,False);
+    for J:=0 to High(PhotoSigns) do begin
+      BoardP:=NodePlanePos(Data,PhotoSigns[J],Proj);
+      if Sqr(BoardP.X-Base.X)+Sqr(BoardP.Z-Base.Z)<16 then Exit; { one observed support replaces the inferred one }
     end;
+    { Eight-sided post, 7 cm diameter; all sign geometry shares the atlas. }
+    Post(Base);
     BoardP:=Base+Vector3(0,2.5,0);
     Board(BoardP,Right*Side,Facing,0.8,SIGN_CROSSING_RIGHT,SIGN_CROSSING_LEFT);
     if HasBump then begin
@@ -279,7 +306,10 @@ begin
         for X:=Floor((Min(Roads[I].X0,Roads[I].X1)-F)/GRID) to Floor((Max(Roads[I].X0,Roads[I].X1)+F)/GRID) do
           Insert(RoadGrid,X,Z,I);
     end;
-    if RoadGrid.Count=0 then Exit;
+    for Node in Data.Nodes.Values do if Node.Tags.HasKey('rezvivo:photo_sign') then begin
+      I:=Length(PhotoSigns);SetLength(PhotoSigns,I+1);PhotoSigns[I]:=Node;
+    end;
+    if (RoadGrid.Count=0) and (Length(PhotoSigns)=0) then Exit;
     if Query=nil then Query:=TGroundSurfaceQuery.Create(Ground)
     else Query.IncludeAppended;
     GenerationProgress('Crossings',0,0);
@@ -319,9 +349,10 @@ begin
           end;
       if Best>=0 then AddCandidate(Best,B,Vector3(0,0,0),Node.Id);
     end;
-    if Length(Candidates)=0 then Exit;
+    if (Length(Candidates)=0) and (Length(PhotoSigns)=0) then Exit;
     Result:=TMesh.Create('road_furniture');
     try
+    for I:=0 to High(PhotoSigns) do PhotoSign(PhotoSigns[I]);
     for I:=0 to High(Candidates) do begin
       CheckGenerationCancelled;
       GenerationProgress('Crossings', I, Length(Candidates));
@@ -331,7 +362,10 @@ begin
         Lo:=(J-K*0.5)*1.0+0.25;Hi:=Lo+0.5;
         PaintStrip(Lo,Hi);
       end;
-      HasBumpBefore:=Bump(-C.Depth*0.5-3);HasBumpAfter:=Bump(C.Depth*0.5+3);
+      HasBumpBefore:=False;HasBumpAfter:=False;
+      if not C.PhotoLocated then begin
+        HasBumpBefore:=Bump(-C.Depth*0.5-3);HasBumpAfter:=Bump(C.Depth*0.5+3);
+      end; { a photographed zebra is not evidence of speed bumps }
       Sign(-1,HasBumpBefore);Sign(1,HasBumpAfter);
       Inc(Stats.Crossings);
     end;

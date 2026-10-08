@@ -215,6 +215,7 @@ type
     DX, DZ:    Single;
     LenSq:     Single;
     HalfW:     Single;        { half-width + ROAD_CLEAR_M }
+    HalfW0, HalfW1: Single;
     HalfWSq:   Single;
     { Segment AABB expanded by HalfW — fast candidate filter. }
     BBoxMinX, BBoxMaxX: Single;
@@ -233,7 +234,7 @@ type
 
     { HalfWidth = nominal half-width (ClassWidth / 2); ROAD_CLEAR_M
       is added internally. }
-    procedure AddSegment(X0, Z0, X1, Z1, HalfWidth: Single);
+    procedure AddSegment(X0, Z0, X1, Z1, HalfWidth: Single; HalfWidthEnd:Single=-1);
 
     procedure BuildFromDataset(Dataset: TOSMDataset; Proj: TLocalProjection);
 
@@ -268,7 +269,7 @@ function ForestToTileTrees(
 
 implementation
 
-uses Generics.Collections, Osm3dProceduralTreeData;
+uses Generics.Collections, Osm3dProceduralTreeData, Osm3dVegetationLayout;
 
 { Lookup tables (exact port from streets-gl utils.ts) }
 
@@ -1243,11 +1244,77 @@ begin
   DstCount := Need;
 end;
 
+procedure AppendPhotoPlants(const MP:TPolygonMultipolygon; const Tags:TOSMTags;
+  const Options:TForestBuildOptions; HeightCtx:THeightSamplerCtx;
+  RoadMask:TRoadExclusionMask; const TaggedPlants:TScatterPointArray;
+  var TreesOut,ShrubsOut:TTreeInstanceArray; var TreesCount,ShrubsCount:Integer);
+var Plants:TPhotoPlants; I,J,Count:Integer; Pos:TVector3; PlantTags:TOSMTags;
+  One:TTreeInstanceArray; Inside,Duplicate,IsShrub:Boolean; Cands:TRoadSegArray;
+  F:TFormatSettings; MinX,MaxX,MinZ,MaxZ:Single;
+begin
+  Plants:=ReadVegetationLayout(Tags.Get(VEGETATION_LAYOUT_TAG));
+  Count:=0;Cands:=nil;
+  if RoadMask<>nil then begin
+    MultipolygonBBox(MP,MinX,MaxX,MinZ,MaxZ);
+    RoadMask.CollectCandidates(MinX,MinZ,MaxX,MaxZ,Cands,Count);
+  end;
+  PlantTags:=TOSMTags.Create;SetLength(One,1);F:=DefaultFormatSettings;F.DecimalSeparator:='.';
+  try
+    for I:=0 to High(Plants) do begin
+      IsShrub:=Plants[I].Kind='shrub';
+      if (IsShrub and Options.SkipShrubs) or (not IsShrub and Options.SkipTrees) then Continue;
+      Pos:=HeightCtx.Projection.Project(Plants[I].Position);
+      Inside:=PointInRingXZ(Pos.X,Pos.Z,MP.Outer);
+      if Inside then for J:=0 to High(MP.Inners) do
+        if PointInRingXZ(Pos.X,Pos.Z,MP.Inners[J]) then begin Inside:=False;Break end;
+      if not Inside then Continue;
+      Duplicate:=False;
+      for J:=0 to High(TaggedPlants) do
+        if Sqr(TaggedPlants[J].X-Pos.X)+Sqr(TaggedPlants[J].Z-Pos.Z)<1 then begin Duplicate:=True;Break end;
+      if Duplicate then Continue; { explicit OSM object owns this plant }
+      if (Count>0) and TRoadExclusionMask.IsOnRoad(Pos.X,Pos.Z,Cands,Count) then Continue;
+      Pos.Y:=HeightCtx.HeightAtGeo(Plants[I].Position)+HeightCtx.Lift;
+      if IsNan(Pos.Y) or IsInfinite(Pos.Y) then Continue;
+      PlantTags.Clear;PlantTags.Add('natural',Plants[I].Kind);PlantTags.Add('genus',Plants[I].Genus);
+      if Plants[I].LeafType<>'' then PlantTags.Add('leaf_type',Plants[I].LeafType);
+      PlantTags.Add('height',FloatToStr(Plants[I].Height,F));
+      One[0]:=MakeSingleTreeInstance(PhotoPlantSeed(Plants[I].Id,Plants[I].Position),Pos,PlantTags);
+      if IsShrub then begin One[0].Scale:=Plants[I].Height;One[0].SeedAsTexId:=0 end;
+      One[0].Procedural:=ClassifyTreeTag(TreeTagJSON(PlantTags),Plants[I].Position,IsShrub);
+      if IsShrub then AppendInstances(ShrubsOut,ShrubsCount,One)
+      else AppendInstances(TreesOut,TreesCount,One);
+    end;
+  finally PlantTags.Free end;
+end;
+
+procedure ExcludePhotoAreas(var Trees:TTreeInstanceArray; const Masks:TMultipolygonArray;
+  const HostMinX,HostMaxX,HostMinZ,HostMaxZ:Single);
+var I,J,N:Integer; Keep:Boolean; MinX,MaxX,MinZ,MaxZ:Single;
+begin
+  if Length(Masks)=0 then Exit;
+  for J:=0 to High(Masks) do begin
+    if Length(Trees)=0 then Exit;
+    MultipolygonBBox(Masks[J],MinX,MaxX,MinZ,MaxZ);
+    { A reviewed street must not scan every tree in distant forests. }
+    if (MaxX<HostMinX) or (MinX>HostMaxX) or
+      (MaxZ<HostMinZ) or (MinZ>HostMaxZ) then Continue;
+    N:=0;
+    for I:=0 to High(Trees) do begin
+      Keep:=(Trees[I].X<MinX) or (Trees[I].X>MaxX) or (Trees[I].Z<MinZ) or (Trees[I].Z>MaxZ);
+      if not Keep then Keep:=not PointInRingXZ(Trees[I].X,Trees[I].Z,Masks[J].Outer);
+      if Keep then begin Trees[N]:=Trees[I];Inc(N) end;
+    end;
+    SetLength(Trees,N);
+  end;
+end;
+
 procedure ProcessOnePolygon(const MP: TPolygonMultipolygon;
   const Tags: TOSMTags; IsForest: Boolean;
   const Options: TForestBuildOptions;
   HeightCtx: THeightSamplerCtx;
   RoadMask: TRoadExclusionMask;
+  const TaggedPlants: TScatterPointArray;
+  const LocalPhotoMasks:TMultipolygonArray;
   var TreesOut, ShrubsOut: TTreeInstanceArray;
   var TreesCount, ShrubsCount: Integer);
 { SPLIT_THRESHOLD_M / TILE_SIZE_M / MAX_BBOX_M live in Osm3dStudioSettings (SPLIT_THRESHOLD_M =
@@ -1255,6 +1322,7 @@ procedure ProcessOnePolygon(const MP: TPolygonMultipolygon;
 var
   Species:   TTreeType;
   TaggedH:   Double;
+  PhotoSpacing: Double;
   Local:     TTreeInstanceArray;
   MinX, MaxX, MinZ, MaxZ: Single;
   SubMPs:    TMultipolygonArray;
@@ -1265,6 +1333,13 @@ var
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(464);{$ENDIF}
   if Length(MP.Outer) < 3 then Exit;
+  if Tags.HasKey(VEGETATION_LAYOUT_TAG) then begin
+    { Consume once, before spatial subdivision. The explicit positions already
+      have global identities; splitting must not replicate rows of trees. }
+    AppendPhotoPlants(MP,Tags,Options,HeightCtx,RoadMask,TaggedPlants,
+      TreesOut,ShrubsOut,TreesCount,ShrubsCount);
+    Exit;
+  end;
 
   MultipolygonBBox(MP, MinX, MaxX, MinZ, MaxZ);
 
@@ -1277,7 +1352,7 @@ begin
     SubMPs := SplitMultipolygonIntoTiles(MP, TILE_SIZE_M);
     for K := 0 to High(SubMPs) do
       ProcessOnePolygon(SubMPs[K], Tags, IsForest, Options,
-                        HeightCtx, RoadMask, TreesOut, ShrubsOut,
+                        HeightCtx, RoadMask, TaggedPlants, LocalPhotoMasks, TreesOut, ShrubsOut,
                         TreesCount, ShrubsCount);
     Exit;
   end;
@@ -1294,7 +1369,12 @@ begin
   begin
     Species := GetTreeTypeFromTags(Tags);
     TaggedH := GetTreeHeight(Tags);
-    Local := ScatterTrees(MP, Species, Options.CellMetersForest, TaggedH);
+    PhotoSpacing:=Options.CellMetersForest;
+    if Tags.HasKey('rezvivo:plant_spacing') then
+      PhotoSpacing:=EnsureRange(ParseOSMMeters(Tags.Get('rezvivo:plant_spacing')),2,60);
+    Local := ScatterTrees(MP, Species, PhotoSpacing, TaggedH);
+    if not Tags.HasKey('rezvivo:local_photo_object') then
+      ExcludePhotoAreas(Local,LocalPhotoMasks,MinX,MaxX,MinZ,MaxZ);
     if Length(Local) > 0 then
     begin
       ApplyTerrainHeights(Local, @HeightCtx.HeightAt);
@@ -1309,7 +1389,12 @@ begin
   end
   else if (not IsForest) and (not Options.SkipShrubs) then
   begin
-    Local := ScatterShrubs(MP, Options.CellMetersShrubs);
+    PhotoSpacing:=Options.CellMetersShrubs;
+    if Tags.HasKey('rezvivo:plant_spacing') then
+      PhotoSpacing:=EnsureRange(ParseOSMMeters(Tags.Get('rezvivo:plant_spacing')),2,60);
+    Local := ScatterShrubs(MP, PhotoSpacing);
+    if not Tags.HasKey('rezvivo:local_photo_object') then
+      ExcludePhotoAreas(Local,LocalPhotoMasks,MinX,MaxX,MinZ,MaxZ);
     if Length(Local) > 0 then
     begin
       ApplyShrubHeights(Local, HeightCtx);
@@ -1390,6 +1475,12 @@ var
   ScannedForest, ScannedScrub, ScannedMPs: Integer;
 
   EffectiveOptions: TForestBuildOptions;
+  TaggedPlants: TScatterPointArray;
+  TaggedCount: Integer;
+  TaggedNode: TOSMNode;
+  TaggedPosition: TVector3;
+  TaggedPlantsReady: Boolean;
+  LocalPhotoMasks:TMultipolygonArray;
 
   procedure Log(const Msg: string);
   begin
@@ -1408,8 +1499,8 @@ begin
 
   EffectiveOptions := Options;
 
-  Log(Format('TForestInstanceBuilder: lat=%.3f° → ' +
-    'cellForest=%.2f m, cellShrubs=%.2f m (streets-gl-equivalent: 15.3 / 7.64)',
+  Log(Format('TForestInstanceBuilder: lat=%0.3f° → ' +
+    'cellForest=%0.2f m, cellShrubs=%0.2f m (streets-gl-equivalent: 15.3 / 7.64)',
     [Projection.Origin.Lat,
      EffectiveOptions.CellMetersForest,
      EffectiveOptions.CellMetersShrubs]));
@@ -1429,6 +1520,13 @@ begin
     HeightCtx.Projection := Projection;
     HeightCtx.Lift := EffectiveOptions.LiftAboveTerrain;
     HeightCtx.Terrain := Terrain;     { эталонный источник высоты }
+    TaggedPlants:=nil;TaggedCount:=0;TaggedPlantsReady:=False;LocalPhotoMasks:=nil;
+    if Dataset.HasLocalPhotoVegetation then
+      for Way in Dataset.Ways.Values do if Way.IsClosed and
+        (Way.Tags.HasKey(VEGETATION_LAYOUT_TAG) or Way.Tags.HasKey('rezvivo:photo_replace_scatter')) then begin
+        I:=Length(LocalPhotoMasks);SetLength(LocalPhotoMasks,I+1);
+        LocalPhotoMasks[I]:=BuildMultipolygonFromWay(Way,Dataset,Projection);
+      end;
 
     Log(Format('Scanning %d relations for forest/scrub multipolygons...',
       [Dataset.Relations.Count]));
@@ -1474,7 +1572,7 @@ begin
 
       for I := 0 to High(Multipolygons) do
         ProcessOnePolygon(Multipolygons[I], Rel.Tags, IsForest,
-          EffectiveOptions, HeightCtx, RoadMask, Result.Trees, Result.Shrubs,
+          EffectiveOptions, HeightCtx, RoadMask, TaggedPlants, LocalPhotoMasks, Result.Trees, Result.Shrubs,
           TreesCount, ShrubsCount);
     end;
     Log(Format('  relations processed: %d forest + %d scrub → %d multipolygons',
@@ -1489,6 +1587,19 @@ begin
 
       IsForest := IsForestPolygon(Way.Tags);
       IsScrub  := IsScrubPolygon(Way.Tags);
+      if Way.Tags.HasKey(VEGETATION_LAYOUT_TAG) then begin
+        IsForest:=True;
+        if not TaggedPlantsReady then begin
+          for TaggedNode in Dataset.Nodes.Values do
+            if TaggedNode.Tags.HasKeyValue('natural','tree') or TaggedNode.Tags.HasKeyValue('natural','shrub') then begin
+              if TaggedCount=Length(TaggedPlants) then SetLength(TaggedPlants,Max(64,TaggedCount*2));
+              TaggedPosition:=NodePlanePos(Dataset,TaggedNode,Projection);
+              TaggedPlants[TaggedCount].X:=TaggedPosition.X;TaggedPlants[TaggedCount].Z:=TaggedPosition.Z;Inc(TaggedCount);
+            end;
+          SetLength(TaggedPlants,TaggedCount);
+          TaggedPlantsReady:=True;
+        end;
+      end;
       if (not IsForest) and (not IsScrub) then Continue;
       if IsForest then KindMask := 1 else KindMask := 2;
       if CoveredWays.TryGetValue(Way.Id, CoverMask) and
@@ -1498,7 +1609,7 @@ begin
       if Length(MP.Outer) < 3 then Continue;
 
       ProcessOnePolygon(MP, Way.Tags, IsForest, EffectiveOptions, HeightCtx,
-        RoadMask, Result.Trees, Result.Shrubs, TreesCount, ShrubsCount);
+        RoadMask, TaggedPlants, LocalPhotoMasks, Result.Trees, Result.Shrubs, TreesCount, ShrubsCount);
     end;
 
     if not EffectiveOptions.SkipTrees then
@@ -1541,7 +1652,7 @@ begin
   SetLength(FSegs, Length(FSegs) * 2);
 end;
 
-procedure TRoadExclusionMask.AddSegment(X0, Z0, X1, Z1, HalfWidth: Single);
+procedure TRoadExclusionMask.AddSegment(X0, Z0, X1, Z1, HalfWidth,HalfWidthEnd: Single);
 var
   S: TRoadSeg;
   HW: Single;
@@ -1552,7 +1663,9 @@ begin
   S.LenSq := S.DX * S.DX + S.DZ * S.DZ;
   if S.LenSq < 0.01 then Exit;     { skip degenerate / duplicate-node segments }
 
-  HW := HalfWidth + ROAD_CLEAR_M;
+  if HalfWidthEnd<0 then HalfWidthEnd:=HalfWidth;
+  S.HalfW0:=HalfWidth+ROAD_CLEAR_M;S.HalfW1:=HalfWidthEnd+ROAD_CLEAR_M;
+  HW := Max(S.HalfW0,S.HalfW1);
   S.HalfW   := HW;
   S.HalfWSq := HW * HW;
 
@@ -1593,7 +1706,8 @@ begin
       if (NA = nil) or (NB = nil) then Continue;
       PA := NodePlanePos(Dataset, NA, Proj);   { int-first }
       PB := NodePlanePos(Dataset, NB, Proj);
-      AddSegment(PA.X, PA.Z, PB.X, PB.Z, HalfW);
+      AddSegment(PA.X, PA.Z, PB.X, PB.Z,
+        WayNodeWidth(Way,I,HalfW*2)*0.5,WayNodeWidth(Way,I+1,HalfW*2)*0.5);
     end;
   end;
 end;
@@ -1644,7 +1758,7 @@ begin
     Cx := S^.X0 + t * S^.DX;
     Cz := S^.Z0 + t * S^.DZ;
     DSq := (X - Cx) * (X - Cx) + (Z - Cz) * (Z - Cz);
-    if DSq <= S^.HalfWSq then
+    if DSq <= Sqr(S^.HalfW0+(S^.HalfW1-S^.HalfW0)*t) then
     begin
       Result := True;
       Exit;

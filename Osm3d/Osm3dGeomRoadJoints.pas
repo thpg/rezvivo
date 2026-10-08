@@ -17,6 +17,8 @@ uses
 ;
 
 type
+  TRibbonWidthArray = array of Single;
+  PRibbonWidthArray = ^TRibbonWidthArray;
 
   TPolylinePointClass = (
     ppcStraight,      { |angle| < STRAIGHT_RAD; digitising noise, emit as-is }
@@ -134,7 +136,8 @@ procedure SubdivideSmoothRuns(const Classified: TClassifiedPointArray;
   var Stats: TPolylineStats;
   MaxChordErrorM: Single = CR_DEFAULT_CHORD_ERR_M;
   MinSegmentLenM: Single = CR_DEFAULT_MIN_SEG_M;
-  MaxSubdivisionsPerEdge: Integer = CR_MAX_SUBDIV_PER_EDGE);
+  MaxSubdivisionsPerEdge: Integer = CR_MAX_SUBDIV_PER_EDGE;
+  ASourceStations: PRibbonWidthArray = nil);
 
 { Build TRibbonEdgePointArray with joint geometry: endpoints/mitre = one edge-point; bevel = two
   (shared inner mitre, differing outer perp); round = N+1 fan points on the outer arc. Mitre falls
@@ -143,7 +146,8 @@ procedure SubdivideSmoothRuns(const Classified: TClassifiedPointArray;
 procedure BuildRibbonEdges(const Center: TRibbonVertexArray;
   HalfWidth: Single;
   out Edges: TRibbonEdgePointArray;
-  var Stats: TPolylineStats);
+  var Stats: TPolylineStats;
+  const AHalfWidths: TRibbonWidthArray = nil);
 
 { Full pipeline in one call: classify → fillet sharp corners inward + shoulder gentle bends →
   Catmull-Rom the gentle bends → build edges with joints. Convenience for AppendWayRibbon. }
@@ -152,7 +156,8 @@ procedure BuildSmoothRibbonEdges(const Center: TRibbonVertexArray;
   out Edges: TRibbonEdgePointArray;
   out Stats: TPolylineStats;
   MaxChordErrorM: Single = CR_DEFAULT_CHORD_ERR_M;
-  const ANoFillet: TBoolArray = nil);
+  const ANoFillet: TBoolArray = nil;
+  const AHalfWidths: TRibbonWidthArray = nil);
 
 implementation
 
@@ -529,7 +534,8 @@ procedure SubdivideSmoothRuns(const Classified: TClassifiedPointArray;
   var Stats: TPolylineStats;
   MaxChordErrorM: Single;
   MinSegmentLenM: Single;
-  MaxSubdivisionsPerEdge: Integer);
+  MaxSubdivisionsPerEdge: Integer;
+  ASourceStations: PRibbonWidthArray);
 var
   N, I, J: Integer;
   P0x, P0z, P1x, P1z, P2x, P2z, P3x, P3z: Single;
@@ -541,7 +547,7 @@ var
   OutCount, OutCap: Integer;
   Closed: Boolean;
 
-  procedure AddPoint(X, Z: Single);
+  procedure AddPoint(X, Z, SourceStation: Single);
   var
     Dx, Dz: Single;
   begin
@@ -550,6 +556,10 @@ var
     begin
       OutCap := OutCap * 2;
       SetLength(Out_, OutCap);
+    end;
+    if ASourceStations<>nil then begin
+      if Length(ASourceStations^)<OutCap then SetLength(ASourceStations^,OutCap);
+      ASourceStations^[OutCount]:=SourceStation;
     end;
     Out_[OutCount].X := X;
     Out_[OutCount].Z := Z;
@@ -713,7 +723,8 @@ var
 
     for K2 := 0 to BufCount - 1 do
     begin
-      AddPoint(Buf[K2].X, Buf[K2].Z);
+      AddPoint(Buf[K2].X, Buf[K2].Z, Classified[J].AccumLen+
+        (Classified[J+1].AccumLen-Classified[J].AccumLen)*(K2+1)/Steps);
       Inc(Stats.Subdivided);
     end;
   end;
@@ -724,11 +735,13 @@ begin
   if N < 2 then
   begin
     SetLength(Smoothed, N);
+    if ASourceStations<>nil then SetLength(ASourceStations^,N);
     for I := 0 to N - 1 do
     begin
       Smoothed[I].X := Classified[I].X;
       Smoothed[I].Z := Classified[I].Z;
       Smoothed[I].AccumLen := Classified[I].AccumLen;
+      if ASourceStations<>nil then ASourceStations^[I]:=Classified[I].AccumLen;
     end;
     Exit;
   end;
@@ -754,7 +767,7 @@ begin
   OutCount := 0;
 
   { First point — always emit. }
-  AddPoint(Classified[0].X, Classified[0].Z);
+  AddPoint(Classified[0].X, Classified[0].Z, Classified[0].AccumLen);
 
   { Per-edge criterion: any edge touching a bent node gets the spline, so a SINGLE bent node
     smooths both its edges; two neighbouring bends share their middle edge exactly once; pure
@@ -763,17 +776,19 @@ begin
   begin
     if BendAt(J) or BendAt(J + 1) then
       SubdivideEdge(J);
-    AddPoint(Classified[J + 1].X, Classified[J + 1].Z);
+    AddPoint(Classified[J + 1].X, Classified[J + 1].Z, Classified[J+1].AccumLen);
   end;
 
   SetLength(Out_, OutCount);
+  if ASourceStations<>nil then SetLength(ASourceStations^,OutCount);
   Smoothed := Out_;
 end;
 
 procedure BuildRibbonEdges(const Center: TRibbonVertexArray;
   HalfWidth: Single;
   out Edges: TRibbonEdgePointArray;
-  var Stats: TPolylineStats);
+  var Stats: TPolylineStats;
+  const AHalfWidths: TRibbonWidthArray);
 var
   N, I, K: Integer;
   Out_: TRibbonEdgePointArray;
@@ -820,6 +835,10 @@ begin
   OutCap := N + 8;
   SetLength(Out_, OutCap);
 
+  if (AHalfWidths<>nil) and (Length(AHalfWidths)<>N) then
+    raise Exception.Create('Ribbon width count does not match centreline');
+  if AHalfWidths<>nil then HalfWidth:=AHalfWidths[0];
+
   { Endpoint 0: perpendicular of first edge. }
   Dx1 := Center[1].X - Center[0].X;
   Dz1 := Center[1].Z - Center[0].Z;
@@ -850,6 +869,7 @@ begin
     Len2 := Sqrt(Dx2 * Dx2 + Dz2 * Dz2);
 
     Cx := Center[I].X; Cz := Center[I].Z; ALen := Center[I].AccumLen;
+    if AHalfWidths<>nil then HalfWidth:=AHalfWidths[I];
 
     if (Len1 < 1e-9) or (Len2 < 1e-9) then
     begin
@@ -1025,6 +1045,7 @@ begin
     end;
   end;
 
+  if AHalfWidths<>nil then HalfWidth:=AHalfWidths[N-1];
   { Endpoint N-1: perpendicular of last edge. }
   Dx1 := Center[N - 1].X - Center[N - 2].X;
   Dz1 := Center[N - 1].Z - Center[N - 2].Z;
@@ -1051,12 +1072,15 @@ procedure BuildSmoothRibbonEdges(const Center: TRibbonVertexArray;
   out Edges: TRibbonEdgePointArray;
   out Stats: TPolylineStats;
   MaxChordErrorM: Single;
-  const ANoFillet: TBoolArray);
+  const ANoFillet: TBoolArray;
+  const AHalfWidths: TRibbonWidthArray);
 var
   Classified: TClassifiedPointArray;
   Shouldered: TClassifiedPointArray;
   Smoothed: TRibbonVertexArray;
-  NFi: Integer;
+  NFi,J: Integer;
+  Stations,Widths: TRibbonWidthArray;
+  T,Span:Single;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(304);{$ENDIF}
 
@@ -1071,9 +1095,23 @@ begin
       if (NFi <= High(ANoFillet)) and ANoFillet[NFi] then
         Classified[NFi].PointClass := ppcStraight;
   PrepareCorners(Classified, HalfWidth, Shouldered, Stats);
-  SubdivideSmoothRuns(Shouldered, Smoothed, Stats, MaxChordErrorM);
-  { Smoothed.AccumLen is fresh per the new sample density. }
-  BuildRibbonEdges(Smoothed, HalfWidth, Edges, Stats);
+  if AHalfWidths=nil then
+    SubdivideSmoothRuns(Shouldered, Smoothed, Stats, MaxChordErrorM)
+  else begin
+    if Length(AHalfWidths)<>Length(Center) then raise Exception.Create('Ribbon width count');
+    SubdivideSmoothRuns(Shouldered, Smoothed, Stats, MaxChordErrorM,
+      CR_DEFAULT_MIN_SEG_M, CR_MAX_SUBDIV_PER_EDGE, @Stations);
+    SetLength(Widths,Length(Smoothed));J:=0;
+    for NFi:=0 to High(Widths) do begin
+      while (J<High(Center)-1) and (Stations[NFi]>Center[J+1].AccumLen) do Inc(J);
+      while (J>0) and (Stations[NFi]<Center[J].AccumLen) do Dec(J);
+      Span:=Center[J+1].AccumLen-Center[J].AccumLen;
+      if Span>1e-6 then T:=EnsureRange((Stations[NFi]-Center[J].AccumLen)/Span,0,1) else T:=0;
+      Widths[NFi]:=AHalfWidths[J]+(AHalfWidths[J+1]-AHalfWidths[J])*T;
+    end;
+  end;
+  { UV distance is measured on the smoothed curve; width retains original stationing. }
+  BuildRibbonEdges(Smoothed, HalfWidth, Edges, Stats, Widths);
 end;
 
 end.

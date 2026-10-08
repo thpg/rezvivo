@@ -133,14 +133,11 @@ end;
 destructor TTrainingPage.Destroy;
 begin FSelected.Free;FItems.Free;FLocal.Free;inherited;end;
 procedure TTrainingPage.LoadItems;
-var I,J:Integer;Search:TSearchRec;W:TWorkoutFile;Dir:String;Recent:TJSONArray;K:Integer;
+var I,J:Integer;W:TWorkoutFile;Recent:TJSONArray;K:Integer;
 begin
-  FContent.ClearControls;FreeAndNil(FContentOwner);FItems.Clear;FLocal.Clear;Dir:=UserDataDir+'workouts'+PathDelim;
-  if FindFirst(Dir+'*.zwo',faAnyFile,Search)=0 then begin
-    repeat W:=TWorkoutFile.Create;
-      if W.LoadFromUrl(FilenameToURISafe(Dir+Search.Name))then begin FLocal.Add(W);FItems.Add(W);end else W.Free;
-    until FindNext(Search)<>0;FindClose(Search);
-  end;
+  FContent.ClearControls;FreeAndNil(FContentOwner);FItems.Clear;FLocal.Clear;
+  LoadLocalWorkoutFiles(UserDataDir+'workouts',FLocal);
+  for I:=0 to FLocal.Count-1 do FItems.Add(FLocal[I]);
   if WorkoutLib<>nil then for I:=0 to WorkoutLib.Categories.Count-1 do
     for J:=0 to WorkoutLib.Categories[I].Workouts.Count-1 do FItems.Add(WorkoutLib.Categories[I].Workouts[J]);
   K:=0;for I:=0 to FItems.Count-1 do if Pos('/00-quick-start/',TWorkoutFile(FItems[I]).Url)>0 then begin

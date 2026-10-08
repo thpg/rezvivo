@@ -241,7 +241,7 @@ begin
   Result := False;
   ARGB   := nil;
   APx    := 0;
-  Path := FCache.BlockTexPath(BlockNW(B));
+  Path := FCache.BlockTexPath(BlockNW(B),FBlockSize);
   if not FileExists(Path) then Exit;
 
   { экземпляр — crack-класса: ниже жёсткий каст TFPMemoryImageCrack(Img),
@@ -406,7 +406,7 @@ begin
   end;
 
   { запись PNG }
-  Path := FCache.BlockTexPath(BlockNW(ABlock));
+  Path := FCache.BlockTexPath(BlockNW(ABlock),FBlockSize);
   Dir  := ExtractFilePath(Path);
   if (Dir <> '') and (not DirectoryExists(Dir)) then
     ForceDirectories(Dir);

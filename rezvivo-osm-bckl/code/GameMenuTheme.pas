@@ -33,7 +33,7 @@ type
     constructor Create(AOwner:TComponent); override;
     procedure Render; override;
   end;
-  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,mgArrow,mgBicycle,mgCalendar);
+  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,mgArrow,mgBicycle,mgCalendar,mgAssistant);
   TMenuGlyph=class(TCastleUserInterface)
   public
     Kind:TMenuGlyphKind;
@@ -222,6 +222,10 @@ begin
       Line([6,17,10,8,15,17,6,17,16,9,19,17]);Line([8,7,12,7]);Line([16,4,18,4,19,6]);Line([17,5,19,17]);
     end;
     mgArrow:begin Line([4,12,20,12]);Line([14,6,20,12,14,18]);end;
+    mgAssistant:begin
+      Line([4,3,20,3,22,5,22,15,20,17,10,17,4,22,4,17,2,15,2,5,4,3]);
+      Line([6,8,18,8]);Line([6,12,14,12]);
+    end;
   end;
 end;
 

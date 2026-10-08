@@ -1,0 +1,208 @@
+object StudioMainForm: TStudioMainForm
+  Left = 200
+  Height = 600
+  Top = 100
+  Width = 1456
+  Caption = 'OSM3D Studio'
+  ClientHeight = 600
+  ClientWidth = 1456
+  Menu = MainMenu1
+  Position = poScreenCenter
+  LCLVersion = '4.6.0.0'
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  object LeftPanel: TPanel
+    Left = 0
+    Height = 577
+    Top = 0
+    Width = 340
+    Align = alLeft
+    BevelOuter = bvNone
+    ClientHeight = 577
+    ClientWidth = 340
+    TabOrder = 0
+    object btnGenerate: TButton
+      AnchorSideLeft.Control = LeftPanel
+      AnchorSideTop.Control = LeftPanel
+      Left = 0
+      Height = 32
+      Top = 0
+      Width = 156
+      Caption = 'Generate'
+      TabOrder = 0
+      OnClick = btnGenerateClick
+    end
+    object btnCancel: TButton
+      AnchorSideLeft.Control = btnGenerate
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = btnGenerate
+      Left = 156
+      Height = 32
+      Top = 0
+      Width = 156
+      Caption = 'Cancel'
+      TabOrder = 1
+    end
+    object btn3D: TButton
+      AnchorSideLeft.Control = LeftPanel
+      AnchorSideTop.Control = btnGenerate
+      AnchorSideTop.Side = asrBottom
+      Left = 0
+      Height = 32
+      Top = 40
+      Width = 156
+      BorderSpacing.Top = 8
+      Caption = '3D'
+      TabOrder = 2
+      OnClick = btn3DClick
+    end
+    object btnFlat: TButton
+      AnchorSideLeft.Control = btn3D
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = btn3D
+      Left = 156
+      Height = 32
+      Top = 40
+      Width = 156
+      Caption = 'Flat'
+      TabOrder = 3
+      OnClick = btnFlatClick
+    end
+    object btnViewSource: TButton
+      AnchorSideLeft.Control = LeftPanel
+      AnchorSideTop.Control = btn3D
+      AnchorSideTop.Side = asrBottom
+      Left = 0
+      Height = 32
+      Top = 80
+      Width = 156
+      BorderSpacing.Top = 8
+      Caption = 'View source'
+      TabOrder = 7
+      OnClick = btnViewSourceClick
+    end
+    object btnVisible: TButton
+      AnchorSideLeft.Control = btnViewSource
+      AnchorSideLeft.Side = asrBottom
+      AnchorSideTop.Control = btnViewSource
+      Left = 156
+      Height = 32
+      Top = 80
+      Width = 156
+      Caption = 'On-screen OSM'
+      TabOrder = 8
+      OnClick = btnVisibleClick
+    end
+    object btnHeights: TButton
+      AnchorSideLeft.Control = LeftPanel
+      AnchorSideTop.Control = btnViewSource
+      AnchorSideTop.Side = asrBottom
+      Left = 0
+      Height = 32
+      Top = 120
+      Width = 312
+      BorderSpacing.Top = 8
+      Caption = 'Tile heights (AWS)'
+      TabOrder = 9
+      OnClick = btnHeightsClick
+    end
+    object EndpointsHost: TPanel
+      Left = 0
+      Height = 240
+      Top = 164
+      Width = 340
+      Align = alTop
+      BorderSpacing.Top = 164
+      BevelOuter = bvLowered
+      TabOrder = 4
+    end
+    object LogMemo: TMemo
+      Left = 0
+      Height = 230
+      Top = 347
+      Width = 340
+      Align = alBottom
+      Font.Height = -12
+      Font.Name = 'Monospace'
+      ParentFont = False
+      ReadOnly = True
+      ScrollBars = ssVertical
+      TabOrder = 5
+    end
+    object SplitterLogs: TSplitter
+      Cursor = crVSplit
+      Left = 0
+      Height = 5
+      Top = 399
+      Width = 340
+      Align = alBottom
+      ResizeAnchor = akBottom
+    end
+    object NetMemo: TMemo
+      Left = 0
+      Height = 0
+      Top = 404
+      Width = 340
+      Align = alClient
+      Font.Height = -12
+      Font.Name = 'Monospace'
+      ParentFont = False
+      ReadOnly = True
+      ScrollBars = ssVertical
+      TabOrder = 6
+    end
+  end
+  object ViewportHost: TCastleControl
+    Left = 340
+    Height = 577
+    Top = 0
+    Width = 1116
+    Align = alClient
+    Options = []
+    TabOrder = 1
+  end
+  object StatusBar1: TStatusBar
+    Left = 0
+    Height = 23
+    Top = 577
+    Width = 1456
+    Panels = <>
+    SimpleText = 'Ready.'
+  end
+  object ProgressBar1: TProgressBar
+    Left = 1000
+    Height = 16
+    Top = 782
+    Width = 200
+    Anchors = [akRight, akBottom]
+    Smooth = True
+    TabOrder = 3
+  end
+  object MainMenu1: TMainMenu
+    Left = 16
+    Top = 16
+    object miFile: TMenuItem
+      Caption = '&File'
+      object miOpenFit: TMenuItem
+        Caption = 'Open route…'
+        OnClick = miOpenFitClick
+      end
+      object miSeparator1: TMenuItem
+        Caption = '-'
+      end
+      object miExit: TMenuItem
+        Caption = 'E&xit'
+      end
+    end
+    object miHelp: TMenuItem
+      Caption = '&Help'
+      object miAbout: TMenuItem
+        Caption = 'About…'
+      end
+    end
+  end
+  object OpenDialog1: TOpenDialog
+    Left = 80
+    Top = 16
+  end
+end

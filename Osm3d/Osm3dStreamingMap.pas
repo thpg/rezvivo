@@ -948,6 +948,8 @@ type
     { Convert a camera/world XZ position to geographic lat/lon using the
       session's fixed local projection. Used by the diagnostic overlay. }
     function CameraGeo(LocalX, LocalZ: Single): TLatLon;
+    property WorldScaleLatitude: Double read FWorldScaleLat;
+    function KnowledgeRecipeHash: string;
 
     { Обратное к CameraGeo: гео lat/lon → мировые XZ в системе координат
       (фиксированной проекции) этой сессии. Нужно, чтобы перенести камеру в
@@ -1455,6 +1457,7 @@ begin
   FBlockGen := TOsm3dBlockGenerator.Create(
                  AHttp, ATerrFetcher, AOverpass,
                  ASettings, AGenHash, FEdge, GEO_BLOCK_SIZE);
+  FBlockGen.Recipes := FCache.Recipes;
   FBlockGen.LogTarget := FLog;
   SetSunDirection(FSunDir, FSunShadowsAllowed);
 
@@ -1944,6 +1947,11 @@ begin
   { FProj is the session's fixed local projection; Unproject maps a
     local XZ point back to lat/lon (Y / elevation is ignored). }
   Result := FProj.Unproject(LocalX, LocalZ);
+end;
+
+function TOsm3dStreamingMap.KnowledgeRecipeHash: string;
+begin
+  if (FCache<>nil) and (FCache.Recipes<>nil) then Result:=FCache.Recipes.ContentHash else Result:='';
 end;
 
 function TOsm3dStreamingMap.TileScaleX(const AId: TGeoTileId): Double;
@@ -7480,7 +7488,7 @@ begin
           FSnapHarvesting := False;
           if (FWarmup <> nil) and (not FDestroying) then
           begin
-            FWarmup.ShowWarmup(FCache.Grid, FSnapForceTiles, FRoute, FAuxHttp);
+            FWarmup.ShowWarmup(FCache.Grid, FSnapForceTiles, FRoute, FAuxHttp, FCache.Recipes);
             { Этап 0 «Профиль высот маршрута»: фит-слой строится в
               Session.Create, ДО показа оверлея, — сразу done. }
             FWarmup.SetStageState(0, wssDone);
@@ -7870,7 +7878,7 @@ begin
     FSnapHarvesting := False;
     if (FWarmup <> nil) and (not FDestroying) then
     begin
-      FWarmup.ShowWarmup(FCache.Grid, FSnapForceTiles, FRoute, FAuxHttp);
+      FWarmup.ShowWarmup(FCache.Grid, FSnapForceTiles, FRoute, FAuxHttp, FCache.Recipes);
       { Этап 0 «Профиль высот маршрута»: фит-слой строится в
         Session.Create, ДО показа оверлея, — сразу done. }
       FWarmup.SetStageState(0, wssDone);
@@ -8524,7 +8532,8 @@ var
     { BRIDGE_SNAP: pass IsBridge so snap prefers deck over under-road. }
     if TRouteSnapper.MakeSnapSegment(
          WorldSeg.X0, WorldSeg.Z0, WorldSeg.X1, WorldSeg.Z1,
-         WorldSeg.Width, WorldSeg.WayId, HSeg, WorldSeg.IsBridge) then
+         WorldSeg.Width, WorldSeg.WayId, HSeg, WorldSeg.IsBridge,
+         WorldSeg.Surface.WidthStart,WorldSeg.Surface.WidthEnd) then
       PushSeg(HSeg);
   end;
 

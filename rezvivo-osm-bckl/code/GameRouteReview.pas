@@ -55,7 +55,7 @@ type
 implementation
 uses Math,Generics.Collections,UiTranslations,Osm3dGeoTileGrid,Osm3dGeoTileBlock,
   Osm3dGeoTileCache,Osm3dGroundComposite,Osm3dSceneMaterials,Osm3dGeomMesh,
-  Osm3dRouteBuildings,Osm3dBuildingObstacleIndex;
+  Osm3dRouteBuildings,Osm3dBuildingObstacleIndex,Osm3dRoadSurface;
 type TIntList=specialize TList<Integer>;
   TWayPoints=specialize TObjectDictionary<Int64,TIntList>;
 var Tasks:TList;TasksLock:TCriticalSection;Idle:TEvent;
@@ -243,7 +243,7 @@ begin
                 Best:=D;Review.Points[I].Structure:=Seg.IsBridge;
                 { Reuse the rendered centerline transform, including latitude scale. }
                 Seg:=RoadSegmentToFrame(Seg,Center,ScaleX);
-                if Abs(Seg.Width-FWidths[I])>Max(0.5,FWidths[I]*0.15)then Include(Review.Points[I].Issues,rcWidth)
+                if Abs(RoadWidthAt(Seg.Surface,Seg.Width,T)-FWidths[I])>Max(0.5,FWidths[I]*0.15)then Include(Review.Points[I].Issues,rcWidth)
                 else if(FWidths[I]>=0.8)and(FWidths[I]<=60)then Exclude(Review.Points[I].Issues,rcWidth);
               end;
             end;

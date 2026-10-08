@@ -75,10 +75,32 @@ type
 var
   WorkoutLib: TWorkoutLibrary;
 
+{ Append local user plans to an owning list. Shared by the Training page and
+  explicit MCP requests; never called from a frame/status update. }
+procedure LoadLocalWorkoutFiles(const Directory:String; Dest:TWorkoutFileList);
+
 implementation
 
 uses
   CastleUriUtils, CastleLog;
+
+procedure LoadLocalWorkoutFiles(const Directory:String; Dest:TWorkoutFileList);
+var Search:TSearchRec;W:TWorkoutFile;Dir:String;
+begin
+  Dir:=IncludeTrailingPathDelimiter(Directory);
+  if FindFirst(Dir+'*.zwo',faAnyFile,Search)<>0 then Exit;
+  try
+    repeat
+      if (Search.Attr and faDirectory)<>0 then Continue;
+      W:=TWorkoutFile.Create;
+      try
+        if W.LoadFromUrl(FilenameToURISafe(Dir+Search.Name)) then begin
+          Dest.Add(W);W:=nil;
+        end;
+      finally W.Free end;
+    until FindNext(Search)<>0;
+  finally FindClose(Search) end;
+end;
 
 { ── TWorkoutCategory ───────────────────────────────────────────────── }
 

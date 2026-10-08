@@ -47,6 +47,7 @@ type
     LenSq:    Single;
     LenInv:   Single;
     HalfW:    Single;
+    HalfW0, HalfW1: Single;
     HalfWSq:  Single;
     { AABB inflated by HalfW + HaloRadius. }
     BBoxMinX, BBoxMaxX: Single;
@@ -83,7 +84,7 @@ type
     procedure SetWorldBounds(MinX, MinZ, MaxX, MaxZ: Single);
 
     { HalfWidth = TRoadParams.Width * 0.5. }
-    procedure AddSegment(X0, Z0, X1, Z1, HalfWidth: Single);
+    procedure AddSegment(X0, Z0, X1, Z1, HalfWidth: Single; HalfWidthEnd:Single=-1);
 
     { Iterate dataset, classify each way, project, AddSegment for each
       segment. Mirrors Osm3dGeomRoadMask.BuildFromDataset but without
@@ -181,7 +182,7 @@ begin
   if FHeight < 16 then FHeight := 16;
 end;
 
-procedure TRoadDistField.AddSegment(X0, Z0, X1, Z1, HalfWidth: Single);
+procedure TRoadDistField.AddSegment(X0, Z0, X1, Z1, HalfWidth,HalfWidthEnd: Single);
 var
   S: TDFRoadSegment;
   Len, HaloPad: Single;
@@ -194,7 +195,9 @@ begin
   if S.LenSq < 0.01 then Exit;
   Len := Sqrt(S.LenSq);
   S.LenInv  := 1.0 / Len;
-  S.HalfW   := Max(0.5, HalfWidth);
+  if HalfWidthEnd<0 then HalfWidthEnd:=HalfWidth;
+  S.HalfW0:=Max(0.25,HalfWidth);S.HalfW1:=Max(0.25,HalfWidthEnd);
+  S.HalfW   := Max(S.HalfW0,S.HalfW1);
   S.HalfWSq := S.HalfW * S.HalfW;
 
   HaloPad := S.HalfW + FHaloRadiusM;
@@ -246,7 +249,8 @@ begin
       if (NA = nil) or (NB = nil) then Continue;
       PA := Projection.Project(NA.Position, 0);
       PB := Projection.Project(NB.Position, 0);
-      AddSegment(PA.X, PA.Z, PB.X, PB.Z, HalfW);
+      AddSegment(PA.X, PA.Z, PB.X, PB.Z,
+        WayNodeWidth(Way,I,HalfW*2)*0.5,WayNodeWidth(Way,I+1,HalfW*2)*0.5);
     end;
   end;
 end;
@@ -391,12 +395,12 @@ begin
         DSq := (WorldX - Cx) * (WorldX - Cx) + (WorldZ - Cz) * (WorldZ - Cz);
 
         { Mask = 1 inside footprint, linear ramp over HaloRadius outside. }
-        if DSq <= S^.HalfWSq then
+        if DSq <= Sqr(S^.HalfW0+(S^.HalfW1-S^.HalfW0)*t) then
           Factor := 1.0
         else
         begin
           D := Sqrt(DSq);
-          BeyondEdge := D - S^.HalfW;
+          BeyondEdge := D - (S^.HalfW0+(S^.HalfW1-S^.HalfW0)*t);
           if BeyondEdge >= FHaloRadiusM then
             Continue
           else
@@ -420,8 +424,8 @@ begin
 
   if Assigned(LogProc) then
     LogProc(Format(
-      '  RoadDistField: rasterised %d×%d at %.2f m/texel, %d segments, ' +
-      'halo=%.1f m, grid=%d×%d (%d index entries)',
+      '  RoadDistField: rasterised %d×%d at %0.2f m/texel, %d segments, ' +
+      'halo=%0.1f m, grid=%d×%d (%d index entries)',
       [FWidth, FHeight, FMPerTexel, FSegCount, FHaloRadiusM,
        GridCols, GridRows, TotalGridEntries]));
 end;

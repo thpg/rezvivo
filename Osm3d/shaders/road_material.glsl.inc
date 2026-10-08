@@ -199,20 +199,23 @@
 '  int idx=int(clamp(floor((lateral-meta.y)/width),0.0,float(count-1)));' + #10 +
 '  float a=meta.y+float(idx)*width, b=a+width;' + #10 +
 '  if(meta.w>0.5 && profile>0) {' + #10 +
+'    vec4 last=texelFetch(rp_layout,ivec2(1+count/4,profile),0);' + #10 +
+'    float scale=max(0.01,roadWidth-2.0*meta.y)/max(0.01,last[count%4]-meta.y);' + #10 +
+'    float originalLateral=meta.y+(lateral-meta.y)/scale;' + #10 +
 '    // Upper bound on at most 32 lanes: five probes, including very wide roads.' + #10 +
 '    int lo=0, hi=count-1;' + #10 +
 '    for(int step=0;step<5;++step) {' + #10 +
 '      if(lo>=hi) break;' + #10 +
 '      int mid=(lo+hi+1)/2;' + #10 +
 '      vec4 bounds=texelFetch(rp_layout,ivec2(1+mid/4,profile),0);' + #10 +
-'      if(lateral>=bounds[mid%4]) lo=mid; else hi=mid-1;' + #10 +
+'      if(originalLateral>=bounds[mid%4]) lo=mid; else hi=mid-1;' + #10 +
 '    }' + #10 +
 '    idx=lo;' + #10 +
 '    vec4 bounds=texelFetch(rp_layout,ivec2(1+idx/4,profile),0);' + #10 +
 '    a=bounds[idx%4];' + #10 +
 '    int next=idx+1;' + #10 +
 '    if((next%4)==0) bounds=texelFetch(rp_layout,ivec2(1+next/4,profile),0);' + #10 +
-'    b=bounds[next%4];' + #10 +
+'    b=bounds[next%4]; a=meta.y+(a-meta.y)*scale; b=meta.y+(b-meta.y)*scale;' + #10 +
 '  }' + #10 +
 '    return vec4(a,b,float(idx),float(count));' + #10 +
 '}' + #10 +

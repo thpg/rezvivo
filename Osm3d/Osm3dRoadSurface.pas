@@ -30,12 +30,35 @@ type
     { 0: unspecified/old cache; 1: new, 2: good, 3: worn, 4: bad, 5: broken. }
     Condition: LongInt;
     Layout: TRoadLaneLayout;
+    { Optional linear width at the centreline endpoints. Zero = legacy constant.
+      The containing segment Width is the conservative maximum for spatial grids. }
+    WidthStart, WidthEnd: Single;
   end;
 
 function RoadConditionFromSmoothness(const Value: string): LongInt;
+function RoadWidthAt(const Surface: TRoadSurfaceProfile; DefaultWidth, T: Single): Single; inline;
+function RoadWidthAtPoint(const Surface: TRoadSurfaceProfile;
+  DefaultWidth, X0,Z0,X1,Z1,X,Z: Single): Single; inline;
 
 implementation
-uses SysUtils;
+uses SysUtils, Math;
+
+function RoadWidthAt(const Surface: TRoadSurfaceProfile; DefaultWidth, T: Single): Single;
+begin
+  if (Surface.WidthStart>0) and (Surface.WidthEnd>0) then
+    Result:=Surface.WidthStart+(Surface.WidthEnd-Surface.WidthStart)*EnsureRange(T,0,1)
+  else Result:=DefaultWidth;
+end;
+
+function RoadWidthAtPoint(const Surface: TRoadSurfaceProfile;
+  DefaultWidth, X0,Z0,X1,Z1,X,Z: Single): Single;
+var DX,DZ,L: Single;
+begin
+  if Surface.WidthStart<=0 then Exit(DefaultWidth);
+  DX:=X1-X0;DZ:=Z1-Z0;L:=DX*DX+DZ*DZ;
+  if L>1e-8 then L:=((X-X0)*DX+(Z-Z0)*DZ)/L else L:=0;
+  Result:=RoadWidthAt(Surface,DefaultWidth,L);
+end;
 
 function RoadConditionFromSmoothness(const Value: string): LongInt;
 var S: string;

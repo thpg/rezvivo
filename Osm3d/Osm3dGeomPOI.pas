@@ -68,7 +68,8 @@ type
     pkxBusStop,
     pkxBench,
     pkxPlaceOfWorship,
-    pkxInfoBoard
+    pkxInfoBoard,
+    pkxBin
   );
 
   { Compact POI placement for the tiled cache. The assembler bakes templates
@@ -145,6 +146,7 @@ type
     class procedure AppendMonument(Target: TMesh; const At: TVector3);
     class procedure AppendBusStop(Target: TMesh; const At: TVector3);
     class procedure AppendBench(Target: TMesh; const At: TVector3);
+    class procedure AppendBin(Target: TMesh; const At: TVector3);
     class procedure AppendPlaceOfWorship(Target: TMesh; const At: TVector3);
     class procedure AppendInfoBoard(Target: TMesh; const At: TVector3);
   end;
@@ -159,6 +161,8 @@ type
   end;
 
 implementation
+
+uses Osm3dOsmTagUtils;
 
 { Ground height for POI/labels — общий SampleTerrainYGeo в Osm3dGeomTerrain
   (sampler SampleAt -> heightmap SampleBilinear -> 0). }
@@ -430,6 +434,7 @@ begin
 
   V := Tags.GetLower('amenity');
   if V = 'bench' then Exit(pkxBench);
+  if V = 'waste_basket' then Exit(pkxBin);
   if V = 'fountain' then Exit(pkxFountain);
   if V = 'place_of_worship' then Exit(pkxPlaceOfWorship);
 
@@ -480,6 +485,12 @@ begin
   AppendBox(Target,
     Vector3(At.X, At.Y + 2.55, At.Z - 0.5),
     3.0, 0.08, 1.2);
+end;
+
+class procedure TPOIBuilderExt.AppendBin(Target: TMesh; const At: TVector3);
+begin
+  AppendCylinder(Target,At,0.22,0.65,8);
+  AppendBox(Target,Vector3(At.X,At.Y+0.72,At.Z),0.48,0.08,0.48);
 end;
 
 class procedure TPOIBuilderExt.AppendBench(Target: TMesh; const At: TVector3);
@@ -767,6 +778,8 @@ begin
 
     Pos := NodePlanePos(Dataset, Node, Projection);   { int-first }
     Yaw := 0;
+    if Node.Tags.HasKey('rezvivo:local_photo_object') and Node.Tags.HasKey('direction') then
+      Yaw:=-DegToRad(ParseOSMMeters(Node.Tags.Get('direction'))); { geographic east is -X }
 
     { Bus stops / platforms: move to the roadside and turn to face the road,
       then re-sample the ground at the moved position. }
@@ -842,6 +855,7 @@ begin
       pkxBench:          AppendBench(Result, ZERO);
       pkxPlaceOfWorship: AppendPlaceOfWorship(Result, ZERO);
       pkxInfoBoard:      AppendInfoBoard(Result, ZERO);
+      pkxBin:            AppendBin(Result, ZERO);
     end;
   except
     Result.Free;
@@ -902,6 +916,7 @@ begin
       pkxBench:          AppendBench(Result, Instances[I].Position);
       pkxPlaceOfWorship: AppendPlaceOfWorship(Result, Instances[I].Position);
       pkxInfoBoard:      AppendInfoBoard(Result, Instances[I].Position);
+      pkxBin:            AppendBin(Result, Instances[I].Position);
     end;
 end;
 

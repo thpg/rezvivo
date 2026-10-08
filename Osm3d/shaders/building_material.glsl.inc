@@ -12,6 +12,7 @@
   'uniform vec3 u_bld_fallback_rgb[U_BLD_MAT_COUNT];' + #10 +
   'uniform float u_bld_metallic[U_BLD_MAT_COUNT];' + #10 +
   'uniform float u_bld_tint_amount[U_BLD_MAT_COUNT];' + #10 +
+  'uniform vec3 u_bld_photo_tints[32];' + #10 +
   'uniform vec3 gc_SunDirToward;' + #10 +
   'uniform vec3 u_sky_zenith;' + #10 +
   'uniform vec3 u_sky_horizon;' + #10 +
@@ -100,11 +101,59 @@
   '' + #10 +
   'void bldEvaluate(const vec3 toCamera)' + #10 +
   '{' + #10 +
+  '    if (vBldSeed.y <= -1000000.0) {' + #10 +
+  '        // Authored components share this material and all its shadow/reflection' + #10 +
+  '        // hooks. No atlas lookups and no procedural windows painted over them.' + #10 +
+  '        float rgb=floor(vBldSeed.x+0.25);' + #10 +
+  '        vec3 paint=vec3(floor(rgb/65536.0),mod(floor(rgb/256.0),256.0),mod(rgb,256.0))/255.0;' + #10 +
+  '        float surfaceBits=floor(-vBldSeed.y-1000000.0+0.25);' + #10 +
+  '        float surface=floor(surfaceBits/65536.0);' + #10 +
+  '        bldRoughness=max(0.05,mod(surfaceBits,256.0)/255.0);' + #10 +
+  '        bldMetallic=mod(floor(surfaceBits/256.0),256.0)/255.0;' + #10 +
+  '        bldView=normalize(toCamera);' + #10 +
+  '        vec3 N=normalize(vBldNormalOS);' + #10 +
+  '        if (dot(N,bldView)<0.0) N=-N;' + #10 +
+  '        bldNormal=N;bldCavity=1.0;bldEnvironment=vec3(0);' + #10 +
+  '        if (surface<0.5) {' + #10 +
+  '            // Metre-scale variation anchored to the house, not world hashes or' + #10 +
+  '            // frame time. Keep trim paint consistent across adjacent pieces.' + #10 +
+  '            float weather=bldNoise(vBldMetric*.31);' + #10 +
+  '            paint*=0.97+0.05*weather;' + #10 +
+  '        }' + #10 +
+  '        if (surface>1.5 && surface<2.5) {' + #10 +
+  '            // Horizontal timber siding for authored walls, with the same PBR,' + #10 +
+  '            // shadow and reflection path as the other architectural surfaces.' + #10 +
+  '            float row=vBldMetric.y/0.16;' + #10 +
+  '            float aa=max(fwidth(row),0.002);' + #10 +
+  '            float seam=1.0-smoothstep(0.015,0.045+aa,min(fract(row),1.0-fract(row)));' + #10 +
+  '            seam*=1.0-smoothstep(0.35,1.0,aa);' + #10 +
+  '            float grain=bldNoise(vBldMetric*vec2(.8,22.0));' + #10 +
+  '            paint*=0.94+0.10*grain-0.24*seam;' + #10 +
+  '            bldCavity=1.0-0.16*seam;' + #10 +
+  '        }' + #10 +
+  '        bldAlbedo=gc_SRGBtoLINEAR(paint);' + #10 +
+  '        if (surface>0.5 && surface<1.5) {' + #10 +
+  '            vec3 reflected=reflect(-bldView,N);' + #10 +
+  '            vec3 sky=mix(u_sky_ground,u_sky_horizon,smoothstep(-.12,.10,reflected.y));' + #10 +
+  '            sky=mix(sky,u_sky_zenith,smoothstep(.10,.70,reflected.y));' + #10 +
+  '            float fresnel=.04+.96*pow(1.0-max(0.0,dot(bldView,N)),5.0);' + #10 +
+  '            rzBldRequest=vec4(N*.5+.5,1.0);' + #10 +
+  '            // Opaque recessed pane: no alpha sorting, no sky leaking through' + #10 +
+  '            // the shell. Reflection uses the same RTX request as atlas glass.' + #10 +
+  '            bldEnvironment=rzEnvironment(gc_SRGBtoLINEAR(sky))*fresnel*u_bld_reflect_strength+' + #10 +
+  '                gc_SRGBtoLINEAR(paint)*(.20*(1.0-fresnel));' + #10 +
+  '            bldAlbedo*=.035;bldMetallic=0.0;' + #10 +
+  '        }' + #10 +
+  '        return;' + #10 +
+  '    }' + #10 +
   '    int matId = int(clamp(floor(vBldMatId+0.5),0.0,15.0));' + #10 +
   '    bool wall = matId < 6 || matId >= 12;' + #10 +
-  '    bool house = vBldSeed.x > 0.5;' + #10 +
+  '    float houseSeed = mod(vBldSeed.x,65536.0);' + #10 +
+  '    int photoTint = int(clamp(floor(vBldSeed.x/65536.0),0.0,31.0));' + #10 +
+  '    bool house = houseSeed > 0.5;' + #10 +
   '    bool facade = wall && vBldSeed.y >= 131072.0;' + #10 +
   '    bool entrance = facade && mod(floor(vBldSeed.y/65536.0),2.0)>0.5;' + #10 +
+  '    bool authored = facade && vBldSeed.y >= 262144.0;' + #10 +
   '    vec2 paneLo = (matId==1 || matId==4) ? vec2(0.3203125,0.2109375) : vec2(0.30859375,0.224609375);' + #10 +
   '    vec2 paneHi = (matId==1 || matId==4) ? vec2(0.6796875,0.787109375) : vec2(0.693359375,0.77734375);' + #10 +
   '    vec2 baseUV = vBldUV;' + #10 +
@@ -145,7 +194,7 @@
   '    bldView = V;' + #10 +
   '    if (dot(N,V)<0.0) { N=-N; B=-B; }' + #10 +
   '' + #10 +
-  '    vec2 seed = vec2(mod(vBldSeed.x,251.0),floor(vBldSeed.x/251.0));' + #10 +
+  '    vec2 seed = vec2(mod(houseSeed,251.0),floor(houseSeed/251.0));' + #10 +
   '    float age = house ? mix(0.06,0.80,bldHash(seed+3.1)) : 0.0;' + #10 +
   '    float upkeep = bldHash(seed+7.3);' + #10 +
   '    age *= mix(0.45,1.0,smoothstep(0.18,0.65,upkeep));' + #10 +
@@ -165,6 +214,15 @@
   '    }' + #10 +
   '    float nonGlass = 1.0-glass;' + #10 +
   '    color *= mix(vec3(1),u_bld_fallback_rgb[matId],u_bld_tint_amount[matId]);' + #10 +
+  '    if (wall && photoTint>0) {' + #10 +
+  '        // Colour and material are independent. Preserve the material''s relief' + #10 +
+  '        // and tonal variation; leave glass and the window frames unchanged.' + #10 +
+  '        vec2 inside = smoothstep(paneLo-0.035-aa,paneLo-0.035+aa,uv)*' + #10 +
+  '                      (1.0-smoothstep(paneHi+0.035-aa,paneHi+0.035+aa,uv));' + #10 +
+  '        float paint = nonGlass*(1.0-inside.x*inside.y);' + #10 +
+  '        float tone = clamp(dot(color,vec3(0.2126,0.7152,0.0722))/0.72,0.35,1.3);' + #10 +
+  '        color = mix(color,u_bld_photo_tints[photoTint]*tone,paint);' + #10 +
+  '    }' + #10 +
   '    if (house) {' + #10 +
   '        // Paint batches differ subtly between houses. Never dirty every wall equally.' + #10 +
   '        vec3 tint = mix(vec3(0.91,0.94,0.98),vec3(1.02,0.99,0.94),bldHash(seed+1.7));' + #10 +
@@ -175,8 +233,8 @@
   '        float footing = max(0.0,vBldMetric.x);' + #10 +
   '        float eave = max(0.0,vBldMetric.y);' + #10 +
   '        float buildingHeight = vBldMetric.x+vBldMetric.y;' + #10 +
-  '        float family = mod(floor(vBldSeed.x+0.5),4.0);' + #10 +
-  '        if (facade) {' + #10 +
+  '        float family = mod(floor(houseSeed+0.5),4.0);' + #10 +
+  '        if (facade && !authored) {' + #10 +
   '            // A house-wide construction system, rather than independent' + #10 +
   '            // random marks on each window. All lines filter in screen space.' + #10 +
   '            float rowEdge = min(uv.y,1.0-uv.y);' + #10 +
@@ -226,7 +284,7 @@
   '            if (entrance && runoffCell.x==0.0 && runoffCell.y==0.0) streak=0.0;' + #10 +
   '            // Per-pane frame paint. Derivative smoothing avoids thin-line shimmer.' + #10 +
   '            float frame = bldRectangle(uv,paneLo-vec2(0.035,0.025),paneHi+vec2(0.035,0.025),aa)*nonGlass;' + #10 +
-  '            color = mix(color,bldFrameColor(vBldSeed.x),frame);' + #10 +
+  '            color = mix(color,bldFrameColor(houseSeed),frame);' + #10 +
   '            float edge = min(min(uv.x-paneLo.x,paneHi.x-uv.x),' + #10 +
   '                             min(uv.y-paneLo.y,paneHi.y-uv.y));' + #10 +
   '            bldCavity *= 1.0-0.28*(1.0-smoothstep(0.0,0.055,edge))*glass;' + #10 +
@@ -270,11 +328,11 @@
   '            panelAA.x *= leaves;' + #10 +
   '            float panel = bldRectangle(panelUV,vec2(0.15,0.09),vec2(0.85,0.41),panelAA);' + #10 +
   '            panel += bldRectangle(panelUV,vec2(0.15,0.56),vec2(0.85,0.91),panelAA);' + #10 +
-  '            vec3 paint = bldFrameColor(vBldSeed.x)*vec3(0.57,0.60,0.61);' + #10 +
+  '            vec3 paint = bldFrameColor(houseSeed)*vec3(0.57,0.60,0.61);' + #10 +
   '            paint *= 0.83+0.17*panel;' + #10 +
   '            float handle = bldRectangle(panelUV,vec2(0.74,0.465),vec2(0.87,0.485),panelAA);' + #10 +
   '            paint = mix(paint,vec3(0.60,0.61,0.58),handle*detail);' + #10 +
-  '            color = mix(color,bldFrameColor(vBldSeed.x),door);' + #10 +
+  '            color = mix(color,bldFrameColor(houseSeed),door);' + #10 +
   '            color = mix(color,paint,innerDoor);' + #10 +
   '            // Remove the old pane''s reflection and mullion normals as well as' + #10 +
   '            // its color; otherwise the window remains visible through the door.' + #10 +

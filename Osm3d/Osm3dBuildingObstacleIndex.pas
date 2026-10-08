@@ -134,6 +134,8 @@ function BuildingObstacleTileKey(Zone: Byte; North: Boolean;
 
 implementation
 
+uses Osm3dGroundOpenings;
+
 function BuildingObstacleTileKey(Zone: Byte; North: Boolean;
   TX, TY: Integer): Int64;
 begin
@@ -161,8 +163,22 @@ end;
 
 function CastersToObstacles(const Casters: TBuildingShadowCasters): TBuildingObstacleArray;
 var
-  I, J, N, OutN: Integer;
+  I, N, OutN, K: Integer;
   O: TBuildingObstacle;
+  Pieces: TBuildingGroundOpenings;
+  procedure AppendPiece(const Footprint: array of TVector3);
+  var V:Integer;
+  begin
+    if Length(Footprint)<3 then Exit;
+    O:=Default(TBuildingObstacle);
+    SetLength(O.Footprint,Length(Footprint));
+    for V:=0 to High(Footprint) do O.Footprint[V]:=Vector3(Footprint[V].X,0,Footprint[V].Z);
+    RebuildObstacleAABB(O);
+    O.BaseY:=Casters[I].BaseY;O.MaxY:=Casters[I].MaxY;
+    if O.MaxY<O.BaseY+1 then O.MaxY:=O.BaseY+3;
+    if OutN=Length(Result) then SetLength(Result,Max(OutN+1,OutN*2));
+    Result[OutN]:=O;Inc(OutN);
+  end;
 begin
   { BUILDING_OBSTACLE }
   SetLength(Result, Length(Casters));
@@ -172,21 +188,13 @@ begin
     if Casters[I].KeepGroundUnder then Continue;
     N := Length(Casters[I].Footprint);
     if N < 3 then Continue;
-    O := Default(TBuildingObstacle);
-    SetLength(O.Footprint, N);
-    for J := 0 to N - 1 do
+    if Length(Casters[I].GroundOpenings)>0 then
     begin
-      O.Footprint[J] := Casters[I].Footprint[J];
-      O.Footprint[J].Y := 0;
+      Pieces:=SubtractBuildingGroundOpenings(Casters[I].Footprint,Casters[I].GroundOpenings);
+      for K:=0 to High(Pieces) do AppendPiece(Pieces[K]);
+      Continue;
     end;
-    RebuildObstacleAABB(O);
-    O.BaseY := Casters[I].BaseY;
-    O.MaxY  := Casters[I].MaxY;
-    if O.MaxY < O.BaseY + 1.0 then
-      O.MaxY := O.BaseY + 3.0;   { fallback envelope }
-    O.TileKey := 0;
-    Result[OutN] := O;
-    Inc(OutN);
+    AppendPiece(Casters[I].Footprint);
   end;
   SetLength(Result, OutN);
 end;

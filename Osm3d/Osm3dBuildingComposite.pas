@@ -22,7 +22,7 @@ uses Osm3dStaticGeometry,
   Osm3dGeomMesh,
   Osm3dGlslLib,
   Osm3dCompositeAtlas,    { TCompositeAtlasBase / TAtlasLayout — общая база атласов }
-  Osm3dGroundComposite, Osm3dGpuGround,
+  Osm3dGroundComposite, Osm3dGpuGround, Osm3dFacadeLayout,
   Osm3dBuildingTextures   { FACADE_TEX_DIR / ROOF_TEX_DIR + name helpers }
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ;
@@ -95,7 +95,8 @@ function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
 function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
   Atlas: TBuildingAtlas; const SunDirToward: TVector3;
   out DetailGroup: TCollisionNode; LogProc: TLogProc;
-  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0): TShapeNode; overload;
+  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0;
+  const Layouts:TFacadeLayouts=nil; const Tints:TBuildingTints=nil): TShapeNode; overload;
 
 { Coarse, conservative batch culling plus collision exclusion for near trims. }
 function BuildingDetailGroup(Shape: TShapeNode): TCollisionNode;
@@ -402,7 +403,7 @@ begin
   LOD.FdCenter.Send((MinP+MaxP)*0.5);
   { If a box is within 70 m of the camera its batch must still be active.
     Beyond this enclosing sphere even vertex processing/draw submission stops. }
-  if Geo.X3DName='BuildingEntrances' then
+  if Geo.X3DName='BuildingStructure' then
     LOD.FdRange.Send([600+(MaxP-MinP).Length*0.5])
   else LOD.FdRange.Send([BUILDING_DETAIL_FAR+(MaxP-MinP).Length*0.5]);
   LOD.AddChildren(Shape); LOD.AddChildren(TGroupNode.Create);
@@ -412,7 +413,8 @@ end;
 function BuildBuildingCompositeInternal(Composite: TGroundCompositeMesh;
   Atlas: TBuildingAtlas; const SunDirToward: TVector3;
   out DetailGroup: TCollisionNode; WantDetails: Boolean; LogProc: TLogProc;
-  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0): TShapeNode;
+  Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0;
+  const Layouts:TFacadeLayouts=nil; const Tints:TBuildingTints=nil): TShapeNode;
 var
   Geo:        TIndexedFaceSetNode;
   Facade: TBuildingFacadeData;
@@ -426,6 +428,7 @@ var
   PV, PF:     TEffectPartNode;
   UseUrl:     Boolean;
   FallbackArr: array of TVector3;
+  PhotoTints: array of TVector3;
   MetalArr:   array of Single;
   TintArr:    array of Single;
   I:          Integer;
@@ -438,11 +441,12 @@ begin
   if Atlas = nil then
     raise EInvalidOperation.Create('BuildBuildingCompositeShape: Atlas is nil');
 
-  Facade := TBuildingFacadeData.Create(Composite, WantDetails, Ground, GroundX, GroundZ);
+  Facade := TBuildingFacadeData.Create(Composite, WantDetails, Ground, GroundX, GroundZ,Layouts,Tints);
   try
     Geo := BuildBuildingIFS(Composite);
     if Geo = nil then Exit;
     Facade.AttachInfo(Geo);
+    PhotoTints:=Facade.PhotoTintColors;
     if WantDetails then
     begin
       DetailGeos := Facade.DetailGeometries;
@@ -554,6 +558,7 @@ begin
     else TintArr[I] := 0.0;
   Effect.AddCustomField(TMFFloat.Create(Effect, True,
     'u_bld_tint_amount', TintArr));
+  Effect.AddCustomField(TMFVec3f.Create(Effect, True,'u_bld_photo_tints',PhotoTints));
 
   Sun := SunDirToward;
   if (Sun.X = 0) and (Sun.Y = 0) and (Sun.Z = 0) then
@@ -611,10 +616,10 @@ end;
 function BuildBuildingCompositeShape(Composite: TGroundCompositeMesh;
   Atlas: TBuildingAtlas; const SunDirToward: TVector3;
   out DetailGroup: TCollisionNode; LogProc: TLogProc;
-  Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single): TShapeNode;
+  Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single; const Layouts:TFacadeLayouts; const Tints:TBuildingTints): TShapeNode;
 begin
   Result := BuildBuildingCompositeInternal(Composite, Atlas, SunDirToward,
-    DetailGroup, True, LogProc, Ground, GroundX, GroundZ);
+    DetailGroup, True, LogProc, Ground, GroundX, GroundZ,Layouts,Tints);
 end;
 
 end.

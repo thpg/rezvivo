@@ -31,7 +31,7 @@ implementation
 
 uses Math, TypInfo, PasZLib, CastleVectors, Osm3dGeomMesh,
   Osm3dGeoTileGrid, Osm3dGeomPOI, Osm3dSceneMaterials, Osm3dGeoMath,
-  Osm3dRoadSurface, Osm3dBuildingObstacleIndex, Osm3dManholeData;
+  Osm3dRoadSurface, Osm3dBuildingObstacleIndex, Osm3dManholeData, Osm3dFacadeLayout;
 
 const
   MAGIC: array[0..7] of AnsiChar = 'O3DTBIN1';
@@ -518,6 +518,41 @@ begin
   M.SetRoadSegs(R);
 end;
 
+function HasRoadWidths(M:TTileModel):Boolean;
+var I:Integer;
+begin
+  for I:=0 to M.RoadSegCount-1 do if M.RoadSegs[I].Surface.WidthStart>0 then Exit(True);
+  Result:=False;
+end;
+
+procedure WriteRoadWidths(S:TStream; M:TTileModel);
+var A:TTileSingleArray;I:Integer;
+begin
+  SetLength(A,M.RoadSegCount*2);
+  for I:=0 to M.RoadSegCount-1 do begin
+    A[I*2]:=M.RoadSegs[I].Surface.WidthStart;
+    A[I*2+1]:=M.RoadSegs[I].Surface.WidthEnd;
+  end;
+  WriteU(S,M.RoadSegCount);WriteArray(S,Pointer(A),Length(A),4);
+end;
+
+procedure ReadRoadWidths(S:TStream; M:TTileModel);
+var A:TTileSingleArray;R:TTileRoadSegArray;N,I:Integer;
+begin
+  N:=Count(S,8);Require(N=M.RoadSegCount,'RWID count does not match ROAD');
+  ExactSize(S,Int64(N)*8);SetLength(A,N*2);ReadArray(S,Pointer(A),N*2,4);
+  CheckFloats(PSingle(Pointer(A)),N*2);SetLength(R,N);
+  for I:=0 to N-1 do begin
+    R[I]:=M.RoadSegs[I];
+    Require(((A[I*2]=0) and (A[I*2+1]=0)) or
+      ((A[I*2]>=0.5) and (A[I*2]<=60) and (A[I*2+1]>=0.5) and (A[I*2+1]<=60)),
+      'road endpoint width out of range');
+    Require(Max(A[I*2],A[I*2+1])<=R[I].Width+0.001,'ROAD width is not conservative');
+    R[I].Surface.WidthStart:=A[I*2];R[I].Surface.WidthEnd:=A[I*2+1];
+  end;
+  M.SetRoadSegs(R);
+end;
+
 procedure WriteBuildings(S: TStream; M: TTileModel);
 var A: TBuildingsWire; P: TUVArray; I, J, N: Integer;
 begin
@@ -649,6 +684,9 @@ begin
   CheckPlatform; Require(Model <> nil, 'nil model');
   FillChar(H, SizeOf(H), 0); H.Magic := MAGIC; H.Version := 1;
   H.Endian := $01020304; H.Count := Model.MeshCount+7; H.Directory := 32;
+  if Length(Model.FacadeLayouts)>0 then Inc(H.Count);
+  if Length(Model.BuildingTints)>0 then Inc(H.Count);
+  if HasRoadWidths(Model) then Inc(H.Count);
   Require(H.Count <= MAX_CHUNKS, 'too many meshes');
   SetLength(Entries, H.Count); E := 0;
   F := TFileStream.Create(FileName, fmCreate);
@@ -659,8 +697,12 @@ begin
       WriteMeta(S, Model); Emit('META');
       for I := 0 to Model.MeshCount-1 do begin WriteMesh(S, Model.Meshes[I]); Emit('MESH') end;
       WriteTrees(S, Model); Emit('TREE'); WritePOIs(S, Model); Emit('POIS');
-      WriteRoads(S, Model); Emit('ROAD'); WriteBuildings(S, Model); Emit('BULD');
+      WriteRoads(S, Model); Emit('ROAD');
+      if HasRoadWidths(Model) then begin WriteRoadWidths(S,Model);Emit('RWID') end;
+      WriteBuildings(S, Model); Emit('BULD');
       WriteModels(S, Model); Emit('MODL'); WriteManholes(S, Model); Emit('MHOL');
+      if Length(Model.FacadeLayouts)>0 then begin WriteFacadeLayouts(S,Model.FacadeLayouts); Emit('FACA') end;
+      if Length(Model.BuildingTints)>0 then begin WriteBuildingTints(S,Model.BuildingTints); Emit('BCOL') end;
       F.Position := H.Directory; F.WriteBuffer(Entries[0], Length(Entries)*40);
     finally S.Free end;
   finally F.Free end;
@@ -668,19 +710,23 @@ end;
 
 class function TTileBinary.LoadFile(const FileName: string;
   Layers: TTileBinaryLayers): TTileModel;
-var R: TTileReader; S: TMemoryStream; I: Integer; K: string; Wanted: Boolean;
+var R: TTileReader; S: TMemoryStream; I: Integer; K: string; Wanted: Boolean; WidthChunk:Integer;
 begin
-  Result := nil; R := TTileReader.Create(FileName);
+  Result := nil; WidthChunk:=-1; R := TTileReader.Create(FileName);
   try
     Result := TTileModel.Create;
     try
       for I := 0 to High(R.Entries) do
       begin
         SetString(K, PAnsiChar(@R.Entries[I].Kind[0]), 4);
+        if (K='RWID') and (tblRoads in Layers) then begin
+          Require(WidthChunk<0,'duplicate RWID');WidthChunk:=I;Continue;
+        end;
         Wanted := (K = 'META') or ((K = 'MESH') and (tblMeshes in Layers)) or
           ((K = 'TREE') and (tblTrees in Layers)) or ((K = 'POIS') and (tblPOIs in Layers)) or
           ((K = 'ROAD') and (tblRoads in Layers)) or ((K = 'BULD') and (tblBuildings in Layers)) or
-          ((K = 'MODL') and (tblModels in Layers)) or ((K = 'MHOL') and (tblManholes in Layers));
+          ((K = 'MODL') and (tblModels in Layers)) or ((K = 'MHOL') and (tblManholes in Layers)) or
+          ((K = 'FACA') and (tblMeshes in Layers)) or ((K='BCOL') and (tblMeshes in Layers));
         if not Wanted then Continue;
         S := R.Chunk(I);
         try
@@ -689,9 +735,16 @@ begin
             'TREE': ReadTrees(S, Result); 'POIS': ReadPOIs(S, Result);
             'ROAD': ReadRoads(S, Result); 'BULD': ReadBuildings(S, Result);
             'MODL': ReadModels(S, Result); 'MHOL': ReadManholes(S, Result);
+            'FACA': Result.FacadeLayouts:=ReadFacadeLayouts(S);
+            'BCOL': Result.BuildingTints:=ReadBuildingTints(S);
           end;
           ExactSize(S, 0);
         finally S.Free end;
+      end;
+
+      if WidthChunk>=0 then begin
+        S:=R.Chunk(WidthChunk);
+        try ReadRoadWidths(S,Result);ExactSize(S,0) finally S.Free end;
       end;
     except FreeAndNil(Result); raise end;
   finally R.Free end;
@@ -724,7 +777,7 @@ begin
   try
     Result := 'O3DTBIN1';
     for I := 0 to High(R.Entries) do
-      if KindIs(R.Entries[I], 'META') or KindIs(R.Entries[I], 'ROAD') then
+      if KindIs(R.Entries[I], 'META') or KindIs(R.Entries[I], 'ROAD') or KindIs(R.Entries[I], 'RWID') then
         Result := Result + ':' + IntToHex(R.Entries[I].CRC, 8) + ':' +
           IntToStr(R.Entries[I].RawSize);
   finally R.Free end;

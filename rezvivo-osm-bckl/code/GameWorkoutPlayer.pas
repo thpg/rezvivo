@@ -16,6 +16,13 @@ type
     FWaitForPedal,FRequireSignal,FSignalLost:Boolean;
     FAutoPaused,FWasPedaling,FResumeOnPedal,FPedalTracking:Boolean;
     FNoPedalingTime:Double;
+    FStateObservers:array of TNotifyEvent;
+    FObservedState:TWorkoutState;
+    FObservedIndex:Integer;
+    FObservedRevision:QWord;
+    FObservedAutoPaused,FObservedSignalLost:Boolean;
+    FObservedReference,FObservedIntensity:Double;
+    procedure NotifyStateChanged;
     procedure JournalState;
     procedure Advance;
     function GetStage:TWorkoutSegment;
@@ -36,6 +43,8 @@ type
     procedure Restart;
     procedure ChangeIntensity(Delta:Double);
     procedure ChangeReferenceWatts(Delta:Double);
+    procedure AddStateObserver(const Callback:TNotifyEvent);
+    procedure RemoveStateObserver(const Callback:TNotifyEvent);
     function NeedsTrainerControl:Boolean;
     function TextMessage:String;
     function SaveState:TJSONObject;
@@ -82,6 +91,40 @@ procedure TWorkoutPlayer.JournalState;
 begin
   if FPlan<>nil then SensorLog.SetSessionState(FState=wsRunning,FJournalLap,
     EnsureRange(Round(TargetWatts),0,65535));
+  NotifyStateChanged;
+end;
+
+procedure TWorkoutPlayer.AddStateObserver(const Callback:TNotifyEvent);
+var I,N:Integer;
+begin
+  if not Assigned(Callback) then Exit;
+  for I:=0 to High(FStateObservers) do if (TMethod(FStateObservers[I]).Code=TMethod(Callback).Code) and
+    (TMethod(FStateObservers[I]).Data=TMethod(Callback).Data) then Exit;
+  N:=Length(FStateObservers);SetLength(FStateObservers,N+1);FStateObservers[N]:=Callback;
+end;
+procedure TWorkoutPlayer.RemoveStateObserver(const Callback:TNotifyEvent);
+var I,J:Integer;
+begin
+  for I:=High(FStateObservers) downto 0 do if (TMethod(FStateObservers[I]).Code=TMethod(Callback).Code) and
+    (TMethod(FStateObservers[I]).Data=TMethod(Callback).Data) then begin
+    for J:=I to High(FStateObservers)-1 do FStateObservers[J]:=FStateObservers[J+1];
+    SetLength(FStateObservers,Length(FStateObservers)-1);
+  end;
+end;
+procedure TWorkoutPlayer.NotifyStateChanged;
+var I:Integer;Observers:array of TNotifyEvent;
+begin
+  { JournalState already runs during Step. Only scalar comparisons happen
+    until an actual transition; no JSON, sensor sampling or timer here. }
+  if (FObservedState=FState) and (FObservedIndex=FIndex) and (FObservedRevision=FRevision) and
+    (FObservedAutoPaused=FAutoPaused) and (FObservedSignalLost=FSignalLost) and
+    (FObservedReference=FReference) and (FObservedIntensity=FIntensity) then Exit;
+  FObservedState:=FState;FObservedIndex:=FIndex;FObservedRevision:=FRevision;
+  FObservedAutoPaused:=FAutoPaused;FObservedSignalLost:=FSignalLost;
+  FObservedReference:=FReference;FObservedIntensity:=FIntensity;
+  Observers:=Copy(FStateObservers);
+  for I:=0 to High(Observers) do
+    try Observers[I](Self) except { A monitoring client cannot break trainer control. } end;
 end;
 
 function TWorkoutPlayer.SaveState:TJSONObject;
@@ -178,7 +221,7 @@ begin
   FPedalTracking:=False;FNoPedalingTime:=0;
   FIndex:=0;FStageTime:=0;FElapsed:=0;FPosition:=0;
   FStageStartElapsed:=0;Inc(FRevision);
-  Inc(FJournalLap);SensorLog.SetSessionState(False,FJournalLap,0);
+  Inc(FJournalLap);SensorLog.SetSessionState(False,FJournalLap,0);NotifyStateChanged;
 end;
 
 procedure TWorkoutPlayer.Restart;
@@ -223,7 +266,7 @@ begin
     { A manual pause pressed while turning the cranks waits for a stop and a
       fresh start, rather than disappearing in the following frame. }
     if not FWasPedaling then FResumeOnPedal:=True;
-    if not(FResumeOnPedal and FWasPedaling)then Exit;
+    if not(FResumeOnPedal and FWasPedaling)then begin NotifyStateChanged;Exit end;
     Resume;
   end;
   if FSignalLost then begin
@@ -231,7 +274,7 @@ begin
   end;
   if Pedaling then FNoPedalingTime:=0;
   if FState=wsReady then begin
-    if FWaitForPedal and not Pedaling then Exit;
+    if FWaitForPedal and not Pedaling then begin NotifyStateChanged;Exit end;
     FState:=wsRunning;
   end;
   Idle:=FPedalTracking and not Pedaling;

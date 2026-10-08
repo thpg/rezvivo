@@ -424,7 +424,7 @@ begin
     if (V = 'forest') or (V = 'wood') then Exit(lkForest);
     if (V = 'grass') or (V = 'meadow') or
        (V = 'recreation_ground') then Exit(lkGrass);
-    if (V = 'village_green') then Exit(lkGarden);
+    if (V = 'village_green') or (V = 'flowerbed') then Exit(lkGarden);
     if (V = 'cemetery') or (V = 'grave_yard') then Exit(lkCemetery);
     if (V = 'farmland') or (V = 'farmyard') or (V = 'allotments') or
        (V = 'orchard') or (V = 'vineyard') or

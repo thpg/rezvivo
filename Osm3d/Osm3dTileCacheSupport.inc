@@ -100,6 +100,33 @@ const
     ''#10 +
     '## MESH: геометрия'#10 +
     ''#10 +
+    'Необязательный слой `BCOL` хранит принятые цвета стен независимо от материала:'#10 +
+    '`version:u32 = 1`, `count:u32` (0..8192), затем `osm_id:i64, rgb:u32` по 12 байт.'#10 +
+    'ID уникальны и ненулевые; совпадают с OsmId геометрии здания. Цвет —'#10 +
+    '`0x00RRGGBB`. В текстовом кэше соответствует `O3DBuildingTints data="..."`'#10 +
+    'с массивом `{osm_id: string, color: "#RRGGBB"}`. Слой читается вместе с мешами,'#10 +
+    'при загрузке только дорог пропускается. Старые файлы без него сохраняют свой цвет.'#10 +
+    'Рендер объединяет цвета в палитру до 31 оттенка на композит (излишние сопоставляет'#10 +
+    'ближайшему); слот упакован в старший разряд seed, без нового атрибута вершины.'#10 +
+    ''#10 +
+    'Необязательный слой `FACA` хранит принятую раскладку фасадов по фотографиям.'#10 +
+    'Он загружается вместе с `MESH`; загрузке только маршрута этот слой не нужен.'#10 +
+    'Старые файлы без `FACA` используют обычную процедурную раскладку.'#10 +
+    ''#10 +
+    'Внутри `FACA`: `version:u32 = 1`, `count:u32` (1..4096), затем для каждого'#10 +
+    'фасада заголовок `<q4d6f2I` (72 байта): OSM ID, start lat/lon, end lat/lon,'#10 +
+    'локальные start X/Z и end X/Z, глубина балкона, ширина балкона в долях оконного'#10 +
+    'модуля, число модулей, число карнизов. Далее модули `<ffI>`: ширина в метрах,'#10 +
+    'сдвиг окна в долях этажа, битовая маска этажей балконов. Бит 0 запрещён,'#10 +
+    'биты 1..23 — этажи над первым наземным этажом. Последний массив — положения'#10 +
+    'карнизов `f32` в долях этажа, строго возрастающие. Не более 32 элементов'#10 +
+    'каждого массива. Повтор модулей начинается от start; наружная нормаль —'#10 +
+    'векторное произведение start→end на вертикаль. Это типизированные массивы,'#10 +
+    'а не вложенный JSON. В текстовом кэше им соответствует `O3DFacades` с'#10 +
+    'экранированным JSON в атрибуте `data`.'#10 +
+    ''#10 +
+    '### Массивы MESH'#10 +
+    ''#10 +
     '`name:string, material_enum_name:string`, затем восемь `u32`:'#10 +
     '`flags, vertex_count, pool_count, index_count, material_count, water_count,'#10 +
     'osm_count, border_count`.'#10 +
@@ -187,7 +214,23 @@ const
     'притягивания достаточно CRC32 и размеров META/ROAD из каталога; полное чтение'#10 +
     'дорог всё равно проверяет их CRC. Изменение геометрии без изменения осей дорог'#10 +
     'не заставляет повторно притягивать маршрут. Подготовка обхода зданий использует'#10 +
-    'актуальный BULD отдельно. Пространство кэша привязки — `route-snap-v9`.'#10;
+    'актуальный BULD отдельно. Пространство кэша привязки — `route-snap-v7`.'#10 +
+    ''#10 +
+    '## RWID ? ?????????? ?????? ?????? (???????????? ??????)'#10 +
+    ''#10 +
+    '`u32 count`, ????? `count` ??? `f32 width_start_m, f32 width_end_m` ? ???????'#10 +
+    '??????? `ROAD`. ?????????? ????????? ? ?????? ????????? `ROAD`. ???? `0,0` ????????'#10 +
+    '??????? ?????????? ??????; ????? ??? ?????? ? ????????? 0,5?60 ?, ???????'#10 +
+    '??????????????? ????? ????????. `ROAD.width` ?????? ???????? ?????? ??? ???????.'#10 +
+    '?????? ????????? ??????????; ???????????, ???? ? ????? ??? ?????????? ????????.'#10 +
+    '???????? ????????? ??? ????? `ROAD`, ?????????? ?? ??????? ? ????????.'#10 +
+    '????????? ??? ???? ???????????? ???????? ???????? `RWID`. ?????? ????? ????????'#10 +
+    '??? ?????????. `tile_cache.py dump ... --layer RWID` ?????????? ???????.'#10 +
+    ''#10 +
+    '? ????????? ???????? ???? ?????????? ??????? ???????????? ??? `O3DRoad` ?'#10 +
+    '`widths="start end"`; ??????? ???? ??-???????? ????????????. ??????? ???????'#10 +
+    '`O3RS` ?????? 3 ?????? ?? ?? ??? `f32` ????? ????? ????? (37 ???? ?? ???????).'#10 +
+    '?????? 1 ? 2 ???????? ??-???????? ??????????????.'#10;
   TileCachePythonTool: AnsiString =
     '#!/usr/bin/env python3'#10 +
     '"""Inspect REZVIVO O3DTBIN1 tiles. Python 3.9+, standard library only.'#10 +
@@ -378,6 +421,13 @@ const
     '        require(all(r[0] < np and r[1] < np and r[4] <= 1 and'#10 +
     '                    r[17] <= 32 and r[16] + r[17] <= nl for r in records), ''invalid road offsets'')'#10 +
     '        result = dict(fields=ROAD_FIELDS, records=records, points_xz=points, lane_widths=widths)'#10 +
+    '    elif kind == ''RWID'':'#10 +
+    '        n = p.u32()'#10 +
+    '        widths = p.records(struct.Struct(''<2f''), n)'#10 +
+    '        finite_records(widths)'#10 +
+    '        require(all((a == 0 and b == 0) or (.5 <= a <= 60 and .5 <= b <= 60)'#10 +
+    '                    for a, b in widths), ''invalid road endpoint widths'')'#10 +
+    '        result = dict(fields=[''width_start_m'', ''width_end_m''], records=widths)'#10 +
     '    elif kind == ''BULD'':'#10 +
     '        n, np = p.values(''2I'')'#10 +
     '        records = p.records(BUILDING, n)'#10 +
@@ -398,6 +448,39 @@ const
     '        finite_records(records)'#10 +
     '        require(all(0 <= r[7] < 9 for r in records), ''invalid manhole kind'')'#10 +
     '        result = dict(fields=[''x'', ''y'', ''z'', ''nx'', ''ny'', ''nz'', ''rotation'', ''kind''], records=records)'#10 +
+    '    elif kind == ''BCOL'':'#10 +
+    '        version, count = p.values(''2I'')'#10 +
+    '        require(version == 1 and count <= 8192, ''invalid building tint header'')'#10 +
+    '        records = p.records(struct.Struct(''<qI''), count)'#10 +
+    '        require(all(r[0] != 0 and r[1] <= 0xffffff for r in records), ''invalid building tint'')'#10 +
+    '        require(len({r[0] for r in records}) == count, ''duplicate building tint'')'#10 +
+    '        result = dict(version=version, buildings=[dict(osm_id=str(i), color=f''#{c:06X}'') for i, c in records])'#10 +
+    '    elif kind == ''FACA'':'#10 +
+    '        version, count = p.values(''2I'')'#10 +
+    '        require(version == 1 and 0 < count <= 4096, ''invalid facade layout header'')'#10 +
+    '        facades = []'#10 +
+    '        for _ in range(count):'#10 +
+    '            r = p.values(''q4d6f2I'')'#10 +
+    '            finite_records([r])'#10 +
+    '            osm_id, la, lo, lb, lob, ax, az, bx, bz, depth, width, nb, nc = r'#10 +
+    '            require(osm_id != 0 and 1 <= nb <= 32 and nc <= 32, ''invalid facade arrays'')'#10 +
+    '            require(-85 <= la <= 85 and -85 <= lb <= 85 and -180 <= lo <= 180 and -180 <= lob <= 180,'#10 +
+    '                    ''invalid facade coordinates'')'#10 +
+    '            require(1 <= math.hypot(bx-ax, bz-az) <= 2000 and .25 <= depth <= 1.5 and .4 <= width <= .951,'#10 +
+    '                    ''invalid facade dimensions'')'#10 +
+    '            bays = p.records(struct.Struct(''<ffI''), nb)'#10 +
+    '            cornices = p.scalars(''f'', nc)'#10 +
+    '            finite_records(bays)'#10 +
+    '            require(all(1 <= b[0] <= 7 and -.451 <= b[1] <= .451 and b[2] < 1 << 24 and not b[2] & 1'#10 +
+    '                        for b in bays), ''invalid facade bays'')'#10 +
+    '            require(all(math.isfinite(c) and 0 <= c <= 64 for c in cornices) and'#10 +
+    '                    all(a < b for a, b in zip(cornices, cornices[1:])), ''invalid cornices'')'#10 +
+    '            facades.append(dict(osm_id=str(osm_id), start=[lo, la], end=[lob, lb], local_a=[ax, az],'#10 +
+    '                                local_b=[bx, bz], balcony_depth_m=depth, balcony_width=width,'#10 +
+    '                                bays=[dict(width_m=b[0], floor_shift=b[1],'#10 +
+    '                                           balcony_floors=[i for i in range(1, 24) if b[2] & (1 << i)]) for b in bays],'#10 +
+    '                                cornice_floors=list(cornices)))'#10 +
+    '        result = dict(version=version, facades=facades)'#10 +
     '    else:'#10 +
     '        return dict(unknown_layer=kind, bytes=len(data))'#10 +
     '    p.finish()'#10 +
@@ -421,7 +504,7 @@ const
     '        item = sub.add_parser(name)'#10 +
     '        item.add_argument(''tile'', type=Path)'#10 +
     '        if name == ''dump'':'#10 +
-    '            item.add_argument(''--layer'', choices=sorted(REQUIRED | {''MESH''}))'#10 +
+    '            item.add_argument(''--layer'', choices=sorted(REQUIRED | {''MESH'', ''FACA'', ''BCOL'', ''RWID''}))'#10 +
     '            item.add_argument(''--index'', type=int, help=''directory index of one chunk'')'#10 +
     '            item.add_argument(''--limit'', type=int, default=20, help=''items per array; 0 means all'')'#10 +
     '        if name == ''extract'':'#10 +

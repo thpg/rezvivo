@@ -54,8 +54,10 @@ procedure McpSilenceStdOut;
 
 implementation
 
-uses jsonparser, fpjson
+uses jsonparser, fpjson, Math
 {$IFDEF WINDOWS}, Windows{$ENDIF};
+
+{$I Utf8Json.inc}
 
 { ── raw std-handle IO ────────────────────────────────────────────────── }
 
@@ -128,8 +130,19 @@ end;
 function TMcpStdioServer.ReadLineRaw(out ALine: String): Boolean;
 var
   S: UTF8String;
+  Used, Capacity, First, Count: SizeInt;
+  procedure AppendRun;
+  begin
+    Count:=FBufPos-First;
+    if Count=0 then Exit;
+    if Used+Count>Capacity then begin
+      Capacity:=Max(Used+Count,Max(SizeOf(FBuf),Capacity*2));
+      SetLength(S,Capacity);
+    end;
+    Move(FBuf[First],S[Used+1],Count);Inc(Used,Count);
+  end;
 begin
-  S := '';
+  S := ''; Used:=0;Capacity:=0;
   while True do
   begin
     if FBufPos >= FBufLen then
@@ -139,8 +152,9 @@ begin
       if FBufLen <= 0 then
       begin
         { EOF or error: deliver accumulated partial line if any }
-        if S <> '' then
+        if Used > 0 then
         begin
+          SetLength(S,Used);
           ALine := String(S);
           Exit(True);
         end;
@@ -150,12 +164,16 @@ begin
     if FBuf[FBufPos] = 10 then  { LF }
     begin
       Inc(FBufPos);
+      SetLength(S,Used);
       ALine := String(S);
       Exit(True);
     end;
-    if FBuf[FBufPos] <> 13 then  { skip CR }
-      S := S + Chr(FBuf[FBufPos]);
-    Inc(FBufPos);
+    if FBuf[FBufPos] = 13 then Inc(FBufPos) { skip CR }
+    else begin
+      First:=FBufPos;
+      while (FBufPos<FBufLen) and not (FBuf[FBufPos] in [10,13]) do Inc(FBufPos);
+      AppendRun;
+    end;
   end;
 end;
 
@@ -171,7 +189,7 @@ begin
     Line := Trim(Line);
     if Line = '' then Continue;
     try
-      Payload := GetJSON(Line);
+      Payload := ParseUtf8Json(Line);
     except
       on E: Exception do
       begin

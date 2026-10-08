@@ -81,6 +81,10 @@ type
     { Append Other into Self with re-indexing. Other is not modified or freed. }
     procedure AppendMesh(Other: TMesh);
 
+    { Roll back a builder-owned tail before replacing it. The retained prefix
+      must not reference vertices from that tail. Capacity remains reusable. }
+    procedure TruncateGeometry(AVertexCount, ATriangleCount: Integer);
+
     { Make each triangle's winding agree with its vertices' stored normals (front face = the
       side builders intended outward), so building shapes can render Solid=True. Swaps the two
       non-pivot indices when the geometric normal opposes the average stored normal. }
@@ -115,6 +119,14 @@ function MakeVertex2(const APos, ANormal: TVector3): TMeshVertex; inline;
 function MakeUV(U, V: Single): TVector2; inline;
 
 implementation
+
+procedure TMesh.TruncateGeometry(AVertexCount, ATriangleCount: Integer);
+begin
+  if (AVertexCount<0) or (AVertexCount>FVertexCount) or
+     (ATriangleCount<0) or (ATriangleCount>FIndexCount div 3) then
+    raise ERangeError.Create('Mesh truncation outside live geometry');
+  FVertexCount:=AVertexCount;FIndexCount:=ATriangleCount*3;
+end;
 
 procedure TMesh.AdoptGeometry(const AVertices: TMeshVertexArray;
   const AIndices: TMeshIndexArray);

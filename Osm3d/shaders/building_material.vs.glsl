@@ -19,6 +19,9 @@ void PLUG_vertex_object_space(const in vec4 vertex_object,
     vBldNormalOS = bldNormal;
     vBldMetric = bldInfo.xy;
     vBldSeed = bldInfo.zw;
+    // Exact RGB24 + bounded surface payload in baked architectural meshes.
+    // Flat transport avoids interpolation of packed integers at long range.
+    if (bldUV.y <= -1000000.0) vBldSeed = bldUV;
     // Subtract before interpolation; never reconstruct distant geometry by
     // undoing the camera rotation in the fragment shader.
     vBldShadowPosition = (castle_ModelMatrix * vertex_object).xyz - gc_rider_camera;

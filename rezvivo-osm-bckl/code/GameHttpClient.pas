@@ -340,9 +340,9 @@ begin
     GProxyResolved := True;
     case GProxy.Kind of
       pkNamed:
-        WritelnLog('HTTP', 'Proxy: ' + GProxy.Named + ' (' + GProxy.Source + ')');
+        WritelnLog('HTTP', 'Proxy: configured');
       pkAuto:
-        WritelnLog('HTTP', 'Proxy: autodetect (' + GProxy.Source + ')');
+        WritelnLog('HTTP', 'Proxy: autodetect');
       pkDirect:
         WritelnLog('HTTP', 'Proxy: direct');
     end;
@@ -517,6 +517,7 @@ begin
       ResponseHeaders.Clear;
       ReadHeader('Content-Range');
       ReadHeader('Content-Length');
+      ReadHeader('Content-Type');
       ReadHeader('Content-Encoding');
       ReadHeader('ETag');
     end;

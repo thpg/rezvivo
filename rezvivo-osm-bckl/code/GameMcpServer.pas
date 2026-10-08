@@ -23,6 +23,14 @@ unit GameMcpServer;
 
 interface
 
+uses fpjson;
+
+{ Explicit, non-persistent same-user attach. Status is for local UI only;
+  endpoint/command are deliberately not exposed as public MCP properties. }
+function EnableLocalMcp(out Error:string):Boolean;
+procedure DisableLocalMcp;
+function LocalMcpStatus:TJSONObject;
+
 { Инициализация MCP-режима. Без --mcp-stdio в командной строке — no-op.
   Вызывать в конце ApplicationInitialize, когда views уже созданы. }
 procedure InitMcpServer;
@@ -38,17 +46,17 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses
+uses GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
-  Classes, SysUtils, Math, fpjson, base64,
+  Classes, SysUtils, Math, base64,
   CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages,
   CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog, CastleRendererInternalShader,
   CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
-  McpRegistry, McpStdio,
+  McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
   BikeParametric, RiderPoseCatalog, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
-  Osm3dProceduralVegetation, TreeSeason, GrassRenderer,
+  Osm3dProceduralVegetation, TreeSeason, TreeRenderer, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
   GameWorld, GamePhysicalAgent, GameBikeShaderDiagnostics,
@@ -63,6 +71,7 @@ type
     { Прокачка CheckSynchronize каждый кадр — иначе McpRunTask
       будет ждать до таймаута. }
     procedure UpdatePump(Sender: TObject);
+    procedure BeforePipeDispatch(Sender:TObject);
     { EOF на stdin (MCP-хост закрыл pipe) → завершаем приложение. }
     procedure EndOfStream(Sender: TObject);
   end;
@@ -75,9 +84,33 @@ type
 var
   McpActive: Boolean = False;
   Server: TMcpStdioServer = nil;
+  LocalServer:TMcpLocalPipeServer=nil;
+  LocalSeenGeneration,LocalSeenRevision,LocalRevision:QWord;
+  LocalWasConnected:Boolean=False;
+  LocalError:string='';
   Glue: TMcpGlue = nil;
   ViewRegs: array of TViewReg;
   PerformanceProbe: TGamePerformanceProbe = nil;
+  PhotoComparisonMode: Boolean = False;
+  PhotoPreviousCameraMode: TPlayCameraMode;
+
+procedure PhotoViewContext(out V:TCastleViewport; out S:TOsm3dStreamingSession);
+begin
+  if (ViewPlay=nil) or not ViewPlay.SessionAlive or (ViewPlay.Osm=nil) or
+    (ViewPlay.Osm.Session=nil) or (Application.MainWindow.Container.View<>ViewPlay) then
+    raise Exception.Create('Photo comparison requires an active real-world ride');
+  V:=ViewPlay.MainViewport; S:=ViewPlay.Osm.Session;
+end;
+
+procedure PhotoViewMode(EnterComparison:Boolean);
+begin
+  if EnterComparison then begin
+    if not PhotoComparisonMode then PhotoPreviousCameraMode:=ViewPlay.CameraMode;
+    ViewPlay.SetCameraMode(pcmFree); PhotoComparisonMode:=True;
+  end else if PhotoComparisonMode then begin
+    ViewPlay.SetCameraMode(PhotoPreviousCameraMode); PhotoComparisonMode:=False;
+  end;
+end;
 
 function McpModeRequested: Boolean;
 var
@@ -89,13 +122,43 @@ begin
       Exit(True);
 end;
 
+procedure SyncLocalPeer;
+var S:TMcpLocalPipeStatus;
+begin
+  if LocalServer=nil then Exit;
+  S:=LocalServer.Status;
+  if S.Revision<>LocalSeenRevision then begin
+    LocalSeenRevision:=S.Revision;Inc(LocalRevision);
+  end;
+  if (S.Generation<>LocalSeenGeneration) or (LocalWasConnected and not S.ClientConnected) then begin
+    Assistant.Disconnect;EndAssistantVoiceSession;
+  end;
+  LocalSeenGeneration:=S.Generation;LocalWasConnected:=S.ClientConnected;
+  Assistant.SetTransportAvailable(S.Enabled);
+  if S.Error<>'' then LocalError:=S.Error;
+end;
+
+procedure TMcpGlue.BeforePipeDispatch(Sender:TObject);
+begin
+  { The transport checks that the client is still connected first. Update the
+    identity generation before any handler can use a previous agent token. }
+  SyncLocalPeer;
+end;
+
 procedure TMcpGlue.UpdatePump(Sender: TObject);
 begin
+  SyncAssistantContext;
+  SyncLocalPeer;
+  if (LocalServer<>nil) and LocalServer.Finished then begin
+    FreeAndNil(LocalServer);Inc(LocalRevision);
+  end;
   CheckSynchronize;
+  UpdateAssistantVoice;
 end;
 
 procedure TMcpGlue.EndOfStream(Sender: TObject);
 begin
+  StopAssistantMcp;
   Application.Terminate;
 end;
 
@@ -171,7 +234,8 @@ procedure EnsureMenuVisible;
 var C: TCastleContainer;
 begin
   C := Application.MainWindow.Container;
-  if C.PendingFrontView = ViewMenu then Exit;
+  DismissAssistant(C);
+  if ResumeMcpView(C,ViewMenu) then Exit;
   if (C.PendingFrontView = ViewPlay) and ViewPlay.SessionAlive then
     ViewPlay.OpenMenu
   else if(ViewTrainingOnly<>nil)and(C.PendingFrontView=ViewTrainingOnly)and ViewTrainingOnly.SessionAlive then
@@ -185,6 +249,7 @@ var
   V: TCastleView;
   N: String;
 begin
+  DismissAssistant(Application.MainWindow.Container);
   N := AParams.Get('view', '');
   V := FindViewByName(N);
   if V <> nil then
@@ -197,16 +262,15 @@ begin
       AResult.Add('overlay', ViewMenu.SessionUnderneath);
       Exit;
     end;
-    if (V = ViewPlay) and (Application.MainWindow.Container.CurrentFrontView = ViewMenu)
-      and ViewMenu.RideUnderneath then
+    if (V = ViewPlay) and ViewPlay.SessionAlive and
+      ResumeMcpView(Application.MainWindow.Container,V) then
     begin
-      ViewMenu.ReturnToRide;
       AResult.Add('ok', True);
       AResult.Add('active', ActiveViewName);
       Exit;
     end;
     if ((V=ViewLogin)or(V=ViewWorkoutEditor))and
-      (Application.MainWindow.Container.CurrentFrontView=ViewMenu)then begin
+      (Application.MainWindow.Container.PendingFrontView=ViewMenu)then begin
       ViewMenu.OpenChildView(V);AResult.Add('ok',True);Exit;
     end;
     Application.MainWindow.Container.View := V;
@@ -277,6 +341,9 @@ var Items: TJSONArray;RootIndex:Integer;
     if C is TCastleButton then Caption := TCastleButton(C).Caption
     else if C is TCastleLabel then Caption := TCastleLabel(C).Caption
     else if C is TCastleCheckbox then Caption:=TCastleCheckbox(C).Caption;
+    { This label also contains live dictation, which has not been submitted.
+      Treat it like an edit value when exposing UI metadata to an agent. }
+    if C.Name = 'AssistantVoiceInputStatus' then Caption := '';
     if (C is TCastleButton)or(C is TCastleCheckbox)or(C is TCastleEdit)or
        (C is TCastleIntegerSlider)or(C is TCastleFloatSlider)or
        ((C is TCastleLabel) and AParams.Get('labels', False)) then
@@ -440,6 +507,8 @@ end;
 procedure McpUnregisterPlayObjects;
 begin
   if not McpActive then Exit;
+  ResetPhotoViewRenderTools;
+  PhotoComparisonMode:=False;
   ClearFarFieldProbe;
   UnregisterMcpObject('world');
   UnregisterMcpObject('bike');
@@ -469,14 +538,8 @@ begin
   if not Assigned(ViewPlay) then
     raise Exception.Create('ViewPlay not available');
   C := Application.MainWindow.Container;
-  { Если меню лежит поверх play (ESC-пауза) — просто снимаем его: сессия
-    продолжится. SetView здесь был бы полным Stop сессии! }
-  if (C.ViewStackCount >= 2) and
-     (C.ViewStack[C.ViewStackCount - 1] = ViewMenu) and
-     (C.ViewStack[C.ViewStackCount - 2] = ViewPlay) then
-    ViewMenu.ReturnToRide
-  else if C.View <> ViewPlay then
-    C.View := ViewPlay;   { холодный старт: Start поднимет мир }
+  DismissAssistant(C);
+  if not ResumeMcpView(C,ViewPlay) then C.View:=ViewPlay;
   ViewPlay.StartMoving;
   AResult.Add('ok', True);
   AResult.Add('active', ActiveViewName);
@@ -486,7 +549,7 @@ procedure CmdRideStop(const AParams: TJSONObject; AResult: TJSONObject);
 begin
   if not Assigned(ViewPlay) then
     raise Exception.Create('ViewPlay not available');
-  if Application.MainWindow.Container.View = ViewPlay then
+  if ViewPlay.SessionAlive then
     ViewPlay.StopMoving;
   AResult.Add('ok', True);
 end;
@@ -534,33 +597,18 @@ begin
   AResult.Add('active', ActiveViewName);
 end;
 
-procedure CmdRideStopFull(const AParams: TJSONObject; AResult: TJSONObject);
-var
-  C: TCastleContainer;
+procedure CmdRideStopFull(const AParams:TJSONObject;AResult:TJSONObject);
+var Alive:Boolean;
 begin
-  { ПОЛНОЕ завершение заезда (как кнопка «Стоп» в меню): снимаем меню со
-    стека и ставим его единственным view — штатный TViewPlay.Stop
-    останавливает стриминг, завершает запись FIT и освобождает ресурсы. }
-  C := Application.MainWindow.Container;
-  if (C.ViewStackCount >= 2) and
-     (C.ViewStack[C.ViewStackCount - 1] = ViewMenu) and
-     (C.ViewStack[C.ViewStackCount - 2] = ViewPlay) then
-  begin
-    C.PopView;
-    C.View := ViewMenu;
-    AResult.Add('stopped', True);
-  end
-  else if C.View = ViewPlay then
-  begin
-    C.View := ViewMenu;
-    AResult.Add('stopped', True);
+  Alive:=((ViewPlay<>nil) and ViewPlay.SessionAlive) or
+    ((ViewTrainingOnly<>nil) and ViewTrainingOnly.SessionAlive);
+  if Alive then begin
+    EnsureMenuVisible;
+    ViewMenu.FinishRide;
   end;
-  AResult.Add('ok', True);
-  AResult.Add('active', ActiveViewName);
+  AResult.Add('stopped',Alive);AResult.Add('ok',True);
+  AResult.Add('active',ActiveViewName);
 end;
-
-{ ── camera.set_mode ────────────────────────────────────────────────── }
-
 procedure CmdCameraSetMode(const AParams: TJSONObject; AResult: TJSONObject);
 var
   M: String;
@@ -2379,21 +2427,12 @@ begin
   AResult.Add('ok', True);
 end;
 
-procedure InitMcpServer;
+procedure PrepareMcpRegistry;
+var PhotoSettings:TStudioSettings;
 begin
   if McpActive then Exit;
-  if not McpModeRequested then Exit;
-
-  { Как можно раньше: любой stray WriteLn в Pascal Output сломал бы
-    JSON-RPC поток. MCP-ответы пишутся напрямую в OS-хэндл и не
-    затрагиваются. }
-  McpSilenceStdOut;
-
-  Glue := TMcpGlue.Create;
+  Glue:=TMcpGlue.Create;
   ApplicationProperties.OnUpdate.Add(@Glue.UpdatePump);
-
-  Server := TMcpStdioServer.Create('third-person-navigation-bike', '0.1.0');
-  Server.OnEndOfStream := @Glue.EndOfStream;
 
   RegisterMcpObject('window', Application.MainWindow);
   RegisterView('play', ViewPlay);
@@ -2409,6 +2448,12 @@ begin
     RegisterMcpObject('devices', DeviceService);
   if Assigned(AppSettings.Settings) then
     RegisterMcpObject('settings', AppSettings.Settings);
+
+  PhotoSettings := TStudioSettings.Defaults;
+  RegisterPhotoMcpTools(PhotoSettings.CacheRoot, PhotoSettings.HeightmapZoom, GEO_TILE_EDGE_PX,
+    PhotoSettings.OverpassTileZoom, PhotoSettings.OverpassTimeoutS);
+  RegisterPhotoViewRenderTools(@PhotoViewContext,@PhotoViewMode);
+  RegisterAssistantMcpTools;
 
   RegisterMcpCommand('app.version', 'Client version and update policy.',
     '{"type":"object","properties":{}}', @CmdClientVersion);
@@ -2450,7 +2495,7 @@ begin
     '',
     @CmdRideStart);
   RegisterMcpCommand('ride.stop',
-    'Stop rider movement (AutoMove off). No-op outside the play view.',
+    'Stop rider movement (AutoMove off), including under menu/Assistant overlays. No-op without an active ride.',
     '',
     @CmdRideStop);
   RegisterMcpCommand('ride.load_fit',
@@ -2788,22 +2833,86 @@ begin
     '"rkey":{"type":"number"},"rfill":{"type":"number"}}}',
     @CmdBikeFitLighting);
 
-  if not Server.Start then
-  begin
-    { std-хэндлы недоступны (приложение не запущено MCP-хостом с
-      pipe'ами) — откатываемся, приложение живёт как обычно. }
-    FreeAndNil(Server);
-    ApplicationProperties.OnUpdate.Remove(@Glue.UpdatePump);
-    FreeAndNil(Glue);
-    Exit;
-  end;
-
-  McpActive := True;
+  McpActive:=True;
+  if (ViewPlay<>nil) and ViewPlay.SessionAlive then McpRegisterPlayObjects;
 end;
 
+procedure InitMcpServer;
+begin
+  if (Server<>nil) or not McpModeRequested then Exit;
+  McpSilenceStdOut;
+  PrepareMcpRegistry;
+  Server:=TMcpStdioServer.Create('third-person-navigation-bike','0.1.0');
+  Server.OnEndOfStream:=@Glue.EndOfStream;
+  if not Server.Start then begin
+    FreeAndNil(Server);Assistant.SetTransportAvailable(False);Exit;
+  end;
+  Assistant.SetTransportAvailable(True);
+end;
+
+function EnableLocalMcp(out Error:string):Boolean;
+begin
+  Result:=False;Error:='';
+  if McpModeRequested then Error:='mcp_stdio_active'
+  {$ifndef MSWINDOWS}else Error:='mcp_platform_unsupported'{$endif};
+  if Error<>'' then begin LocalError:=Error;Inc(LocalRevision);Exit end;
+  if LocalServer<>nil then begin
+    if LocalServer.Status.Enabled then Exit(True);
+    if not LocalServer.Finished then begin Error:='mcp_stopping';Exit end;
+    FreeAndNil(LocalServer);
+  end;
+  try
+    PrepareMcpRegistry;
+    LocalServer:=TMcpLocalPipeServer.Create('third-person-navigation-bike','0.1.0');
+    LocalServer.OnBeforeDispatch:=@Glue.BeforePipeDispatch;
+    if not LocalServer.Start(Error) then FreeAndNil(LocalServer)
+    else begin
+      LocalSeenGeneration:=0;LocalSeenRevision:=0;LocalWasConnected:=False;
+      Assistant.Disconnect;EndAssistantVoiceSession;
+      Assistant.SetTransportAvailable(True);Result:=True;
+    end;
+  except
+    Error:='mcp_pipe_failed';FreeAndNil(LocalServer);
+  end;
+  LocalError:=Error;Inc(LocalRevision);
+end;
+
+procedure DisableLocalMcp;
+begin
+  if LocalServer=nil then Exit;
+  { Revoke dispatch before any queued command can observe torn-down state. }
+  LocalServer.RequestStop;
+  Assistant.SetTransportAvailable(False);EndAssistantVoiceSession;
+  LocalError:='';Inc(LocalRevision);
+end;
+
+function LocalMcpStatus:TJSONObject;
+var S:TMcpLocalPipeStatus;Supported:Boolean;Endpoint,Command:string;
+begin
+  Supported:=not McpModeRequested;
+  {$ifndef MSWINDOWS}Supported:=False;{$endif}
+  S:=Default(TMcpLocalPipeStatus);
+  if LocalServer<>nil then S:=LocalServer.Status;
+  Endpoint:='';Command:='';
+  if S.Enabled then begin
+    Endpoint:=S.Endpoint;
+    Command:='"'+ExpandFileName(ParamStr(0))+'" --mcp-connect '+Endpoint;
+  end;
+  Result:=TJSONObject.Create(['supported',Supported,'stdio',McpModeRequested,
+    'enabled',S.Enabled,'client_connected',S.ClientConnected,
+    'endpoint',Endpoint,'command',Command,'error',LocalError,
+    'revision',Int64(LocalRevision)]);
+end;
 procedure ShutdownMcpServer;
 begin
+  DisableLocalMcp;
+  FreeAndNil(LocalServer);
+  if Server<>nil then Server.Session.Cancel;
+  StopAssistantMcp;
+  ShutdownAssistantVoice;
   if not McpActive then Exit;
+  ShutdownPhotoMcpTools;
+  ShutdownPhotoViewRenderTools;
   ClearFarFieldProbe;
   FreeAndNil(PerformanceProbe);
   McpActive := False;

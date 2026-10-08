@@ -25,10 +25,10 @@ uses
   Osm3dGeomTerrain,
   Osm3dGeomSurface,
   Osm3dGeomVegetation,
-  Osm3dGeomBuildings,
+  Osm3dGeomBuildings, Osm3dGroundOpenings,
   Osm3dGeomFences,
   Osm3dCarveGround,
-  Osm3dGeomRoads,
+  Osm3dGeomRoads, Osm3dRoadSurface,
   Osm3dGroundComposite,
   Osm3dGeomBridges,
   Osm3dGeomTunnels,
@@ -125,6 +125,23 @@ type
     property TotalVerts: Integer read FTotalVerts;
     property TotalTris:  Integer read FTotalTris;
   end;
+
+{ CPU generation primitives; shared by the builder and geometry regression
+  probes. Neither function touches scene state or a graphics context. }
+function BuildHoleNodeMask(const Casters:TBuildingShadowCasters;
+  Sampler:TTerrainSampler;Projection:TLocalProjection):TBytes;
+function BuildBuildingBasesMesh(const Casters:TBuildingShadowCasters;
+  UVScale:Single;ABag:PLatRingBag=nil):TMesh;
+const
+  { Above grass/lawn, tied with forest floor (10), below all mapped roads
+    (>=11). Captured after landuse: the common stable sort puts later equal
+    priorities first, so paving also replaces forest undergrowth. }
+  BUILDING_PASSAGE_PAVING_ZINDEX = 10;
+  { Hide carve-lattice edge rounding beneath the jambs. This affects only
+    material coverage, never the passage geometry or obstacle clearance. }
+  BUILDING_PASSAGE_PAVING_MARGIN_M = 0.03;
+procedure BuildBuildingPassagePaving(const Casters:TBuildingShadowCasters;
+  out Bag:TLatRingBag);
 
 implementation
 
@@ -495,7 +512,7 @@ begin
     fx := c^.Segs[S].X0 + t*dx;
     fz := c^.Segs[S].Z0 + t*dz;
     d  := Sqrt((PX - fx)*(PX - fx) + (PZ - fz)*(PZ - fz));
-    half := c^.Segs[S].Width * 0.5;
+    half := RoadWidthAt(c^.Segs[S].Surface,c^.Segs[S].Width,t) * 0.5;
     if S >= c^.RampStart then
     begin
       { Подходной съезд туннеля: ЯВНЫЙ продольный профиль траншеи, строго
@@ -1747,7 +1764,8 @@ begin
         if Result[iz * GX + ix] <> 0 then Continue;
         if not Sampler.NodePositionXZ(ix, iz, ax, az) then Continue;
         ctr.X := ax; ctr.Y := 0; ctr.Z := az;
-        if PointInPolygonXZ(ctr, Casters[i].Footprint) then
+        if PointInPolygonXZ(ctr, Casters[i].Footprint) and
+          not InBuildingGroundOpening(ctr,Casters[i].GroundOpenings) then
           Result[iz * GX + ix] := 1;
       end;
   end;
@@ -1758,7 +1776,8 @@ const
   BUILDING_BASE_MITER_CAP = 3.0;    { предел длины митра = CAP*EXPAND (острые углы) }
 
 procedure AppendExpandedFootprintXZ(const FP: array of TVector3;
-  D, InvUV: Single; Target: TMesh; ABag: PLatRingBag = nil);
+  D, InvUV: Single; Target: TMesh; ABag: PLatRingBag = nil;
+  const Openings: TBuildingGroundOpenings = nil);
 var
   N, I, J, Prev, Base: Integer;
   Ring, EN, Off: array of TVector3;   { CCW-копия, нормали рёбер, offset — все Y=0 }
@@ -1766,6 +1785,7 @@ var
   dx, dz, len, dot, denom, t: Single;
   nA, nB, dir: TVector3;
   IntPts: TScatterPointArray;
+  Pieces: TBuildingGroundOpenings;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1438);{$ENDIF}
   N := Length(FP);
@@ -1811,6 +1831,16 @@ begin
     Off[I] := Vector3(Ring[I].X + dir.X * t, 0, Ring[I].Z + dir.Z * t);
   end;
 
+  { Cut AFTER expansion: expanding the resulting pieces would close a
+    narrow passage again. Both float and int-first paths use these rings. }
+  if Length(Openings)>0 then
+  begin
+    Pieces:=SubtractBuildingGroundOpenings(Off,Openings);
+    for I:=0 to High(Pieces) do
+      AppendExpandedFootprintXZ(Pieces[I],0,InvUV,Target,ABag);
+    Exit;
+  end;
+
   { int-first: расширенный контур (митры уже разрешены) уходит кольцом
     от источника — триангуляция и меш не нужны вовсе }
   if ABag <> nil then
@@ -1848,7 +1878,7 @@ end;
 { Общий меш отмосток всех домов чанка (пустой = no-op в захвате).
   Владелец — вызывающий (создаём, захватываем, освобождаем). }
 function BuildBuildingBasesMesh(const Casters: TBuildingShadowCasters;
-  UVScale: Single; ABag: PLatRingBag = nil): TMesh;
+  UVScale: Single; ABag: PLatRingBag): TMesh;
 var
   I: Integer;
   InvUV: Single;
@@ -1858,7 +1888,41 @@ begin
   if UVScale > 0 then InvUV := 1.0 / UVScale else InvUV := 0;
   for I := 0 to High(Casters) do
     AppendExpandedFootprintXZ(Casters[I].Footprint,
-      BUILDING_BASE_EXPAND_M, InvUV, Result, ABag);
+      BUILDING_BASE_EXPAND_M, InvUV, Result, ABag,Casters[I].GroundOpenings);
+end;
+
+procedure BuildBuildingPassagePaving(const Casters:TBuildingShadowCasters;
+  out Bag:TLatRingBag);
+var I,J,K,Start,At:Integer;One:TLatRingBag;
+  Seen:TStringList;Key:string;Ring:TLatRing;
+begin
+  Bag:=Default(TLatRingBag);Seen:=nil;
+  try
+    for I:=0 to High(Casters) do
+      for J:=0 to High(Casters[I].GroundOpenings) do begin
+        One:=Default(TLatRingBag);
+        AppendExpandedFootprintXZ(Casters[I].GroundOpenings[J],
+          BUILDING_PASSAGE_PAVING_MARGIN_M,0,nil,@One);
+        if One.N=0 then Continue;
+        { Decoration casters copy their owner's openings. Deduplicate using
+          the carve lattice, canonical winding and start vertex, independent
+          of caster order, source Y, or cyclic ring representation. }
+        Ring:=One.Rings[0];Start:=0;
+        for K:=1 to High(Ring) do
+          if (Ring[K].X<Ring[Start].X) or
+            ((Ring[K].X=Ring[Start].X) and (Ring[K].Z<Ring[Start].Z)) then Start:=K;
+        Key:='';
+        for K:=0 to High(Ring) do begin
+          At:=(Start+K) mod Length(Ring);
+          Key:=Key+IntToStr(Ring[At].X)+','+IntToStr(Ring[At].Z)+';';
+        end;
+        if Seen=nil then begin
+          Seen:=TStringList.Create;Seen.Sorted:=True;Seen.CaseSensitive:=True;
+        end;
+        if Seen.IndexOf(Key)>=0 then Continue;
+        Seen.Add(Key);BagAppend(Bag,One);
+      end;
+  finally Seen.Free end;
 end;
 
 { Parallel strip weld: partition carved triangles into Z-strips, weld each into its own builder
@@ -2064,7 +2128,7 @@ var
   SrcTris:   Integer;
   qi:        Integer;
   BasesMesh: TMesh;      { отмостки домов — захватываются как pavement }
-  BasesBag: TLatRingBag;
+  BasesBag,PassageBag: TLatRingBag;
   HoleMask: TBytes;
   tStep:     QWord;      { per-step wall-clock (ms) for the composite log line }
   msWeld, msFinalize, msDrape, msLevel,
@@ -2298,6 +2362,20 @@ begin
           Маска не добавляет нодеру ни одного сегмента: ячейки, все 4
           узла которых внутри футпринта, просто не эмитятся; нутро
           остаётся крупными RQT-блоками и выбрасывается бесплатно. }
+        { A ground-level architectural opening retains terrain and receives
+          paving through the same non-overlapping ground carve. No floor mesh
+          or Y offset: drape/road leveling and grass material filtering apply
+          exactly as for ordinary ground. Mapped roads keep their priority;
+          capturing after landuse wins the forest-floor tie at ZIndex 10. }
+        BuildBuildingPassagePaving(AInput.BuildingShadowCasters,PassageBag);
+        if PassageBag.N>0 then begin
+          if IntLayerN>=Length(IntLayers) then
+            SetLength(IntLayers,IntLayerN*2+8);
+          LayerFromBag(IntLayers[IntLayerN],PassageBag,
+            GROUND_MAT_PAVEMENT,BUILDING_PASSAGE_PAVING_ZINDEX,
+            iumPlanar,LanduseInvUVOf(GROUND_MAT_PAVEMENT));
+          Inc(IntLayerN);
+        end;
         HoleMask := BuildHoleNodeMask(AInput.BuildingShadowCasters,
           Sampler, Projection);
       end;
