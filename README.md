@@ -102,18 +102,25 @@ git init $engine
 git -C $engine config core.autocrlf false
 git -C $engine remote add origin $lock.repository
 git -C $engine sparse-checkout init --cone
-git -C $engine sparse-checkout set src doc/licenses
+git -C $engine sparse-checkout set src doc/licenses tools packages
 git -C $engine fetch --depth=1 --filter=blob:none origin $lock.commit
 git -C $engine checkout --detach FETCH_HEAD
-git -C $engine apply --check "$PWD/patches/cge-rezvivo.patch"
-git -C $engine apply "$PWD/patches/cge-rezvivo.patch"
 ```
 
-This checks out the pinned engine revision from [the dependency lock](dependencies/engine.json)
-and applies [our CGE patch](patches/cge-rezvivo.patch). The engine stays in the sibling
+This checks out the pinned revision of the [`rezvivo` branch in our CGE fork](https://github.com/thpg/castle-engine/tree/rezvivo),
+as recorded in [the dependency lock](dependencies/engine.json). Our engine changes
+are already committed; there is no separate patch to apply. The engine stays in the sibling
 `rezvivo-dependencies/cge` directory, outside this repository.
 
 </details>
+
+To edit `.castle-user-interface` designs, use Lazarus and the CGE editor from
+this pinned engine. Open `rezvivo-osm-bckl/CastleEngineManifest.xml` and choose
+**Project → Restart Editor (With Custom Components)**. The manifest declares
+`GameMenuTheme`, `GameEnemy` and `Osm3dImpostorCache` as `editor_units`, including
+the `TMenuButton` and `TOsmImpostorViewport` classes used by the UI designs.
+Configure the Lazarus path in the editor's
+preferences if it cannot find `lazbuild`.
 
 The executable is written to `rezvivo-osm-bckl/third_person_navigation.exe`.
 Keep `data` beside it. Runtime DLLs are supplied separately;
@@ -140,7 +147,7 @@ Review the [distribution notes](PUBLICATION.md) before redistributing a binary p
 | `Osm3d` | World generation, rendering, terrain, roads, vegetation and tile caching |
 | `tree-editor/core`, `tree-editor/render` | Vegetation modules used by the game |
 | `Mcp` | Diagnostic interface modules |
-| `patches`, `dependencies` | CGE changes, dependency versions and asset provenance |
+| `dependencies` | Pinned CGE fork, dependency versions and asset provenance |
 | `tools`, `.github` | Source checks and continuous integration |
 
 This repository contains the game and the shared modules needed to build it.

@@ -84,7 +84,8 @@ function MenuSummary(const Text: String; const Font: TCastleAbstractFont;
   const PixelWidth: Single; const MaxLines: Integer): String;
 
 implementation
-uses Math, CastleGLUtils, CastleImages, CastleRenderOptions, CastleComponentSerialize, GameAudio;
+uses Math, CastleGLUtils, CastleImages, CastleRenderOptions, CastleComponentSerialize
+  {$ifndef CASTLE_DESIGN_MODE}, GameAudio{$endif};
 
 var FontOwner:TComponent;
     RegularFont,BoldFont:TCastleFont;
@@ -355,7 +356,10 @@ begin
 end;
 
 procedure TMenuButton.DoClick;
-begin PlayMenuClick;inherited;end;
+begin
+  {$ifndef CASTLE_DESIGN_MODE}PlayMenuClick;{$endif}
+  inherited;
+end;
 
 constructor TMenuButton.Create(AOwner: TComponent);
 var EmptyImage:TRGBAlphaImage;

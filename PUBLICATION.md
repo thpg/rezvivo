@@ -7,7 +7,7 @@ releases or upload to the REZVIVO website.
 
 Included: Windows game source dependencies, portable build and installer scripts,
 the installer-selected runtime assets, original workouts, license notices and
-the pinned CGE patch. Binary assets use Git LFS. DLLs and generated executables
+the lock file for our CGE fork. Binary assets use Git LFS. DLLs and generated executables
 belong in reviewed release packages, not Git source history.
 
 Removed from the source export: developer machine paths, profiles, account/token

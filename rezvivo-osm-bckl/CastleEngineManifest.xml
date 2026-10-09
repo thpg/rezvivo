@@ -8,6 +8,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
 <project name="third_person_navigation"
   standalone_source="third_person_navigation_standalone.dpr"
   game_units="GameInitialize"
+  editor_units="GameMenuTheme,GameEnemy,Osm3dImpostorCache"
   caption="REZVIVO"
   qualified_name="io.castleengine.third.person.navigation"
 >
@@ -23,6 +24,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
     <search_paths>
       <path value="code/" />
       <path value="../Bikeparametric/" />
+      <path value="../avatareditor-avatar/" />
       <path value="../TerrainGenerator/" />
       <path value="../Osm3d/" />
       <path value="../Mcp/" />
