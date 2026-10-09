@@ -629,8 +629,8 @@ var
     SumX := 0; SumZ := 0;
     for KV := APreVert to AMesh.VertexCount - 1 do
     begin
-      SumX := SumX + AMesh.Vertices[KV].Position.X;
-      SumZ := SumZ + AMesh.Vertices[KV].Position.Z;
+      SumX := SumX + AMesh.VertexAt[KV].Position.X;
+      SumZ := SumZ + AMesh.VertexAt[KV].Position.Z;
     end;
     SumX := SumX / VertSpan;
     SumZ := SumZ / VertSpan;

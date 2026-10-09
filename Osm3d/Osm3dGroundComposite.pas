@@ -652,6 +652,9 @@ type
       merge per-strip sub-composites built in parallel. Cross-strip coincident
       positions stay unwelded here and are closed later by StitchBoundaryGaps. }
     procedure AppendRawComposite(Src: TGroundCompositeMesh);
+    { Empty destination, known totals of the parallel build strips.
+      Reserve only raw storage, without a redundant weld hash table. }
+    procedure ReserveForRawMerge(AVertCount,ATriCount,APoolCount:Integer);
 
     procedure TrimArrays;
   end;
@@ -2794,6 +2797,15 @@ begin
     FVerts[I].PoolIdx := ARemap[FVerts[I].PoolIdx];
 end;
 
+procedure TGroundCompositeMesh.ReserveForRawMerge(AVertCount,ATriCount,APoolCount:Integer);
+begin
+  if (FVertCount<>0) or (FIndexCount<>0) or (FPool.Count<>0) then
+    raise Exception.Create('Raw merge reservation requires an empty composite');
+  SetLength(FVerts,AVertCount);SetLength(FMaterialIds,AVertCount);
+  SetLength(FIndices,ATriCount*3);SetLength(FTriTileKeys,ATriCount);
+  SetLength(FPool.FEntries,APoolCount);
+end;
+
 procedure TGroundCompositeMesh.AppendRawComposite(Src: TGroundCompositeMesh);
 var
   poolOff, vOff, i, nTri: Integer;
@@ -2805,7 +2817,7 @@ begin
   { composite verts (+ parallel material ids) }
   if Length(FVerts) < FVertCount + Src.FVertCount then
   begin
-    SetLength(FVerts,       FVertCount + Src.FVertCount);
+    SetLength(FVerts,       Max(FVertCount + Src.FVertCount, Length(FVerts)*2));
     SetLength(FMaterialIds, Length(FVerts));
   end;
   { composite verts: bulk-copy whole records, then offset PoolIdx only if the
@@ -2820,10 +2832,10 @@ begin
   { triangles: bulk-copy indices, then offset to the new vert range; tile keys
     are a plain copy. }
   if Length(FIndices) < FIndexCount + Src.FIndexCount then
-    SetLength(FIndices, FIndexCount + Src.FIndexCount);
+    SetLength(FIndices, Max(FIndexCount + Src.FIndexCount, Length(FIndices)*2));
   nTri := Src.FIndexCount div 3;
   if Length(FTriTileKeys) < (FIndexCount div 3) + nTri then
-    SetLength(FTriTileKeys, (FIndexCount div 3) + nTri);
+    SetLength(FTriTileKeys, Max((FIndexCount div 3) + nTri, Length(FTriTileKeys)*2));
   if Src.FIndexCount > 0 then
   begin
     Move(Src.FIndices[0], FIndices[FIndexCount], Src.FIndexCount * SizeOf(FIndices[0]));
@@ -3474,7 +3486,7 @@ begin
   if (Other = nil) or (Other.FCount = 0) then Exit;
   off := FCount;
   if Length(FEntries) < off + Other.FCount then
-    SetLength(FEntries, off + Other.FCount);
+    SetLength(FEntries, Max(off + Other.FCount, Length(FEntries)*2));
   Move(Other.FEntries[0], FEntries[off], Other.FCount * SizeOf(FEntries[0]));
   Inc(FCount, Other.FCount);
   FSpatialDirty := True;

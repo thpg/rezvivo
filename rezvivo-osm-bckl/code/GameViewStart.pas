@@ -52,7 +52,7 @@ type
     function HandleBack:Boolean;override;
   end;
 implementation
-uses Math,CastleVectors,CastleColors,CastleWindow,CastleURIUtils,CastleApplicationProperties,UiTranslations,
+uses GameTravelUI, Math,CastleVectors,CastleColors,CastleWindow,CastleURIUtils,CastleApplicationProperties,UiTranslations,
   CastleMessages,
   GameViewMenu,GameUserData,GameRideHistory,WorkoutFile,GameSensorLog,FitFile,
   RideUploadQueue,VeloSiteAPI,GameWorkoutSchedule,GameViewSchedule;
@@ -63,12 +63,12 @@ const Captions:array[0..3]of String=('Just ride','Intervals','Choose a route','R
       Names:array[0..3]of String=('QuickRide','QuickIntervals','ChooseRoute','RepeatWorkout');
 begin
   inherited;FullSize:=True;
-  FEyebrow:=TMenuLabel.Create(Self);BindUiText(FEyebrow,'YOUR NEXT RIDE');FEyebrow.Color:=MenuMuted;InsertFront(FEyebrow);
-  FTitle:=TMenuLabel.Create(Self);BindUiText(FTitle,'Where will you ride today?');FTitle.CustomFont:=MenuFont(True);InsertFront(FTitle);
-  FHint:=TMenuLabel.Create(Self);BindUiText(FHint,'A ride, a workout, a new route. Start with what feels right.');FHint.Color:=MenuMuted;InsertFront(FHint);
+  FEyebrow:=TMenuLabel.Create(Self);BindTravelText(FEyebrow, 'YOUR NEXT RIDE');FEyebrow.Color:=MenuMuted;InsertFront(FEyebrow);
+  FTitle:=TMenuLabel.Create(Self);BindTravelText(FTitle, 'Where will you ride today?');FTitle.CustomFont:=MenuFont(True);InsertFront(FTitle);
+  FHint:=TMenuLabel.Create(Self);BindTravelText(FHint, 'A ride, a workout, a new route. Start with what feels right.');FHint.Color:=MenuMuted;InsertFront(FHint);
   for I:=0 to 3 do begin
     FButtons[I]:=TMenuButton.Create(Self);FButtons[I].Name:=Names[I];FButtons[I].AutoSize:=False;
-    FButtons[I].AutoIcon:=False;FButtons[I].Tag:=I;if I in [0,3]then BindUiText(FButtons[I],Captions[I]);
+    FButtons[I].AutoIcon:=False;FButtons[I].Tag:=I;if I in [0,3]then BindTravelText(FButtons[I],Captions[I]);
     FButtons[I].OnClick:=@ClickAction;
     if I in [1,2]then begin
       FCards[I]:=TMenuPanel.Create(Self);InsertFront(FCards[I]);

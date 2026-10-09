@@ -68,7 +68,7 @@ type
     FResumeElapsed,FLastElapsed: Double;
     FLastData:TTrainerDataRecord;
     FLastSlope:Single;
-    FRecordingEnabled:Boolean;
+    FRecordingEnabled,FRecordingResumePending:Boolean;
     FActivityClock:Boolean;
     FClockElapsed:Double;
     FHasFrameData:Boolean;
@@ -322,7 +322,7 @@ var Changed:Boolean;
 begin
   Changed:=(FTimerActive<>TimerActive)or(FLap<>Lap)or(FTarget<>TargetWatts);
   FTimerActive:=TimerActive;FLap:=Lap;FTarget:=TargetWatts;
-  if Changed and FOpened then begin
+  if Changed and FOpened and not FRecordingResumePending then begin
     if FActivityClock and FHasFrameData then LogData(FFrameData,FFrameSlope)
     else if FHasLast then LogData(FLastData,FLastSlope);
   end;
@@ -333,6 +333,7 @@ begin
   if FRecordingEnabled=Value then Exit;
   if not Value then SetSessionState(False,FLap,0);
   FRecordingEnabled:=Value;
+  if Value then FRecordingResumePending:=True;
 end;
 
 procedure TSensorLog.SaveCheckpoint(const Path,Json:String);
@@ -352,12 +353,24 @@ begin
 end;
 
 procedure TSensorLog.LogFrame(const Data:TTrainerDataRecord;ASlope:Single;Seconds:Double;SourceFlags:Byte);
-var StartData:TTrainerDataRecord;
+var StartData:TTrainerDataRecord;WasActive:Boolean;
 begin
   UseActivityClock;
   if not IsNan(Seconds)and not IsInfinite(Seconds)and(Seconds>0)and FRecordingEnabled then begin
     if not FOpened then OpenFile;
     if FOpened then begin
+      if FRecordingResumePending then begin
+        { Keyboard exploration never belongs to a training FIT. Publish a
+          stopped odometer baseline before resuming the measured session,
+          so its first frame cannot inherit distance travelled off-record. }
+        StartData:=Data;
+        if FHasFrameData then StartData.Distance:=FFrameData.Distance;
+        WasActive:=FTimerActive;FTimerActive:=False;
+        WriteData(StartData,ASlope,True);
+        FTimerActive:=WasActive;
+        FFrameData:=StartData;FFrameSlope:=ASlope;FHasFrameData:=True;
+        FRecordingResumePending:=False;
+      end;
       if FTimerActive then FSourceFlags:=FSourceFlags or SourceFlags;
       { Current accounting uses this frame's measured power over Seconds.
         Store it at the beginning, with the previous physical distance, then

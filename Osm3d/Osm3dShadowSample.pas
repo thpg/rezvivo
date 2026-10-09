@@ -1,4 +1,4 @@
-﻿unit Osm3dShadowSample;
+unit Osm3dShadowSample;
 {$mode objfpc}{$H+}
 interface
 uses CastleImages, CastleVectors;

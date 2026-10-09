@@ -22,7 +22,7 @@ unit GameRiderPoseControl;
 interface
 
 uses
-  Classes, SysUtils, RiderTripo, BikeParametric;
+  Classes, SysUtils, RiderTripo, BikeParametric, RiderAttention, CastleVectors;
 
 type
   { Live inputs, sampled once per frame by the caller. }
@@ -33,6 +33,8 @@ type
     GradePct:   Single;   { road grade, % (+ = climbing) }
     FtpW:       Single;   { rider FTP, W (<= 0 -> FallbackFtp is used) }
     LateralAccel: Single; { cornering load, m/s² (|v²/r|); large -> a sharp turn }
+    LookTargetValid: Boolean;
+    LookYaw, LookPitch: Single;
   end;
 
   TPoseManagerReplay = record
@@ -41,6 +43,11 @@ type
     StopTimer: Single;
     SpecialActive: Boolean;
     SpecialTimer: Single;
+    WaitingTimer: Single;
+    BehaviourSeed: Cardinal;
+    Attention: TRiderAttentionState;
+    AttackActive: Boolean;
+    HighPowerTimer, AttackReleaseTimer: Single;
   end;
 
   TRiderPoseManager = class
@@ -59,6 +66,13 @@ type
 
     FSpecialActive: Boolean;
     FSpecialTimer:  Single;  { remaining special hold; <= 0 while active = until ClearSpecial }
+    FWaitingTimer: Single;
+    FBehaviourSeed: Cardinal;
+    FAttention: TRiderAttentionState;
+    FAttackActive: Boolean;
+    FHighPowerTimer, FAttackReleaseTimer: Single;
+    function NextRandom: Single;
+    function WaitingVariant: Integer;
 
     function EffFtp(const S: TRiderSituation): Single;
     function IntensityOf(const S: TRiderSituation): Single;
@@ -71,7 +85,7 @@ type
     function CaptureReplay: TPoseManagerReplay;
     procedure RestoreReplay(const Saved: TPoseManagerReplay);
   public
-    constructor Create(ABike: TBikeInstance);
+    constructor Create(ABike: TBikeInstance; Seed: Cardinal = 0);
     destructor Destroy; override;
 
     procedure SetPoses(ASource: TRiderPoseList);           { copy poses in from an existing list }
@@ -92,6 +106,7 @@ type
     { diagnostics — safe to call any time }
     function DumpPoses: string;
     function DebugLine(const S: TRiderSituation): string;
+    property Attention: TRiderAttentionState read FAttention;
 
     property Poses:          TRiderPoseList read FPoses;
     property FallbackFtp:    Single read FFallbackFtp    write FFallbackFtp;
@@ -101,10 +116,52 @@ type
     property SharpTurnAccel: Single read FSharpTurnAccel  write FSharpTurnAccel;
   end;
 
+procedure SetRiderLookTarget(var S: TRiderSituation;
+  const Position, ForwardDir, Target: TVector3);
+
 implementation
 
 uses
   Math, RiderPoseCatalog;
+
+procedure SetRiderLookTarget(var S: TRiderSituation;
+  const Position, ForwardDir, Target: TVector3);
+var V,F,Left:TVector3;D:Single;
+begin
+  V:=Target-Position-Vector3(0,1.45,0);
+  F:=Vector3(ForwardDir.X,0,ForwardDir.Z);
+  if F.LengthSqr<0.001 then Exit;
+  F:=F.Normalize;Left:=Vector3(F.Z,0,-F.X);
+  D:=Sqrt(Sqr(V.X)+Sqr(V.Z));
+  if D<0.3 then Exit;
+  S.LookTargetValid:=True;
+  S.LookYaw:=RadToDeg(ArcTan2(TVector3.DotProduct(V,Left),TVector3.DotProduct(V,F)));
+  S.LookPitch:=RadToDeg(ArcTan2(V.Y,D));
+end;
+
+function TRiderPoseManager.NextRandom: Single;
+begin
+  FBehaviourSeed:=Cardinal((QWord(FBehaviourSeed)*1664525+1013904223)and $ffffffff);
+  Result:=(FBehaviourSeed shr 8)/16777216;
+end;
+
+function TRiderPoseManager.WaitingVariant: Integer;
+var I,N:Integer;P,Current:TRiderPose;
+begin
+  Result:=FCurIdx;N:=0;
+  if (FCurIdx<0)or(FCurIdx>=FPoses.Count)then Exit;
+  Current:=FPoses[FCurIdx];
+  for I:=0 to FPoses.Count-1 do begin
+    P:=FPoses[I];
+    if (I=FCurIdx)or not P.Grounded or P.Special then Continue;
+    { Keep the planted foot and pelvis support throughout idle changes. }
+    if (Abs(P.LegFreeR-Current.LegFreeR)>0.01)or
+       (Abs(P.LegFreeL-Current.LegFreeL)>0.01)or
+       ((P.LegFreeRPos-Current.LegFreeRPos).LengthSqr>0.0001)or
+       ((P.LegFreeLPos-Current.LegFreeLPos).LengthSqr>0.0001)then Continue;
+    Inc(N);if NextRandom<1/N then Result:=I;
+  end;
+end;
 
 function TRiderPoseManager.CaptureReplay: TPoseManagerReplay;
 begin
@@ -113,6 +170,10 @@ begin
   Result.StopTimer:=FStopTimer;
   Result.SpecialActive:=FSpecialActive;
   Result.SpecialTimer:=FSpecialTimer;
+  Result.WaitingTimer:=FWaitingTimer;Result.BehaviourSeed:=FBehaviourSeed;
+  Result.Attention:=FAttention;
+  Result.AttackActive:=FAttackActive;
+  Result.HighPowerTimer:=FHighPowerTimer;Result.AttackReleaseTimer:=FAttackReleaseTimer;
 end;
 
 procedure TRiderPoseManager.RestoreReplay(const Saved: TPoseManagerReplay);
@@ -122,11 +183,18 @@ begin
   FStopTimer:=Saved.StopTimer;
   FSpecialActive:=Saved.SpecialActive;
   FSpecialTimer:=Saved.SpecialTimer;
+  FWaitingTimer:=Saved.WaitingTimer;FBehaviourSeed:=Saved.BehaviourSeed;
+  FAttention:=Saved.Attention;
+  FAttackActive:=Saved.AttackActive;
+  FHighPowerTimer:=Saved.HighPowerTimer;FAttackReleaseTimer:=Saved.AttackReleaseTimer;
+  FBike.SetRiderAttention(FAttention.Frame);
 end;
 
-constructor TRiderPoseManager.Create(ABike: TBikeInstance);
+constructor TRiderPoseManager.Create(ABike: TBikeInstance; Seed: Cardinal);
 begin
   inherited Create;
+  FBehaviourSeed:=Seed;
+  ResetRiderAttention(FAttention,Seed xor $61c88647);
   FBike := ABike;
   FPoses := TRiderPoseList.Create;
   LoadBuiltinRiderPoses(FPoses);
@@ -269,18 +337,47 @@ begin
   FBike.ApplyRiderPose(FPoses[Idx], Duration);
   FCurIdx     := Idx;
   FDwellTimer := 0;
+  if FPoses[Idx].Grounded then FWaitingTimer:=9+NextRandom*11;
 end;
 
 procedure TRiderPoseManager.Update(Dt: Single; const S: TRiderSituation);
 var
-  curOk, sharpTurn, Grounded, WantsStop, WantsStart: Boolean;
+  curOk, sharpTurn, Grounded, WantsStop, WantsStart, WasAttacking: Boolean;
   pick: Integer;
+  Look:TRiderAttentionInput;
+  AttackIndex,I:Integer;Intensity:Single;
 begin
   if not Assigned(FBike) then Exit;
   FBike.SetRiderEffort(IntensityOf(S));
   Grounded := (FCurIdx >= 0) and (FCurIdx < FPoses.Count) and FPoses[FCurIdx].Grounded;
   WantsStop := (Abs(S.SpeedKmh) < 0.5) and (S.CadenceRpm < 4) and (S.PowerW < 10);
   WantsStart := (Abs(S.SpeedKmh) > 1.2) or (S.CadenceRpm >= 5) or (S.PowerW >= 12);
+  Intensity:=IntensityOf(S);
+  WasAttacking:=FAttackActive;
+  { Power meters/trainers need not supply cadence. A missing cadence signal
+    must not cancel a real high-power effort. }
+  if Intensity>=1.8 then
+    FHighPowerTimer:=FHighPowerTimer+Max(0.0,Dt)
+  else FHighPowerTimer:=0;
+  if Intensity<1.5 then
+    FAttackReleaseTimer:=FAttackReleaseTimer+Max(0.0,Dt)
+  else FAttackReleaseTimer:=0;
+  if FHighPowerTimer>=0.15 then FAttackActive:=True;
+  if (FAttackReleaseTimer>=2.0)or WantsStop then FAttackActive:=False;
+  if WasAttacking and not FAttackActive then FDwellTimer:=FMinDwellSec;
+  AttackIndex:=-1;
+  if FAttackActive then
+    for I:=0 to FPoses.Count-1 do
+      if not FPoses[I].Special and(FPoses[I].Motion.Sprint>0.5)then begin
+        AttackIndex:=I;Break;
+      end;
+  Look:=Default(TRiderAttentionInput);
+  Look.Waiting:=Grounded and WantsStop;
+  Look.Safe:=not FSpecialActive and (Abs(S.LateralAccel)<1.4)and
+    (Look.Waiting or ((Abs(S.SpeedKmh)>7)and(IntensityOf(S)<1.7)));
+  Look.TargetValid:=S.LookTargetValid;Look.TargetYaw:=S.LookYaw;Look.TargetPitch:=S.LookPitch;
+  StepRiderAttention(FAttention,Look,Dt);
+  FBike.SetRiderAttention(FAttention.Frame);
   if WantsStop then FStopTimer := FStopTimer + Max(0.0, Dt)
   else FStopTimer := 0;
 
@@ -289,7 +386,7 @@ begin
   if Grounded and WantsStart then
   begin
     ClearSpecial;
-    pick := PickWeightedIndex(S, False);
+    if AttackIndex>=0 then pick:=AttackIndex else pick := PickWeightedIndex(S, False);
     if pick >= 0 then ApplyIndex(pick, 1.05);
     Exit;
   end;
@@ -306,6 +403,15 @@ begin
     Exit;
   end;
 
+  { Effort is an action, not a cosmetic re-roll. Respond before the ordinary
+    pose dwell, and retain the attack through brief power/cadence dips. }
+  if AttackIndex>=0 then begin
+    if FCurIdx<>AttackIndex then begin
+      ClearSpecial;ApplyIndex(AttackIndex,0.65);
+    end;
+    Exit;
+  end;
+
   { hold a special (event) pose until its timer runs out or it is cleared }
   if FSpecialActive then
   begin
@@ -318,8 +424,15 @@ begin
   end;
 
   if FPoses.Count = 0 then Exit;
-  { Never switch between planted feet at random while waiting. }
-  if Grounded then Exit;
+  if Grounded then begin
+    FWaitingTimer:=FWaitingTimer-Max(0.0,Dt);
+    if (FWaitingTimer<=0)and not FAttention.Active then begin
+      pick:=WaitingVariant;
+      if pick<>FCurIdx then ApplyIndex(pick,1.8)
+      else FWaitingTimer:=9+NextRandom*11;
+    end;
+    Exit;
+  end;
   FDwellTimer := FDwellTimer + Dt;
   sharpTurn := Abs(S.LateralAccel) >= FSharpTurnAccel;
 
@@ -356,6 +469,9 @@ var
   i: Integer;
 begin
   Result := False;
+  if SameText(AName,'look_back')or SameText(AName,'Look back')then begin
+    FAttention.NextLook:=0;Exit(True);
+  end;
   i := FPoses.IndexByName(AName);
   if i < 0 then Exit;
   FBike.ApplyRiderPose(FPoses[i], FTransitionSec);   { event override — plays even though Special }

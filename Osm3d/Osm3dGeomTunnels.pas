@@ -349,8 +349,8 @@ begin
   sumX := 0; sumZ := 0;
   for i := preVert to vEnd - 1 do
   begin
-    sumX := sumX + WallMesh.Vertices[i].Position.X;
-    sumZ := sumZ + WallMesh.Vertices[i].Position.Z;
+    sumX := sumX + WallMesh.VertexAt[i].Position.X;
+    sumZ := sumZ + WallMesh.VertexAt[i].Position.Z;
   end;
   an := Length(Buildings.TileAnchors);
   SetLength(Buildings.TileAnchors, an + 1);

@@ -35,7 +35,7 @@ uses
   Classes, SysUtils, Math,
   CastleVectors,          { TVector3 }
   Osm3dSceneMaterials,    { TSceneMaterialKind, smk* }
-  Osm3dTileX3D,           { TTileModel, TTileRoadSeg }
+  Osm3dTileX3D, Osm3dRoadSurface,           { TTileModel, TTileRoadSeg }
   Osm3dGeomMesh;          { TMesh }
 
 const
@@ -464,7 +464,7 @@ var
   CandD2: array of Double;
   { кромочное поле рельефа: плоский список сегментов ways с наземными
     целями (полуширина полотна+обочина) }
-  EsX0, EsZ0, EsX1, EsZ1, EsHalf: array of Double;
+  EsX0, EsZ0, EsX1, EsZ1, EsHalf, EsHalfEnd: array of Double;
   EsWay: array of Integer;
   NE: Integer;
   EdgeGate: Double;                { радиус гейта по треку для рельефа }
@@ -1075,7 +1075,7 @@ begin
           begin
             SgMark[SgSeg[J]] := SgTag;
             Seg := AModel.RoadSegs[SgSeg[J]];
-            HalfW := Seg.Width * 0.5 + 2.0;
+            HalfW := RoadWidthAtPoint(Seg.Surface,Seg.Width,Seg.X0,Seg.Z0,Seg.X1,Seg.Z1,FPts[I].X,FPts[I].Z)*0.5+2.0;
             if HalfW < 5.0 then HalfW := 5.0;
             SegClosestSq(Seg, FPts[I].X, FPts[I].Z, D);
             if (D < HalfW * HalfW) and (D < CandD2[SgWay[J]]) then
@@ -1365,7 +1365,7 @@ begin
   SetLength(EsZ0, SegLo[NW]);
   SetLength(EsX1, SegLo[NW]);
   SetLength(EsZ1, SegLo[NW]);
-  SetLength(EsHalf, SegLo[NW]);
+  SetLength(EsHalf, SegLo[NW]);SetLength(EsHalfEnd, SegLo[NW]);
   SetLength(EsWay, SegLo[NW]);
   NE := 0;
   EdgeGate := 0;
@@ -1381,8 +1381,9 @@ begin
       EsZ1[NE] := ATileCenterZ + Seg.Z1;
       HalfW := Seg.Width * 0.5;
       if HalfW < 2.0 then HalfW := 2.0;
-      EsHalf[NE] := HalfW + CORR_EDGE_MARGIN_M;
-      if EsHalf[NE] > EdgeGate then EdgeGate := EsHalf[NE];
+      EsHalf[NE] := Max(2.0,RoadWidthAt(Seg.Surface,Seg.Width,0)*0.5)+CORR_EDGE_MARGIN_M;
+      EsHalfEnd[NE] := Max(2.0,RoadWidthAt(Seg.Surface,Seg.Width,1)*0.5)+CORR_EDGE_MARGIN_M;
+      EdgeGate:=Max(EdgeGate,HalfW+CORR_EDGE_MARGIN_M);
       EsWay[NE] := K;
       Inc(NE);
     end;
@@ -1489,7 +1490,7 @@ begin
         begin
           BestD := D;
           W := EsWay[K];
-          HalfW := EsHalf[K];
+          HalfW := EsHalf[K]+(EsHalfEnd[K]-EsHalf[K])*Wt;
         end;
       end;
       Applied := False;

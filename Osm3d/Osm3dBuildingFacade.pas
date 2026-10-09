@@ -158,7 +158,7 @@ var
   Frame: TBuildingFacadeFrame;
   DV, DI, DVCapacity, DICapacity: Integer;
   HouseLimit, HasDoor: Boolean;
-  TintCount:Integer;
+  TintCount, FrameCount:Integer;
 
   function TintSlotFor(AnId:Int64):Integer;
   var I,J:Integer; C:TVector3; D,Best:Single;
@@ -355,6 +355,7 @@ begin
   SetLength(PhotoTintColors,32); TintCount:=1;
   if Mesh=nil then Exit;
   Houses:=nil;
+  HouseCount:=0; FrameCount:=0;
   Ids:=TIdMap.Create; Faces:=TFaceMap.Create;
   Ids.Sorted:=True; Faces.Sorted:=True;
   try
@@ -367,7 +368,9 @@ begin
       J:=Ids.IndexOf(Id);
       if J<0 then
       begin
-        H:=Length(Houses); SetLength(Houses,H+1);
+        H:=HouseCount; Inc(HouseCount);
+        if HouseCount>Length(Houses) then
+          SetLength(Houses,Max(64,Length(Houses)*2));
         Houses[H].MinP:=Mesh.PositionOf(I); Houses[H].MaxP:=Houses[H].MinP;
         Houses[H].BaseY:=1e30; Houses[H].EaveY:=-1e30;
         Houses[H].PrimaryFace:=-1;
@@ -385,7 +388,7 @@ begin
         Houses[H].MaxP.Data[K]:=Max(Houses[H].MaxP.Data[K],P.Data[K]);
       end;
     end;
-    HouseCount:=Length(Houses);
+    SetLength(Houses,HouseCount);
     for I:=0 to Mesh.TriangleCount-1 do
     begin
       A:=Mesh.Indices[I*3]; B:=Mesh.Indices[I*3+1]; C:=Mesh.Indices[I*3+2];
@@ -413,7 +416,12 @@ begin
       J:=Faces.IndexOf(Key);
       if J<0 then
       begin
-        F:=Length(Frames); SetLength(Frames,F+1); Faces.Add(Key,F);
+        F:=FrameCount; Inc(FrameCount);
+        { The game's large-block allocator copies on every resize. Reserve
+          geometrically instead of copying all preceding facades per face. }
+        if FrameCount>Length(Frames) then
+          SetLength(Frames,Max(128,Length(Frames)*2));
+        Faces.Add(Key,F);
         Frames[F].Origin:=O; Frames[F].U:=TU; Frames[F].V:=TV; Frames[F].Normal:=NN;
         Frames[F].MinUV:=UV0; Frames[F].MaxUV:=UV0;
         Frames[F].House:=H; Frames[F].Material:=M;
@@ -439,6 +447,7 @@ begin
         Frames[F].MaxUV.Y:=Max(Frames[F].MaxUV.Y,UV0.Y);
       end;
     end;
+    SetLength(Frames,FrameCount);
     { One architectural rhythm per house. Quantize to complete windows on a
       complete facade; leave clipped walls, gables and skirts alone. Both the
       material and the trim below consume these same adjusted coordinates. }

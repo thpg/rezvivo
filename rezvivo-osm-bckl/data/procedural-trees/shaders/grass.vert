@@ -11,6 +11,7 @@ uniform vec2 uWeeds[8]; // sparse plants per patch, maximum stalk height
 uniform float uVariation[8];
 uniform vec3 uColors[8];
 uniform vec3 uBladeViewGain[32];
+uniform int uComplexity;
 uniform float uTime,uWind,uDistanceOverride;
 uniform vec4 uLodDistances; // blades start/end, visibility fade/end
 uniform vec2 uTopDistances;
@@ -206,7 +207,7 @@ void main(){
     if(form==1)h*=0.66;else if(form==2)h*=0.38;else if(form==3)h*=0.80;
     // Broad gusts and quiet leaf motion. World phase is bounded for long rides.
     float phase=dot(mod(aBase.xz,256.0),vec2(0.17180585,0.12271846))+uTime*0.75;
-    vec2 wind=vec2(1,0.35)*(sin(phase)+0.22*sin(phase*2.0+root.y))*h*uWind*0.055;
+    vec2 wind=vec2(1,0.35)*(sin(phase)+(uComplexity>=3 ? 0.22*sin(phase*2.0+root.y) : 0.0))*h*(uComplexity==0 ? 0.0 : uWind)*0.055;
     float spread=form==0?mix(0.16,0.55,rnd.w):(form==2?1.25:0.72);
     vec2 lean=bend*h*spread+wind;
     p=aBase.xyz+vec3(root.x,dot(aSurface.xy,root)-0.002,root.y);

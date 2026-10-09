@@ -206,6 +206,7 @@ begin
       E := FBindings[I].Effect;
       { An inactive scene may still be traversed by the mount worker. }
       if (FBindings[I].TimeField <> nil) and
+         (FBindings[I].TimeField.Value <> FClock) and
          (E.Scene is TCastleSceneCore) and TCastleSceneCore(E.Scene).Exists then
         FBindings[I].TimeField.Send(FClock);
     end;

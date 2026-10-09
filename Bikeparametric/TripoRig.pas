@@ -72,6 +72,9 @@ type
     Delta:      array of TTripoMat4;    { per-joint LOCAL rotation delta }
     WorldPose:  array of TTripoMat4;    { current world transform of each joint }
     SkinMatrix: array of TTripoMat4;    { WorldPose * InvBind  - UPLOAD THESE }
+    { Optional outerwear envelope, in normalized body metres. The walking
+      arm solver leaves room for the garment; cycling grip IK is unchanged. }
+    ClothingRadiusX,ClothingRadiusZ:Single;
     BendCache:  array of TTripoVec3;     { last bend (pole) direction per Mid joint, world
                                           frame; used by the stabilized IK to keep the
                                           elbow/knee from flipping side across the hint

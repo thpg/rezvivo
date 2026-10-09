@@ -3905,13 +3905,28 @@ var
 
   procedure DistributeManholes;
   var I,N:Integer; T:TGeoTileId; M:TTileModel;
+    Owners:TTileModelArray;
+    Counts:specialize TDictionary<TTileModel,Integer>;
   begin
+    SetLength(Owners,Length(Input.Manholes));
+    Counts:=specialize TDictionary<TTileModel,Integer>.Create;
+    try
     for I:=0 to High(Input.Manholes) do begin
       T:=Grid.TileAt(Proj.Unproject(Input.Manholes[I].Position.X,Input.Manholes[I].Position.Z));
       if not KeepGeoCell(T.TX,T.TY) then Continue;
-      M:=ModelFor(T);N:=Length(M.Manholes);SetLength(M.Manholes,N+1);
-      M.Manholes[N]:=Input.Manholes[I];
+      M:=ModelFor(T);Owners[I]:=M;
+      if not Counts.TryGetValue(M,N) then N:=0;
+      Counts.AddOrSetValue(M,N+1);
     end;
+    for M in Counts.Keys do begin SetLength(M.Manholes,Counts[M]); end;
+    Counts.Clear;
+    for I:=0 to High(Input.Manholes) do begin
+      M:=Owners[I];if M=nil then Continue;
+      if not Counts.TryGetValue(M,N) then N:=0;
+      M.Manholes[N]:=Input.Manholes[I];
+      Counts.AddOrSetValue(M,N+1);
+    end;
+    finally Counts.Free end;
   end;
 
   { File road centerline segments into their geo-tile(s). A segment is
@@ -3973,8 +3988,13 @@ var
     CX, CZ: Single;
     T: TGeoTileId;
     M: TTileModel;
+    Owners: TTileModelArray;
+    Counts: specialize TDictionary<TTileModel,Integer>;
   begin
     All := CastersToObstacles(Input.BuildingShadowCasters);
+    SetLength(Owners,Length(All));
+    Counts:=specialize TDictionary<TTileModel,Integer>.Create;
+    try
     for I := 0 to High(All) do
     begin
       if Length(All[I].Footprint) < 3 then Continue;
@@ -3989,10 +4009,21 @@ var
       T := Grid.TileAt(Proj.Unproject(CX, CZ));
       if not KeepGeoCell(T.TX, T.TY) then Continue;
       M := ModelFor(T);
-      K := Length(M.BuildingObstacles);
-      SetLength(M.BuildingObstacles, K + 1);
-      M.BuildingObstacles[K] := All[I];
+      Owners[I]:=M;
+      if not Counts.TryGetValue(M,K) then K:=0;
+      Counts.AddOrSetValue(M,K+1);
     end;
+    { Allocate once per destination tile. Growing the array per footprint
+      copies all earlier buildings and their managed polygon references. }
+    for M in Counts.Keys do begin SetLength(M.BuildingObstacles,Counts[M]); end;
+    Counts.Clear;
+    for I:=0 to High(All) do begin
+      M:=Owners[I];if M=nil then Continue;
+      if not Counts.TryGetValue(M,K) then K:=0;
+      M.BuildingObstacles[K] := All[I];
+      Counts.AddOrSetValue(M,K+1);
+    end;
+    finally Counts.Free end;
   end;
 
   { Distribute every landuse mesh (grass, farmland, water polygons,

@@ -336,7 +336,7 @@ begin
     if FFocusedAtStart and not Container.Focused then begin Finish(False); Exit end;
     if (Container.PixelsWidth <> FOriginalWidth) or (Container.PixelsHeight <> FOriginalHeight) then
     begin Finish(False, 'Window size changed during calibration'); Exit end;
-    if GetTickCount64 - FStartedAt > 135000 then
+    if GetTickCount64 - FStartedAt > 240000 then
     begin Finish(False, 'Calibration timed out'); Exit end;
     if (FScene <> nil) and (FScene.ErrorText <> '') then
     begin Finish(False, FScene.ErrorText); Exit end;
@@ -355,7 +355,7 @@ begin
           FScene.RestartSamples; FHaveFrame := False;
           FPhase := gapSampling; FPhaseAt := GetTickCount64;
         end
-        else if Elapsed > 15000 then Finish(False, 'Test scene did not finish preparing');
+        else if Elapsed > 90000 then Finish(False, 'Test scene did not finish preparing');
       gapSampling:
         if ((Elapsed >= 1200) and (Length(FWallSamples) >= 60)) or (Elapsed >= 6000) then
           CompleteAngle;

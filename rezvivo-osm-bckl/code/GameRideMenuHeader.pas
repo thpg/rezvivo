@@ -18,7 +18,7 @@ type
     property StartButton: TMenuButton read FStart;
   end;
 implementation
-uses Math, CastleVectors, CastleColors, UiTranslations;
+uses GameTravelUI, Math, CastleVectors, CastleColors, UiTranslations;
 constructor TRideMenuHeader.Create(AOwner: TComponent);
 begin
   inherited;
@@ -50,10 +50,10 @@ procedure TRideMenuHeader.SetRideState(ActiveRide,SameRoute:Boolean);
 begin
   if ActiveRide then begin
     if SameRoute then BindUiText(FStart,'Restart this route')
-    else BindUiText(FStart,'Start another ride');
+    else BindTravelText(FStart, 'Start another ride');
     FStart.Style:=mbSecondary;
   end else begin
-    BindUiText(FStart,'Start ride');
+    BindTravelText(FStart, 'Start ride');
     FStart.Style:=mbPrimary;
   end;
 

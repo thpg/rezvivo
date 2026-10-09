@@ -82,6 +82,7 @@ type
     FContentOwner: TComponent;
 
     FGraphics: TGraphicsPanel;
+    FGraphicsPreview:TGraphicsPreview;
     FAudio: TAudioPanel;
     FInput:TInputPanel;
     FDiskCache: TDiskCachePanel;
@@ -89,6 +90,7 @@ type
     { Language picker — dropdown: одна основная кнопка показывает текущий
       выбор; клик открывает FLangPopupOverlay (затемнение на всю
       страницу), внутри центрированная карта со списком языков. }
+    FLangHint:TCastleLabel;
     FLangSectionLabel:    TCastleLabel;       { 'Interface language:' }
     FLangCurrentButton:   TCastleButton;      { показывает текущий выбор, клик = открыть popup }
     FLangPopupOverlay:    TCastleButton;      { на всю страницу, click = закрыть popup }
@@ -415,6 +417,11 @@ begin
   FActiveTab := ATab;
   if (ATab = ptSettings) and (FGraphics <> nil) then FGraphics.Refresh;
   if FDiskCache <> nil then FDiskCache.SetActive(ATab = ptSettings);
+  if FGraphicsPreview<>nil then begin
+    FGraphicsPreview.Exists:=ATab=ptSettings;
+    if ATab<>ptSettings then FGraphicsPreview.ReleaseScene;
+  end;
+  FSettingsScroll.Border.Right:=20;FSettingsScroll.Border.Top:=0;
   FPageHeading.Exists:=ATab=ptSettings;FTabFlow.Exists:=ATab<>ptSettings;
   FPageHeading.FontSize:=30/Max(0.65,Min(1,UIScale));
   FDesign.Exists := ATab <> ptConnections;
@@ -474,6 +481,7 @@ end;
 procedure TProfilePage.PageHidden;
 begin
   if FDiskCache <> nil then FDiskCache.SetActive(False);
+  if FGraphicsPreview<>nil then begin FGraphicsPreview.Exists:=False;FGraphicsPreview.ReleaseScene end;
   if FProfileDirty then ClickSave(nil);
   if Assigned(FConnectionsPage) and FConnectionsPage.Exists then
   begin
@@ -522,12 +530,12 @@ begin
   FLabelHint         := nil;
   FLabelRiderHint    := nil;
   FButtonRiderSave   := nil;
-  FLangSectionLabel  := nil;
+  FLangSectionLabel  := nil;FLangHint:=nil;
   FLangCurrentButton := nil;
   FGenderSectionLabel := nil;
   FBtnGenderMale     := nil;
   FBtnGenderFemale   := nil;
-  FGraphics := nil;
+  FGraphics := nil;FGraphicsPreview:=nil;
   FAudio := nil;
   FInput := nil;
   FDiskCache := nil;
@@ -996,11 +1004,31 @@ begin FProfileDirty:=True;FAutoSaveDelay:=1.2;end;
 
 procedure TProfilePage.Update(const SecondsPassed: Single;
   var HandleInput: Boolean);
+var W,H,P:Single;
 begin
   inherited;
   HandleAsyncCompletion;
   if (FActiveTab = ptSettings) and (FGraphics <> nil) then
   begin
+    W:=FDesign.EffectiveWidthForChildren;H:=FDesign.EffectiveHeightForChildren;
+    FGraphicsPreview.Exists:=True;
+    if (W>=1040) and (FDesign.RenderRect.Width>=950) then begin
+      P:=Min(720,W*0.44);
+      FGraphicsPreview.Width:=P;FGraphicsPreview.Height:=H-24;
+      FGraphicsPreview.Anchor(hpRight,-20);FGraphicsPreview.Anchor(vpTop,-4);
+      FSettingsScroll.Border.Right:=P+40;FSettingsScroll.Border.Top:=0;
+    end else begin
+      P:=Min(300,Max(190,H*0.37));
+      FGraphicsPreview.Width:=W-40;FGraphicsPreview.Height:=P;
+      FGraphicsPreview.Anchor(hpRight,-20);FGraphicsPreview.Anchor(vpTop,-4);
+      FSettingsScroll.Border.Right:=20;FSettingsScroll.Border.Top:=P+20;
+    end;
+    FSettingsHost.Width:=Max(220,FSettingsScroll.EffectiveWidthForChildren-16);
+    if FLangHint<>nil then begin
+      FLangHint.MaxWidth:=FSettingsHost.EffectiveWidth;
+      FLangHint.Parent.Width:=FSettingsHost.EffectiveWidth;
+      FLangHint.Parent.Height:=Max(130,100+FLangHint.EffectiveHeight);
+    end;
     FGraphics.Width := FSettingsHost.EffectiveWidth;
     FAudio.Width := FSettingsHost.EffectiveWidth;
     FInput.Width := FSettingsHost.EffectiveWidth;
@@ -1159,6 +1187,7 @@ begin
   Group.InsertFront(FLangCurrentButton);
 
   Hint := TMenuLabel.Create(FContentOwner);
+  FLangHint:=Hint;
   Hint.Caption := T('Auto = use language from your VeloSite profile.'
     + ' This choice is saved locally and does not change your VeloSite profile.');
   Hint.MaxWidth := FSettingsHost.EffectiveWidth;
@@ -1375,9 +1404,12 @@ end;
 
 procedure TProfilePage.BuildQualityUI;
 begin
+  FGraphicsPreview:=TGraphicsPreview.Create(FContentOwner);
+  FGraphicsPreview.Exists:=False;FDesign.InsertFront(FGraphicsPreview);
   FGraphics := TGraphicsPanel.Create(FContentOwner);
+  FGraphics.Preview:=FGraphicsPreview;
   FGraphics.Width := FSettingsHost.EffectiveWidth;
-  FPreferencesContainer.InsertFront(FGraphics);
+  FPreferencesContainer.InsertBack(FGraphics);
 end;
 
 procedure TProfilePage.ToggleZones(Sender:TObject);

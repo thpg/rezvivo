@@ -5011,13 +5011,13 @@ begin
     end;
 
     { габарит эмитированных вершин крыши. }
-    RmnX := RoofsTarget.Vertices[VertsBefore].Position.X;  RmxX := RmnX;
-    RmnY := RoofsTarget.Vertices[VertsBefore].Position.Y;  RmxY := RmnY;
-    RmnZ := RoofsTarget.Vertices[VertsBefore].Position.Z;  RmxZ := RmnZ;
+    RmnX := RoofsTarget.VertexAt[VertsBefore].Position.X;  RmxX := RmnX;
+    RmnY := RoofsTarget.VertexAt[VertsBefore].Position.Y;  RmxY := RmnY;
+    RmnZ := RoofsTarget.VertexAt[VertsBefore].Position.Z;  RmxZ := RmnZ;
     Escape := 0;
     for I := VertsBefore to RoofsTarget.VertexCount - 1 do
     begin
-      with RoofsTarget.Vertices[I].Position do
+      with RoofsTarget.VertexAt[I].Position do
       begin
         if X < RmnX then RmnX := X else if X > RmxX then RmxX := X;
         if Y < RmnY then RmnY := Y else if Y > RmxY then RmxY := Y;
@@ -5046,12 +5046,12 @@ begin
     WmnX := 0; WmxX := 0; WmnY := 0; WmxY := 0; WmnZ := 0; WmxZ := 0;
     if (WallsTarget <> nil) and (WVertsAdded > 0) then
     begin
-      WmnX := WallsTarget.Vertices[WVertsBefore].Position.X;  WmxX := WmnX;
-      WmnY := WallsTarget.Vertices[WVertsBefore].Position.Y;  WmxY := WmnY;
-      WmnZ := WallsTarget.Vertices[WVertsBefore].Position.Z;  WmxZ := WmnZ;
+      WmnX := WallsTarget.VertexAt[WVertsBefore].Position.X;  WmxX := WmnX;
+      WmnY := WallsTarget.VertexAt[WVertsBefore].Position.Y;  WmxY := WmnY;
+      WmnZ := WallsTarget.VertexAt[WVertsBefore].Position.Z;  WmxZ := WmnZ;
       for I := WVertsBefore to WallsTarget.VertexCount - 1 do
       begin
-        with WallsTarget.Vertices[I].Position do
+        with WallsTarget.VertexAt[I].Position do
         begin
           if X < WmnX then WmnX := X else if X > WmxX then WmxX := X;
           if Y < WmnY then WmnY := Y else if Y > WmxY then WmxY := Y;
@@ -5082,32 +5082,32 @@ begin
     DownAuth := 0;  DownGeo := 0;  DegenT := 0;
     for DbgT := TrisBefore to RoofsTarget.TriangleCount - 1 do
     begin
-      DbgTA := Integer(RoofsTarget.Indices[DbgT*3]);
-      DbgTB := Integer(RoofsTarget.Indices[DbgT*3 + 1]);
-      DbgTC := Integer(RoofsTarget.Indices[DbgT*3 + 2]);
+      DbgTA := Integer(RoofsTarget.IndexAt[DbgT*3]);
+      DbgTB := Integer(RoofsTarget.IndexAt[DbgT*3 + 1]);
+      DbgTC := Integer(RoofsTarget.IndexAt[DbgT*3 + 2]);
       if (DbgTA < 0) or (DbgTB < 0) or (DbgTC < 0)
       or (DbgTA >= RoofsTarget.VertexCount)
       or (DbgTB >= RoofsTarget.VertexCount)
       or (DbgTC >= RoofsTarget.VertexCount) then Continue;
-      DbgE1.X := RoofsTarget.Vertices[DbgTB].Position.X
-               - RoofsTarget.Vertices[DbgTA].Position.X;
-      DbgE1.Y := RoofsTarget.Vertices[DbgTB].Position.Y
-               - RoofsTarget.Vertices[DbgTA].Position.Y;
-      DbgE1.Z := RoofsTarget.Vertices[DbgTB].Position.Z
-               - RoofsTarget.Vertices[DbgTA].Position.Z;
-      DbgE2.X := RoofsTarget.Vertices[DbgTC].Position.X
-               - RoofsTarget.Vertices[DbgTA].Position.X;
-      DbgE2.Y := RoofsTarget.Vertices[DbgTC].Position.Y
-               - RoofsTarget.Vertices[DbgTA].Position.Y;
-      DbgE2.Z := RoofsTarget.Vertices[DbgTC].Position.Z
-               - RoofsTarget.Vertices[DbgTA].Position.Z;
+      DbgE1.X := RoofsTarget.VertexAt[DbgTB].Position.X
+               - RoofsTarget.VertexAt[DbgTA].Position.X;
+      DbgE1.Y := RoofsTarget.VertexAt[DbgTB].Position.Y
+               - RoofsTarget.VertexAt[DbgTA].Position.Y;
+      DbgE1.Z := RoofsTarget.VertexAt[DbgTB].Position.Z
+               - RoofsTarget.VertexAt[DbgTA].Position.Z;
+      DbgE2.X := RoofsTarget.VertexAt[DbgTC].Position.X
+               - RoofsTarget.VertexAt[DbgTA].Position.X;
+      DbgE2.Y := RoofsTarget.VertexAt[DbgTC].Position.Y
+               - RoofsTarget.VertexAt[DbgTA].Position.Y;
+      DbgE2.Z := RoofsTarget.VertexAt[DbgTC].Position.Z
+               - RoofsTarget.VertexAt[DbgTA].Position.Z;
       DbgFN  := VecCross(DbgE1, DbgE2);
       DbgLen := Sqrt(DbgFN.X*DbgFN.X + DbgFN.Y*DbgFN.Y + DbgFN.Z*DbgFN.Z);
       if DbgLen < 1e-6 then
         Inc(DegenT)
       else if (DbgFN.Y / DbgLen) < -0.05 then
         Inc(DownGeo);
-      if RoofsTarget.Vertices[DbgTA].Normal.Y < -0.05 then
+      if RoofsTarget.VertexAt[DbgTA].Normal.Y < -0.05 then
         Inc(DownAuth);
     end;
 
@@ -5194,25 +5194,25 @@ begin
       ADbg.Add(DbgS);
       for DbgT := TrisBefore to RoofsTarget.TriangleCount - 1 do
       begin
-        DbgTA := Integer(RoofsTarget.Indices[DbgT*3]);
-        DbgTB := Integer(RoofsTarget.Indices[DbgT*3 + 1]);
-        DbgTC := Integer(RoofsTarget.Indices[DbgT*3 + 2]);
+        DbgTA := Integer(RoofsTarget.IndexAt[DbgT*3]);
+        DbgTB := Integer(RoofsTarget.IndexAt[DbgT*3 + 1]);
+        DbgTC := Integer(RoofsTarget.IndexAt[DbgT*3 + 2]);
         if (DbgTA < 0) or (DbgTB < 0) or (DbgTC < 0)
         or (DbgTA >= RoofsTarget.VertexCount)
         or (DbgTB >= RoofsTarget.VertexCount)
         or (DbgTC >= RoofsTarget.VertexCount) then Continue;
-        DbgE1.X := RoofsTarget.Vertices[DbgTB].Position.X
-                 - RoofsTarget.Vertices[DbgTA].Position.X;
-        DbgE1.Y := RoofsTarget.Vertices[DbgTB].Position.Y
-                 - RoofsTarget.Vertices[DbgTA].Position.Y;
-        DbgE1.Z := RoofsTarget.Vertices[DbgTB].Position.Z
-                 - RoofsTarget.Vertices[DbgTA].Position.Z;
-        DbgE2.X := RoofsTarget.Vertices[DbgTC].Position.X
-                 - RoofsTarget.Vertices[DbgTA].Position.X;
-        DbgE2.Y := RoofsTarget.Vertices[DbgTC].Position.Y
-                 - RoofsTarget.Vertices[DbgTA].Position.Y;
-        DbgE2.Z := RoofsTarget.Vertices[DbgTC].Position.Z
-                 - RoofsTarget.Vertices[DbgTA].Position.Z;
+        DbgE1.X := RoofsTarget.VertexAt[DbgTB].Position.X
+                 - RoofsTarget.VertexAt[DbgTA].Position.X;
+        DbgE1.Y := RoofsTarget.VertexAt[DbgTB].Position.Y
+                 - RoofsTarget.VertexAt[DbgTA].Position.Y;
+        DbgE1.Z := RoofsTarget.VertexAt[DbgTB].Position.Z
+                 - RoofsTarget.VertexAt[DbgTA].Position.Z;
+        DbgE2.X := RoofsTarget.VertexAt[DbgTC].Position.X
+                 - RoofsTarget.VertexAt[DbgTA].Position.X;
+        DbgE2.Y := RoofsTarget.VertexAt[DbgTC].Position.Y
+                 - RoofsTarget.VertexAt[DbgTA].Position.Y;
+        DbgE2.Z := RoofsTarget.VertexAt[DbgTC].Position.Z
+                 - RoofsTarget.VertexAt[DbgTA].Position.Z;
         DbgFN  := VecCross(DbgE1, DbgE2);
         DbgLen := Sqrt(DbgFN.X*DbgFN.X + DbgFN.Y*DbgFN.Y + DbgFN.Z*DbgFN.Z);
         DbgNyGeo := 0;
@@ -5221,27 +5221,27 @@ begin
           '    R#%d A=(%.2f %.2f %.2f) B=(%.2f %.2f %.2f) C=(%.2f %.2f %.2f)' +
           ' nA=(%.2f %.2f %.2f) nyGeo=%.2f',
           [DbgT - TrisBefore,
-           RoofsTarget.Vertices[DbgTA].Position.X,
-           RoofsTarget.Vertices[DbgTA].Position.Y,
-           RoofsTarget.Vertices[DbgTA].Position.Z,
-           RoofsTarget.Vertices[DbgTB].Position.X,
-           RoofsTarget.Vertices[DbgTB].Position.Y,
-           RoofsTarget.Vertices[DbgTB].Position.Z,
-           RoofsTarget.Vertices[DbgTC].Position.X,
-           RoofsTarget.Vertices[DbgTC].Position.Y,
-           RoofsTarget.Vertices[DbgTC].Position.Z,
-           RoofsTarget.Vertices[DbgTA].Normal.X,
-           RoofsTarget.Vertices[DbgTA].Normal.Y,
-           RoofsTarget.Vertices[DbgTA].Normal.Z,
+           RoofsTarget.VertexAt[DbgTA].Position.X,
+           RoofsTarget.VertexAt[DbgTA].Position.Y,
+           RoofsTarget.VertexAt[DbgTA].Position.Z,
+           RoofsTarget.VertexAt[DbgTB].Position.X,
+           RoofsTarget.VertexAt[DbgTB].Position.Y,
+           RoofsTarget.VertexAt[DbgTB].Position.Z,
+           RoofsTarget.VertexAt[DbgTC].Position.X,
+           RoofsTarget.VertexAt[DbgTC].Position.Y,
+           RoofsTarget.VertexAt[DbgTC].Position.Z,
+           RoofsTarget.VertexAt[DbgTA].Normal.X,
+           RoofsTarget.VertexAt[DbgTA].Normal.Y,
+           RoofsTarget.VertexAt[DbgTA].Normal.Z,
            DbgNyGeo]));
       end;
       if (WallsTarget <> nil) and (WTrisAdded > 0) then
         for DbgT := WTrisBefore to WallsTarget.TriangleCount - 1 do
         begin
           if DbgT - WTrisBefore >= 60 then Break;
-          DbgTA := Integer(WallsTarget.Indices[DbgT*3]);
-          DbgTB := Integer(WallsTarget.Indices[DbgT*3 + 1]);
-          DbgTC := Integer(WallsTarget.Indices[DbgT*3 + 2]);
+          DbgTA := Integer(WallsTarget.IndexAt[DbgT*3]);
+          DbgTB := Integer(WallsTarget.IndexAt[DbgT*3 + 1]);
+          DbgTC := Integer(WallsTarget.IndexAt[DbgT*3 + 2]);
           if (DbgTA < 0) or (DbgTB < 0) or (DbgTC < 0)
           or (DbgTA >= WallsTarget.VertexCount)
           or (DbgTB >= WallsTarget.VertexCount)
@@ -5249,15 +5249,15 @@ begin
           ADbg.Add(Format(
             '    W#%d A=(%.2f %.2f %.2f) B=(%.2f %.2f %.2f) C=(%.2f %.2f %.2f)',
             [DbgT - WTrisBefore,
-             WallsTarget.Vertices[DbgTA].Position.X,
-             WallsTarget.Vertices[DbgTA].Position.Y,
-             WallsTarget.Vertices[DbgTA].Position.Z,
-             WallsTarget.Vertices[DbgTB].Position.X,
-             WallsTarget.Vertices[DbgTB].Position.Y,
-             WallsTarget.Vertices[DbgTB].Position.Z,
-             WallsTarget.Vertices[DbgTC].Position.X,
-             WallsTarget.Vertices[DbgTC].Position.Y,
-             WallsTarget.Vertices[DbgTC].Position.Z]));
+             WallsTarget.VertexAt[DbgTA].Position.X,
+             WallsTarget.VertexAt[DbgTA].Position.Y,
+             WallsTarget.VertexAt[DbgTA].Position.Z,
+             WallsTarget.VertexAt[DbgTB].Position.X,
+             WallsTarget.VertexAt[DbgTB].Position.Y,
+             WallsTarget.VertexAt[DbgTB].Position.Z,
+             WallsTarget.VertexAt[DbgTC].Position.X,
+             WallsTarget.VertexAt[DbgTC].Position.Y,
+             WallsTarget.VertexAt[DbgTC].Position.Z]));
         end;
     end;
   end;
@@ -5411,14 +5411,14 @@ var
         AnchorVertCount := 0;
         for K := PreWallsVert[PaletteIdx] to Result.Walls[PaletteIdx].VertexCount - 1 do
         begin
-          AnchorSumX := AnchorSumX + Result.Walls[PaletteIdx].Vertices[K].Position.X;
-          AnchorSumZ := AnchorSumZ + Result.Walls[PaletteIdx].Vertices[K].Position.Z;
+          AnchorSumX := AnchorSumX + Result.Walls[PaletteIdx].VertexAt[K].Position.X;
+          AnchorSumZ := AnchorSumZ + Result.Walls[PaletteIdx].VertexAt[K].Position.Z;
           Inc(AnchorVertCount);
         end;
         for K := PreRoofsVert[PaletteIdx] to Result.Roofs[PaletteIdx].VertexCount - 1 do
         begin
-          AnchorSumX := AnchorSumX + Result.Roofs[PaletteIdx].Vertices[K].Position.X;
-          AnchorSumZ := AnchorSumZ + Result.Roofs[PaletteIdx].Vertices[K].Position.Z;
+          AnchorSumX := AnchorSumX + Result.Roofs[PaletteIdx].VertexAt[K].Position.X;
+          AnchorSumZ := AnchorSumZ + Result.Roofs[PaletteIdx].VertexAt[K].Position.Z;
           Inc(AnchorVertCount);
         end;
         if AnchorVertCount = 0 then Exit;

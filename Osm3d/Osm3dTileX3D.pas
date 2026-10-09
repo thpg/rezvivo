@@ -1374,6 +1374,7 @@ var
   Lines:   TStringList;
   Model:   TTileModel;
   LineIdx: Integer;
+  ManholeCount, ModelInstanceCount, ObstacleCount: Integer;
   L:       string;
   DocState: TDocumentState;
   SeenFormat, SeenTile, SeenGen, SeenOrigin, SeenBox: Boolean;
@@ -1687,8 +1688,9 @@ var
     R.Position:=Vector3(P[0],P[1],P[2]);R.Normal:=Vector3(P[3],P[4],P[5]);
     Require((R.Normal.Length>0.9)and(R.Normal.Length<1.1)and(R.Normal.Y>0.5),'invalid manhole normal');
     R.Normal:=R.Normal.Normalize;R.Rotation:=P[6];
-    N:=Length(Model.Manholes);Require(N<100000,'too many manholes');
-    SetLength(Model.Manholes,N+1);Model.Manholes[N]:=R;
+    N:=ManholeCount;Require(N<100000,'too many manholes');
+    if N=Length(Model.Manholes) then SetLength(Model.Manholes,Max(32,N*2));
+    Model.Manholes[N]:=R;Inc(ManholeCount);
   end;
 
   procedure HandleModel(const Line: string);
@@ -1702,8 +1704,9 @@ var
     R.Scale:=Vector3(P[7],P[8],P[9]);
     Require((P[7]>0)and(P[8]>0)and(P[9]>0),'invalid model scale');
     Require(Sqr(P[3])+Sqr(P[4])+Sqr(P[5])>1e-12,'invalid model rotation axis');
-    N:=Length(Model.ModelInstances);Require(N<100000,'too many model instances');
-    SetLength(Model.ModelInstances,N+1);Model.ModelInstances[N]:=R;
+    N:=ModelInstanceCount;Require(N<100000,'too many model instances');
+    if N=Length(Model.ModelInstances) then SetLength(Model.ModelInstances,Max(16,N*2));
+    Model.ModelInstances[N]:=R;Inc(ModelInstanceCount);
   end;
 
   procedure HandleRoadSeg(const Line: string);
@@ -1809,12 +1812,14 @@ var
   var O: TBuildingObstacle; K: Integer;
   begin
     if not ParseBuildingObstacle(Line,O) then Exit;
-    K:=Length(Model.BuildingObstacles);
-    SetLength(Model.BuildingObstacles,K+1); Model.BuildingObstacles[K]:=O;
+    K:=ObstacleCount;
+    if K=Length(Model.BuildingObstacles) then SetLength(Model.BuildingObstacles,Max(64,K*2));
+    Model.BuildingObstacles[K]:=O;Inc(ObstacleCount);
   end;
 
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1339);{$ENDIF}
+  ManholeCount:=0;ModelInstanceCount:=0;ObstacleCount:=0;
   { Large city tiles can exceed 200 MiB. Release text as it is consumed,
     rather than retaining the entire input alongside all decoded meshes. }
   SetLength(Raw, Stream.Size - Stream.Position);
@@ -1946,6 +1951,9 @@ begin
     end;
 
     Require((DocState = dsDone) and (not HaveShape), 'truncated document');
+    SetLength(Model.Manholes,ManholeCount);
+    SetLength(Model.ModelInstances,ModelInstanceCount);
+    SetLength(Model.BuildingObstacles,ObstacleCount);
     Result := Model;
   except
     Model.Free;

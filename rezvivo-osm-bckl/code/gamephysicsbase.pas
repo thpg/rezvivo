@@ -361,6 +361,7 @@ begin
   if not Assigned(FState) then Exit;
   FState.CameraStateValid := false;
   if not FState.CameraLockActive then Exit;
+  if not Assigned(FActor.Navigation) or not FActor.Navigation.Exists then Exit;
   if not Assigned(FActor.Viewport) then Exit;
   if not Assigned(FActor.Viewport.Camera) then Exit;
   if not Assigned(FActor.Transform) then Exit;
@@ -377,6 +378,7 @@ begin
   if not Assigned(FState) then Exit;
   if not FState.CameraLockActive then Exit;
   if not FState.CameraStateValid then Exit;
+  if not Assigned(FActor.Navigation) or not FActor.Navigation.Exists then Exit;
   if not Assigned(FActor.Viewport) then Exit;
   if not Assigned(FActor.Viewport.Camera) then Exit;
   if not Assigned(FActor.Transform) then Exit;

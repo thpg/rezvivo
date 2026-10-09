@@ -63,6 +63,7 @@ type
     RoadsideAnchor, StandAnchor: TVector3;
     OrbitAngle, OrbitDir, OrbitRadius, StandHeight: Single;
     Puddle: TRoadPuddleSite;
+    PuddleEntryPosition: TVector3;
     PuddleDuration: Single;
   end;
 
@@ -783,10 +784,11 @@ begin
   end;
   FPendingShot:=Default(TCameraShotState);FPendingShot.Mode:=cmPuddle;
   FPendingShot.Puddle:=S;
-  FPendingShot.PuddleDuration:=EnsureRange(Ahead/FTargetSpeed+1.8,4.2,6.0);
+  FPendingShot.PuddleDuration:=EnsureRange(Ahead/FTargetSpeed+0.65,2.8,4.5);
+  FPendingShot.PuddleEntryPosition:=FTarget.Translation;
   { Look from the carriageway, across the wet surface toward its surroundings.
     Never place the lens beyond the curb inside buildings or vegetation. }
-  FPendingShot.RoadsideAnchor:=S.Position-Outward*1.35-Fwd*1.8+Vector3(0,0.55,0);
+  FPendingShot.RoadsideAnchor:=S.Position-Outward*1.35-Fwd*Ahead+Vector3(0,0.55,0);
   { A failed terrain probe must not enqueue the same shot every frame. }
   FPuddleCooldown:=3;
   FPending:=True;FPendingAge:=0;TryPendingShot;
@@ -907,11 +909,13 @@ begin
 
     cmPuddle:
     begin
-      P:=FShot.RoadsideAnchor;
-      if FPreparingShot and GroundYRemembered(P.X,P.Z,False,FShot.CameraGround,GY) then begin
+      { Travel alongside the rider throughout the shot. A fixed roadside
+        anchor used to stop the camera for several seconds at the puddle. }
+      P:=FShot.RoadsideAnchor+(TPos-FShot.PuddleEntryPosition);
+      if GroundYRemembered(P.X,P.Z,False,FShot.CameraGround,GY) then begin
         { Another level, embankment or obstruction is not a usable low shot. }
-        if Abs(GY-FShot.Puddle.Position.Y)>0.6 then FProbeReady:=False;
-        P.Y:=GY+0.55;FShot.RoadsideAnchor:=P;
+        if FPreparingShot and(Abs(GY-FShot.Puddle.Position.Y)>0.6)then FProbeReady:=False;
+        P.Y:=GY+0.55;
       end;
       LookAt:=FShot.Puddle.Position;
       LookSrc:='puddle:reflection';

@@ -239,7 +239,7 @@ var
 
 implementation
 
-uses UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
+uses GameTravelUI, UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
   Math, GameDeviceSensor, GameDeviceTypes, CastleApplicationProperties, CastleWindow, CastleLog, CastleURIUtils,
   GameViewPlay,GameViewTrainingOnly,GameAssistantUI,
   GameViewLogin,
@@ -368,17 +368,17 @@ begin
   FDevicesSummary.OnClick:=@ClickDevices;InsertFront(FDevicesSummary);
   FResumeButton:=TMenuButton.Create(FreeAtStop);FResumeButton.Name:='ResumeRideButton';
   FRoomButton:=TMenuButton.Create(FreeAtStop);FRoomButton.Name:='RideWithFriend';
-  FRoomButton.AutoSize:=False;FRoomButton.AutoIcon:=False;BindUiText(FRoomButton,'Ride with a friend');
+  FRoomButton.AutoSize:=False;FRoomButton.AutoIcon:=False;BindTravelText(FRoomButton, 'Ride with a friend');
   FRoomButton.OnClick:=@ClickRoom;InsertFront(FRoomButton);
   FResumeButton.AutoSize:=False;FResumeButton.AutoIcon:=False;
-  BindUiText(FResumeButton,'Return to ride');FResumeButton.OnClick:=@ClickResume;
+  BindTravelText(FResumeButton, 'Return to ride');FResumeButton.OnClick:=@ClickResume;
   FResumeButton.Style:=mbPrimary;InsertFront(FResumeButton);
   FEndRideButton:=TMenuButton.Create(FreeAtStop);FEndRideButton.Name:='EndRideButton';
   FEndRideButton.AutoSize:=False;FEndRideButton.AutoIcon:=False;
-  BindUiText(FEndRideButton,'Finish ride');FEndRideButton.OnClick:=@StopSelectedRide;
+  BindTravelText(FEndRideButton, 'Finish ride');FEndRideButton.OnClick:=@StopSelectedRide;
   FEndRideButton.Style:=mbDanger;InsertFront(FEndRideButton);
   FSessionLabel:=TMenuLabel.Create(FreeAtStop);FSessionLabel.Color:=Vector4(0.68,0.78,0.82,1);
-  BindUiText(FSessionLabel,'Ride continues while this menu is open');InsertFront(FSessionLabel);
+  BindTravelText(FSessionLabel, 'Ride continues while this menu is open');InsertFront(FSessionLabel);
   RefreshRideControls;
 
   if Assigned(ButtonQuit) then
@@ -426,6 +426,8 @@ begin
     FRouteCreatorPage := nil;
 
   BuildTiles;
+  BindTravelText(FTileBikeFit.TitleLabel,'Rider and bicycle');
+  BindTravelText(FTileHistory.TitleLabel,'My rides');
 
   { Первая подгонка плашек под окно; дальше Update следит сам. }
   FLastLayoutW := -1;
@@ -1031,6 +1033,7 @@ end;
 procedure TViewMenu.TravelChanged(Sender:TObject);
 var InWorld,InFit:Boolean;
 begin
+  RefreshTravelTexts;
   InWorld:=((FRoutesPage<>nil)and FRoutesPage.Exists)or((FExplorePage<>nil)and FExplorePage.Exists);
   InFit:=(FBikeFitPage<>nil)and FBikeFitPage.Exists;
   if RideUnderneath then ViewPlay.ChangeTravelMode(Settings.TravelMode);

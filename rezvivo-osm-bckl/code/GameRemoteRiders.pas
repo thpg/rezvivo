@@ -950,7 +950,7 @@ var
   I: Integer;
   Ag: TPhysicalAgent;
   Bike: TBikeInstance;
-  ParentLean: Single;
+  ParentLean, Cad, CrankInt: Single;
 begin
   for I := 0 to FRemoteVisualCount - 1 do
   begin
@@ -964,6 +964,14 @@ begin
       Bike.SetRiderDynamicsSituation(Ag.State.AppliedPowerWatts,
         Ag.State.CurrentSpeed*Ag.State.CurrentYawRateRad,ParentLean,Ag.State.CurrentModelPitch);
       Bike.SetRiderEffort(Ag.State.AppliedPowerWatts/220);
+      if Bike.IsFixedGear then begin
+        Cad:=0;
+        if Assigned(FRemoteVisuals[I].Controller) then
+          Cad:=FRemoteVisuals[I].Controller.Cadence;
+        Cad:=Bike.VisualCadence(Cad,Ag.State.CurrentSpeed);
+        if Cad>0 then CrankInt:=60/Cad else CrankInt:=9999;
+        Bike.SetAnimationSpeed(CrankInt,CrankInt);
+      end;
       Bike.SetWheelSpeedMps(Ag.State.CurrentSpeed);
     end;
     Bike.AnimateFrame(SecondsPassed);

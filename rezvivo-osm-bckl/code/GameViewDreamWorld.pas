@@ -160,7 +160,7 @@ begin
   FStatus:=TMenuLabel.Create(Self);FStatus.FontSize:=15;FStatus.Color:=White;FStatus.Anchor(hpLeft,16);FStatus.Anchor(vpBottom,22);InsertFront(FStatus);
   FTitle.Exists:=False;FInfo.Exists:=False;
   FHeader:=TRideMenuHeader.Create(Self);FHeader.Anchor(vpTop);InsertFront(FHeader);
-  FHeader.SetSelection(UiText('Choose a world'),UiText('Click a card to select a ride'),False);
+  FHeader.SetSelection(UiText('Choose a world'),UiText('Click a card to select a world'),False);
   FStart:=FHeader.StartButton;FStart.OnClick:=@ClickStart;
   FSearch:=TMenuEdit.Create(Self);FSearch.Name:='DreamWorldSearch';
   FSearch.Text:='';BindUiText(FSearch,'Search worlds','Placeholder');FSearch.OnChange:=@FilterChanged;InsertFront(FSearch);

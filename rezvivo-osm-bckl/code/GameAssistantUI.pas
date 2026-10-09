@@ -35,6 +35,7 @@ type
     procedure BuildControls;
     function OwnsKeyboard: Boolean;
     procedure ReleaseKeyboard;
+    function TrySendMessage(const Text: String; out Reason: String): Boolean;
     procedure ClickSend(Sender: TObject);
     procedure ClickClose(Sender: TObject);
     procedure ClickDisconnect(Sender: TObject);
@@ -52,6 +53,8 @@ type
     procedure RefreshVoice;
     procedure BuildMessages(const ToBottom: Boolean);
     procedure Layout;
+  protected
+    procedure SubmitVoiceTranscript(const Text: String);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -490,35 +493,44 @@ begin
   else Result := UiText('Voice input is unavailable. Please try again.');
 end;
 
+procedure TViewAssistant.SubmitVoiceTranscript(const Text: String);
+var Transcript, Draft, Reason: String;
+begin
+  if FClosing or not Exists or not Assistant.Connected then Exit;
+  Transcript := Trim(Text);
+  if Transcript = '' then Exit;
+  { A completed voice command is its own message. Never send an unrelated
+    typed draft, including edits made while recognition was running. }
+  if TrySendMessage(Transcript, Reason) then
+    FVoiceNotice := 'Voice command sent.'
+  else begin
+    { Preserve failed input for retry; consuming the recognition result once
+      prevents automatic retries from producing duplicate commands. }
+    Draft := FInput.Text;
+    if (Draft <> '') and not (Draft[Length(Draft)] in [#10, #13]) then
+      Draft := Draft + #10;
+    FInput.Text := Draft + Transcript; FDraft := FInput.Text;
+    InputChanged(nil); FError.Caption := UiText(Reason);
+    FVoiceNotice := 'Could not send the voice command. The text is saved in the input field.';
+    FNeedFocus := OwnsKeyboard;
+  end;
+end;
+
 procedure TViewAssistant.RefreshVoice;
 var Data: TJSONObject; InputText, OutputText, OutputState, Code, Partial,
-    Transcript, Draft, CaptionText: String;
+    Transcript, CaptionText: String;
   Connected, ActiveInput: Boolean; Level: Double;
 begin
   if FMicrophone = nil then Exit;
+  { Revoke an old account/session before consuming its recognition result. }
+  SyncAssistantContext(True); SyncDraftContext;
   Connected := Assistant.Connected;
   { Snapshot updates the service; only then consume its completed transcript.
     This prevents acknowledging a new revision before reading its result. }
   Data := AssistantVoice.Snapshot;
   try
   if Connected and not FClosing and Exists and
-    AssistantVoice.TakeTranscript(Transcript) then begin
-    Transcript := Trim(Transcript);
-    if Transcript <> '' then begin
-      { Never replace a typed draft, including edits made during recognition.
-        Keep all UTF-8 bytes even when the combined draft exceeds the send
-        limit: the existing length check asks the user to shorten it. }
-      Draft := FInput.Text;
-      if (Draft <> '') and not (Draft[Length(Draft)] in [#9, #10, #13, ' ']) then
-        Draft := Draft + ' ';
-      FInput.Text := Draft + Transcript; FDraft := FInput.Text;
-      InputChanged(nil);
-      if Length(FInput.Text) > 4096 then
-        FVoiceNotice := 'Voice text added. Shorten the draft before sending.'
-      else FVoiceNotice := 'Voice text added. Review it and press Send.';
-      FNeedFocus := OwnsKeyboard;
-    end else FVoiceNotice := 'No speech recognized. The draft was not changed.';
-  end;
+    AssistantVoice.TakeTranscript(Transcript) then SubmitVoiceTranscript(Transcript);
     FVoiceRevision := AssistantVoice.Revision;
     FVoiceState := Data.Get('input_state', 'idle');
     ActiveInput := (FVoiceState = 'waiting_output') or (FVoiceState = 'loading') or
@@ -548,7 +560,7 @@ begin
       Code := Data.Get('input_error', '');
       if Code <> '' then InputText := VoiceErrorText(Code, False)
       else if FVoiceNotice <> '' then InputText := UiText(FVoiceNotice)
-      else InputText := UiText('Dictation is added to your draft.');
+      else InputText := UiText('Voice commands are sent automatically after recognition.');
     end;
     FMicrophone.Caption := UiText(CaptionText);
     FVoiceInputStatus.Caption := MenuSummary(InputText, FVoiceInputStatus.Font,
@@ -613,22 +625,30 @@ begin
   else FError.Caption := '';
 end;
 
-procedure TViewAssistant.ClickSend(Sender: TObject);
-var Reason: String;
+function TViewAssistant.TrySendMessage(const Text: String; out Reason: String): Boolean;
 begin
-  SyncAssistantContext(True);SyncDraftContext;
-  if not FSend.Enabled then Exit;
+  Result := False; Reason := '';
   try
-    Assistant.SendUserMessage(Trim(FInput.Text));
-    FInput.Text := ''; FDraft := ''; FVoiceNotice := ''; RefreshConversation; ClickLatest(nil);
-    FNeedFocus := True;
+    Assistant.SendUserMessage(Trim(Text));
+    Result := True;
   except on E: Exception do begin
     if E.Message = 'assistant_not_connected' then Reason := 'Connect an agent before sending a message.'
     else if E.Message = 'assistant_queue_full' then Reason := 'The assistant has too many pending messages. Wait for a reply.'
     else if E.Message = 'assistant_invalid_text' then Reason := 'Enter a message of up to 4096 bytes.'
     else Reason := 'Could not send the message. Please try again.';
-    FError.Caption := UiText(Reason);
   end; end;
+  if Result then begin RefreshConversation; ClickLatest(nil); end;
+end;
+
+procedure TViewAssistant.ClickSend(Sender: TObject);
+var Reason: String;
+begin
+  SyncAssistantContext(True);SyncDraftContext;
+  if not FSend.Enabled then Exit;
+  if TrySendMessage(FInput.Text, Reason) then begin
+    FInput.Text := ''; FDraft := ''; FVoiceNotice := ''; InputChanged(nil);
+    FNeedFocus := True;
+  end else FError.Caption := UiText(Reason);
 end;
 
 procedure TViewAssistant.ClickClose(Sender: TObject);

@@ -32,6 +32,7 @@ type
       FShapes: array of TShape;
       FMuscles: array of TMuscle;
       FRig: TTripoRig;
+      FBodyVertexCount: Integer;
       FInfo: TJSONObject;
       FProfile: TVector4;
       FFrame: TVector2;
@@ -80,8 +81,12 @@ begin
     FRig:=Rig;S:=ArrOf(FInfo,'shapes');M:=ArrOf(FInfo,'muscles');
     { Explicit diagnostic comparison, read once at model load. }
     FSurfaceGradients:=GetEnvironmentVariable('REZVIVO_RIDER_NORMAL_GRADIENTS')<>'0';
-    if(S=nil)or(M=nil)or(M.Count>32)or(FInfo.Get('vertices',0)<>Rig.VertexCount)or
-      (D.Size<>Int64(Rig.VertexCount)*23*SizeOf(Single))then
+    { Clothing meshes are appended to the body by the wardrobe. The authored
+      deformation block still addresses only the unchanged body primitives. }
+    FBodyVertexCount:=FInfo.Get('vertices',0);
+    if(S=nil)or(M=nil)or(M.Count>32)or(FBodyVertexCount<=0)or
+      (FBodyVertexCount>Rig.VertexCount)or
+      (D.Size<>Int64(FBodyVertexCount)*23*SizeOf(Single))then
       raise EReadError.Create('Invalid rider deformation header');
     FLengths:=TSingleList.Create;SetLength(FMuscles,M.Count);
     FDynamicValues:=TVector4List.Create;
@@ -117,7 +122,8 @@ begin
       for J:=0 to Skin.FdShapes.Count-1 do
         if(Skin.FdShapes[J] is TShapeNode)and(Skin.FdShapes[J].X3DName=O.Get('name',''))then Sh:=TShapeNode(Skin.FdShapes[J]);
       if(Sh=nil)or not(Sh.Geometry is TAbstractComposedGeometryNode)or(N<=0)or
-        (O.Get('first',-1)<>First)then raise EReadError.Create('Invalid body deformation mesh');
+        (O.Get('first',-1)<>First)or(N>FBodyVertexCount-First)then
+        raise EReadError.Create('Invalid body deformation mesh');
       G:=TAbstractComposedGeometryNode(Sh.Geometry);
       FShapes[I].Geometry:=G;
       if not(G.FdCoord.Value is TCoordinateNode)or(TCoordinateNode(G.FdCoord.Value).FdPoint.Count<>N)then
@@ -150,7 +156,7 @@ begin
         G.FdAttrib.Add(A);FShapes[I].Gradient[K]:=A;
       end;
     end;
-    if(First<>Rig.VertexCount)or(D.Position<>D.Size)then raise EReadError.Create('Incomplete rider deformation');
+    if(First<>FBodyVertexCount)or(D.Position<>D.Size)then raise EReadError.Create('Incomplete rider deformation');
     SetBodyParameters(DefaultRiderBody(1));RefreshBind;Result:=True;
   finally D.Free end;
 end;
@@ -292,7 +298,7 @@ begin
   { Rest-surface derivatives change only with the body profile. The animated
     shader differentiates its actual skin map; rotating a normal alone misses
     weight and rotation-centre gradients at elbows, hips and shoulders. }
-  N:=FRig.VertexCount;SetLength(C,N);SetLength(Tissue,N);SetLength(Acc,N);SetLength(AliasIndex,N);
+  N:=FBodyVertexCount;SetLength(C,N);SetLength(Tissue,N);SetLength(Acc,N);SetLength(AliasIndex,N);
   for I:=0 to High(FShapes)do for V:=0 to High(FShapes[I].Centre)do begin
     J:=FShapes[I].First+V;K:=V*4;
     C[J]:=V3(FShapes[I].Attr.FdValue.Items[K],FShapes[I].Attr.FdValue.Items[K+1],FShapes[I].Attr.FdValue.Items[K+2]);
@@ -317,6 +323,9 @@ begin
     for I:=0 to Length(FRig.Indices)div 3-1 do begin
       for K:=0 to 2 do Tri[K]:=FRig.Indices[I*3+K];
       A:=Tri[0];B:=Tri[1];D:=Tri[2];
+      { Appended garments must not contribute to body-normal gradients, even
+        when a sewn edge shares its position and skin weights with the body. }
+      if(A>=N)or(B>=N)or(D>=N)then Continue;
       E1:=V3Sub(FRig.Positions[B],FRig.Positions[A]);E2:=V3Sub(FRig.Positions[D],FRig.Positions[A]);
       Cross:=V3Cross(E1,E2);Den:=V3Dot(Cross,Cross);if Den<1E-18 then Continue;
       Area:=Sqrt(Den);G1:=V3Scale(V3Cross(E2,Cross),1/Den);G2:=V3Scale(V3Cross(Cross,E1),1/Den);
@@ -494,7 +503,7 @@ begin
     S.Add(' float top=section.y-section.w*pow(lateral,4.0);float depth=max(0.0,top+.001-seat.y);');
     S.Add(' float edge=1.0-smoothstep(.83,1.0,lateral);float bottom=smoothstep(-.09,-.06,seat.y);');
     S.Add(' return uBodyDynamics[7].xyz*(depth*edge*bottom*uBodyDynamics[3].z); }');
-    S.Add('vec3 bodySoftPush(vec3 p){vec3 push=bodySeatPush(p);float w=riderTissue.z;if(abs(w)<.0001)return push;');
+    S.Add('vec3 bodySoftPush(vec3 p){float w=riderTissue.z;if(w>2.0)return vec3(0);vec3 push=bodySeatPush(p);if(abs(w)<.0001)return push;');
     S.Add(' float soft=clamp(.45+.22*uBodyProfile.x-.12*uBodyProfile.y,.25,.8);');
     S.Add(' if(w<0.0){mat4 m=bodyJoint('+IntToStr(FInfo.Get('bellyJoint',0))+');');
     S.Add(' vec3 c='+JsonVec('bellyCentre')+'+vec3(0.0,0.0,.035*uBodyProfile.x);vec3 r='+JsonVec('bellyRadii')+';r*=vec3(1.0+.35*uBodyProfile.x,1.0,1.0+.65*uBodyProfile.x);');

@@ -5,9 +5,22 @@ unit GameGraphicsUI;
 interface
 
 uses Classes, CastleUIControls, CastleControls, GameMenuTheme, GameGraphicsOptions,
-  GameGraphicsAuto;
+  GameGraphicsAuto, GameGraphicsBenchmarkScene;
 
 type
+  TGraphicsPreview = class(TCastleUserInterface)
+  private
+    FScene: TGraphicsBenchmarkScene;
+    FTitle, FHint: TCastleLabel;
+    FRevision: Cardinal;
+    FSuspended: Boolean;
+  public
+    constructor Create(AOwner:TComponent); override;
+    procedure ReleaseScene;
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean); override;
+    property Suspended:Boolean read FSuspended write FSuspended;
+  end;
+
   TGraphicsPanel = class(TCastleUserInterface)
   private
     FTitle, FIntro: TCastleLabel;
@@ -19,6 +32,7 @@ type
     FChoices: array[TGraphicsOption] of TMenuFlow;
     FButtons: array[TGraphicsOption] of array of TMenuButton;
     FRevision: Cardinal;
+    FPreview: TGraphicsPreview;
     procedure ClickChoice(Sender: TObject);
     procedure ClickAuto(Sender: TObject);
     procedure LanguageChanged(Sender:TObject);
@@ -28,11 +42,47 @@ type
     destructor Destroy; override;
     procedure Refresh;
     procedure Update(const SecondsPassed: Single; var HandleInput: Boolean); override;
+    property Preview:TGraphicsPreview read FPreview write FPreview;
   end;
 
 implementation
 
 uses Math, SysUtils, AppSettings, UiTranslations, CastleColors, Osm3dVegetationQuality;
+
+constructor TGraphicsPreview.Create(AOwner:TComponent);
+begin
+  inherited;
+  Name:='GraphicsPreview';
+  FTitle:=TMenuLabel.Create(Self);BindUiText(FTitle,'Live preview');
+  FTitle.FontSize:=22;FTitle.Anchor(hpLeft);FTitle.Anchor(vpTop);InsertFront(FTitle);
+  FHint:=TMenuLabel.Create(Self);
+  BindUiText(FHint,'Preview FPS depends on its size. Auto tests the same scene at full window size.');
+  FHint.FontSize:=14;FHint.Color:=MenuMuted;
+  FHint.Anchor(hpLeft);FHint.Anchor(vpBottom);InsertFront(FHint);
+end;
+
+procedure TGraphicsPreview.ReleaseScene;
+begin
+  FreeAndNil(FScene);
+end;
+
+procedure TGraphicsPreview.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+var Values:TGraphicsValues;O:TGraphicsOption;
+begin
+  inherited;
+  if FSuspended then Exit;
+  FHint.MaxWidth:=Max(180,EffectiveWidth);
+  if FScene=nil then begin
+    FScene:=TGraphicsBenchmarkScene.Create(Self);
+    FScene.Name:='GraphicsPreviewScene';
+    InsertBack(FScene);FRevision:=Settings.GraphicsRevision-1;
+  end;
+  FScene.Border.Top:=36;FScene.Border.Bottom:=FHint.EffectiveHeight+10;
+  if FRevision<>Settings.GraphicsRevision then begin
+    for O:=Low(O) to High(O) do Values[O]:=Settings.GetGraphicsOption(Ord(O));
+    FScene.ApplyProfile(Values);FRevision:=Settings.GraphicsRevision;
+  end;
+end;
 
 constructor TGraphicsPanel.Create(AOwner: TComponent);
 var O: TGraphicsOption; I: Integer; B: TMenuButton;
@@ -108,12 +158,16 @@ end;
 procedure TGraphicsPanel.ClickAuto(Sender: TObject);
 begin
   if (FAutoRun <> nil) and not FAutoRun.Completed then Exit;
+  { Release its GPU resources before Auto queries memory. Hidden preview
+    textures must not bias memory selection or consume a second render. }
+  if FPreview<>nil then begin FPreview.Suspended:=True;FPreview.ReleaseScene end;
   FreeAndNil(FAutoRun);
   FAutoResult.Caption := '';
   FAutoRun := TGraphicsAutoRun.Create(Self);
   try FAutoRun.BeginRun(Container);
   except
     FreeAndNil(FAutoRun);
+    if FPreview<>nil then FPreview.Suspended:=False;
     FAutoResult.Caption := UiText('Automatic setup failed. Previous settings restored.');
   end;
 end;
@@ -195,6 +249,7 @@ begin
   begin
     FAutoResult.Caption := FAutoRun.ResultText;
     FreeAndNil(FAutoRun);
+    if FPreview<>nil then FPreview.Suspended:=False;
     Refresh;
   end;
   if FRevision <> Settings.GraphicsRevision then Refresh;

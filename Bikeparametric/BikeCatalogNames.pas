@@ -66,6 +66,8 @@ function BikeCatalogDisplayName(const FileName: string): string;
 var Stem, Prefix: string; I: Integer;
 begin
   Stem := ChangeFileExt(ExtractFileName(FileName), '');
+  if SameText(Stem,'rezvivo-trail-mtb') then Exit('REZVIVO Trail MTB');
+  if SameText(Stem,'rezvivo-track-fixed') then Exit('REZVIVO Track Fixed');
   for I := Low(Brands) to High(Brands) do
   begin
     Prefix := LowerCase(StringReplace(Brands[I].Original, ' ', '-', [rfReplaceAll])) + '-';

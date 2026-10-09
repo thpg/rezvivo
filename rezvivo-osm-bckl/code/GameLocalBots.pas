@@ -3,7 +3,8 @@ unit GameLocalBots;
 interface
 uses Classes, SysUtils, CastleVectors, CastleTransform, CastleScene, CastleViewport,
   BikeParametric, GamePhysicalAgent, GameAgentControllers, GamePhysicsCommon,
-  GameWorld, GamePath, GameLocalBotProfile, GameBotEffort, GameRiderPoseControl, Osm3dRouteSnapper, fpjson, RiderTripo, GameBotShadow, GameRiderShaderWarmup;
+  GameWorld, GamePath, GameLocalBotProfile, GameBotEffort, GameBotCompanyMotion,
+  GameRiderPoseControl, Osm3dRouteSnapper, fpjson, RiderTripo, GameBotShadow, GameRiderShaderWarmup;
 type
   TCrossingGround = record
     Points:array of TVector3;
@@ -16,7 +17,9 @@ type
     StepDebt: Single;
     AnimationDebt: Single;
     Effort:TBotEffortState;
+    Waiting:TBotWaitState;
     PowerControl: TPowerController; { owned through Agent.Controller }
+    function RequestedCadence:Single;
     procedure UpdateOffline(const SecondsPassed, FixedDelta: Single;
       const MaxSteps: Integer = 4); override;
   end;
@@ -24,11 +27,13 @@ type
     Spawned, Visible: Boolean;
     StepDebt,AnimationDebt: Single;
     Effort:TBotEffortState;
+    Waiting:TBotWaitState;
     HasBike:Boolean;
     Bike:TBikePlaybackState;
     Pose:TPoseManagerReplay;
   end;
   TLocalBotsReplay = record
+    Started: Boolean;
     Elapsed, SelectionTime: Double;
     NextAppearance,NextOncoming:Double;
     ReferencePower: Single;
@@ -62,6 +67,7 @@ type
     FReferencePower,FFtp:Single;
     FPrepareIndex,FPrepareStage,FVisibleCount,FRenderLimit:Integer;
     FReady,FRenderEnabled,FAnimationEnabled:Boolean;
+    FStarted:Boolean;
     FPoseCachePolicy:Integer;
     FGlbWorker:TTripoGlbWorker;
     FMaxPrepareMs,FLastSwitchMs,FMaxSwitchMs:QWord;
@@ -127,6 +133,13 @@ implementation
 uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, jsonparser,
   BikeGeometryLib, BikeParametric_Frame, BikeParametric_Crankset,
   GameBikeAvatar, GameRiderTraffic, GameAgentNetwork, GameMath, DebugLog, AppSettings, UiTranslations;
+
+function TLocalBotAgent.RequestedCadence:Single;
+begin
+  Result:=0;
+  if (State<>nil)and State.AutoMove and(State.AppliedPowerWatts>1)then
+    Result:=EnsureRange(65.0+State.AppliedPowerWatts*0.1,65.0,105.0);
+end;
 
 procedure TLocalBotAgent.UpdateOffline(const SecondsPassed,FixedDelta:Single;const MaxSteps:Integer);
 var Dt:Single;Tangent:TVector3;
@@ -206,7 +219,7 @@ begin
   A:=TLocalBotAgent.Create(FOwner);A.Name:=FProfiles[Index].DisplayName;
   A.Oncoming:=Index=LocalBotOncomingIndex;
   A.SetupActor(T,S,nil,FViewport,nil,FLevel);
-  A.PowerControl:=TPowerController.Create;A.SetController(A.PowerControl);
+  A.PowerControl:=TLocalBotController.Create;A.SetController(A.PowerControl);
   A.RecreatePhysics(pmKinematicCurrent);A.State.WheelContactAtOrigin:=True;
   A.State.AvatarMass:=FProfiles[Index].Body.WeightKg+9;
   A.State.DragCoefficient:=FAvatar.State.DragCoefficient;
@@ -260,9 +273,9 @@ begin
       2:begin
         B.TripoRider.HairStyle:=FProfiles[I].Hair;
         B.TripoRider.SetHeadAppearance(FProfiles[I].Headwear,FProfiles[I].Beard,FProfiles[I].Mustache);
-        B.TripoRider.ApplyHelmetColor(FProfiles[I].Helmet,True);
+        B.SetHeadwearColorLive(FProfiles[I].Helmet,True);
         B.SetFrameColorLive(FProfiles[I].Frame);B.SetRimColorLive(FProfiles[I].Rim);
-        FPoses[I]:=TRiderPoseManager.Create(B);
+        FPoses[I]:=TRiderPoseManager.Create(B,FProfiles[I].EffortSeed);
         A.Physics.SetWheelProbeHalfSpan(B.AxleHalfSpanM);
         B.AnimationEnabled:=FAnimationEnabled;
         B.AnimateFrame(Single(0));
@@ -306,7 +319,7 @@ var I:Integer;A:TLocalBotAgent;P:TPathPosition;
 begin
   RemoveCrossing;
   for I:=0 to FAgents.Count-1 do SetVisible(I,False);
-  FLanes:=Lanes;FAvatar:=Avatar;FElapsed:=0;FSelectionTime:=0;
+  FLanes:=Lanes;FAvatar:=Avatar;FElapsed:=0;FSelectionTime:=0;FStarted:=False;
   FNextAppearance:=0;FNextOncoming:=LocalBotOncomingFirst;
   FReferencePower:=FFtp*0.75;FLength:=0;
   SetLength(FDistances,FAvatar.Path.PointCount+1);
@@ -320,8 +333,11 @@ begin
     A:=GetAgent(I);A.Spawned:=False;A.StepDebt:=0;
     ResetBotEffort(A.Effort,FProfiles[I].EffortSeed,
       LocalBotSustainablePower(FProfiles[I],FReferencePower,FAvatar.State.AvatarMass)*0.89);
+    ResetBotWait(A.Waiting,FProfiles[I].EffortSeed);
     FAvatar.Path.CopyTo(A.Path,A.Oncoming);A.SetPhysicsLOD(plMinimal);
     A.PowerControl.SetEnabled(False);
+    A.PowerControl.SetDesiredPower(0);
+    A.State.AppliedPowerWatts:=0;A.State.CurrentSpeed:=0;
   end;
 end;
 
@@ -473,19 +489,33 @@ begin
 end;
 
 procedure TLocalBots.BeforePhysics(Dt:Single);
-var I,CompanionLimit:Integer;A:TLocalBotAgent;C:TPowerController;P:TPathPosition;
+var I,CompanionLimit:Integer;A:TLocalBotAgent;C:TLocalBotController;P:TPathPosition;
   Distance,CameraDistance,Target,Gap,Behind:Single;InCamera:Boolean;
   EffortInput:TBotEffortInput;
+  WaitInput:TBotWaitInput;WaitControl:TBotWaitControl;RiderMoving:Boolean;
 begin
   if not FReady or(Dt<=0)or(FLength<200)then Exit;
-  FElapsed:=FElapsed+Dt;
+  RiderMoving:=FAvatar.State.AutoMove and (Abs(FAvatar.State.CurrentSpeed)>0.2);
+  if RiderMoving then FStarted:=True;
+  if RiderMoving then FElapsed:=FElapsed+Dt;
+  { One companion can wait at the start; nobody races a motionless player.
+    The remaining company/encounter clocks only run while the player moves. }
+  A:=GetAgent(0);
+  if not A.Spawned then begin
+    Behind:=-4;
+    if FAvatar.Path.OutAndBack and(Station(FAvatar.Path.Position)<5)then Behind:=4;
+    P:=FAvatar.Path.Position;FAvatar.Path.AdvanceFollow(P,Behind);
+    A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance+Behind;
+    A.State.CurrentSpeed:=0;A.State.AppliedPowerWatts:=0;A.Spawned:=True;
+    if FRenderEnabled and(FRenderLimit>0)then SetVisible(0,True);
+  end;
   Target:=FAvatar.State.AppliedPowerWatts;
   if Target>10 then FReferencePower:=FReferencePower+
     (EnsureRange(Target,FFtp*0.30,FFtp*1.5)-FReferencePower)*(1-Exp(-Dt/90));
   for I:=0 to LocalBotCount-1 do begin
-    A:=GetAgent(I);C:=A.PowerControl;
+    A:=GetAgent(I);C:=TLocalBotController(A.PowerControl);
     if not A.Spawned then begin
-      if A.Oncoming or (FElapsed<I*LocalBotJoinInterval) then Continue;
+      if not RiderMoving or A.Oncoming or (FElapsed<I*LocalBotJoinInterval) then Continue;
       Behind:=72+I*12;
       { At the start of an out-and-back ride there is no road behind yet.
         Wait, instead of spawning on the opposite-direction return branch. }
@@ -494,7 +524,6 @@ begin
       A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance-Behind;
       A.State.CurrentSpeed:=FAvatar.State.CurrentSpeed;A.Spawned:=True;
     end;
-    C.SetEnabled(True);
     EffortInput.SustainableWatts:=LocalBotSustainablePower(FProfiles[I],FReferencePower,FAvatar.State.AvatarMass);
     EffortInput.CapacitySeconds:=FProfiles[I].CapacitySeconds;
     EffortInput.RecoverySeconds:=FProfiles[I].RecoverySeconds;
@@ -504,7 +533,22 @@ begin
     EffortInput.Racing:=not A.Oncoming and (EffortInput.RiderSpeed>0.5);
     EffortInput.UnderPressure:=(EffortInput.Gap>0)and(EffortInput.Gap<30)and
       (EffortInput.RiderSpeed>EffortInput.Speed+0.4);
-    C.SetDesiredPower(StepBotEffort(A.Effort,EffortInput,Dt));
+    WaitInput:=Default(TBotWaitInput);
+    WaitInput.Started:=FStarted;WaitInput.RiderMoving:=RiderMoving;
+    WaitInput.Distance:=A.State.CumulativeDistance;WaitInput.Gap:=RouteGap(I);
+    WaitInput.Speed:=A.State.CurrentSpeed;WaitInput.Mass:=A.State.AvatarMass;
+    WaitInput.GradeDeg:=A.State.CurrentSlopeAngle;
+    WaitInput.RidingPower:=StepBotEffort(A.Effort,EffortInput,Dt);
+    { Passing traffic is not part of the waiting company. Its creation is
+      gated by player movement below, but a visible encounter may finish. }
+    if A.Oncoming then begin
+      C.SetEnabled(FStarted);C.SetDesiredPower(WaitInput.RidingPower);C.BrakeForce:=0;
+    end else begin
+      WaitControl:=StepBotWait(A.Waiting,WaitInput,Dt);
+      C.SetDesiredPower(WaitControl.Power);C.SetEnabled(WaitControl.Enabled);
+      C.BrakeForce:=WaitControl.BrakeForce;
+      if not WaitControl.Enabled then A.State.AppliedPowerWatts:=0;
+    end;
   end;
   if FCrossAgent<>nil then begin
     if FCrossAgent.State.CumulativeDistance>=FCrossLength-25 then begin
@@ -516,8 +560,9 @@ begin
     Distance:=(VisibilityPosition(FCrossAgent)-FAvatar.State.WorldPosition).Length;
     if BotCanDisappear(Distance,CameraDistance,InCamera)then RemoveCrossing;
   end;
-  if FElapsed<FSelectionTime then Exit;
-  FSelectionTime:=FElapsed+0.25;
+  FSelectionTime:=FSelectionTime-Dt;
+  if FSelectionTime>0 then Exit;
+  FSelectionTime:=0.25;
   for I:=0 to LocalBotCount-1 do begin
     A:=GetAgent(I);if not A.Spawned then Continue;
     Distance:=(VisibilityPosition(A)-FAvatar.State.WorldPosition).Length;
@@ -529,9 +574,9 @@ begin
     end;
   end;
   if not FRenderEnabled or (FElapsed<FNextAppearance) then Exit;
-  if FElapsed>=LocalBotJoinInterval then TryCrossing;
+  if RiderMoving and(FElapsed>=LocalBotJoinInterval) then TryCrossing;
   if FElapsed<FNextAppearance then Exit;
-  TryOncoming;
+  if RiderMoving then TryOncoming;
   if FElapsed<FNextAppearance then Exit;
   CompanionLimit:=FRenderLimit;
   { Keep an overdue encounter's slot available while a bend delays its safe
@@ -774,12 +819,14 @@ function TLocalBots.CaptureReplay:TLocalBotsReplay;
 var I:Integer;A:TLocalBotAgent;
 begin
   Result:=Default(TLocalBotsReplay);
+  Result.Started:=FStarted;
   Result.Elapsed:=FElapsed;Result.SelectionTime:=FSelectionTime;Result.ReferencePower:=FReferencePower;
   Result.NextAppearance:=FNextAppearance;Result.NextOncoming:=FNextOncoming;
   for I:=0 to LocalBotCount-1 do begin A:=GetAgent(I);
     Result.Bots[I].Spawned:=A.Spawned;Result.Bots[I].Visible:=A.Visible;Result.Bots[I].StepDebt:=A.StepDebt;
     Result.Bots[I].AnimationDebt:=A.AnimationDebt;Result.Bots[I].HasBike:=FBikes[I]<>nil;
     Result.Bots[I].Effort:=A.Effort;
+    Result.Bots[I].Waiting:=A.Waiting;
     if FBikes[I]<>nil then Result.Bots[I].Bike:=TBikeInstance(FBikes[I]).CaptureReplay;
     if FPoses[I]<>nil then Result.Bots[I].Pose:=TRiderPoseManager(FPoses[I]).CaptureReplay;
   end;
@@ -796,12 +843,14 @@ procedure TLocalBots.RestoreReplay(const Value:TLocalBotsReplay);
 var I:Integer;A:TLocalBotAgent;
 begin
   RemoveCrossing;
+  FStarted:=Value.Started;
   FElapsed:=Value.Elapsed;FSelectionTime:=Value.SelectionTime;FReferencePower:=Value.ReferencePower;
   for I:=0 to LocalBotCount-1 do begin A:=GetAgent(I);
     A.Spawned:=Value.Bots[I].Spawned;A.StepDebt:=Value.Bots[I].StepDebt;
     SetVisible(I,Value.Bots[I].Visible,False);
     A.AnimationDebt:=Value.Bots[I].AnimationDebt;
     A.Effort:=Value.Bots[I].Effort;
+    A.Waiting:=Value.Bots[I].Waiting;
     A.StartGroundPending:=A.Visible;
   end;
   FCrossUsed:=Copy(Value.CrossUsed);
@@ -835,7 +884,7 @@ begin
     'visible',FVisibleCount,'limit',FRenderLimit,
     'ready',FReady,'prepared',FPrepareIndex,'max_prepare_ms',Int64(FMaxPrepareMs),
     'last_switch_ms',Int64(FLastSwitchMs),'max_switch_ms',Int64(FMaxSwitchMs),
-    'elapsed',FElapsed,'reference_power',FReferencePower,
+    'started',FStarted,'elapsed',FElapsed,'reference_power',FReferencePower,
     'next_appearance',FNextAppearance,'next_oncoming',FNextOncoming,
     'render_enabled',FRenderEnabled,'route_length',FLength,
     'avatar_station',Station(FAvatar.Path.Position),'out_and_back',FAvatar.Path.OutAndBack]);
@@ -854,6 +903,7 @@ begin
       'effort_time',A.Effort.ModeTime,'chases',A.Effort.Chases,'overtakes',A.Effort.Overtakes,
       'attacks',A.Effort.Attacks,'recoveries',A.Effort.Recoveries,
       'gap',RouteGap(I),'distance',A.State.CumulativeDistance,'speed',A.State.CurrentSpeed,
+      'waiting',BotWaitModeName(A.Waiting.Mode),'stop_distance',A.Waiting.StopDistance,
       'power',A.State.AppliedPowerWatts,'physics_lod',Ord(A.PhysicsLOD),
       'visibility_position',TJSONArray.Create([V.X,V.Y,V.Z]),
       'rider_distance',RiderDistance,'camera_distance',CameraDistance,'in_camera',InCamera,
@@ -861,6 +911,12 @@ begin
       'position',TJSONArray.Create([P.X,P.Y,P.Z]),'name',A.Name,'catalog_index',FProfiles[I].CatalogIndex,'body',WriteRiderBody(FProfiles[I].Body)]));
     B:=TBikeInstance(FBikes[I]);
     if (B<>nil)and(B.RiderScene<>nil)then begin
+      if FPoses[I]<>nil then begin
+        Rows.Objects[Rows.Count-1].Add('pose',TRiderPoseManager(FPoses[I]).CurrentPoseName);
+        Rows.Objects[Rows.Count-1].Add('look_yaw',TRiderPoseManager(FPoses[I]).Attention.Frame.Yaw);
+        Rows.Objects[Rows.Count-1].Add('look_events',Integer(TRiderPoseManager(FPoses[I]).Attention.Events));
+      end;
+      Rows.Objects[Rows.Count-1].Add('pedal_phase',B.CaptureReplay.Phase);
       Rows.Objects[Rows.Count-1].Add('pose_cache_revision',Int64(B.RiderScene.RenderOptions.CachedAnimationRevision));
       Rows.Objects[Rows.Count-1].Add('model_enabled',B.Group.Exists);
       ReadFitAdjustments(B,SeatExt,SaddleOff,Spacers,Stem);

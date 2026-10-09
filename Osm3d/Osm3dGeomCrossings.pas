@@ -46,7 +46,7 @@ function BuildCrossings(Data:TOSMDataset; Proj:TLocalProjection;
 var
   RoadGrid,PlacedGrid:TGrid;Candidates:array of TCrossing;
   RoadOK:array of Boolean;W:TOSMWay;Node,N0,N1:TOSMNode;RP:TRoadParams;
-  I,J,K,X,Z,CX,CZ,Best:Integer;L:TIntList;P,A,B,D,Q:TVector3;
+  I,J,K,X,Z,CX,CZ,Best,CandidateCount:Integer;L:TIntList;P,A,B,D,Q:TVector3;
   C:TCrossing;F,T,U,Dist,BestDist,Span,Lo,Hi:Single;Hit:TSurfaceHit;
   HasBumpBefore,HasBumpAfter:Boolean;
   PhotoSigns:array of TOSMNode;
@@ -82,7 +82,10 @@ var
         if PlacedGrid.TryGetValue(Key(GX,GZ),Items) then for Id in Items do
           if (Candidates[Id].Center-NewC.Center).Length<3 then
             if Abs(TVector3.DotProduct(Candidates[Id].Along,NewC.Along))>0.8 then Exit;
-    Id:=Length(Candidates);SetLength(Candidates,Id+1);Candidates[Id]:=NewC;
+    Id:=CandidateCount;Inc(CandidateCount);
+    if CandidateCount>Length(Candidates) then
+      SetLength(Candidates,Max(32,Length(Candidates)*2));
+    Candidates[Id]:=NewC;
     Insert(PlacedGrid,Floor(Position.X/GRID),Floor(Position.Z/GRID),Id);
   end;
   procedure AddQuad(const V:TQuad; Cell:Integer; Up:Boolean; SwapUV:Boolean=False);
@@ -287,7 +290,7 @@ var
     Inc(Stats.Signs);
   end;
 begin
-  Result:=nil;Stats:=Default(TCrossingStats);
+  Result:=nil;Stats:=Default(TCrossingStats);CandidateCount:=0;
   if (Data=nil)or(Proj=nil)or(Ground=nil)or(Ground.TriangleCount=0) then Exit;
   RoadGrid:=TGrid.Create([doOwnsValues]);PlacedGrid:=TGrid.Create([doOwnsValues]);
   try
@@ -349,6 +352,7 @@ begin
           end;
       if Best>=0 then AddCandidate(Best,B,Vector3(0,0,0),Node.Id);
     end;
+    SetLength(Candidates,CandidateCount);
     if (Length(Candidates)=0) and (Length(PhotoSigns)=0) then Exit;
     Result:=TMesh.Create('road_furniture');
     try

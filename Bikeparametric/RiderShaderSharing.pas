@@ -29,5 +29,6 @@ begin
       Add(Effect.InterfaceDeclarations[I].Field.X3DName);
     end;
   Effect.InternalSharedCodeKey:=MD5Print(MD5String(Code));
+  Effect.InternalSharedRevisionCache:=True;
 end;
 end.

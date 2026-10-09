@@ -66,7 +66,7 @@ function BuildManholes(Data:TOSMDataset; Proj:TLocalProjection;
 var
   Zones:TZones; ZoneGrid:TGrid; Candidates:TCellList;
   W:TOSMWay; Rel:TOSMRelation; Polys:TMultipolygonArray;
-  I,IX,IZ,Mat,ClassId,OtherMat,N,AreaN,CandidateI,ZX,ZZ:Integer;
+  I,IX,IZ,Mat,ClassId,OtherMat,N,AreaN,CandidateI,ZX,ZZ,ZoneCount:Integer;
   GX,GZ,X0,X1,Z0,Z1:Int64;
   MinX,MaxX,MinZ,MaxZ,WX,WZ,H,OtherH,NearDist:Single;
   OffsetX,OffsetZ,CellX,CellZ,JitterPad:Double; Seed:LongWord; M:TManhole;
@@ -84,7 +84,9 @@ var
       (Bld='garages')or(Bld='carport')or(Bld='ruins')or(Bld='construction')or
       (Bld='greenhouse')or(Bld='barn'));
     MultipolygonBBox(Poly,R.MinX,R.MaxX,R.MinZ,R.MaxZ);
-    Id:=Length(Zones);SetLength(Zones,Id+1);Zones[Id]:=R;
+    Id:=ZoneCount;Inc(ZoneCount);
+    if ZoneCount>Length(Zones) then SetLength(Zones,Max(64,Length(Zones)*2));
+    Zones[Id]:=R;
     if R.Serviced then Radius:=NEAR_HOUSE else Radius:=2;
     { Clip large residential polygons to the generated chunk before indexing. }
     for CZ:=Floor(Max(MinZ,R.MinZ-Radius)/CELL) to Floor(Min(MaxZ,R.MaxZ+Radius)/CELL) do
@@ -126,6 +128,7 @@ begin
   Result:=nil;
   if (Data=nil)or(Proj=nil)or(Ground=nil)or(Ground.TriangleCount=0) then Exit;
   GenerationProgress('Manhole areas',0,0);
+  ZoneCount:=0;
   ZoneGrid:=TGrid.Create([doOwnsValues]);Candidates:=TCellList.Create;
   try
     MinX:=1e20;MinZ:=1e20;MaxX:=-1e20;MaxZ:=-1e20;
@@ -139,7 +142,7 @@ begin
       Polys:=BuildMultipolygonsFromRelation(Rel,Data,Proj);
       for I:=0 to High(Polys) do AddZone(Polys[I],Rel.Tags);
     end;
-    if Length(Zones)=0 then Exit;
+    if ZoneCount=0 then Exit;
     if Query=nil then Query:=TGroundSurfaceQuery.Create(Ground)
     else Query.IncludeAppended;
     MinX:=1e20;MinZ:=1e20;MaxX:=-1e20;MaxZ:=-1e20;

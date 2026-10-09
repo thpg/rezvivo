@@ -37,6 +37,13 @@ implementation
 uses Math, Generics.Collections, Osm3dGeomMesh, Osm3dCurbSimplify,
   Osm3dRoadSurface;
 
+const
+  { Road triangles are finely tessellated by terrain carving. A 64 m cell
+    feeds thousands of unrelated triangles to every short curb edge. This
+    broad phase only filters candidates; exact clipping below is unchanged. }
+  ROAD_QUERY_CELL = 8.0;
+  BUILDING_QUERY_CELL = 128.0;
+
 type
   TEdge = record A,B,C,Mat,Roads:Integer; Neighbour,MappedNeighbour:Boolean end;
   TCurbEdge = record
@@ -68,12 +75,28 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
   RingLift:array[0..3] of Boolean;
   RingIndex:array[0..3,0..ROAD_CURB_ROWS-1] of Integer;
   PreviousIndex:array[0..ROAD_CURB_ROWS-1] of Integer;
-  RoadGrid:TRoadGrid;
+  RoadGrid,BuildingGrid:TRoadGrid;
   RoadSeen:array of Integer;
   RoadStamp:Integer;
   procedure AddJoin(Vertex:Integer; const Inset:TVector3); forward;
   function GridKey(X,Z:Integer):Int64; inline;
   begin Result:=Int64((QWord(LongWord(X)) shl 32) or LongWord(Z)) end;
+  procedure IndexBuildings;
+  var N,X,Z:Integer; Items:TRoadIds; Key:Int64;
+  begin
+    { UrbanAt needs only boxes within 120 m of the query, not every
+      building in the tile for every short road-boundary edge. }
+    for N:=0 to High(Model.BuildingObstacles) do
+      with Model.BuildingObstacles[N] do
+        for Z:=Floor((MinZ-120)/BUILDING_QUERY_CELL) to Floor((MaxZ+120)/BUILDING_QUERY_CELL) do
+          for X:=Floor((MinX*EastScale-120)/BUILDING_QUERY_CELL) to Floor((MaxX*EastScale+120)/BUILDING_QUERY_CELL) do begin
+            Key:=GridKey(X,Z);
+            if not BuildingGrid.TryGetValue(Key,Items) then begin
+              Items:=TRoadIds.Create;BuildingGrid.Add(Key,Items);
+            end;
+            Items.Add(N);
+          end;
+  end;
   procedure IndexRoads;
   var S,X,Z,K,Mat:Integer; A,B,C:TVector3; Items:TRoadIds; Key:Int64;
   begin
@@ -84,10 +107,10 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
       K:=Comp.Indices[S*3];Mat:=Comp.MatIdOf(K);
       if not ((Mat=13) or (Mat in [24..27])) then Continue;
       A:=Comp.PositionOf(K);B:=Comp.PositionOf(Comp.Indices[S*3+1]);C:=Comp.PositionOf(Comp.Indices[S*3+2]);
-      for Z:=Floor((Min(A.Z,Min(B.Z,C.Z))-2*ROAD_CURB_WIDTH-0.02)/64) to
-             Floor((Max(A.Z,Max(B.Z,C.Z))+2*ROAD_CURB_WIDTH+0.02)/64) do
-        for X:=Floor((Min(A.X,Min(B.X,C.X))-2*ROAD_CURB_WIDTH-0.02)/64) to
-               Floor((Max(A.X,Max(B.X,C.X))+2*ROAD_CURB_WIDTH+0.02)/64) do begin
+      for Z:=Floor((Min(A.Z,Min(B.Z,C.Z))-2*ROAD_CURB_WIDTH-0.02)/ROAD_QUERY_CELL) to
+             Floor((Max(A.Z,Max(B.Z,C.Z))+2*ROAD_CURB_WIDTH+0.02)/ROAD_QUERY_CELL) do
+        for X:=Floor((Min(A.X,Min(B.X,C.X))-2*ROAD_CURB_WIDTH-0.02)/ROAD_QUERY_CELL) to
+               Floor((Max(A.X,Max(B.X,C.X))+2*ROAD_CURB_WIDTH+0.02)/ROAD_QUERY_CELL) do begin
           Key:=GridKey(X,Z);
           if not RoadGrid.TryGetValue(Key,Items) then begin
             Items:=TRoadIds.Create;RoadGrid.Add(Key,Items);
@@ -134,8 +157,8 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
       both curbs. Otherwise their faces overlap across a triangulation sliver.
       Explicitly mapped islands keep the ordinary single-curb test. }
     if not Edge.MappedNeighbour then Clearance:=2*ROAD_CURB_WIDTH+0.02;
-    for Z:=Floor(Min(P.Z,Q.Z)/64) to Floor(Max(P.Z,Q.Z)/64) do
-      for X:=Floor(Min(P.X,Q.X)/64) to Floor(Max(P.X,Q.X)/64) do
+    for Z:=Floor(Min(P.Z,Q.Z)/ROAD_QUERY_CELL) to Floor(Max(P.Z,Q.Z)/ROAD_QUERY_CELL) do
+      for X:=Floor(Min(P.X,Q.X)/ROAD_QUERY_CELL) to Floor(Max(P.X,Q.X)/ROAD_QUERY_CELL) do
         if RoadGrid.TryGetValue(GridKey(X,Z),Items) then for S in Items do begin
           if RoadSeen[S]=RoadStamp then Continue;RoadSeen[S]:=RoadStamp;
           A0:=Comp.PositionOf(Comp.Indices[S*3]);
@@ -158,7 +181,8 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
           SurfaceY:=A0.Y-(Nrm.X*(Probe.X-A0.X)+Nrm.Z*(Probe.Z-A0.Z))/Nrm.Y;
           { Decks at another elevation cannot cut an opening in this curb. }
           if Abs(SurfaceY-Probe.Y)>0.35 then Continue;
-          SetLength(Cuts,CutN+1);Cuts[CutN]:=Vector2(T0,T1);Inc(CutN);
+          if CutN=Length(Cuts) then SetLength(Cuts,Max(8,CutN*2));
+          Cuts[CutN]:=Vector2(T0,T1);Inc(CutN);
         end;
     for N:=1 to CutN-1 do begin
       Swap:=Cuts[N];K:=N;
@@ -198,11 +222,14 @@ var Edges:TEdges; Key:QWord; Edge:TEdge; Curb:TCurbEdge; Pair:specialize TPair<Q
     Result:=(QWord(Min(PA,PB)) shl 32) or LongWord(Max(PA,PB));
   end;
   function UrbanAt(const Pos:TVector3):Boolean;
-  var N:Integer;
+  var N:Integer; Items:TRoadIds;
   begin
+    if not BuildingGrid.TryGetValue(GridKey(
+      Floor((Pos.X-TileOrigin.X)/BUILDING_QUERY_CELL),
+      Floor((Pos.Z-TileOrigin.Z)/BUILDING_QUERY_CELL)),Items) then Exit(False);
     Local:=Pos-TileOrigin; Local.X:=Local.X/EastScale;
     NearCount:=0; Closest:=1e20;
-    for N:=0 to High(Model.BuildingObstacles) do
+    for N in Items do
       with Model.BuildingObstacles[N] do
       begin
         DX:=Max(0.0,Max(MinX-Local.X,Local.X-MaxX))*EastScale;
@@ -342,8 +369,9 @@ begin
   Joins:=specialize TDictionary<Integer,TVector3>.Create;
   Degrees:=specialize TDictionary<Integer,Integer>.Create;
   RoadGrid:=TRoadGrid.Create([doOwnsValues]);RoadStamp:=0;
+  BuildingGrid:=TRoadGrid.Create([doOwnsValues]);
   try
-    IndexRoads;
+    IndexRoads;IndexBuildings;
     for I:=0 to Model.RoadSegCount-1 do
     begin
       Seg:=Model.RoadSegs[I];
@@ -523,7 +551,7 @@ begin
       CurbVertices.Indices[IndexBase+J-FirstTri*3]:=
         ExportBase+Integer(Comp.Indices[J])-FirstVertex;
     Comp.TrimArrays;
-  finally RoadGrid.Free; Degrees.Free; Joins.Free; Asphalt.Free; Edges.Free end;
+  finally BuildingGrid.Free; RoadGrid.Free; Degrees.Free; Joins.Free; Asphalt.Free; Edges.Free end;
 end;
 
 end.

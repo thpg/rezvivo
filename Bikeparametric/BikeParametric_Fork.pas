@@ -20,6 +20,7 @@ type
     FStemLength:      Single;
     FStemAngle:       Single;
     FStemDia:         Single;
+    procedure BuildSuspension(Ctx:TBikeBuildContext);
   public
     constructor Create; override;
     class function ComponentName: string; override;
@@ -54,7 +55,7 @@ const
 
 implementation
 
-uses BikeParametric_Frame, BikeParametric_Wheel;
+uses BikeParametric_Frame, BikeParametric_Wheel, BikeMeshDetail;
 
 constructor TForkComponent.Create;
 begin
@@ -129,6 +130,10 @@ begin
   CrownHalfZ := Max(FrontHalfZ * 0.5, TireHalfWidth + BladeRadius + 5 * M);
   SteerUp := Vector3(Skel.HTDirX, Skel.HTDirY, 0).Normalize;
   CrownCenter := HTB - SteerUp * (CrownHalfZ + BladeRadius + 6 * M);
+  if ForkTravel>0 then begin
+    CrownHalfZ:=Max(FrontHalfZ,TireHalfWidth+BladeRadius+8*M);
+    CrownCenter:=HTB-SteerUp*(18*M);
+  end;
   Skel.AddBone('fork_crown_l', CrownCenter + Vector3(0, 0, CrownHalfZ));
   Skel.AddBone('fork_crown_r', CrownCenter - Vector3(0, 0, CrownHalfZ));
   Skel.AddBone('front_dropout_l', Vector3(Skel['front_axle'].X, Skel['front_axle'].Y, FrontHalfZ));
@@ -318,6 +323,72 @@ begin
   Result.AddChildren(Shape);
 end;
 
+procedure TForkComponent.BuildSuspension(Ctx:TBikeBuildContext);
+var S:TBikeSkeleton;W:TWheelComponent;M,InnerR,OuterR,Exposed,WheelR,T:Single;
+    Up,ForwardAxis,Top,Seal,Foot,Drop,Crown,Brace:TVector3;
+    BraceEnds:array[0..1]of TVector3;Side,I:Integer;Name:string;
+    Arch:array[0..8]of TVector3;
+    Metal,MetalSpec,LowerColor,LowerSpec:TVector3;
+begin
+  S:=Ctx.Skeleton;M:=S.MM;
+  Up:=Vector3(S.HTDirX,S.HTDirY,0).Normalize;
+  ForwardAxis:=Vector3(Up.Y,-Up.X,0);
+  W:=TWheelComponent(FindComponent(TWheelComponent));
+  WheelR:=DEF_WHEEL_RADIUS*M;if W<>nil then WheelR:=W.WheelRadius*M;
+  InnerR:=EnsureRange(ForkBladeDia*0.5,14,20)*M;OuterR:=InnerR+6*M;
+  Exposed:=EnsureRange(ForkTravel+18,70,ForkAxleToCrown*0.42)*M;
+  Metal:=Vector3(0.57,0.59,0.61);MetalSpec:=Vector3(0.90,0.91,0.92);
+  LowerColor:=Vector3(0.035,0.039,0.043);LowerSpec:=Vector3(0.25,0.27,0.29);
+  Ctx.BeginAccum(Ctx.SteerRoot);
+  Crown:=Ctx.O(S['head_tube_bottom']);
+  Ctx.Add(Ctx.MakeCylinder(Crown-Up*0.035,Crown+Up*0.003,0.021,
+    Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.65));
+  for Side:=0 to 1 do begin
+    if Side=0 then Name:='l'else Name:='r';
+    Top:=Ctx.O(S['fork_crown_'+Name]);Drop:=Ctx.O(S['front_dropout_'+Name]);
+    Seal:=Top-Up*Exposed;
+    { The slider and stanchion share an axis. Offset belongs to the axle lug. }
+    Foot:=Seal-Up*((Seal.Y-Drop.Y-0.030)/Max(0.1,Up.Y));
+    BikeDetailTube(Ctx,[Crown-Up*0.018,
+      (Crown-Up*0.018+Top)*0.5,Top],
+      [Vector2(0.027,0.014),Vector2(0.024,0.012),Vector2(OuterR,0.015)],
+      ForwardAxis,LowerColor,LowerSpec,0.65);
+    { Two separate telescoping surfaces and a dust seal. The offset lives
+      at the dropout; both stanchions stay parallel to the steering axis. }
+    Ctx.Add(Ctx.MakeCylinder(Seal,Top+Up*0.005,InnerR,Metal,MetalSpec,0.85));
+    BikeDetailTube(Ctx,[Foot,Foot+(Seal-Foot)*0.12,
+      Foot+(Seal-Foot)*0.70,Seal-Up*0.016,Seal],
+      [Vector2(OuterR*0.93,OuterR*0.86),Vector2(OuterR*1.06,OuterR),
+       Vector2(OuterR,OuterR*0.94),Vector2(OuterR,OuterR),Vector2(OuterR,OuterR)],
+      ForwardAxis,LowerColor,LowerSpec,0.65);
+    Ctx.Add(Ctx.MakeCylinder(Seal-Up*0.004,Seal+Up*0.005,OuterR+0.002,
+      Ctx.Colors.Dark,Ctx.Colors.FrameSpec,0.4));
+    BikeDetailTube(Ctx,[Foot+Up*0.025,Foot,Drop],
+      [Vector2(OuterR*0.90,OuterR*0.90),Vector2(OuterR,OuterR*0.88),
+       Vector2(0.019,0.014)],Vector3(0,0,1),LowerColor,LowerSpec,0.65);
+    Ctx.Add(Ctx.MakeCylinder(Drop-Vector3(0,0,0.012),Drop+Vector3(0,0,0.012),0.019,
+      Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.6));
+    T:=EnsureRange((Drop.Y+WheelR-0.030-Foot.Y)/Max(0.01,Seal.Y-Foot.Y),0.35,0.93);
+    BraceEnds[Side]:=Foot+(Seal-Foot)*T+ForwardAxis*(OuterR*0.7);
+    Ctx.Add(Ctx.MakeCylinder(Top+Up*0.012,Top+Up*0.018,InnerR*0.70,
+      Ctx.Colors.Chrome,Ctx.Colors.ChromeSpec,0.75));
+    if Ctx.DetailLevel>0 then
+      Ctx.Add(Ctx.MakeCylinder(Top+Up*0.018,Top+Up*0.021,InnerR*0.52,
+        LowerColor,LowerSpec,0.65));
+  end;
+  { Arch clears the top of the tyre and ties the lower legs together. }
+  Brace:=(BraceEnds[0]+BraceEnds[1])*0.5;
+  Brace.Y:=Ctx.O(S['front_axle']).Y+WheelR+0.021;
+  for I:=0 to High(Arch) do begin
+    T:=I/High(Arch);
+    Arch[I]:=BraceEnds[0]*(1-T)+BraceEnds[1]*T;
+    Arch[I].Y:=Arch[I].Y+Sin(Pi*T)*(Brace.Y-(BraceEnds[0].Y+BraceEnds[1].Y)*0.5);
+  end;
+  BikeDetailTube(Ctx,Arch,[Vector2(0.013,0.009)],ForwardAxis,
+    LowerColor,LowerSpec,0.65);
+  Ctx.EndAccum;
+end;
+
 procedure TForkComponent.BuildGeometry(Ctx: TBikeBuildContext);
 var
   S: TBikeSkeleton;
@@ -325,6 +396,7 @@ var
   M, HeadRadius: Single;
   Up: TVector3;
 begin
+  if ForkTravel>0 then begin BuildSuspension(Ctx);Exit end;
   S := Ctx.Skeleton; M := S.MM;
   Up := Vector3(S.HTDirX, S.HTDirY, 0).Normalize;
   Fr := TFrameComponent(FindComponent(TFrameComponent));

@@ -1,4 +1,4 @@
-﻿{
+{
   GameBikeAvatar — loads a parametric bike+rider model from JSON
   and applies it to a TCastleScene for use as the player avatar.
 
@@ -96,7 +96,7 @@ procedure ReorientBikeRoot(Root: TX3DRootNode);
 implementation
 
 
-uses RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
+uses GameRiderWardrobe, RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
   DebugLog, AppSettings, GameBikeAutoFit;
@@ -589,7 +589,7 @@ begin
   Size := '';
   if Settings <> nil then
   begin
-    Rider := ResolveRiderGlbPath(Settings.SelectedRiderGlb);
+    Rider := WardrobeRiderPath(ResolveRiderGlbPath(Settings.SelectedRiderGlb));
     Size := Trim(Settings.SelectedBikeSize);
   end;
   if PerformanceRiderModel <> '' then Rider := PerformanceRiderModel;
@@ -666,11 +666,11 @@ begin
   if (Inst = nil) or (Settings = nil) then Exit;
   if Inst.TripoRider<>nil then begin
     Inst.TripoRider.HairStyle:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
-    Inst.TripoRider.SetHeadAppearance(ParseHeadwear(UserPreference('rider_headwear','helmet')),
+    Inst.TripoRider.SetHeadAppearance(WardrobeHeadwear,
       ParseBeard(UserPreference('rider_beard','none')),ParseMustache(UserPreference('rider_mustache','none')));
   end;
   if Trim(Settings.BikeFitColors) = '' then begin
-    if Inst.TripoRider<>nil then Inst.TripoRider.ApplyHelmetColor(Vector3(1,1,1),False);
+    Inst.SetHeadwearColorLive(Vector3(1,1,1),False);
     Exit;
   end;
   AnyCloth := False;
@@ -710,8 +710,7 @@ begin
     else
       Logger.Info('[BikeAvatar] cloth dye staged for next rider load');
   end;
-  if Inst.TripoRider <> nil then
-    Inst.TripoRider.ApplyHelmetColor(HelmetC,HelmetOn);
+  Inst.SetHeadwearColorLive(HelmetC,HelmetOn);
 end;
 
 procedure ApplyRiderShapeAdjustments(Inst: TBikeInstance;

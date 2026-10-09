@@ -44,6 +44,8 @@ type
     FShadowFingerprint: LongWord;
     FShadowBoundsMin, FShadowBoundsMax: TTreeVec3;
     FReady: Boolean;
+    FBatchActive: Boolean;
+    UComplexity:GLint;
     FEnvironment: TTreeRenderEnvironment;
     USunDirection,UBillboardRight,UFogColor,UFogDensity,UOutputGamma,UDepthOnly,UDirectBranches,ULeafScale,UNeedleScale: GLint;
     FLODTextures: array[TTreeSpecies] of GLuint;
@@ -62,6 +64,7 @@ type
     UBakeMode,UUseBakedLOD,ULODTexture,ULODFrames: GLint;
     UProjection,UView,UModel,UKind,USlices,USegments,UQuality,UTime,UWind,
     UProfile,UBark,ULeaf,UEye,USpecies,UDensity,UDebug,UNeedlePairs,UNeedlesPerFascicle,UNeedleVertices,UViewportHeight,UNeedleDetail: GLint;
+    procedure SetPassUniforms(const Projection,View:TTreeMat4; const Eye:TTreeVec3; Seconds:Single);
     procedure Upload(Index: Integer; const Items: TTreeGPUItems);
     function UploadIndices(const Indices:TTreeIndices):GLuint;
     function GridIndices(Slices,Segments:Integer):GLuint;
@@ -88,6 +91,9 @@ type
     procedure UpdateDistantItems(First: Integer; const Items: TTreeGPUItems);
     procedure UploadForest(const Center: TTreeInstance; const P: TTreeParams; Count: Integer);
     function VerifyPackedType(Expected: TTreeTypeCode): Boolean; { smoke only; synchronous GPU readback }
+    procedure BeginBatch(const Projection,View:TTreeMat4; const Eye:TTreeVec3;
+      const Env:TTreeRenderEnvironment; Seconds:Single);
+    procedure EndBatch;
     procedure Render(const Instance: TTreeInstance; const P: TTreeParams;
       const Projection,View,Model: TTreeMat4; const Eye: TTreeVec3;
       Quality,Seconds,Wind: Single; Wireframe,Debug,ShowLeaves,ShowGround,ShowForest: Boolean;
@@ -111,6 +117,8 @@ type
     property Environment: TTreeRenderEnvironment read FEnvironment write FEnvironment;
     property Stats: TTreeRenderStats read FStats;
   end;
+var TreePassBatching:Boolean=True;
+    TreeRenderComplexity:Integer=3;
 implementation
 uses Classes, Math, TreeFruits;
 function TTreeRenderer.ShadowLOD(const Profile: TTreeParams; out Texture: Cardinal;
@@ -155,6 +163,7 @@ begin
       glGetProgramInfoLog(FProgram,Len,nil,PChar(Log)); raise Exception.Create('Tree shader link failed: '+Log);
     end;
     end;
+    UComplexity:=glGetUniformLocation(FProgram,'uComplexity');
     UProjection:=glGetUniformLocation(FProgram,'uProjection'); UView:=glGetUniformLocation(FProgram,'uView');
     UModel:=glGetUniformLocation(FProgram,'uModel'); UKind:=glGetUniformLocation(FProgram,'uKind');
     USlices:=glGetUniformLocation(FProgram,'uSlices'); USegments:=glGetUniformLocation(FProgram,'uSegments');
@@ -556,6 +565,40 @@ begin
     Result:=(Code=Expected) and (IsInteger=GL_TRUE) and (Kind=GL_UNSIGNED_INT) and (Divisor=1);
   finally glBindVertexArray(OldVAO); glBindBuffer(GL_ARRAY_BUFFER,OldBuffer); end;
 end;
+procedure TTreeRenderer.SetPassUniforms(const Projection,View:TTreeMat4; const Eye:TTreeVec3; Seconds:Single);
+begin
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
+    glUseProgram(FProgram);
+    if FBakeMode then glUniform1i(UComplexity,3) else glUniform1i(UComplexity,TreeRenderComplexity);
+    if FEnvironment.Enabled then begin
+      glUniform3fv(USunDirection,1,@FEnvironment.SunDirection);
+      glUniform3fv(UBillboardRight,1,@FEnvironment.BillboardRight);
+      glUniform3fv(UFogColor,1,@FEnvironment.FogColor);
+      glUniform1f(UFogDensity,FEnvironment.FogDensity);
+      glUniform1f(UOutputGamma,FEnvironment.OutputGamma);
+      glUniform1i(UDepthOnly,Ord(FEnvironment.DepthOnly));
+    end else begin
+      glUniform3f(USunDirection,-0.5,0.85,0.45);
+      glUniform3f(UBillboardRight,View[0],0,View[8]);
+      glUniform3f(UFogColor,0.19,0.26,0.27);
+      glUniform1f(UFogDensity,0.0014); glUniform1f(UOutputGamma,1/2.2);
+      glUniform1i(UDepthOnly,0);
+    end;
+    glUniformMatrix4fv(UProjection,1,GL_FALSE,@Projection[0]);
+    glUniformMatrix4fv(UView,1,GL_FALSE,@View[0]);
+    glUniform3f(UEye,Eye.X,Eye.Y,Eye.Z);glUniform1f(UTime,Seconds);
+end;
+procedure TTreeRenderer.BeginBatch(const Projection,View:TTreeMat4; const Eye:TTreeVec3;
+  const Env:TTreeRenderEnvironment; Seconds:Single);
+begin
+  if not TreePassBatching then Exit;
+  Assert(FShared=nil);
+  FEnvironment:=Env;
+  SetPassUniforms(Projection,View,Eye,Seconds);
+  FBatchActive:=True;
+end;
+procedure TTreeRenderer.EndBatch;
+begin FBatchActive:=False end;
 procedure TTreeRenderer.Render(const Instance: TTreeInstance; const P: TTreeParams;
   const Projection,View,Model: TTreeMat4; const Eye: TTreeVec3;
   Quality,Seconds,Wind: Single; Wireframe,Debug,ShowLeaves,ShowGround,ShowForest: Boolean;
@@ -590,28 +633,14 @@ begin
   WasDepth:=glIsEnabled(GL_DEPTH_TEST); WasBlend:=glIsEnabled(GL_BLEND); WasCull:=glIsEnabled(GL_CULL_FACE);
   end;
   try
-    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
-    glUseProgram(FProgram);
-    if FEnvironment.Enabled then begin
-      glUniform3fv(USunDirection,1,@FEnvironment.SunDirection);
-      glUniform3fv(UBillboardRight,1,@FEnvironment.BillboardRight);
-      glUniform3fv(UFogColor,1,@FEnvironment.FogColor);
-      glUniform1f(UFogDensity,FEnvironment.FogDensity);
-      glUniform1f(UOutputGamma,FEnvironment.OutputGamma);
-      glUniform1i(UDepthOnly,Ord(FEnvironment.DepthOnly));
-    end else begin
-      glUniform3f(USunDirection,-0.5,0.85,0.45);
-      glUniform3f(UBillboardRight,View[0],0,View[8]);
-      glUniform3f(UFogColor,0.19,0.26,0.27);
-      glUniform1f(UFogDensity,0.0014); glUniform1f(UOutputGamma,1/2.2);
-      glUniform1i(UDepthOnly,0);
-    end;
+    if PreserveGLState or not Resources.FBatchActive then SetPassUniforms(Projection,View,Eye,Seconds);
     glUniform1i(UBakeMode,Ord(FBakeMode)); glUniform1i(UUseBakedLOD,Ord(UseAtlas));
     glUniform1i(UDirectBranches,Ord(DirectBranches));
     glUniform1f(ULeafScale,1);
     glUniform1f(UNeedleScale,1);
     NeedleDetail:=1;
     if DirectBranches and not FBakeMode then NeedleDetail:=Clamp(FEnvironment.NeedleDetail,0,1);
+    if (TreeRenderComplexity<3) and not FBakeMode then NeedleDetail:=0;
     RenderWind:=Wind;
     if FEnvironment.Enabled and FEnvironment.DepthOnly and IsConifer(P.Species) and not FBakeMode then begin
       { Filter sub-texel needle motion in shadows. Wood and foliage share the
@@ -632,9 +661,7 @@ begin
       glBindTexture(GL_TEXTURE_2D_ARRAY,Resources.FLODTextures[P.Species]);
       glUniform3fv(ULODFrames,LOD_AGES,@Resources.FLODFrames[P.Species][0].X);
     end;
-    glUniformMatrix4fv(UProjection,1,GL_FALSE,@Projection[0]);
-    glUniformMatrix4fv(UView,1,GL_FALSE,@View[0]); glUniformMatrix4fv(UModel,1,GL_FALSE,@Model[0]);
-    glUniform3f(UEye,Eye.X,Eye.Y,Eye.Z); glUniform1f(UTime,Seconds); glUniform1f(UWind,RenderWind);
+    glUniformMatrix4fv(UModel,1,GL_FALSE,@Model[0]);glUniform1f(UWind,RenderWind);
     if FEnvironment.Enabled and (FEnvironment.ViewportHeight>0) then
       ViewHeight:=FEnvironment.ViewportHeight
     else begin glGetIntegerv(GL_VIEWPORT,@Viewport[0]);ViewHeight:=Max(1,Viewport[3]);end;
@@ -670,6 +697,10 @@ begin
       if FEnvironment.Enabled then begin
         if FEnvironment.BranchSides>0 then Slices:=FEnvironment.BranchSides;
         if FEnvironment.BranchSegments>0 then Segments:=FEnvironment.BranchSegments;
+      end;
+      if not FBakeMode then begin
+        if TreeRenderComplexity=0 then begin Slices:=3;Segments:=1 end
+        else if TreeRenderComplexity=1 then begin Slices:=Min(Slices,4);Segments:=Min(Segments,2) end;
       end;
       if P.Species=tsCactus then begin Slices:=Max(Slices,12);Segments:=Max(Segments,10);end;
       glUniform1i(USlices,Slices); glUniform1i(USegments,Segments);

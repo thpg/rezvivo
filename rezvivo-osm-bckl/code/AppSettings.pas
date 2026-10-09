@@ -228,6 +228,9 @@ type
     property GraphicsSoftening: Integer index Ord(goSoftening) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsWorldShadows: Integer index Ord(goWorldShadows) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsRtxReflections: Integer index Ord(goRtxReflections) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsRiderComplexity: Integer index Ord(goRiderComplexity) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsWorldComplexity: Integer index Ord(goWorldComplexity) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsVegetationComplexity: Integer index Ord(goVegetationComplexity) read GetGraphicsOption write SetGraphicsOption;
     { Доступ через RTTI (MCP property_get/property_set). Запись идёт через
       существующие сеттеры — они же сохраняют settings.json на диск, так
       что RTTI-set не обходит персистентность. }
@@ -281,7 +284,7 @@ implementation
 
 uses
   fpjson, jsonparser, CastleFilesUtils, CastleURIUtils,
-  DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair, GameUserData;
+  RenderComplexity, TreeRenderer, GrassRenderer, DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair, GameUserData;
 
 const
   SETTINGS_FILE = 'settings.json';
@@ -941,6 +944,10 @@ end;
 
 procedure TAppSettings.ApplyGraphicsGlobals;
 begin
+  SetRenderComplexity(rdRider,FGraphics[goRiderComplexity]);
+  SetRenderComplexity(rdWorld,FGraphics[goWorldComplexity]);
+  TreeRenderComplexity:=FGraphics[goVegetationComplexity];
+  GrassRenderComplexity:=TreeRenderComplexity;
   RiderHairQuality:=FGraphics[goHair];
   GlobalTextureQuality := TTextureQuality(FGraphics[goTextures]);
   RenderGrassActive := FGraphics[goGrass] <> 0;
@@ -1044,6 +1051,9 @@ begin
     FGraphics[Option] := Value;
     case Option of
       goHair:RiderHairQuality:=Value;
+      goRiderComplexity:SetRenderComplexity(rdRider,Value);
+      goWorldComplexity:SetRenderComplexity(rdWorld,Value);
+      goVegetationComplexity:begin TreeRenderComplexity:=Value;GrassRenderComplexity:=Value end;
       goTextures: GlobalTextureQuality := TTextureQuality(Value);
       goGrass: RenderGrassActive := Value <> 0;
       goTrees, goVegetationCache, goVegetationAdaptive: begin

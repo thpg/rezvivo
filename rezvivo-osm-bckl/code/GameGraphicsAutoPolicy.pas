@@ -36,6 +36,9 @@ begin
   Result[goGrass]:=Ord(Tier>0);
   Result[goTrees]:=Tier;
   Result[goHair]:=EnsureRange(Tier-1,0,3);
+  Result[goRiderComplexity]:=Min(Tier,3);
+  Result[goWorldComplexity]:=Min(Tier,3);
+  Result[goVegetationComplexity]:=Min(Tier,3);
   { Geometry/shadow cost and texture memory are different limits. A slow
     forest must not blur the road and rider when VRAM is plentiful. Keep
     the chosen texture quality unless the measured memory budget limits it. }

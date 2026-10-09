@@ -47,7 +47,7 @@ end;
 
 constructor TBuildingPartSelection.Create(Dataset:TOSMDataset);
 var E:TFootprints;W:TOSMWay;R:TOSMRelation;N:TOSMNode;
-  I,J,K,C,A,B,Count:Integer;Candidate:array of Integer;TotalArea:Double;
+  I,J,K,C,A,B,Count,FootprintCount:Integer;Candidate:array of Integer;TotalArea:Double;
   ParentEdges,PartEdges:TStringList;Valid:Boolean;
   procedure Append(const Id:string;IsPart:Boolean;const Outers,Inners:TInt64ArrayArray;Complete:Boolean);
   var F:TPartFootprint;Q,H:Integer;P,Prev,Origin:TLatLon;SignedArea:Double;
@@ -71,7 +71,9 @@ var E:TFootprints;W:TOSMWay;R:TOSMRelation;N:TOSMNode;
       if Q<F.OuterCount then F.Area+=Abs(SignedArea)*0.5 else F.Area-=Abs(SignedArea)*0.5;
     end;
     F.Valid:=F.Valid and (F.Area>1e-14);
-    Q:=Length(E);SetLength(E,Q+1);E[Q]:=F;
+    Q:=FootprintCount;Inc(FootprintCount);
+    if FootprintCount>Length(E) then SetLength(E,Max(64,Length(E)*2));
+    E[Q]:=F;
   end;
   procedure AddWay(Way:TOSMWay);
   var Chains:TInt64ArrayArray;
@@ -141,10 +143,11 @@ begin
   for W in Dataset.Ways.Values do if PartTag(W.Tags) then begin Valid:=True;Break end;
   if not Valid then for R in Dataset.Relations.Values do if PartTag(R.Tags) then begin Valid:=True;Break end;
   if not Valid then Exit;
-  E:=nil;
+  E:=nil;FootprintCount:=0;
   for W in Dataset.Ways.Values do if W.IsClosed and (W.Tags.HasKey('building') or PartTag(W.Tags)) then AddWay(W);
   for R in Dataset.Relations.Values do
     if (R.Tags.GetLower('type')='multipolygon') and (R.Tags.HasKey('building') or PartTag(R.Tags)) then AddRelation(R);
+  SetLength(E,FootprintCount);
   ParentEdges:=TStringList.Create;PartEdges:=TStringList.Create;
   try
     for I:=0 to High(E) do if not E[I].Part and E[I].Valid then begin

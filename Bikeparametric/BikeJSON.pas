@@ -53,8 +53,7 @@ function FindBikeComponentClass(const AName: string): TBikeComponentClass;
   NaN/Inf (those become '0'), no float-precision tails: the value is
   rounded to 6 decimals and trailing zeros are stripped
   (0.10000000149 -> "0.1", -30.0 -> "-30").
-  Registered for ALL fpjson float nodes at unit initialization, so every
-  AsJSON / FormatJSON in the program emits numbers in this form. }
+  Used only for bike configuration output; other JSON retains full precision. }
 function CleanJSONFloatStr(const V: Double): string;
 
 implementation
@@ -99,7 +98,7 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════
-  Canonical float formatting for ALL fpjson output
+  Canonical float formatting for bike configuration output
   ═══════════════════════════════════════════════════════════════════ }
 
 function CleanJSONFloatStr(const V: Double): string;
@@ -119,25 +118,6 @@ begin
   Result := FormatFloat('0.######', V, FS);
   if Result = '-0' then Result := '0';
 end;
-
-type
-  { fpjson float node with the canonical text form above; registered via
-    SetJSONInstanceType so the parser AND every Add(..., Double)/CreateJSON
-    produce this class — one switch cleans every file the program writes. }
-  TCleanJSONFloat = class(TJSONFloatNumber)
-  protected
-    function GetAsString: TJSONStringType; override;
-  end;
-
-function TCleanJSONFloat.GetAsString: TJSONStringType;
-begin
-  Result := CleanJSONFloatStr(AsFloat);
-end;
-
-{ ═══════════════════════════════════════════════════════════════════
-  JSON helpers — Vec3ToJSON and JSONToVec3 moved to GameMath.pas;
-  call sites below resolve to GameMath via the uses clause above.
-  ═══════════════════════════════════════════════════════════════════ }
 
 procedure WriteStr(Obj: TJSONObject; const Key: string; const Val: string);
 begin
@@ -291,7 +271,7 @@ begin
         begin
           try
             V := StrToFloat(Buf, Fmt);
-            Buf := FloatToStrF(V, ffGeneral, 7, 0, Fmt);
+            Buf := CleanJSONFloatStr(V);
           except
             { Unparseable — leave original text as-is. }
           end;
@@ -445,10 +425,9 @@ end;
   ═══════════════════════════════════════════════════════════════════ }
 
 initialization
-  { every fpjson float node in the program (parser + Add(Double) + CreateJSON)
-    serializes via TCleanJSONFloat: digits + '.' only, no exponent/locale
-    comma/precision tails, NaN/Inf -> 0 }
-  SetJSONInstanceType(jitNumberFloat, TCleanJSONFloat);
+  { Do not replace fpjson's process-wide numeric class here. OSM E7
+    coordinates and cache fingerprints need all their original digits.
+    SaveBikeToJSON applies the bike-only formatter after serialization. }
   RegisterBikeComponent(TFrameComponent);
   RegisterBikeComponent(TForkComponent);
   RegisterBikeComponent(TDropBarComponent);

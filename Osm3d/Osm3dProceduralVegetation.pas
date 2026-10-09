@@ -762,6 +762,7 @@ begin
     BatchOrigin.X:=Floor(LocalCamera.X/CELL_METERS)*CELL_METERS;
     BatchOrigin.Z:=Floor(LocalCamera.Z/CELL_METERS)*CELL_METERS;
     Batch:=FarBatch(VisibleCells,BatchOrigin);
+    FShared.BeginBatch(Projection,View,Eye,Env,WindNow);
     M:=WorldTransform*TranslationMatrix(WorldPos(BatchOrigin));Model:=ToTreeMatrix(M);
     for S:=Low(S) to High(S) do if (Batch.Renderer[S]<>nil) and (Batch.Count[S]>0) then begin
         Batch.Renderer[S].Environment:=Env;
@@ -817,6 +818,7 @@ begin
     end;
     if not Depth and (FError='') then QueueDetail;
   finally
+    if FShared<>nil then FShared.EndBatch;
     RenderContext.DepthRange:=OldRange;
     glUseProgram(OldProgram);glBindVertexArray(OldVAO);glBindBuffer(GL_ARRAY_BUFFER,OldBuffer);
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture);glActiveTexture(OldActive);

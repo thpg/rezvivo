@@ -1481,6 +1481,7 @@ var
   TaggedPosition: TVector3;
   TaggedPlantsReady: Boolean;
   LocalPhotoMasks:TMultipolygonArray;
+  LocalMaskCount:Integer;
 
   procedure Log(const Msg: string);
   begin
@@ -1520,14 +1521,17 @@ begin
     HeightCtx.Projection := Projection;
     HeightCtx.Lift := EffectiveOptions.LiftAboveTerrain;
     HeightCtx.Terrain := Terrain;     { эталонный источник высоты }
-    TaggedPlants:=nil;TaggedCount:=0;TaggedPlantsReady:=False;LocalPhotoMasks:=nil;
+    TaggedPlants:=nil;TaggedCount:=0;TaggedPlantsReady:=False;LocalPhotoMasks:=nil;LocalMaskCount:=0;
     if Dataset.HasLocalPhotoVegetation then
       for Way in Dataset.Ways.Values do if Way.IsClosed and
         (Way.Tags.HasKey(VEGETATION_LAYOUT_TAG) or Way.Tags.HasKey('rezvivo:photo_replace_scatter')) then begin
-        I:=Length(LocalPhotoMasks);SetLength(LocalPhotoMasks,I+1);
+        I:=LocalMaskCount;Inc(LocalMaskCount);
+        if LocalMaskCount>Length(LocalPhotoMasks) then
+          SetLength(LocalPhotoMasks,Max(16,Length(LocalPhotoMasks)*2));
         LocalPhotoMasks[I]:=BuildMultipolygonFromWay(Way,Dataset,Projection);
       end;
 
+    SetLength(LocalPhotoMasks,LocalMaskCount);
     Log(Format('Scanning %d relations for forest/scrub multipolygons...',
       [Dataset.Relations.Count]));
 

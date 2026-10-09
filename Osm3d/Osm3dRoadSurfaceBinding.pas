@@ -124,6 +124,7 @@ var
   MinT,MaxT:Single;
   Coord,Style:array of Single;
   Requests:TRoadPageRequests;
+  RequestCount:Integer;
   R:TRoadPageRequest;
   A:TRoadCoordAttribute;
   SA:TFloatVertexAttributeNode;
@@ -141,12 +142,15 @@ var
     begin
       R.Profile:=AProfile; R.Block:=ABlock;
       R.MinX:=AP.X; R.MaxX:=AP.X; R.MinZ:=AP.Z; R.MaxZ:=AP.Z;
-      RI:=Length(Requests); SetLength(Requests,RI+1); Requests[RI]:=R;
+      RI:=RequestCount;Inc(RequestCount);
+      if RequestCount>Length(Requests) then SetLength(Requests,Max(64,Length(Requests)*2));
+      Requests[RI]:=R;
       RequestsByKey.Add(Key,RI);
     end;
   end;
 begin
   if (Geo=nil) or (Composite=nil) then Exit;
+  RequestCount:=0;
   Owners:=SurfaceOwners(Composite,Model,TileOrigin,EastScale);
   Ways:=specialize TDictionary<Int64,TWayInfo>.Create;
   RequestsByKey:=specialize TDictionary<QWord,Integer>.Create;
@@ -372,6 +376,7 @@ begin
     SA:=TFloatVertexAttributeNode.Create;
     SA.NameField:='roadStyle'; SA.NumComponents:=4; AssignStaticField(SA.FdValue, Style);
     Geo.FdAttrib.Add(A); Geo.FdAttrib.Add(SA);
+    SetLength(Requests,RequestCount);
     A.Publish(Requests);
     RegisterRoadPuddles(Geo,Puddles.Sites);
   finally Puddles.Free;RequestsByKey.Free; Ways.Free end;

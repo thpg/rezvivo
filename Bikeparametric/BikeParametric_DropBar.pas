@@ -20,6 +20,7 @@ type
     FBarReach:   Single;
     FHoodLength: Single;
     FHoodAngle:  Single;
+    FShowHoods: Boolean;
     FTapeColor:  Integer;   { packed $RRGGBB; -1 = inherit Ctx.Colors.Tape }
     { external handlebar model (glb in data/) }
     FUseModel:     Boolean;
@@ -55,6 +56,7 @@ type
     property BarReach:   Single  read FBarReach   write FBarReach;    { mm, center to forward-most }
     property HoodLength: Single  read FHoodLength write FHoodLength;  { mm, shifter body length (scales whole shifter) }
     property HoodAngle:  Single  read FHoodAngle  write FHoodAngle;   { degrees, shifter tilt (45 = neutral) }
+    property ShowHoods: Boolean read FShowHoods write FShowHoods;
     { Bar-tape colour as packed $RRGGBB. -1 (default) = global Ctx.Colors.Tape. }
     property TapeColor:  Integer read FTapeColor  write FTapeColor;
     { External handlebar model (glb under data/). When UseModel is true and the
@@ -402,6 +404,7 @@ begin
   FBarReach   := DEF_BAR_REACH;
   FHoodLength := DEF_HOOD_LENGTH;
   FHoodAngle  := DEF_HOOD_ANGLE;
+  FShowHoods := True;
   FTapeColor  := -1;
   FUseModel     := True;
   FModelURL     := 'bike/dropbar.glb';
@@ -421,6 +424,7 @@ class function TDropBarComponent.ComponentName: string; begin Result := 'DropBar
 
 procedure TDropBarComponent.ApplyPreset(const APreset: string);
 begin
+  FShowHoods:=not SameText(APreset,'fixed');
   if SameText(APreset, 'gravel') then
     FBarWidth := 440;
 end;
@@ -474,7 +478,7 @@ begin
 
   { hand grips from the glb (PlaceR1/PlaceL1), mapped through the same placement
     as the model geometry so the rider's hands land on the loaded bar }
-  HandsOK := FUseModel and Skel.HasBone('stem_base')
+  HandsOK := FUseModel and FShowHoods and Skel.HasBone('stem_base')
              and ReadModelBones(FS, PR, PL);
   FModelStemShift:=TVector3.Zero;FModelStemReference:=TVector3.Zero;
   if HandsOK then begin
@@ -513,7 +517,9 @@ begin
     Off := ArcOffset(1.00); Skel.AddBone('hook_start_' + Names[I], Vector3(StemEnd.X + Off.X, StemEnd.Y + Off.Y, BZ));
     Skel.AddBone('hook_end_' + Names[I], Vector3(StemEnd.X + FHkX, StemEnd.Y + FHkY, BZ));
     if not HandsOK then begin
-      Skel.AddBone('place_'+Names[I]+'_1',HB+Vector3(HoodC*0.25,HoodS*0.25,0));
+      if not FShowHoods then
+        Skel.AddBone('place_'+Names[I]+'_1',Skel['ramp_start_'+Names[I]]+Vector3(0,0.014,0))
+      else Skel.AddBone('place_'+Names[I]+'_1',HB+Vector3(HoodC*0.25,HoodS*0.25,0));
       Skel.AddBone('place_'+Names[I]+'_2',Skel['ramp_start_'+Names[I]]+Vector3(0,0.014,0));
       Off:=ArcOffset(0.65);
       Skel.AddBone('place_'+Names[I]+'_3',Vector3(StemEnd.X+Off.X,StemEnd.Y+Off.Y,BZ+Signs[I]*0.014));
@@ -661,7 +667,7 @@ begin
   if Fk <> nil then LocalStemDia := Fk.StemDia else LocalStemDia := 24;
 
   { -- external handlebar model: load glb and add its nodes into the bike -- }
-  if FUseModel then begin
+  if FUseModel and FShowHoods then begin
     ModelRoot := TryLoadModel;
     if ModelRoot <> nil then begin
       if not FModelHasStem then
@@ -755,7 +761,7 @@ begin
       Ctx.Add(Ctx.MakeSphere(BarEnd, TapeR, TapeCol, TapeSpec, 0.35));
 
     { STI shifter (body + levers) }
-    BuildHood(Ctx, HBase, HoodLength * M, DL);
+    if FShowHoods then BuildHood(Ctx, HBase, HoodLength * M, DL);
 
     { bend: front half-ellipse, hood_base (u=0) -> drops bottom (u=1) }
     Off := ArcOffset(0.0);

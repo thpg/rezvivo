@@ -1841,8 +1841,8 @@ begin
     sumX := 0; sumZ := 0;
     for i := preVert to vEnd - 1 do
     begin
-      sumX := sumX + RailMesh.Vertices[i].Position.X;
-      sumZ := sumZ + RailMesh.Vertices[i].Position.Z;
+      sumX := sumX + RailMesh.VertexAt[i].Position.X;
+      sumZ := sumZ + RailMesh.VertexAt[i].Position.Z;
     end;
     sumX := sumX / vspan;
     sumZ := sumZ / vspan;

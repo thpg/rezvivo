@@ -4,7 +4,7 @@ unit Osm3dRiderShadow;
 
 interface
 
-uses X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, fpjson;
+uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, fpjson;
 
 type
   TRiderShadowMatrices = array[0..3] of TMatrix4;
@@ -34,6 +34,7 @@ type
     FLight: TDirectionalLightNode;
     FOptions: TCastleRenderOptions;
     FCasters, FSelected, FWorldCasters: TCastleTransformList;
+    FWorldSet: specialize TDictionary<TCastleTransform,Boolean>;
     FProbe: TShadowGroundProbe;
     FProbePoint, FProbeClip: TVector3;
     FProbeEnabled: Boolean;
@@ -650,6 +651,7 @@ begin
   FCasters := TCastleTransformList.Create(False);
   FSelected := TCastleTransformList.Create(False);
   FWorldCasters := TCastleTransformList.Create(False);
+  FWorldSet:=specialize TDictionary<TCastleTransform,Boolean>.Create;
   FOptions := TCastleRenderOptions.Create(nil);
   FLight := TDirectionalLightNode.Create;
   FLight.KeepExistingBegin;
@@ -700,6 +702,7 @@ begin
   FWorldSelected.Free;
   FRidersSelected.Free;
   FOptions.Free;
+  FWorldSet.Free;
   FWorldCasters.Free;
   FSelected.Free;
   FCasters.Free;
@@ -712,7 +715,7 @@ begin
     the building shapes marked during assembly belong in this depth pass. }
   Result := True;
   if (Shape.ParentScene <> nil) and
-     (FWorldCasters.IndexOf(TCastleTransform(Shape.ParentScene)) >= 0) then
+     FWorldSet.ContainsKey(TCastleTransform(Shape.ParentScene)) then
   begin
     Result := IsWorldShadowCaster(Shape.Node);
     if Result then Inc(FWorldShapeCount);
@@ -747,7 +750,7 @@ begin
         needlessly repeats distant roof and wall vertex work. }
       FWorldSelected.Clear;
       for I:=0 to FSelected.Count-1 do
-        if (FWorldCasters.IndexOf(FSelected[I])>=0) and
+        if FWorldSet.ContainsKey(FSelected[I]) and
           ((FSelected[I] is TCastleSceneCore) or not ProceduralVegetationActive) then FWorldSelected.Add(FSelected[I]);
       FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
       FRtx.DrawCachedRaster(FRenderingZone);
@@ -756,7 +759,7 @@ begin
       if not ProceduralVegetationActive then begin
         FWorldSelected.Clear;
         for I:=0 to FSelected.Count-1 do
-          if (FWorldCasters.IndexOf(FSelected[I])>=0) and not (FSelected[I] is TCastleSceneCore) then
+          if FWorldSet.ContainsKey(FSelected[I]) and not (FSelected[I] is TCastleSceneCore) then
             FWorldSelected.Add(FSelected[I]);
         if FWorldSelected.Count>0 then
           FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape,False);
@@ -766,7 +769,7 @@ begin
       FProbe.Submit(FProbePoint,FProbeClip,FTileSize,2*FZoneHalfExtent[FRenderingZone]/FTileSize);
     FRidersSelected.Clear;
     for I:=0 to FSelected.Count-1 do
-      if FWorldCasters.IndexOf(FSelected[I])<0 then FRidersSelected.Add(FSelected[I]);
+      if not FWorldSet.ContainsKey(FSelected[I]) then FRidersSelected.Add(FSelected[I]);
     if FRidersSelected.Count>0 then
       FViewport.InternalRenderShadowCasters(Camera,FRidersSelected,nil,False);
     Exit;
@@ -776,7 +779,7 @@ begin
     FWorldSelected.Clear;
     FRidersSelected.Clear;
     for I := 0 to FSelected.Count - 1 do
-      if FWorldCasters.IndexOf(FSelected[I]) >= 0 then FWorldSelected.Add(FSelected[I])
+      if FWorldSet.ContainsKey(FSelected[I]) then FWorldSelected.Add(FSelected[I])
       else FRidersSelected.Add(FSelected[I]);
     FViewport.InternalRenderShadowCasters(Camera, FWorldSelected, @AcceptShadowShape);
     if FProbe.SampleDue(FProbePoint) then
@@ -817,6 +820,10 @@ var
   RayEnd,RayRow:TVector3;
 begin
   FWorldShapeCount := 0;
+  { External caster lists can change on every tile mount. Rebuild once,
+    then all shape tests and cascades use constant-time membership. }
+  FWorldSet.Clear;
+  for I:=0 to FWorldCasters.Count-1 do FWorldSet.AddOrSetValue(FWorldCasters[I],True);
   if FWorldShadows then
     for I := 0 to FWorldCasters.Count - 1 do FCasters.Add(FWorldCasters[I]);
   FillChar(FZoneCasterCount, SizeOf(FZoneCasterCount), 0);

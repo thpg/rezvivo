@@ -7,6 +7,7 @@ layout(location=4) in uint aTreeCode;
 uniform mat4 uProjection, uView, uModel;
 uniform int uKind, uSlices, uSegments, uNeedlePairs, uNeedlesPerFascicle;
 uniform int uNeedleVertices=9;
+uniform int uComplexity;
 uniform float uQuality, uTime, uWind, uViewportHeight;
 uniform float uSeasonLeaf;
 uniform float uFruitAmount=1.0;
@@ -47,6 +48,8 @@ vec3 curve(vec3 p, vec3 ctrl, vec3 tip, float t) {
     return p*(1.0-t)*(1.0-t)+2.0*ctrl*t*(1.0-t)+tip*t*t;
 }
 vec3 wind(vec3 p, float phase) {
+    if(uComplexity==0)return p;
+    if(uComplexity==1)return p+vec3(sin(uTime*1.25+p.y*.31),0,0)*uWind*pow(max(0.0,p.y/max(.1,uProfile.x)),2.0)*.22;
     float weight = pow(max(p.y,0.0)/max(uProfile.x,1.0),2.0);
     return p + vec3(sin(uTime*1.25+p.y*.31)+.35*sin(uTime*2.1+p.y*.63+p.x*.11+p.z*.13),
                    0.0, .5*cos(uTime*.93+p.y*.4))*uWind*weight*.22;
@@ -104,7 +107,7 @@ void main() {
         vec3 side=normalize(cross(axis,abs(axis.y)>.95 ? vec3(1,0,0):vec3(0,1,0)));
         vec2 uv=vUV*2.0-1.0;
         p=a.xyz+(axis*uv.y*a.w+side*uv.x*a.w*b.w)*sqrt(vSeasonVisible)*uLeafScale;
-        p.y+=sin(uTime*3.0+d.x*37.0)*uWind*.045*uv.y;
+        if(uComplexity>=3)p.y+=sin(uTime*3.0+d.x*37.0)*uWind*.045*uv.y;
         n=normalize(cross(side,axis));
     } else if (uKind==8) {
         // Opuntia cladodes: thick closed pads, using the existing leaf buffer.
@@ -308,7 +311,7 @@ void main() {
         vNeedleCoverage=clamp(densityCoverage*(physicalWidth/width)*(physicalLength/length),0.0,1.0);
         width*=1.0-.48*shape.y;
         p=curve(base,bend,tip,shape.y)+widthAxis*shape.x*width;
-        p+=radial*sin(uTime*4.1+d.x*23.0+float(fascicle)) * uWind*.004*shape.y;
+        if(uComplexity>=3)p+=radial*sin(uTime*4.1+d.x*23.0+float(fascicle)) * uWind*.004*shape.y;
         if(uDepthOnly==0) {
             n=normalize(cross(widthAxis,axis));
             vNeedleAxis=normalize(mat3(uModel)*axis);

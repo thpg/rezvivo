@@ -47,6 +47,8 @@ type
     function GetTriangleCount: Integer; inline;
     function GetVertices: TMeshVertexArray;
     function GetIndices: TMeshIndexArray;
+    function GetVertex(AIndex: Integer): TMeshVertex; inline;
+    function GetIndex(AIndex: Integer): Cardinal; inline;
 
     procedure GrowVertices;
     procedure GrowIndices;
@@ -99,6 +101,11 @@ type
     { Trims to live count on read; intended for export, not hot loops. }
     property Vertices: TMeshVertexArray read GetVertices;
     property Indices:  TMeshIndexArray  read GetIndices;
+
+    { Builder reads must preserve spare capacity. Exporting the whole array
+      between buildings otherwise shrinks it and makes growth quadratic. }
+    property VertexAt[AIndex: Integer]: TMeshVertex read GetVertex;
+    property IndexAt[AIndex: Integer]: Cardinal read GetIndex;
 
     property Name:          string  read FName write FName;
     property VertexCount:   Integer read GetVertexCount;
@@ -245,6 +252,16 @@ begin
   Result := FIndices;
 end;
 
+function TMesh.GetVertex(AIndex: Integer): TMeshVertex;
+begin
+  Result := FVertices[AIndex];
+end;
+
+function TMesh.GetIndex(AIndex: Integer): Cardinal;
+begin
+  Result := FIndices[AIndex];
+end;
+
 procedure TMesh.ReserveVertices(ACount: Integer);
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(274);{$ENDIF}
@@ -367,19 +384,31 @@ end;
 
 procedure TMesh.AppendMesh(Other: TMesh);
 var
-  VOffset, IBase, I: Integer;
+  VOffset, IBase, I, Needed, NewCap: Integer;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(283);{$ENDIF}
   if (Other = nil) or (Other.FVertexCount = 0) then Exit;
 
   VOffset := FVertexCount;
-  ReserveVertices(FVertexCount + Other.FVertexCount);
+  Needed := FVertexCount + Other.FVertexCount;
+  if Needed > FVertexCap then
+  begin
+    NewCap := FVertexCap * 2;
+    if NewCap < Needed then NewCap := Needed;
+    ReserveVertices(NewCap);
+  end;
   Move(Other.FVertices[0], FVertices[VOffset],
        Other.FVertexCount * SizeOf(TMeshVertex));
   Inc(FVertexCount, Other.FVertexCount);
 
   IBase := FIndexCount;
-  ReserveIndices(FIndexCount + Other.FIndexCount);
+  Needed := FIndexCount + Other.FIndexCount;
+  if Needed > FIndexCap then
+  begin
+    NewCap := FIndexCap * 2;
+    if NewCap < Needed then NewCap := Needed;
+    ReserveIndices(NewCap);
+  end;
   { Indices must be shifted by VOffset — cannot use Move directly. }
   for I := 0 to Other.FIndexCount - 1 do
     FIndices[IBase + I] := Other.FIndices[I] + Cardinal(VOffset);

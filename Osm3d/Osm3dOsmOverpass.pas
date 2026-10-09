@@ -333,7 +333,7 @@ type
 implementation
 
 uses
-  StrUtils, Osm3dGenerationProgress,
+  StrUtils, URIParser, Osm3dGenerationProgress,
   MD5;
 
 threadvar
@@ -390,7 +390,7 @@ var
   Candidates: TStringArray;
   I: Integer;
   AttemptMs: Int64;
-  Lease:string;
+  Lease,Errors,Failure:string;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(615);{$ENDIF}
   Bytes     := nil;
@@ -419,15 +419,22 @@ begin
     if R.Success and (Fetcher.Cache <> nil) then Fetcher.Cache.Delete(OverpassCacheKey(Query));
     if Fetcher.Aborted then begin ErrMsg := 'aborted'; Exit; end;
     Candidates := OsmServerCandidates(Query);
+    Errors:='';
     ErrMsg := 'No reachable OSM servers';
     for I := 0 to High(Candidates) do
     begin
       if Fetcher.Aborted then begin ErrMsg := 'aborted'; Break; end;
-      if not OsmEndpointCanTry(Candidates[I]) then Continue;
-      Result := OverpassFetchOnEndpoint(Fetcher, Candidates[I], Query, Bytes, AttemptMs, ErrMsg, 3000);
-      if not Fetcher.Aborted then OsmEndpointResult(Candidates[I], Result);
+      if OsmEndpointCanTry(Candidates[I]) then begin
+        Result := OverpassFetchOnEndpoint(Fetcher, Candidates[I], Query, Bytes, AttemptMs, Failure, 3000);
+        if not Fetcher.Aborted then OsmEndpointResult(Candidates[I], Result,Failure);
+      end else Failure:=OsmEndpointLastError(Candidates[I]);
       if Result then Break;
+      if Failure<>'' then begin
+        if Errors<>'' then Errors:=Errors+'; ';
+        Errors:=Errors+ParseURI(Candidates[I]).Host+': '+Failure;
+      end;
     end;
+    if not Result and (Errors<>'') then ErrMsg:=Errors;
     ElapsedMs := Round((Now-T0)*86400000);
     Exit;
   end;

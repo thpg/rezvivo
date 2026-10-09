@@ -9,7 +9,8 @@ const
   OSM_DIRECTORY_MODE = 'auto';
   OSM_PUBLIC_ENDPOINTS =
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter;' +
-    'https://overpass.private.coffee/api/interpreter';
+    'https://overpass.private.coffee/api/interpreter;' +
+    'https://overpass-api.de/api/interpreter';
   HEIGHT_PUBLIC_TEMPLATE =
     'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
   HEIGHT_DATASET_REVISION = 'mapzen-geotiff-v1';
@@ -30,7 +31,8 @@ function HeightServerCandidates(const South, West, North, East: Double;
   AllowRefresh: Boolean = True): TStringArray;
 function HeightDatasetCacheKey(const URLTemplate: string): string;
 function OsmEndpointCanTry(const URL: string): Boolean;
-procedure OsmEndpointResult(const URL: string; Success: Boolean);
+procedure OsmEndpointResult(const URL: string; Success: Boolean; const ErrorText:string='');
+function OsmEndpointLastError(const URL:string):string;
 { Nonblocking reservation. The caller waits cancellably outside the lock;
   a lease remembers its group even if discovery changes in flight. }
 function OsmTryAcquireRequest(const URL:string;out Lease:string):Boolean;
@@ -53,6 +55,7 @@ type
   TEndpointHealth = record
     URL: string;
     FailedUntil: QWord;
+    LastError: string;
   end;
   TRequestBudget=record Key:string;Active:Integer;LastStart:QWord;end;
   TLimitedStream = class(TMemoryStream)
@@ -356,6 +359,16 @@ begin
   Result:=Candidates(D,B,True,True);
 end;
 
+function DirectoryCacheFile:string;
+var Root:string;
+begin
+  Root:=GetAppConfigDir(False);
+  if (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
+    (GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT')<>'') then
+    Root:=GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT');
+  Result:=IncludeTrailingPathDelimiter(Root)+'osm-servers.json';
+end;
+
 procedure LoadDiskDirectory;
 var CacheFile: string; S: TStringList; D: TDirectory; Loaded: TDateTime;
 begin
@@ -363,7 +376,7 @@ begin
   try
     if GDiskLoaded then Exit;
     GDiskLoaded:=True;
-    CacheFile:=IncludeTrailingPathDelimiter(GetAppConfigDir(False))+'osm-servers.json';
+    CacheFile:=DirectoryCacheFile;
     S:=TStringList.Create;
     try
       try
@@ -397,7 +410,7 @@ begin
   until False;
   Good:=False;Loaded:=0;
   try
-    CacheFile:=IncludeTrailingPathDelimiter(GetAppConfigDir(False))+'osm-servers.json';
+    CacheFile:=DirectoryCacheFile;
     for I:=0 to High(Hosts) do
       if ReadHTTP(Hosts[I]+'/api/v1/osm/servers',Body,Code) and ParseDirectory(Body,D) then begin
         Good:=True;Loaded:=Now;
@@ -517,14 +530,22 @@ begin
   Result:=Length(GHealth);SetLength(GHealth,Result+1);GHealth[Result].URL:=URL;
 end;
 
-procedure OsmEndpointResult(const URL: string; Success: Boolean);
+function OsmEndpointLastError(const URL:string):string;
+var I:Integer;
+begin
+  EnterCriticalSection(GGuard);
+  try I:=HealthIndex(URL);Result:=GHealth[I].LastError;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+procedure OsmEndpointResult(const URL: string; Success: Boolean; const ErrorText:string);
 var I: Integer;
 begin
   EnterCriticalSection(GGuard);
   try
     I:=HealthIndex(URL);
-    if Success then GHealth[I].FailedUntil:=0
-    else GHealth[I].FailedUntil:=GetTickCount64+30000;
+    if Success then begin GHealth[I].FailedUntil:=0;GHealth[I].LastError:='' end
+    else begin GHealth[I].FailedUntil:=GetTickCount64+30000;GHealth[I].LastError:=ErrorText end;
   finally LeaveCriticalSection(GGuard);end;
 end;
 

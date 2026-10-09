@@ -291,11 +291,15 @@ begin
   VertexLimit:=Min(524288,Mesh.VertexCount-FirstVertex+131072);
   Source:=TMesh.Create;Dest:=nil;Kept:=nil;
   try
-    Source.CurrentOsmId:=Mesh.CurrentOsmId;Vertices:=Mesh.Vertices;Indices:=Mesh.Indices;
-    for I:=FirstVertex to High(Vertices) do Source.AddVertex(Vertices[I]);
-    for I:=FirstTriangle*3 to High(Indices) do begin
-      Check(Indices[I]>=Cardinal(FirstVertex),'building mesh tail references another building');
-      if (I mod 3)=0 then Source.AddTriangle(Indices[I]-FirstVertex,Indices[I+1]-FirstVertex,Indices[I+2]-FirstVertex);
+    Source.CurrentOsmId:=Mesh.CurrentOsmId;
+    { Only the current building is carved. Reading its tail must not trim
+      the accumulated walls for all preceding buildings in the block. }
+    Source.ReserveVertices(Mesh.VertexCount-FirstVertex);
+    Source.ReserveIndices((Mesh.TriangleCount-FirstTriangle)*3);
+    for I:=FirstVertex to Mesh.VertexCount-1 do Source.AddVertex(Mesh.VertexAt[I]);
+    for I:=FirstTriangle*3 to Mesh.TriangleCount*3-1 do begin
+      Check(Mesh.IndexAt[I]>=Cardinal(FirstVertex),'building mesh tail references another building');
+      if (I mod 3)=0 then Source.AddTriangle(Mesh.IndexAt[I]-FirstVertex,Mesh.IndexAt[I+1]-FirstVertex,Mesh.IndexAt[I+2]-FirstVertex);
     end;
     for Q:=0 to High(Passages) do begin
       P:=Passages[Q];if Base+P.Bottom+P.Height>Top-0.02 then Continue;

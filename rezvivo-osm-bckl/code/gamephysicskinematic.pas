@@ -80,7 +80,8 @@ begin
 end;
 
 procedure TKinematicActorPhysics.FreeTravelStep(const Dt: Single);
-var Wanted, Safe, Dir: TVector3; Turn, Accel, OldSpeed, LengthBefore: Single;
+var Wanted, Safe, Dir: TVector3;
+  Turn, Accel, OldSpeed, LengthBefore, StepDistance: Single;
 begin
   if Dt<=0 then Exit;
   ApplyControlInput;
@@ -106,21 +107,20 @@ begin
   else FState.CurrentSpeed:=EnsureRange(OldSpeed+Accel*Dt,0,MaxSpeed);
   Dir:=RotatePointAroundAxis(Vector4(0,1,0,Turn*Dt),FState.ForwardDir);
   SmoothRotateToDirection(Dir,Dt);
+  StepDistance:=Abs(FState.CurrentSpeed)*Dt;
   Wanted:=FState.ForwardDir*(FState.CurrentSpeed*Cos(DegToRad(FState.CurrentGroundPitch))*Dt);
   Safe:=ConstrainGroundMovement(FState.WorldPosition,Wanted);
   LengthBefore:=Wanted.Length;
   if Safe.LengthSqr+1e-12<Wanted.LengthSqr then FState.CurrentSpeed:=Min(OldSpeed,FState.CurrentSpeed);
   Dir:=FState.WorldPosition+Safe;
-  if Assigned(FState.PositionConstraint) then
-    if FState.PositionConstraint(Dir.X,Dir.Z) then begin
-      { Reject a step through a solid building; do not teleport to its far edge. }
-      Dir:=FState.WorldPosition;FState.CurrentSpeed:=0;
-    end;
+  if FState.ConstrainBodyMove(FState.WorldPosition,Dir) then
+    FState.CurrentSpeed:=FState.CurrentSpeed*
+      Min(1,(Dir-FState.WorldPosition).Length/Max(1e-6,Safe.Length));
   Safe:=Dir-FState.WorldPosition;
   FState.MovementVelocity:=Safe/Dt;
   FState.WorldPosition:=Dir;
   if LengthBefore>1e-7 then FState.CumulativeDistance:=FState.CumulativeDistance+
-    Abs(FState.CurrentSpeed)*Dt*Min(1,Safe.Length/LengthBefore);
+    StepDistance*Min(1,Safe.Length/LengthBefore);
   UpdateTrajectoryFromRealVelocity(Dt);
   FActor.Transform.Translation:=Vector3(Dir.X,FActor.Transform.Translation.Y,Dir.Z);
   RestoreCameraRelativeState;
@@ -132,7 +132,7 @@ var
   SpeedBeforeStep, GroundMoveLength: Single;
   Cursor: TPathPosition;
   RoadW, LaneTarget: Single;
-  MoveDir, PathTan, WantedMove, SafeMove: TVector3;
+  MoveDir, PathTan, WantedMove, SafeMove, NextPosition: TVector3;
   Log: Boolean;
   LOD: TPhysicsLOD;
   DiagOn: Boolean;
@@ -311,10 +311,14 @@ begin
     MoveDist := MoveDist * MoveScale;
     FState.MovementVelocity := SafeMove / FixedDelta;
   end;
-  FState.WorldPosition := FState.WorldPosition + FState.MovementVelocity * FixedDelta;
-  if Assigned(FState.PositionConstraint) then
-    if FState.PositionConstraint(FState.WorldPosition.X, FState.WorldPosition.Z) then
-      InvalidateGroundPlacement;
+  NextPosition:=FState.WorldPosition+FState.MovementVelocity*FixedDelta;
+  if FState.ConstrainBodyMove(FState.WorldPosition,NextPosition) then begin
+    MoveScale:=Min(1,(NextPosition-FState.WorldPosition).Length/Max(1e-6,SafeMove.Length));
+    MoveDist:=MoveDist*MoveScale;FState.CurrentSpeed:=FState.CurrentSpeed*MoveScale;
+    FState.MovementVelocity:=(NextPosition-FState.WorldPosition)/FixedDelta;
+    InvalidateGroundPlacement;
+  end;
+  FState.WorldPosition:=NextPosition;
 
   { Progress is the local projection of the new physical position, not a
     comparison between arc length and the chord to an old carrot. }

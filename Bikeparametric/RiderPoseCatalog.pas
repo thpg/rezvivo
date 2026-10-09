@@ -7,7 +7,7 @@ interface
 
 uses RiderTripo;
 
-const BuiltinRiderPoseCount = 17;
+const BuiltinRiderPoseCount = 19;
 
 function BuiltinRiderPose(Index: Integer): TRiderPose;
 procedure LoadBuiltinRiderPoses(List: TRiderPoseList);
@@ -333,13 +333,31 @@ begin
       { No absolute watt threshold: the reference's 500 W rider stays seated.
         The standing climb and sprint retain their higher priorities. }
     end;
+    17: begin { Waiting, resting both hands on the tops; same planted foot }
+      Result:=BuiltinRiderPose(6);
+      Result.Name:='Waiting tops';
+      Result.HandPosR:=5;Result.HandPosL:=5;
+      Result.SpineAngles[0]:=-18;
+      Result.SpineAngles[4]:=8;
+      Result.ShoulderRoundDeg:=5;
+    end;
+    18: begin { Waiting, one hand relaxed beside the thigh }
+      Result:=BuiltinRiderPose(6);
+      Result.Name:='Waiting relaxed';
+      Result.HandPosR:=0;Result.HandPosL:=1;
+      Result.HandFreeRPos:=Vector3(0.10,0.82,0.21);
+      Result.HandFreeRWave:=0;
+      Result.SpineAngles[0]:=-8;
+      Result.SpineAngles[4]:=0;
+      Result.ShoulderRoundDeg:=3;
+    end;
     else raise ERangeError.CreateFmt('Unknown rider pose %d', [Index]);
   end;
   { Spread forward flexion over lumbar and thoracic regions. The total trunk
     angle stays the same, while the back no longer hinges almost entirely at
     Waist. Slot 1 is absent on MEN/FEM, so use the two actual spine joints.
     Derived climbing / power poses inherit this adjustment above. }
-  if not (Index in [15,16]) then begin
+  if not (Index in [15,16,17,18]) then begin
     { Sit slightly farther along the cushion, leaving its raised rear edge
       behind the glutes. This is a pose target, so dynamics and hand/foot IK
       share it and pose transitions blend it. Derived poses inherit it once;

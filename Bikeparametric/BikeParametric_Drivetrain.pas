@@ -17,6 +17,7 @@ type
     FCassetteSprocketCount: Integer;
     FCassetteWidth:         Single;
     FCassetteTexturePath:   string;
+    FFixedGear:             Boolean;
     { drive-side cassette plane, derived from the frame's rear dropout spacing }
     function CassetteZ(M: Single; out ADropoutZ: Single): Single;
   public
@@ -35,6 +36,7 @@ type
     procedure ParamsToJSON(Obj: TJSONObject); override;
     procedure ParamsFromJSON(Obj: TJSONObject); override;
   published
+    property FixedGear: Boolean read FFixedGear write FFixedGear;
     property CassetteSprocketCount: Integer read FCassetteSprocketCount write FCassetteSprocketCount;
     property CassetteWidth:         Single  read FCassetteWidth         write FCassetteWidth;
     property CassetteTexturePath:   string  read FCassetteTexturePath   write FCassetteTexturePath;
@@ -75,7 +77,26 @@ begin
 end;
 
 procedure TDrivetrainComponent.ApplyPreset(const APreset: string);
+var I:Integer;
 begin
+  { Catalog changes reuse components. Reset both directions, including the
+    single sprocket and texture when leaving a fixed-gear bicycle. }
+  FFixedGear:=SameText(APreset,'fixed');
+  FCassetteSprocketCount:=DEF_CASSETTE_COUNT;
+  FCassetteWidth:=DEF_CASSETTE_WIDTH;
+  FCassetteTexturePath:='Cassette_Shimano_Dura_Ace.png';
+  SetLength(CassetteSprockets,DEF_CASSETTE_COUNT);
+  SetLength(CassetteTeeth,DEF_CASSETTE_COUNT);
+  for I:=0 to DEF_CASSETTE_COUNT-1 do begin
+    CassetteSprockets[I]:=DEF_CASSETTE_SPROCKETS[I];
+    CassetteTeeth[I]:=DEF_CASSETTE_TEETH[I];
+  end;
+  if FFixedGear then begin
+    FCassetteSprocketCount:=1;FCassetteWidth:=3;
+    CassetteTeeth[0]:=18;
+    CassetteSprockets[0]:=12.7/(2*Sin(Pi/CassetteTeeth[0]));
+    FCassetteTexturePath:='';
+  end else
   if SameText(APreset, 'mtb') then begin
     FCassetteSprocketCount := 5;
     SetLength(CassetteSprockets, 5);
@@ -97,12 +118,18 @@ end;
   cassette is INSIDE the rear triangle (real road chainline ~ 43.5 mm for a
   130 mm rear end with a 35 mm cassette). Also returns the dropout-face Z. }
 function TDrivetrainComponent.CassetteZ(M: Single; out ADropoutZ: Single): Single;
-var Fr: TFrameComponent; RearSp, CW: Single;
+var Fr: TFrameComponent; Cr:TCranksetComponent; RearSp, CW: Single;
 begin
   Fr := TFrameComponent(FindComponent(TFrameComponent));
   if Fr <> nil then RearSp := Fr.RearDropoutSpacing else RearSp := 130;
   if RearSp < 100 then RearSp := 130;
   ADropoutZ := (RearSp / 2) * M;            { drive-side dropout face }
+  if FixedGear then begin
+    Cr:=TCranksetComponent(FindComponent(TCranksetComponent));
+    if Cr<>nil then Result:=(Cr.QFactorHalf+Cr.ChainringPlaneOffset)*M
+    else Result:=44*M;
+    Exit(Result-CassetteWidth*M/2);
+  end;
   CW := CassetteWidth * M; if CW < 0.010 then CW := 0.035;
   { small cog ~4 mm inboard of the dropout; return the cassette CENTRE plane }
   Result := ADropoutZ - 0.004 - CW / 2;
@@ -113,6 +140,7 @@ var QZ, M, RX, AY, DropZ, GuideDrop: Single; I: Integer;
 begin
   M := Skel.MM;
 
+  if FixedGear then CassetteSprocketCount:=1;
   if CassetteSprocketCount < 1 then CassetteSprocketCount := DEF_CASSETTE_COUNT;
   CassetteSprocketCount := Min(CassetteSprocketCount, 32);
   { Preserve supplied gears and allocate the requested count, not always five.
@@ -132,6 +160,11 @@ begin
     end;
     if CassetteTeeth[I] < 5 then
       CassetteTeeth[I] := Max(5, Round(2 * Pi * CassetteSprockets[I] / 12.7));
+  end;
+  if FixedGear then begin
+    CassetteWidth:=3;
+    CassetteSprockets[0]:=12.7/(2*Sin(Pi/Max(5,CassetteTeeth[0])));
+    Exit; { no hanger, cage or jockey wheels }
   end;
   if CassetteWidth < 10 then CassetteWidth := DEF_CASSETTE_WIDTH;
 
@@ -154,7 +187,7 @@ var
   Centers, InPoint, OutPoint: array[0..3] of TVector3;
   Radii: array[0..3] of Single;
   Cr: TCranksetComponent;
-  I, J, K, N, Steps: Integer;
+  I, J, K, N, Steps, Count: Integer;
   D, U, Normal, P: TVector3;
   Dist, DeltaR, H, A, B, Sweep, DropZ: Single;
   procedure AddPoint(const V: TVector3);
@@ -168,8 +201,12 @@ begin
   Result := nil; N := 0;
   Centers[0] := Skel['bb'];
   Centers[1] := Skel['rear_axle'];
-  Centers[2] := Skel['jockey_upper'];
-  Centers[3] := Skel['jockey_lower'];
+  Count:=2;
+  if not FixedGear then begin
+    Count:=4;
+    Centers[2] := Skel['jockey_upper'];
+    Centers[3] := Skel['jockey_lower'];
+  end;
   Cr := TCranksetComponent(FindComponent(TCranksetComponent));
   if Cr <> nil then
   begin
@@ -184,9 +221,9 @@ begin
   Radii[2] := 0.014; Radii[3] := 0.014;
   { One directed tangent for each span. Signed radii give the S bend through
     the guide/tension pulleys; all contacts lie on the same selected rear cog. }
-  for I := 0 to 3 do
+  for I := 0 to Count-1 do
   begin
-    J := (I+1) mod 4;
+    J := (I+1) mod Count;
     D := Centers[J] - Centers[I]; D.Z := 0;
     Dist := D.Length;
     DeltaR := Winding[I]*Radii[I] - Winding[J]*Radii[J];
@@ -197,7 +234,7 @@ begin
     OutPoint[I] := Centers[I] + Normal*(Winding[I]*Radii[I]);
     InPoint[J] := Centers[J] + Normal*(Winding[J]*Radii[J]);
   end;
-  for I := 0 to 3 do
+  for I := 0 to Count-1 do
   begin
     A := ArcTan2(InPoint[I].Y-Centers[I].Y, InPoint[I].X-Centers[I].X);
     B := ArcTan2(OutPoint[I].Y-Centers[I].Y, OutPoint[I].X-Centers[I].X);
@@ -320,17 +357,28 @@ var DL: Integer;
       I, J, ST: Integer;
       UseTex: Boolean;
       TexURL: string;
+      Parent, WheelSpin: TTransformNode;
   begin
     S := Ctx.Skeleton;
     CC := Ctx.O(S['rear_axle']); QZ := CachedCasZ; CW := CassetteWidth*S.MM;
 
+    Parent:=Ctx.Root;
+    if FixedGear then begin
+      WheelSpin:=Ctx.Root.FindNode(TTransformNode,'RearWheelRot',[fnNilOnMissing]) as TTransformNode;
+      if WheelSpin<>nil then begin
+        Parent:=WheelSpin;
+        CC:=TVector3.Zero; { the fixed sprocket rotates with its rear hub }
+      end;
+    end;
     TexURL := ResolveTexURL(CassetteTexturePath, '[Drivetrain] ');
-    UseTex := TexURL <> '';
+    UseTex := (not FixedGear) and (TexURL <> '');
 
     { одна accum-сессия на всю кассету: раньше 2-3 сессии подряд к тому же
       родителю без не-batched вставок между ними }
-    Ctx.BeginAccum(Ctx.Root);
-    if UseTex then
+    Ctx.BeginAccum(Parent);
+    if FixedGear then
+      BuildBikeSprocket(Ctx,Vector3(CC.X,CC.Y,QZ+CW/2),CassetteSprockets[0]*S.MM,CassetteTeeth[0],4)
+    else if UseTex then
     begin
       { Textured frustum cone from smallest to largest sprocket — в текстурный бакет }
       BuildCassetteMesh(CC, TexURL);
@@ -357,8 +405,8 @@ var DL: Integer;
           end;
       end;
     end;
-    { Hub cylinder — always }
-    Ctx.Add(Ctx.MakeCylinder(
+    { The fixed sprocket builder already supplies its hub. }
+    if not FixedGear then Ctx.Add(Ctx.MakeCylinder(
       Vector3(CC.X, CC.Y, QZ-CW/2-0.003),
       Vector3(CC.X, CC.Y, QZ+CW/2+0.003),
       0.018, Ctx.Colors.Chrome, Ctx.Colors.ChromeSpec, 1.0));
@@ -488,7 +536,7 @@ begin
   DL := Ctx.DetailLevel;
   CachedCasZ := CassetteZ(Ctx.Skeleton.MM, CachedDropZ);
   DoCassette;
-  if DL >= 1 then DoDerailleur;
+  if (DL >= 1) and not FixedGear then DoDerailleur;
   if DL >= 1 then DoChain;
 end;
 

@@ -2137,7 +2137,7 @@ var
   zMin, zMax: Single;    { geometry Z range for balanced weld strips }
   gnx, gnz: Integer;     { grid node counts for the perimeter Z-range scan }
   pxq, pzq: Single;      { scratch world XZ of a perimeter grid node }
-  nStrips, vi: Integer;
+  nStrips, vi, MergeVertices, MergeTriangles, MergePool: Integer;
   WSrcV:     TMeshVertexArray;
   WSrcI:     TMeshIndexArray;
   WeldCtx:   TWeldStripCtx;
@@ -2615,6 +2615,14 @@ begin
 
       { serial concat of the per-strip sub-composites (raw, no re-weld) }
       Composite := TGroundCompositeMesh.Create('ground_composite');
+      MergeVertices:=0;MergeTriangles:=0;MergePool:=0;
+      for vi:=0 to nStrips-1 do
+        if WeldCtx.SubComp[vi]<>nil then begin
+          Inc(MergeVertices,WeldCtx.SubComp[vi].VertexCount);
+          Inc(MergeTriangles,WeldCtx.SubComp[vi].TriangleCount);
+          Inc(MergePool,WeldCtx.SubComp[vi].Pool.Count);
+        end;
+      Composite.ReserveForRawMerge(MergeVertices,MergeTriangles,MergePool);
       for vi := 0 to nStrips - 1 do
         if WeldCtx.SubComp[vi] <> nil then
         begin

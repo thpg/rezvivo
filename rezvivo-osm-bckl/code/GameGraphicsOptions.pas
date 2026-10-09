@@ -9,18 +9,18 @@ uses SysUtils;
 type
   TGraphicsOption = (goFrameLimit, goAntialiasing, goShadowSize,
     goShadowFilter, goShadowDistance, goGrass, goTrees, goTextures,
-    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections);
+    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity);
   TGraphicsValues = array[TGraphicsOption] of Integer;
   TGraphicsChangeEvent = procedure(Sender: TObject; Option: TGraphicsOption) of object;
 
 const
   GraphicsKeys: array[TGraphicsOption] of String =
     ('fps_limit', 'msaa', 'shadow_size', 'shadow_filter', 'shadow_distance',
-     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections');
+     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity');
   GraphicsTitles: array[TGraphicsOption] of String =
     ('Frame rate limit', 'Anti-aliasing', 'Shadow map', 'Shadow filtering',
      'Shadow distance', '3D grass', 'Vegetation quality', 'Texture quality:',
-     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections');
+     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity');
   GraphicsHints: array[TGraphicsOption] of String =
     ('VSync follows your monitor. A lower limit reduces GPU load.',
      'MSAA smooths edges. Takes effect after restarting the game.',
@@ -35,10 +35,13 @@ const
      'Controls hair detail, lighting and motion update rate. Applies immediately.',
      'Soft lens edges and distant scenery. Keeps the central rider area and interface clear. Applies immediately.',
      'Cached tree silhouettes are faster. RTX requires a ray-tracing GPU; unsupported hardware uses raster shadows.',
-     'Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.');
-  GraphicsDefaults: TGraphicsValues = (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0);
+     'Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.',
+     'Full keeps all cloth relief and lighting. Lower modes simplify cloth shading without changing body animation.',
+     'Full keeps detailed road relief. Lower modes use cached normals and remove parallax. Road layout and markings stay unchanged.',
+     'Changes branches, needles, blade geometry and wind at the same distance. LOD distance is controlled separately.');
+  GraphicsDefaults: TGraphicsValues = (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3);
   GraphicsDisplayOrder: array[TGraphicsOption] of TGraphicsOption =
-    (goFrameLimit,goAntialiasing,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
+    (goFrameLimit,goAntialiasing,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
      goShadowDistance,goGrass,goTrees,goTextures,
      goVegetationCache,goVegetationAdaptive,goHair,goSoftening);
 
@@ -53,7 +56,7 @@ function GraphicsChoiceCount(Option: TGraphicsOption): Integer;
 begin
   case Option of
     goFrameLimit: Result := 7;
-    goAntialiasing, goShadowSize, goTextures,goHair: Result := 4;
+    goAntialiasing, goShadowSize, goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
     goShadowFilter, goShadowDistance, goVegetationCache,goSoftening,goWorldShadows: Result := 3;
     goTrees: Result := 5;
     goGrass, goVegetationAdaptive,goRtxReflections: Result := 2;
@@ -76,7 +79,7 @@ begin
     goShadowSize: Result := Sizes[Index];
     goShadowFilter: Result := Filters[Index];
     goShadowDistance: Result := Distances[Index];
-    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections: Result := Index;
+    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := Index;
   end;
 end;
 
@@ -103,6 +106,8 @@ begin
     goGrass, goVegetationAdaptive,goRtxReflections:
       if V = 0 then Result := 'Off' else Result := 'On';
     goTextures,goHair: Result := Textures[V];
+    goRiderComplexity,goWorldComplexity,goVegetationComplexity:
+      case V of 0:Result:='Minimal';1:Result:='Light';2:Result:='Balanced';else Result:='Full';end;
     goSoftening:
       case V of 0:Result:='Off';1:Result:='Subtle';else Result:='Stronger';end;
     goWorldShadows:

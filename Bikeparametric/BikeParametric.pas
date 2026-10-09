@@ -29,7 +29,7 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion, RiderDynamics, RiderHandGrip, AvatarGait,
+  RiderMotion, RiderDynamics, RiderAttention, RiderHandGrip, AvatarGait,
   RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
@@ -360,6 +360,7 @@ type
     Supports single-LOD and automatic X3D LODNode-based multi-LOD builds. }
   {$M+}  { generate RTTI for the published section of this plain class }
   TBikePlaybackState = record
+    Attention: TRiderAttentionFrame;
     BodyDynamics: TRiderDynamicsState;
     BodyDynamicsInput: TRiderDynamicsInput;
     BodyDynamicsEnabled, BodyDynamicsSituation: Boolean;
@@ -404,6 +405,7 @@ type
     FOnFoot, FOnFootSavedGpu: Boolean;
     FOnFootPhase: Single;
     FOnFootDynamics: TGaitDynamicsState;
+    FOnFootFrame: TGaitFrame;
     FOwner: TComponent;
     FGroup: TCastleTransform;
     { ЕДИНАЯ сцена байка: весь байк (рама/колёса/шатун/райдер) + райдер GLB +
@@ -462,6 +464,7 @@ type
     FRiderEffort, FRiderEffortTarget, FMotionCadence: Single;
     FBodyDynamics: TRiderDynamicsState;
     FBodyDynamicsInput: TRiderDynamicsInput;
+    FAttention: TRiderAttentionFrame;
     FBodyDynamicsEnabled, FBodyDynamicsSituation: Boolean;
     procedure SetBodyDynamicsEnabled(Value:Boolean);
     function BodyDynamicsDebugJson:TJSONObject;
@@ -566,8 +569,7 @@ type
                                     <1 = glossier, >1 = more matte (0 also = 1) }
     FTripoMetallic: Single;       { PBR gloss correction: metallic multiplier, 1 = as authored,
                                     <1 = more dielectric (no metal sheen), >1 = more metallic (0 also = 1) }
-    FHelmetColor: string;    { helmet tint as 'RRGGBB' hex; '', '0', 'FFFFFF' and
-                                    '000000' = off (the white-textured helmet stays as authored) }
+    FHelmetColor: string;    { headwear tint as 'RRGGBB' hex; '' / '0' = authored }
     FHelmetPitchX: Single;   { extra helmet nod, deg; + = visor down / forward }
     FHelmetPitchFromJson: Boolean; { True = bike JSON overrides authored extras }
     FTripoRiderPath: string;      { last-loaded rider glb (for JSON save/load) }
@@ -786,9 +788,12 @@ type
     function GroundShadowMap: TGeneratedShadowMapNode;
     procedure SetGroundShadowReceiver(const Enabled: Boolean);
     procedure SetOnFoot(Value: Boolean);
-    procedure AnimateOnFoot(Dt, Speed: Single; Facing: Single = 0; GroundSlope: Single = 0);
+    procedure AnimateOnFoot(Dt, Speed: Single; Facing: Single = 0; GroundSlope: Single = 0;
+      PhaseOverride: Single = -1);
     property OnFoot: Boolean read FOnFoot write SetOnFoot;
+    property OnFootFrame: TGaitFrame read FOnFootFrame;
     procedure SetRiderEffort(Intensity: Single);
+    procedure SetRiderAttention(const Value: TRiderAttentionFrame);
     procedure SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
       RoadPitchDeg:Single=0);
     procedure SampleRiderDynamics;
@@ -858,6 +863,9 @@ type
     procedure SetAnimationSpeed(CrankInterval, WheelInterval: Single);
     { Drive the wheels' spin from ground speed (m/s); stops them at ~zero speed. }
     procedure SetWheelSpeedMps(SpeedMps: Single);
+    function IsFixedGear: Boolean;
+    function DriveMetresPerCrankRevolution: Single;
+    function VisualCadence(SensorCadence, SpeedMps: Single): Single;
     procedure SetSteerAngleDeg(const V: Single);
 
     { Фазы читаются и игрой для синхронизации. GpuAnim — published. }
@@ -882,6 +890,7 @@ type
     { Current analytic joints / authored anchors in the centred bike frame.
       Used by the low-detail NPC shadow, without CPU mesh skinning. }
     function RiderJointPos(const Nm: string; out P: TVector3): Boolean;
+    function RiderClothingSkin(const Name:string;out M:TMatrix4):Boolean;
     function BikeAnchor(const Nm: string; out P: TVector3): Boolean;
     { Loading-time fit against this rider's real joints/cleats. Samples one
       seated revolution without skinning vertices, then rebuilds the seat
@@ -921,6 +930,7 @@ type
       Caller на живой сцене должен перезагрузить райдера сам. }
     procedure StageRiderClothColor(Slot: TClothSlot; const C: TVector3);
     procedure ClearRiderClothColor(Slot: TClothSlot);
+    procedure SetRiderClothColorLive(Slot: TClothSlot; const C: TVector3; Enabled: Boolean);
     function  RiderClothColor(Slot: TClothSlot): TVector3;
     function  RiderClothColorActive(Slot: TClothSlot): Boolean;
     { cdmShader — эффекты вешаются при LoadGlb (сцена ещё без байка).
@@ -949,6 +959,7 @@ type
     procedure StageBodyParameters(Section:TJSONObject;const Path:string);
     property BodyParameters: TRiderBodyParameters read FBodyParameters write SetBodyParameters;   { push the shape params into the rider mesh + bones }
     procedure ApplyHelmetTint; { parse HelmetColor hex and tint the helmet }
+    procedure SetHeadwearColorLive(const Color:TVector3;Enabled:Boolean);
     procedure SetHelmetPitchX(const V: Single);
 
     { ── Ground contact shadow (soft capsule shadow under bike + rider).
@@ -2506,6 +2517,7 @@ const
 
 function TBikeInstance.CaptureReplay: TBikePlaybackState;
 begin
+  Result.Attention:=FAttention;
   Result.BodyDynamics:=FBodyDynamics;
   Result.BodyDynamicsInput:=FBodyDynamicsInput;
   Result.BodyDynamicsEnabled:=FBodyDynamicsEnabled;
@@ -2554,6 +2566,7 @@ end;
 
 procedure TBikeInstance.RestoreReplay(const Saved: TBikePlaybackState);
 begin
+  FAttention:=Saved.Attention;
   ApplyRiderPose(Saved.Pose,0);
   FSteerAngleDeg:=Saved.SteerAngleDeg;
   FPedalSteerDeg:=Saved.PedalSteerDeg;
@@ -2953,7 +2966,12 @@ begin
     FOnFootSavedGpu:=FGpuAnim;SetGpuAnim(False);FOnFootPhase:=0;
     if FTripoRider<>nil then FTripoRider.SetSkinnedAnimationShaders(True);
     if (FTripoRider<>nil) and (FBikeContainer<>nil) then
+    begin
       FTripoRider.Scene.RootNode.RemoveChildren(FBikeContainer);
+      { This retained graph may outlive the scene when clothing is changed
+        on foot. CGE does not unregister nodes detached from an owned root. }
+      FBikeContainer.UnregisterScene;
+    end;
   end else begin
     if (FTripoRider<>nil) and (FBikeContainer<>nil) then
       FTripoRider.Scene.RootNode.AddChildren(FBikeContainer);
@@ -2961,8 +2979,8 @@ begin
   end;
 end;
 
-procedure TBikeInstance.AnimateOnFoot(Dt, Speed: Single; Facing,GroundSlope: Single);
-var Frame: TGaitFrame; Scale, Amount, Yaw, Direction, Effort, RunBlend: Single; Offset: TVector3;
+procedure TBikeInstance.AnimateOnFoot(Dt, Speed: Single; Facing,GroundSlope,PhaseOverride: Single);
+var Frame: TGaitFrame; Scale, Yaw, Direction, Effort, RunBlend: Single; Offset: TVector3;
 begin
   if not HasTripoRider then Exit;
   SetOnFoot(True);
@@ -2970,13 +2988,14 @@ begin
   Dt:=EnsureRange(Dt,0,0.1);Direction:=1;if Speed<0 then Direction:=-1;
   Speed:=EnsureRange(Abs(Speed),0,8);
   Scale:=AvatarGaitScale(FTripoRider.Rig);
-  Amount:=EnsureRange(Speed/Max(0.45*Scale,0.01),0,1);
-  Amount:=Amount*Amount*(3-2*Amount);
   RunBlend:=EnsureRange((Speed/Max(Scale,0.1)-2.0)/1.1,0,1);
   RunBlend:=RunBlend*RunBlend*(3-2*RunBlend);
-  FOnFootPhase:=Frac(FOnFootPhase+Direction*Dt*GaitFrequency(Speed,Scale,Speed>2.5,RunBlend)*Amount);
+  FOnFootPhase:=AdvanceGaitPhase(FOnFootPhase,Dt,Direction*Speed,Scale,RunBlend);
+  if PhaseOverride>=0 then FOnFootPhase:=Frac(PhaseOverride);
   if FOnFootPhase<0 then FOnFootPhase:=FOnFootPhase+1;
   PoseAvatarGait(FTripoRider.Rig,FOnFootPhase,Speed,Speed>2.5,Frame,RunBlend,GroundSlope);
+  Frame.VerticalVelocity:=Frame.VerticalVelocity*Direction;
+  FOnFootFrame:=Frame;
   FTripoRider.SyncProceduralPose(Frame.ShoulderProtraction[1],Frame.ShoulderProtraction[0]);
   { The gait uses the authored rig's axes. Convert its forward vector to
     the host's desired horizontal heading, keeping sole contact at Y=0. }
@@ -3032,7 +3051,10 @@ begin
   if (FTripoRider <> nil) and FTripoRider.PoseAnimating then
     P := FTripoRider.CurrentPose
   else P := BuildRiderPose('');
-  FPedalRate := AdvancePedalRate(FPedalRate, RequestedRate, Dt,
+  { A fixed drive cannot coast while a foot is being placed on its pedal.
+    Free-foot IK still handles the departure; the crank remains driven. }
+  if IsFixedGear then FPedalRate := RequestedRate
+  else FPedalRate := AdvancePedalRate(FPedalRate, RequestedRate, Dt,
     PedalContactsReady(P.Motion.Pedalling, P.LegFreeR, P.LegFreeL,
       FBaseRiderPose.Grounded));
   FPhase := Frac(FPhase + Dt * FPedalRate);
@@ -3318,6 +3340,16 @@ begin
     FTripoRider.StageClearClothColor(Slot);
 end;
 
+procedure TBikeInstance.SetRiderClothColorLive(Slot: TClothSlot;
+  const C: TVector3; Enabled: Boolean);
+begin
+  FDyePresetActive[Slot] := Enabled;
+  if Enabled then FDyePresetColor[Slot] := C;
+  if FTripoRider = nil then Exit;
+  if Enabled then FTripoRider.SetClothColor(Slot, C)
+  else FTripoRider.ClearClothColor(Slot);
+end;
+
 function TBikeInstance.RiderClothColor(Slot: TClothSlot): TVector3;
 begin
   Result := FDyePresetColor[Slot];
@@ -3550,6 +3582,36 @@ begin
     CrankInterval, CrankInterval > 0.01);
 end;
 
+function TBikeInstance.IsFixedGear: Boolean;
+var D: TDrivetrainComponent;
+begin
+  D := TDrivetrainComponent(Component(TDrivetrainComponent));
+  Result := (D <> nil) and D.FixedGear;
+end;
+
+function TBikeInstance.DriveMetresPerCrankRevolution: Single;
+var W: TWheelComponent; C: TCranksetComponent; D: TDrivetrainComponent;
+  RadiusM: Single;
+begin
+  Result := 5.5; { preview development for bicycles with selectable gears }
+  if not IsFixedGear then Exit;
+  C := TCranksetComponent(Component(TCranksetComponent));
+  D := TDrivetrainComponent(Component(TDrivetrainComponent));
+  if (C = nil) or (C.ChainringTeeth < 1) or (D.CassetteTeeth[0] < 1) then Exit;
+  W := TWheelComponent(Component(TWheelComponent));
+  RadiusM := WHEEL_RADIUS_FALLBACK_M;
+  if (W <> nil) and (W.WheelRadius > 1) then RadiusM := W.WheelRadius / 1000;
+  Result := 2 * Pi * RadiusM * C.ChainringTeeth / D.CassetteTeeth[0];
+end;
+
+function TBikeInstance.VisualCadence(SensorCadence, SpeedMps: Single): Single;
+begin
+  Result := Max(0, SensorCadence);
+  { Only the visual drive uses this estimate. Never publish it as sensor data. }
+  if (Result <= 0) and IsFixedGear then
+    Result := Max(0, SpeedMps) * 60 / DriveMetresPerCrankRevolution;
+end;
+
 procedure TBikeInstance.SetWheelSpeedMps(SpeedMps: Single);
 var
   W: TWheelComponent;
@@ -3654,6 +3716,9 @@ begin
   Result.Add('accum_time', FAccumTime);
   Result.Add('crank_interval_cur', FCrankIntervalCur);
   Result.Add('wheel_interval_cur', FWheelIntervalCur);
+  Result.Add('fixed_gear', IsFixedGear);
+  Result.Add('forward_speed_mps', FForwardSpeedMps);
+  Result.Add('drive_metres_per_crank_rev', DriveMetresPerCrankRevolution);
   Result.Add('gpu_anim', FGpuAnim);
   Result.Add('animation_enabled', FAnimationEnabled);
   if FTripoRider <> nil then
@@ -3957,6 +4022,7 @@ begin
           FTripoRider.Scene.RootNode.RemoveChildren(FVisSwitch);  { умрёт со старым glb-графом }
       end;
     end;
+    if FBikeContainer<>nil then FBikeContainer.UnregisterScene;
     FVisSwitch := nil;               { умрёт вместе с графом старой сцены }
     FreeAndNil(FTripoRider);
     FBikeScene := nil;               { висячие до MountBikeIntoRider }
@@ -3964,6 +4030,7 @@ begin
   end;
   FTripoRider := NewRider;
   FTripoRider.OcclusionJointQuery:=@RiderJointPos;
+  FTripoRider.ClothingSkinQuery:=@RiderClothingSkin;
   if (not FBodyParametersSet) and NewRider.HasParametricBody then
     FBodyParameters:=NewRider.BodyParameters;
   FTripoFitScale := 0.0;             { new rig → re-fit size once on next placement }
@@ -4194,6 +4261,16 @@ begin
   end;
 end;
 
+procedure TBikeInstance.SetHeadwearColorLive(const Color:TVector3;Enabled:Boolean);
+begin
+  if Enabled then
+    FHelmetColor:=IntToHex(EnsureRange(Round(Color.X*255),0,255),2)+
+      IntToHex(EnsureRange(Round(Color.Y*255),0,255),2)+
+      IntToHex(EnsureRange(Round(Color.Z*255),0,255),2)
+  else FHelmetColor:='';
+  ApplyHelmetTint;
+end;
+
 procedure TBikeInstance.ApplyHelmetTint;
 
   function HexDigit(Ch: Char; out V: Integer): Boolean;
@@ -4229,12 +4306,9 @@ var
   Enable: Boolean;
 begin
   if FTripoRider = nil then Exit;
-  { '', '0', white and black are the OFF sentinels: the helmet texture is
-    already white-with-shading, so white adds nothing, and black would just
-    kill it — per the design both mean "leave as authored". }
-  Enable := ParseHexColor(FHelmetColor, C)
-    and not (SameText(Trim(FHelmetColor), 'FFFFFF')
-          or SameText(Trim(FHelmetColor), '000000'));
+  { Empty / '0' means the authored material. White and black are valid
+    palette colors, also for a colored hat replacing the white helmet. }
+  Enable := ParseHexColor(FHelmetColor, C);
   if not Enable then C := Vector3(1, 1, 1);
   FTripoRider.ApplyHelmetColor(C, Enable);
 end;
@@ -4304,7 +4378,7 @@ begin
     1.0 + FTripoBodyHeight);
   end; { skeleton: limbs + height; inseam keeps stature }
   FTripoRider.ApplyGlossCorrection(FTripoRoughness, FTripoMetallic); { PBR: roughness/metallic multipliers, 1 = as authored }
-  ApplyHelmetTint; { tint the optional helmet ('' / 0 / white / black = off) }
+  ApplyHelmetTint;
   FTripoRider.HelmetPitchXDeg := FHelmetPitchX;
   if FGpuAnim then
   begin
@@ -4385,6 +4459,11 @@ end;
 
 function TBikeInstance.RiderTotalLeanDeg:Single;
 begin Result:=FBodyDynamics.Frame.TotalLeanDeg end;
+
+procedure TBikeInstance.SetRiderAttention(const Value: TRiderAttentionFrame);
+begin
+  FAttention:=Value;
+end;
 
 procedure TBikeInstance.SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
   RoadPitchDeg:Single);
@@ -4482,6 +4561,8 @@ begin
   Result.Add('crank_phase', FRiderCrankPhase);
   Result.Add('breaths_per_minute',RiderBreathsPerMinute(FBreathLoad)); Result.Add('effort', FRiderEffort); Result.Add('cadence', FMotionCadence);
   Result.Add('gpu', FGpuAnim); Result.Add('last_error', FUtrLastError);
+  Result.Add('look_yaw',FAttention.Yaw);
+  Result.Add('look_torso_yaw',FAttention.TorsoYaw);
   Result.Add('pose', FBaseRiderPose.Name);
   Result.Add('pedal_rpm', FPedalRate * 60);
   Result.Add('stance_half_mm', GetRiderStanceHalf);
@@ -4590,7 +4671,8 @@ begin
     points) so the preview grid reflects it and the instant-sync after the
     animation lands on the same values }
   FBaseRiderPose := P;
-  if P.Grounded or (P.Motion.Pedalling <= 0) then FPedalRate := 0
+  if IsFixedGear then FPedalRate := RiderCadenceRpm / 60
+  else if P.Grounded or (P.Motion.Pedalling <= 0) then FPedalRate := 0
   else if Duration <= 0 then
   begin
     if PedalContactsReady(P.Motion.Pedalling, P.LegFreeR, P.LegFreeL, False) then
@@ -4664,10 +4746,23 @@ var
   FromFrameR,FromFrameL:TRiderGripFrame;
 
   function GripFrame(Idx,Side:Integer):TRiderGripFrame;
-  var Origin:TVector3;
+  var Origin:TVector3; Bar:TDropBarComponent; Flat:TFlatBarComponent; Sweep:Single;
   begin
-    if (Idx>0) and (BarType=btFlat) then Result:=RiderGripFrame(5,Side)
-    else Result:=RiderGripFrame(Idx,Side);
+    if (Idx>0) and (BarType=btFlat) then begin
+      Result:=RiderGripFrame(5,Side);
+      Flat:=TFlatBarComponent(Component(TFlatBarComponent));
+      if Flat<>nil then begin
+        Sweep:=DegToRad(Flat.FlatBarSweep);
+        Result.Forward.Z:=Result.Forward.X*Sin(Sweep)*(1-2*Side);
+        Result.Forward.X:=Result.Forward.X*Cos(Sweep);
+      end;
+    end
+    else begin
+      Bar:=TDropBarComponent(Component(TDropBarComponent));
+      if (Idx=1)and(Bar<>nil)and not Bar.ShowHoods then
+        Result:=RiderGripFrame(2,Side)
+      else Result:=RiderGripFrame(Idx,Side);
+    end;
     if Idx>0 then begin
       Origin:=SteerPoint(TVector3.Zero);
       Result.Forward:=(SteerPoint(Result.Forward)-Origin).Normalize;
@@ -4931,6 +5026,11 @@ begin
   PelvisRot := Vector3(SeatV.X, SeatV.Y, SeatV.Z);
   Rot4 := FTripoRider.OrientedRotationVec4(YawRad);
   BodyQ := QuatNormalize(QuatMul(RootQ, QuatFromAxisAngle(Rot4.X, Rot4.Y, Rot4.Z, Rot4.W)));
+  if Abs(FAttention.Yaw)+Abs(FAttention.Pitch)+Abs(FAttention.TorsoYaw)>0.00001 then begin
+    SeatV:=QuatRotateV3(QuatConj(BodyQ),V3(0,1,0));
+    LivePose:=RiderAttentionPose(LivePose,FTripoRider.LeanAxis,FAttention,
+      Vector3(SeatV.X,SeatV.Y,SeatV.Z));
+  end;
   Rot4 := Vector4(BodyQ.X, BodyQ.Y, BodyQ.Z, 2 * ArcCos(EnsureRange(BodyQ.W, -1.0, 1.0)));
   if Abs(Rot4.W) < 1e-6 then Rot4 := Vector4(0, 1, 0, 0);
   FTripoRider.Scene.Scale := Vector3(S, S, S);
@@ -6583,6 +6683,18 @@ begin
   FShadowCapRA.Send(FShadowSendRA);
   FShadowCapRB.Send(FShadowSendRB);
   FShadowCapN.Send(Total);
+end;
+
+function TBikeInstance.RiderClothingSkin(const Name:string;out M:TMatrix4):Boolean;
+var J,C,R:Integer;
+begin
+  Result:=False;M:=TMatrix4.Identity;
+  if(FTripoRider=nil)or(FTripoRider.Rig=nil)then Exit;
+  if FGpuAnim and(FGpuSkin<>nil)and FGpuSkin.Ready then
+    Exit(FGpuSkin.SpineSkin(Name,M));
+  J:=FTripoRider.Rig.JointIndexByName(Name);if J<0 then Exit;
+  for C:=0 to 3 do for R:=0 to 3 do M.Data[C,R]:=FTripoRider.Rig.SkinMatrix[J][C*4+R];
+  Result:=True;
 end;
 
 function TBikeInstance.RiderJointPos(const Nm: string; out P: TVector3): Boolean;

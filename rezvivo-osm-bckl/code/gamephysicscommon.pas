@@ -50,7 +50,8 @@ type
     высота берётся не raycast-ом, а прямым запросом к рельефному мешу.
     Когда не назначен (nil) — физика работает по-старому, через
     PhysicsRayCast. }
-  TPositionConstraint = function(var WorldX, WorldZ: Single): Boolean of object;
+  TPositionConstraint = function(const From,Forward,HalfSize:TVector3;
+    var Target:TVector3):Boolean of object;
 
   { ReferenceY is the current contact level; overlapping floors must not
     select an overhead deck or terrain above a tunnel. }
@@ -164,6 +165,9 @@ type
     FreeTravel, Walking: Boolean;
     TravelSteering, TravelTargetSpeed, TravelBrake: Single;
     PositionConstraint: TPositionConstraint;
+    CollisionHalfWidth, CollisionBodyHeight: Single;
+    function ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
+  public
     ForwardDir: TVector3;
     CurrentYawRad: Single;
     PrevWorldPosition: TVector3;
@@ -760,6 +764,8 @@ begin
 
   GroundQuery := nil;
   SlopeQuery := nil;
+  CollisionHalfWidth:=0.36;
+  CollisionBodyHeight:=1.78;
 
   ShadowGroundNormal := Vector3(0, 1, 0);
   ShadowGroundNormalValid := False;
@@ -767,6 +773,16 @@ begin
   ShadowPlaneWanted := True;   { прежнее поведение: плоскость тени считается }
 
   ResetDynamic;
+end;
+
+function TPhysicsState.ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
+var HalfSize:TVector3;
+begin
+  Result:=False;if not Assigned(PositionConstraint) then Exit;
+  if Walking then HalfSize:=Vector3(CollisionHalfWidth,CollisionBodyHeight*0.5,0.4)
+  else HalfSize:=Vector3(CollisionHalfWidth,(CollisionBodyHeight+0.2)*0.5,
+    Max(0.85,ModelHalfLength-ScaledWheelInset+ScaledWheelRadius));
+  Result:=PositionConstraint(From,ForwardDir,HalfSize,Target);
 end;
 
 procedure TPhysicsState.ResetDynamic;

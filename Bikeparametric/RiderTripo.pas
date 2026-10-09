@@ -41,7 +41,7 @@ uses RiderShaderSharing, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveDat
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
-  BikeLog, GltfCore, X3DLoad, CastleURIUtils, RiderPoseCorrectives, RiderEquipment, RiderMotion, RiderRuntimeAudit;
+  BikeLog, GltfCore, X3DLoad, CastleURIUtils, RiderPoseCorrectives, RiderEquipment, RiderMotion, RiderAttention, RiderRuntimeAudit;
 
 const
   RiderSpineChainCount = 7;
@@ -103,6 +103,11 @@ function RiderSpineDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TT
 { Articulation in the anatomical bind frame. Compose with the parent's delta,
   unlike RiderSpineDelta, which orients the whole rider in the bike frame. }
 function RiderSpineJointDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TTripoVec4;
+function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
+  const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
+function RiderHeadRotation(const P:TRiderPose;const LeanAxis:TVector3):TTripoVec4;
+procedure SetRiderHeadRotation(var P:TRiderPose;const LeanAxis:TVector3;
+  const Desired:TTripoVec4);
 { The authored neck angle is a total gaze rotation. Share it over the two
   cervical joints and the skull, identically in CPU posing and GPU skinning. }
 function RiderSpineChainDelta(const LeanAxis: TVector3;
@@ -208,6 +213,12 @@ type
     Face:TRiderFaceReplay;
     AppearancePhase,AppearanceEffort,BreathLoad:Single;
     BreathPhase:Double;
+  end;
+
+  TRiderAppearanceAddon = class
+    procedure Update(Dt,Speed:Single);virtual;abstract;
+    procedure ClothColorChanged(Slot:TClothSlot;const Color:TVector3;Enabled:Boolean);virtual;
+    procedure HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);virtual;
   end;
 
   TTripoRiderScene = class
@@ -330,8 +341,10 @@ type
     FAuthorHeight: Single;
     FBaldHead: Boolean;
     FFabric: TRiderFabric;
+    FAppearanceAddon:TRiderAppearanceAddon;
     FSelfOcclusion: TRiderOcclusion;
     FOcclusionJointQuery: TRiderJointQuery;
+    FClothingSkinQuery:TRiderSkinQuery;
     FSurfaceSkin: TRiderSkin;
     FFace:TRiderFace;
     FAppearancePhase,FAppearanceEffort,FAppearanceBreathLoad:Single;
@@ -355,6 +368,7 @@ type
     FHelmetMats: array of TX3DNode;        { TPhysicalMaterialNode / TUnlitMaterialNode }
     FHelmetOrigColor: array of TVector3;   { authored base/emissive color factors }
     FHeadwearColor: TVector3;             { one tint for helmet, cap and bandana }
+    FHeadwearColorActive: Boolean;
 
     { Sky irradiance and the rider's scoped key/fill lights. }
     FEnvLight: TEnvironmentLightNode;      { 'RiderEnv' — живёт в сцене райдера }
@@ -413,6 +427,7 @@ type
     function  SlotOfLiveShape(Sh: TShapeNode; out Slot: TClothSlot): Boolean;
     procedure ClearShaderDyeFields;
     procedure ApplyMaterialClothDye;
+    procedure RefreshAppearanceColors;
     function ShaderClothDyeColor(Slot: TClothSlot): TVector3;
     procedure RemoveShaderClothDye;
     procedure PushShaderClothDye(Slot: TClothSlot);
@@ -514,6 +529,8 @@ type
     { The skinned scene — add this to TCastleViewport.Items (or a parent
       TCastleTransform) and position it where the rider sits on the bike. }
     property Scene: TCastleScene read FScene;
+    property AppearanceAddon:TRiderAppearanceAddon read FAppearanceAddon;
+    property BodyMorph:TRiderBodyMorph read FBodyMorph;
 
     { Перенести граф райдера в чужую сцену (единая сцена байка — требование
       shadow maps CGE: casters/receivers per-scene). Узлы переезжают без
@@ -605,6 +622,7 @@ type
     property BodyParameters: TRiderBodyParameters read FBodyParameters;
     property SelfOcclusion: TRiderOcclusion read FSelfOcclusion;
     property OcclusionJointQuery: TRiderJointQuery read FOcclusionJointQuery write FOcclusionJointQuery;
+    property ClothingSkinQuery:TRiderSkinQuery read FClothingSkinQuery write FClothingSkinQuery;
 
     { Change limb LENGTH on the SKELETON: scale the thigh+shin bones (legs),
       upperarm+forearm bones (arms), clavicle bones (shoulder width), the
@@ -904,7 +922,32 @@ type
   TTripoRig.LoadFromFile / FileExists не умеют castle-data: URL. }
 function ResolveGlbFilesystemPath(const APath: string): string;
 
+type
+  TRiderAssetResolver=function(const Path:string):string;
+  TRiderAppearanceFactory=function(Rider:TTripoRiderScene;const Path:string):TRiderAppearanceAddon;
+var
+  { Optional game-owned assets; standalone editors keep their normal loader. }
+  RiderAssetResolver:TRiderAssetResolver=nil;
+  RiderAppearanceFactory:TRiderAppearanceFactory=nil;
+
 implementation
+
+procedure TRiderAppearanceAddon.ClothColorChanged(Slot:TClothSlot;
+  const Color:TVector3;Enabled:Boolean);
+begin end;
+
+procedure TRiderAppearanceAddon.HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);
+begin end;
+
+procedure TTripoRiderScene.RefreshAppearanceColors;
+var Slot:TClothSlot;
+begin
+  if FAppearanceAddon=nil then Exit;
+  for Slot:=Low(TClothSlot)to High(TClothSlot)do
+    FAppearanceAddon.ClothColorChanged(Slot,FDyeColor[Slot],
+      FDyeActive[Slot]and(FDyeMode<>cdmNone));
+  FAppearanceAddon.HeadwearColorChanged(FHeadwearColor,FHeadwearColorActive);
+end;
 
 function ResolveGlbFilesystemPath(const APath: string): string;
 var
@@ -922,6 +965,7 @@ var
   P: Integer;
 begin
   Result := Trim(APath);
+  if Assigned(RiderAssetResolver)then Result:=RiderAssetResolver(Result);
   if Result = '' then Exit;
   if Pos('castle-data:', LowerCase(Result)) <> 1 then begin ResolveSharedSibling;Exit;end;
   DataRoot := URIToFilenameSafe('castle-data:/');
@@ -1234,6 +1278,72 @@ begin
       QuatFromAxisAngle(0, 1, 0, DegToRad(Yaw))));
 end;
 
+function RiderHeadRotation(const P:TRiderPose;const LeanAxis:TVector3):TTripoVec4;
+var I:Integer;
+begin
+  Result:=QuatFromAxisAngle(0,1,0,0);
+  for I:=0 to 4 do Result:=QuatMul(Result,
+    RiderSpineJointDelta(LeanAxis,P.SpineAngles[I],P.SpineYaw[I],P.SpineRoll[I]));
+end;
+
+procedure SetRiderSpineJointRotation(var P:TRiderPose;Index:Integer;
+  const LeanAxis:TVector3;const Delta:TTripoVec4);
+var
+  ZAxis,ColumnX,ColumnY,ColumnZ:TVector3;V:TTripoVec3;
+begin
+  ZAxis:=TVector3.CrossProduct(LeanAxis,Vector3(0,1,0));
+  V:=QuatRotateV3(Delta,V3(LeanAxis.X,LeanAxis.Y,LeanAxis.Z));ColumnX:=Vector3(V.X,V.Y,V.Z);
+  V:=QuatRotateV3(Delta,V3(0,1,0));ColumnY:=Vector3(V.X,V.Y,V.Z);
+  V:=QuatRotateV3(Delta,V3(ZAxis.X,ZAxis.Y,ZAxis.Z));ColumnZ:=Vector3(V.X,V.Y,V.Z);
+  { In this orthonormal basis the existing joint order is Rx(P)*Rz(-R)*Ry(Y). }
+  P.SpineRoll[Index]:=RadToDeg(ArcSin(EnsureRange(TVector3.DotProduct(LeanAxis,ColumnY),-1.0,1.0)));
+  P.SpineAngles[Index]:=RadToDeg(ArcTan2(TVector3.DotProduct(ZAxis,ColumnY),ColumnY.Y));
+  P.SpineYaw[Index]:=RadToDeg(ArcTan2(TVector3.DotProduct(LeanAxis,ColumnZ),TVector3.DotProduct(LeanAxis,ColumnX)));
+end;
+
+procedure SetRiderHeadRotation(var P:TRiderPose;const LeanAxis:TVector3;
+  const Desired:TTripoVec4);
+var Parent:TTripoVec4;I:Integer;
+begin
+  Parent:=QuatFromAxisAngle(0,1,0,0);
+  for I:=0 to 3 do Parent:=QuatMul(Parent,
+    RiderSpineJointDelta(LeanAxis,P.SpineAngles[I],P.SpineYaw[I],P.SpineRoll[I]));
+  SetRiderSpineJointRotation(P,4,LeanAxis,QuatNormalize(QuatMul(QuatConj(Parent),Desired)));
+end;
+
+function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
+  const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
+const TurnShare:array[0..3]of Single=(0.08,0.08,0.53,1.0);
+var Original,Desired,BaseParent,TurnedParent,Local:TTripoVec4;
+  I:Integer;Yaw,Torso:Single;Up:TVector3;
+begin
+  Result:=Base;
+  if Abs(Attention.Yaw)+Abs(Attention.Pitch)+Abs(Attention.TorsoYaw)<0.00001 then Exit;
+  Up:=UpAxis.Normalize;
+  Torso:=EnsureRange(Attention.TorsoYaw,-28.0,28.0);
+  Yaw:=EnsureRange(Attention.Yaw,Torso-RiderAttentionNeckYawLimit,
+    Torso+RiderAttentionNeckYawLimit);
+  Original:=RiderHeadRotation(Base,LeanAxis);
+  BaseParent:=QuatFromAxisAngle(0,1,0,0);TurnedParent:=BaseParent;
+  for I:=0 to 3 do begin
+    BaseParent:=QuatMul(BaseParent,
+      RiderSpineJointDelta(LeanAxis,Base.SpineAngles[I],Base.SpineYaw[I],Base.SpineRoll[I]));
+    { Cumulative turn in the bike's upright frame. Convert back to each
+      joint's parent frame: adding local yaw to a leaned thorax raised one
+      shoulder and left the head to undo the resulting roll. The optional
+      Spine slot gets no added turn; both rider rigs can omit it. }
+    Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(Torso*TurnShare[I])),BaseParent);
+    Local:=QuatNormalize(QuatMul(QuatConj(TurnedParent),Desired));
+    SetRiderSpineJointRotation(Result,I,LeanAxis,Local);
+    TurnedParent:=Desired;
+  end;
+  { Pelvis pitch and rider orientation are already included in UpAxis.
+    Solve only the remaining cervical turn, before contact IK and skinning. }
+  Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(Yaw)),Original);
+  Desired:=QuatMul(Desired,QuatFromAxisAngle(LeanAxis.X,LeanAxis.Y,LeanAxis.Z,DegToRad(Attention.Pitch)));
+  SetRiderHeadRotation(Result,LeanAxis,Desired);
+end;
+
 function RiderScapulaDelta(const LeanAxis: TVector3; Round, Twist, Elevation: Single;
   Side: Integer): TTripoVec4;
 var ForwardAxis: TVector3; Sign: Single;
@@ -1250,6 +1360,7 @@ var FaceDetail,FaceStrain: Single;FaceTime:Double;TorsoA,TorsoB:TVector3;
   Query:TRiderJointQuery;
 begin
   CountRiderWork(rwAppearance);
+  if FAppearanceAddon<>nil then FAppearanceAddon.Update(Dt,Speed);
   FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
   if (FSelfOcclusion<>nil) and (FEnvLight<>nil) and FEnvLight.FdOn.Value and
     FScene.RenderOptions.Lighting and FScene.RenderOptions.ReceiveSceneLights then
@@ -1360,6 +1471,7 @@ end;
 destructor TTripoRiderScene.Destroy;
 var i: Integer;
 begin
+  FreeAndNil(FAppearanceAddon);
   { Filters are chained hair -> face. Remove them in reverse order. }
   FreeAndNil(FFace);
   FreeAndNil(FHeadAppearance);
@@ -3216,6 +3328,9 @@ var
 begin
   Result := True;
   U := LowerCase(Nm);
+  { Generated wardrobe owns explicit material-to-slot bindings. In particular,
+    "garment" contains "arm" and must not be mistaken for exposed skin. }
+  if Pos('avatarcloth_',U)>0 then Exit(False);
   if (Pos('jersey', U) > 0) or (Pos('part_sleeves', U) > 0) then Slot := csJersey
   else if Pos('short', U) > 0 then Slot := csShorts
   else if Pos('sock', U) > 0 then Slot := csSocks
@@ -4968,6 +5083,8 @@ end;
 procedure TTripoRiderScene.SetDyeColor(Slot: TClothSlot; const V: TVector3);
 begin
   FDyeColor[Slot] := V;
+  if FAppearanceAddon<>nil then
+    FAppearanceAddon.ClothColorChanged(Slot,V,FDyeActive[Slot]and(FDyeMode<>cdmNone));
   if FDyeActive[Slot] and FDyeInLoad then BakeClothDye;
   { live-запечь нельзя: запечётся при следующей загрузке }
 end;
@@ -4983,6 +5100,8 @@ begin
   if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(C);
   FDyeColor[Slot] := C;
   FDyeActive[Slot] := True;
+  if FAppearanceAddon<>nil then
+    FAppearanceAddon.ClothColorChanged(Slot,C,FDyeMode<>cdmNone);
   { Live-запечка запрещена (глушит рендер живой GL-сцены) — только при
     загрузке. Шейдерный режим обновляет uniforms на живой сцене. }
   if FDyeInLoad then
@@ -5005,6 +5124,8 @@ begin
   if (Slot=csHair) and (FHair<>nil) then FHair.Color:=Vector3(0.26,0.17,0.105);
   if (Slot=csHair) and (FHeadAppearance<>nil) then FHeadAppearance.SetHairColor(Vector3(0.26,0.17,0.105));
   FDyeActive[Slot] := False;
+  if FAppearanceAddon<>nil then
+    FAppearanceAddon.ClothColorChanged(Slot,FDyeColor[Slot],False);
   if FDyeInLoad then
     BakeClothDye
   else if FDyeMode = cdmShader then
@@ -5033,6 +5154,7 @@ begin
   if FDyeMode = V then Exit;
   Old := FDyeMode;
   FDyeMode := V;
+  RefreshAppearanceColors;
   ApplyMaterialClothDye;
   { Уходим с cdmTexture — вернуть исходные пиксели; приходим — запечь.
     На живой сцене запечь нельзя — caller перезагружает сцену сам. }
@@ -5058,6 +5180,7 @@ begin
     FDyeColor[S] := Src.FDyeColor[S];
     FDyeActive[S] := Src.FDyeActive[S];
   end;
+  RefreshAppearanceColors;
 end;
 
 procedure TTripoRiderScene.GrabDyeAppearance(Node: TX3DNode);
@@ -5884,6 +6007,7 @@ var
   RigTh: TRigParseThread;
   Path: string;
 begin
+  FreeAndNil(FAppearanceAddon);
   FreeAndNil(FFace);
   FreeAndNil(FHeadAppearance);
   FreeAndNil(FHair);
@@ -5955,6 +6079,7 @@ function TTripoRiderScene.LoadPrepared(APrep: TTripoGlbPrepared; Log: TStrings):
 var
   TD0: QWord;
 begin
+  FreeAndNil(FAppearanceAddon);
   FreeAndNil(FCorrectives);
   FreeAndNil(FBodyMorph);
   FHelmetNode := nil;
@@ -6608,6 +6733,10 @@ begin
   BodyMeta:=ReadRiderExtra(AFileName,'bodyParameters');
   try FBodyParameters:=ReadRiderBody(BodyMeta,DefaultRiderBody(1));
   finally BodyMeta.Free end;
+  FreeAndNil(FAppearanceAddon);
+  if Assigned(RiderAppearanceFactory)then
+    FAppearanceAddon:=RiderAppearanceFactory(Self,AFileName);
+  RefreshAppearanceColors;
 
   { Contact markers are NOT baked here on purpose: RiderArmLength / RiderLegLength /
     shoulder width move the end joints (and stretch the mesh), and the marker offsets
@@ -6839,7 +6968,9 @@ var
   I: Integer;
   V: TVector3;
 begin
+  FHeadwearColorActive:=Enable;
   if Enable then FHeadwearColor:=C else FHeadwearColor:=Vector3(1,1,1);
+  if FAppearanceAddon<>nil then FAppearanceAddon.HeadwearColorChanged(C,Enable);
   if FHeadAppearance<>nil then FHeadAppearance.SetClothColor(FHeadwearColor);
   if FHelmetNode = nil then Exit;   { model has no helmet — nothing to tint }
   CacheHelmetMaterials;
@@ -6905,7 +7036,7 @@ begin
   FHeadAppearance:=TRiderHeadAppearance.Create(FScene.RootNode,Parts,Head,Scale);
   FHeadAppearance.FitToRig(FRig);
   if FDyeActive[csHair]then FHeadAppearance.SetHairColor(FDyeColor[csHair]);
-  ApplyHelmetColor(FHeadwearColor,True);
+  ApplyHelmetColor(FHeadwearColor,FHeadwearColorActive);
   SetHeadAppearance(FHeadwear,FBeard,FMustache);
 end;
 
@@ -8031,8 +8162,13 @@ begin
     Need := ArcTan2(B, A) - ArcCos(EnsureRange(C / Radius, -1.0, 1.0));
     Extra := Max(Extra, EnsureRange(RadToDeg(Need), 0.0, 30.0));
   end;
-  P.SpineAngles[0] := P.SpineAngles[0] - Extra;
-  P.SpineAngles[4] := P.SpineAngles[4] + Extra; { keep the authored gaze }
+  if Extra>0 then begin
+    { Preserve the full gaze, including a backwards turn. Opposite Euler
+      pitches cancel only while the neck has no yaw or roll. }
+    Q:=RiderHeadRotation(P,FLeanAxis);
+    P.SpineAngles[0]:=P.SpineAngles[0]-Extra;
+    SetRiderHeadRotation(P,FLeanAxis,Q);
+  end;
 end;
 
 procedure TTripoRiderScene.WritePoseToFields;
@@ -8049,7 +8185,7 @@ begin
     artistic split is relative to this rig's upright rest pose, not a clinical
     measurement: https://www.jssm.org/volume10/iss2/cap/jssm-10-355.pdf
     Smooth endpoints also cover stop/start and interrupted pose transitions. }
-  Result := -18 * SmoothUnit((-P.SpineAngles[0] - 10) / 50);
+  Result := -26 * SmoothUnit((-P.SpineAngles[0] - 10) / 50);
   P.SpineAngles[0] := P.SpineAngles[0] - Result;
 end;
 
@@ -8061,6 +8197,13 @@ begin
     SpineAutoLeanDeg(Result.TorsoLeanDeg,Result.SpineCurve,FSpineJoints,Result.SpineAngles);
     Result.SpineManual:=True;
   end;
+  { Missing catalogue slots must also be identity for analytic FK (gaze and
+    reach), just as they already are for the rendered skeleton. Otherwise
+    the optional Spine's authored pitch is counted only by the neck solver. }
+  for I:=0 to 4 do
+    if FSpineJoints[I]<0 then begin
+      Result.SpineAngles[I]:=0;Result.SpineYaw[I]:=0;Result.SpineRoll[I]:=0;
+    end;
   for I:=0 to 4 do begin
     { MEN/FEM omit the optional Spine slot. Transfer its small motion to the
       next existing vertebral joint, preserving counter-rotation of the neck. }

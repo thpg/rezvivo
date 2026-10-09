@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses GameTravel,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses GameTravel,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -55,7 +55,7 @@ uses GameTravel,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoic
   CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
-  BikeParametric, RiderPoseCatalog, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
+  BikeParametric, RiderPoseCatalog, RiderAttention, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, TreeSeason, TreeRenderer, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
@@ -484,7 +484,7 @@ begin
 end;
 procedure CmdExploreInput(const AParams:TJSONObject;AResult:TJSONObject);
 begin
-  if not ViewPlay.SessionAlive or not ViewPlay.FreeExploration then raise Exception.Create('No free exploration session');
+  if not ViewPlay.SessionAlive then raise Exception.Create('No active world session');
   ViewPlay.SetExploreInput(AParams.Get('power_axis',0.0),AParams.Get('steer',0.0),
     AParams.Get('walk_axis',0.0),AParams.Get('enabled',True));
   AResult.Add('ok',True);
@@ -706,6 +706,11 @@ begin
   AResult.Add('chase', ViewPlay.ChaseCameraActive);
   AResult.Add('distance', ViewPlay.ChaseCameraDistance);
   AResult.Add('height', ViewPlay.ChaseCameraHeight);
+  AResult.Add('walking_follow',ViewPlay.WalkingCameraActive);
+  if ViewPlay.WalkingCameraActive then begin
+    AResult.Add('walking_overview',ViewPlay.WalkingCam.Overview);
+    AResult.Add('walking_still_seconds',ViewPlay.WalkingCam.StillTime);
+  end;
 end;
 
 procedure CmdCameraGet(const AParams: TJSONObject; AResult: TJSONObject);
@@ -728,6 +733,11 @@ begin
   AResult.Add('chase', ViewPlay.ChaseCameraActive);
   AResult.Add('distance', ViewPlay.ChaseCameraDistance);
   AResult.Add('height', ViewPlay.ChaseCameraHeight);
+  AResult.Add('walking_follow',ViewPlay.WalkingCameraActive);
+  if ViewPlay.WalkingCameraActive then begin
+    AResult.Add('walking_overview',ViewPlay.WalkingCam.Overview);
+    AResult.Add('walking_still_seconds',ViewPlay.WalkingCam.StillTime);
+  end;
 end;
 
 { ── camera.sample — viewport + avatar only (cinematic dump reverted) ── }
@@ -800,6 +810,11 @@ begin
   end;
   AResult.Add('ring_mode', ModeStr);
   AResult.Add('chase', ViewPlay.ChaseCameraActive);
+  AResult.Add('walking_follow',ViewPlay.WalkingCameraActive);
+  if ViewPlay.WalkingCameraActive then begin
+    AResult.Add('walking_overview',ViewPlay.WalkingCam.Overview);
+    AResult.Add('walking_still_seconds',ViewPlay.WalkingCam.StillTime);
+  end;
 
   if Assigned(ViewPlay.CinematicCam) then
   begin
@@ -1140,6 +1155,14 @@ begin
   if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
     raise Exception.Create('bike not available (play view not started?)');
   Anim := ViewPlay.Bike.AnimDebugJson;
+  if ViewPlay.RiderPoseManager<>nil then begin
+    if AParams.Get('look_back',False)then
+      ViewPlay.RiderPoseManager.TriggerSpecial('look_back');
+    Anim.Add('pose',ViewPlay.RiderPoseManager.CurrentPoseName);
+    Anim.Add('look_yaw',ViewPlay.RiderPoseManager.Attention.Frame.Yaw);
+    Anim.Add('look_torso_yaw',ViewPlay.RiderPoseManager.Attention.Frame.TorsoYaw);
+    Anim.Add('look_events',Integer(ViewPlay.RiderPoseManager.Attention.Events));
+  end;
   Anim.Add('motion', ViewPlay.Bike.RiderMotionDebugJson);
   Parents := TJSONArray.Create;
   Anim.Add('parents', Parents);
@@ -1209,6 +1232,12 @@ begin
   { Explicit MCP diagnostic only. Keep the live GPU animation/deformation
     path; a paused simulation already prevents the normal clock advancing. }
   State := Bike.CaptureReplay;
+  if AParams.Find('look_yaw')<>nil then begin
+    State.Attention.Yaw:=EnsureRange(AParams.Get('look_yaw',0.0),-100.0,100.0);
+    State.Attention.Pitch:=0;
+    State.Attention.TorsoYaw:=RiderAttentionTorsoYaw(State.Attention.Yaw,
+      State.Pose.Grounded);
+  end;
   State.Phase := Frac(AParams.Get('phase', Double(State.Phase)));
   State.BreathPhase := Frac(AParams.Get('breath', Double(State.BreathPhase)));
   State.BreathLoad := EnsureRange(AParams.Get('breath_load', Double(State.BreathLoad)),0.0,2.0);
@@ -1670,6 +1699,23 @@ end;
 
 { ── app.fps_mode ─────────────────────────────────────────────────────── }
 
+procedure CmdGraphicsPreview(const AParams:TJSONObject; AResult:TJSONObject);
+var Scene:TGraphicsBenchmarkScene;Samples:TJSONArray;Ms:Double;
+begin
+  Scene:=ActiveGraphicsBenchmark;
+  AResult.Add('active',Scene<>nil);
+  if Scene=nil then Exit;
+  if AParams.Find('rotate')<>nil then Scene.RotateCamera:=AParams.Get('rotate',True);
+  if AParams.Find('animate')<>nil then Scene.AnimateScene:=AParams.Get('animate',True);
+  if AParams.Find('view')<>nil then Scene.SetViewIndex(AParams.Get('view',0));
+  AResult.Add('scene',Scene.Diagnostics);
+  if AParams.Get('drain',False) then begin
+    Samples:=TJSONArray.Create;
+    while Scene.ReadGpuSample(Ms) do Samples.Add(Ms);
+    AResult.Add('samples_ms',Samples);
+  end;
+end;
+
 procedure CmdAppFpsMode(const AParams: TJSONObject; AResult: TJSONObject);
 var
   M: String;
@@ -1935,8 +1981,12 @@ begin
     ViewPlay.SetOcclusionCulling(AParams.Get('occlusion', True), AParams.Get('persist', False));
   if AParams.Find('dynamic_batching') <> nil then
     ViewPlay.MainViewport.DynamicBatching := AParams.Get('dynamic_batching', False);
+  if AParams.Find('tree_pass_batching')<>nil then TreePassBatching:=AParams.Get('tree_pass_batching',True);
+  if AParams.Find('grass_base_instance')<>nil then GrassBaseInstance:=AParams.Get('grass_base_instance',True);
   if AParams.Find('shared_uniform_arrays')<>nil then
     UseSharedUniformArrayCache:=AParams.Get('shared_uniform_arrays',True);
+  if AParams.Find('shared_effect_revisions')<>nil then
+    UseSharedEffectRevisionCache:=AParams.Get('shared_effect_revisions',True);
   if AParams.Find('shared_effect_bindings')<>nil then
     UseSharedEffectBindings:=AParams.Get('shared_effect_bindings',True);
   if AParams.Find('binary_shader_names')<>nil then
@@ -1946,7 +1996,10 @@ begin
   if AParams.Find('delayed_pose')<>nil then
     UseDelayedRiderMeshes:=AParams.Get('delayed_pose',False);
   AResult.Add('ok', True);
+  AResult.Add('tree_pass_batching',TreePassBatching);
+  AResult.Add('grass_base_instance',GrassBaseInstance);
   AResult.Add('shared_uniform_arrays',UseSharedUniformArrayCache);
+  AResult.Add('shared_effect_revisions',UseSharedEffectRevisionCache);
   AResult.Add('shared_effect_bindings',UseSharedEffectBindings);
   AResult.Add('binary_shader_names',UseBinaryShaderNames);
   AResult.Add('pose_cache',UseCachedRiderMeshes);
@@ -2394,6 +2447,12 @@ end;
 procedure CmdBikeFitBody(const AParams:TJSONObject;AResult:TJSONObject);
 begin EnsureBikeFitPage.McpBody(AParams,AResult) end;
 
+procedure CmdBikeFitCamera(const AParams:TJSONObject;AResult:TJSONObject);
+begin EnsureBikeFitPage.McpCamera(AParams,AResult) end;
+
+procedure CmdBikeFitAnimation(const AParams:TJSONObject;AResult:TJSONObject);
+begin EnsureBikeFitPage.McpAnimation(AParams,AResult) end;
+
 procedure CmdBikeFitAutoFit(const AParams:TJSONObject;AResult:TJSONObject);
 var P:TBikeFitPage;
 begin P:=EnsureBikeFitPage;P.McpAutoFit;P.McpFillStatus(AResult) end;
@@ -2432,6 +2491,9 @@ end;
 
 procedure CmdBikeFitHead(const AParams:TJSONObject;AResult:TJSONObject);
 begin EnsureBikeFitPage.McpHead(AParams,AResult) end;
+
+procedure CmdBikeFitClothing(const AParams:TJSONObject;AResult:TJSONObject);
+begin EnsureBikeFitPage.McpClothing(AParams,AResult) end;
 
 procedure CmdBikeFitLighting(const AParams: TJSONObject; AResult: TJSONObject);
 var
@@ -2707,11 +2769,11 @@ begin
     'Crank/wheel animation diagnostics of the avatar bike: every ' +
     'CrankTimer/WheelTimer instance (per LOD), Enabled/Active/' +
     'CycleInterval/ElapsedTimeInCycle, scene playback state.',
-    '',
+    '{"type":"object","properties":{"look_back":{"type":"boolean"}}}',
     @CmdBikeAnimDebug);
   RegisterMcpCommand('bike.motion_sample',
     'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation.',
-    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
+    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"look_yaw":{"type":"number","minimum":-100,"maximum":100},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
     @CmdBikeMotionSample);
   RegisterMcpCommand('bike.set_gpu_anim',
     'Switch avatar bike/rider animation between the GPU path (true) and ' +
@@ -2730,6 +2792,8 @@ begin
     'scene — diagnostic for the lost-wheels culling hypothesis.',
     '{"type":"object","properties":{"enabled":{"type":"boolean"}},"required":["enabled"]}',
     @CmdBikeSetFrustumCulling);
+  RegisterMcpCommand('graphics.preview','Inspect the common settings/Auto benchmark scene; freeze animation or select a repeatable viewpoint.',
+    '{"type":"object","properties":{"drain":{"type":"boolean"},"rotate":{"type":"boolean"},"animate":{"type":"boolean"},"view":{"type":"integer","minimum":0,"maximum":2}}}',@CmdGraphicsPreview);
   RegisterMcpCommand('app.fps_mode',
     'Get/set a temporary FPS override: vsync, max (uncapped), low (30). ' +
     'Use settings to restore the saved graphics limit.',
@@ -2763,7 +2827,7 @@ begin
     'binary_shader_names (diagnostic comparison with legacy locale-dependent lookups), ' +
     'discard_shadow_shader (diagnostic: remove the disabled ground-shadow shader). Each key optional.',
     '{"type":"object","properties":{"anim":{"type":"boolean"},' +
-    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
+    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"tree_pass_batching":{"type":"boolean"},"grass_base_instance":{"type":"boolean"},"shared_effect_revisions":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
     '"occlusion":{"type":"boolean"},"persist":{"type":"boolean"},"world_shadows":{"type":"boolean"},"dynamic_batching":{"type":"boolean"},"log_shaders":{"type":"boolean"},' +
     '"vegetation_branches":{"type":"boolean"},"procedural_trees":{"type":"boolean"},"tree_season":{"type":"number","minimum":0,"maximum":1},"vegetation":{"type":"boolean"},"grass":{"type":"boolean"},"grass_lod":{"type":"boolean"},"curb_contacts":{"type":"boolean"},"road_material":{"type":"string","enum":["legacy","direct","cached"]},' +
     '"grass_blades":{"type":"boolean"},"grass_cards":{"type":"boolean"},"grass_carpet":{"type":"boolean"},' +
@@ -2843,8 +2907,9 @@ begin
   RegisterMcpCommand('bikefit.set_color',
     'Set or clear a color slot of the bike-fit result preview. slot: ' +
     'jersey|shorts|socks|boots|gloves|skin|hair|helmet|frame|rim; r,g,b 0..255; ' +
-    'on=false restores stock. Bike-fit preview uses a live shader; ' +
-    'play still bakes cloth into the texture.',
+    'on=false restores stock. Jersey also controls wardrobe tops/outerwear, ' +
+    'shorts controls trousers, boots controls footwear, helmet controls hats. ' +
+    'Colors update live without rebuilding the wardrobe.',
     '{"type":"object","properties":{' +
     '"slot":{"type":"string"},' +
     '"r":{"type":"number"},"g":{"type":"number"},"b":{"type":"number"},' +
@@ -2862,6 +2927,17 @@ begin
     '"open":{"type":"boolean"},"yaw":{"type":"number"},"thumbnail":{"type":"string"},'+
     '"manual_face":{"type":"boolean"},"jaw":{"type":"number"},"smile":{"type":"number"},'+
     '"strain":{"type":"number"}}}',@CmdBikeFitHead);
+  RegisterMcpCommand('bikefit.clothing',
+    'Select the avatar editor clothing for cycling and walking. Empty value restores cycling kit / removes outerwear or hat. Omit fields to inspect.',
+    '{"type":"object","properties":{"top":{"enum":["","tshirt","sweatshirt"]},'+
+    '"bottom":{"enum":["","trousers","jeans"]},"outer":{"enum":["","jacket","coat","loose_jacket","raincoat"]},'+
+    '"feet":{"enum":["","sneakers","boots","loafers"]},"head":{"enum":["","beanie","cap","bucket"]}}}',@CmdBikeFitClothing);
+  RegisterMcpCommand('bikefit.camera',
+    'Frame the isolated avatar preview for reproducible screenshots. Zoom 0.5..4, yaw in degrees relative to the default view. Does not affect the ride camera.',
+    '{"type":"object","properties":{"zoom":{"type":"number"},"yaw":{"type":"number"},"target_y":{"type":"number","minimum":0,"maximum":2.5}}}',@CmdBikeFitCamera);
+  RegisterMcpCommand('bikefit.animation',
+    'Pause and step the isolated walking avatar preview, including cloth, by exact frames. Nonpersistent; use paused=false to resume.',
+    '{"type":"object","properties":{"paused":{"type":"boolean"},"speed":{"type":"number","minimum":0,"maximum":8},"frames":{"type":"integer","minimum":0,"maximum":600},"fps":{"type":"number","minimum":10,"maximum":240},"phase":{"type":"number","minimum":0,"maximum":1}}}',@CmdBikeFitAnimation);
   RegisterMcpCommand('bikefit.lighting',
     'Set/inspect bike-fit page lighting on the fly (omit an argument to keep it): ' +
     'env = rider IBL ambient, key/fill = result viewport directional lights, ' +

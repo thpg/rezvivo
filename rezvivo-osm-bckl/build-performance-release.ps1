@@ -20,7 +20,7 @@ $unitRoot = Join-Path $buildRoot 'units'
 New-Item -ItemType Directory -Path $unitRoot -Force | Out-Null
 $options = @('-MObjFPC', '-Scghi', '-Ci', '-O2', '-gw3', '-gl', '-Xg', '-l', '-vewnibq', '-vh-', '-dRELEASE')
 $projectDirs = @($projectRoot, (Join-Path $projectRoot 'code'))
-foreach ($dir in @('Bikeparametric', 'Osm3d', 'Mcp', 'tree-editor\core', 'tree-editor\render')) {
+foreach ($dir in @('Bikeparametric', 'Osm3d', 'Mcp', 'tree-editor\core', 'tree-editor\render', 'avatareditor-avatar')) {
     $projectDirs += Join-Path $repoRoot $dir
 }
 foreach ($dir in $projectDirs) { $options += '-Fu' + $dir; $options += '-Fi' + $dir }

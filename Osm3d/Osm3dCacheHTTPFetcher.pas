@@ -461,7 +461,7 @@ begin
         Code := OsmPublicPost(URL, Query, ConnectMs, FTimeoutMs,
           Response, @CheckOsmAbort, @AuthenticatedOsmProgress);
       if FAbortAll then Exit(TFetchResult.Failure('aborted'));
-      if Code <> 200 then Exit(TFetchResult.Failure('OSM access/request rejected: HTTP ' + IntToStr(Code), Code));
+      if Code <> 200 then Exit(TFetchResult.Failure('HTTP ' + IntToStr(Code), Code));
       Result.Success := True; Result.Data := Copy(Response.Bytes, 0, Response.Size);
       Result.StatusCode := 200; Result.ContentType := 'application/json';
       if Method='GET' then Result.ContentType:='image/png';

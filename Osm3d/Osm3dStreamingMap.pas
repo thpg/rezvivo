@@ -11,7 +11,7 @@ unit Osm3dStreamingMap;
 interface
 
 uses UiTranslations,
-  Classes,
+  Classes, fpjson,
   SysUtils,
   Math,
   crc,               { crc32 — подписи кромок гридов заглушек в диагностике }
@@ -512,6 +512,10 @@ type
       До подтверждения стримим вокруг старта, независимо от камеры. }
     FWarmupHoldRider:   Boolean;
     FWarmupRiderPlaced: Boolean;
+    FPointWarmup: Boolean;
+    FPointWarmupGeo: TLatLon;
+    FPointWarmupTile: TGeoTileId;
+    FPointWarmupNextUpdate: QWord;
     { Ошибка прогрева для оверлея: снап-воркер пишет строку ОДИН раз до
       завершения (обрыв ожидания по застою / исключение), main читает в
       Update и показывает через SetError + этап → wssError. Строка пишется
@@ -735,6 +739,7 @@ type
       out ABoxT, ATxtT: TTransformNode;
       out ABoxMat: TMaterialNode): TCastleScene;
     function  LoadPhaseText(const AId: TGeoTileId): string;
+    procedure UpdatePointWarmup;
     { Стадия+процент фазы тайла — общий источник и для 3D-плейсхолдера
       (LoadPhaseText), и для 2D-столбиков прогрева: текст гарантированно
       одинаковый. False = нет активной фазы (очередь/кэш/готов). }
@@ -860,6 +865,8 @@ type
       удержания тайлов снап-воркером — то есть ровно на прогрев,
       до запуска притягивания). }
     property WarmupOverlay: TOsm3dWarmupOverlay read FWarmup;
+    { Free exploration uses the same flat map, waiting for just the start tile. }
+    procedure BeginPointWarmup(const Geo: TLatLon);
 
     { Режим «гейт до постановки райдера» (default True): пока включён,
       оверлей прогрева НЕ гасится по обычному условию (снап+волна), пока
@@ -1001,6 +1008,8 @@ type
     { CPU assembly and scene mounting must finish before a missing GPU
       surface sample can be treated as a placement failure. }
     function GroundSceneReadyAt(WorldX, WorldZ: Single): Boolean;
+    function GroundLoadStatusAt(WorldX, WorldZ: Single; out ErrorText: string;
+      Diagnostics: TJSONObject = nil): string;
 
     { Та же высота земли, но с поправкой физического FIT-слоя
       (CorrectHeightGeo поверх сырого треугольника). Для уклона физики
@@ -1016,6 +1025,8 @@ type
     function BuildingPushOutXZ(var WorldX, WorldZ: Single;
       out ABaseY, AMaxY: Single): Boolean;
     { BUILDING_OBSTACLE: camera push-out + soft roof lift. }
+    function BuildingBodyMove(const From,Forward,HalfSize:TVector3;
+      var Target:TVector3):Boolean;
     function ResolveCameraBuilding(var Cam: TVector3): Boolean;
 
     { The cache tree's root blocks — the list of batch nodes, exposed so
@@ -3844,6 +3855,35 @@ begin
     X-CT.CenterX,Z-CT.CenterZ,ReferenceY,CurbContactsEnabled,GpuY,False);
 end;
 
+function TOsm3dStreamingMap.GroundLoadStatusAt(WorldX, WorldZ: Single;
+  out ErrorText: string; Diagnostics: TJSONObject): string;
+var Id:TGeoTileId;CT:TCacheTile;
+begin
+  Result:='';ErrorText:='';
+  if (FProj=nil) or (FCache=nil) or (FCache.Grid=nil) then Exit;
+  Id:=FCache.Grid.TileAt(FProj.Unproject(WorldX,WorldZ));
+  if FStreamer<>nil then ErrorText:=FStreamer.BlockErrorForTile(Id);
+  if (FTileIndex<>nil) and FTileIndex.TryGetValue(Id.ToKey,CT) and
+    (CT<>nil) and (CT.Scene<>nil) and CT.Scene.MountFailed then
+    ErrorText:=CT.Scene.MountError;
+  Result:=LoadPhaseText(Id);
+  if Diagnostics<>nil then begin
+    Diagnostics.Add('flat_map_visible',(FWarmup<>nil) and FWarmup.Showing);
+    if (FWarmup<>nil) and FWarmup.Showing then
+      Diagnostics.Add('warmup_tiles',FWarmup.TileCount)
+    else Diagnostics.Add('warmup_tiles',0);
+    Diagnostics.Add('tile',Id.ToString);
+    Diagnostics.Add('pending',PendingTileWork);
+    Diagnostics.Add('assembling',InterlockedCompareExchange(FAsmPending,0,0));
+    Diagnostics.Add('mounting',InterlockedCompareExchange(FMountPending,0,0));
+    Diagnostics.Add('resident',FTileIndex.Count);
+    Diagnostics.Add('scene_ready',TileSceneReady(Id));
+    if FStreamer<>nil then Diagnostics.Add('streamer',FStreamer.DescribeTile(Id));
+    if FTileIndex.TryGetValue(Id.ToKey,CT) and (CT<>nil) then
+      Diagnostics.Add('ground_field',CT.GroundHasField);
+  end;
+end;
+
 function TOsm3dStreamingMap.GroundSceneReadyAt(WorldX, WorldZ: Single): Boolean;
 begin
   Result := (FProj <> nil) and (FCache <> nil) and (FCache.Grid <> nil) and
@@ -3973,6 +4013,13 @@ begin
   ABaseY := 0; AMaxY := 0;
   if FBuildingObstacles = nil then Exit(False);
   Result := FBuildingObstacles.TryPushOutXZ(WorldX, WorldZ, ABaseY, AMaxY);
+end;
+
+function TOsm3dStreamingMap.BuildingBodyMove(const From,Forward,HalfSize:TVector3;
+  var Target:TVector3):Boolean;
+begin
+  if FBuildingObstacles=nil then Exit(False);
+  Result:=FBuildingObstacles.ConstrainBoxMove(From,Forward,HalfSize,Target);
 end;
 
 function TOsm3dStreamingMap.ResolveCameraBuilding(var Cam: TVector3): Boolean;
@@ -7304,7 +7351,12 @@ begin
         the start resident until the host places the rider AND camera there.
         Use the published ride path as soon as snapping finishes, including
         starts moved across a tile boundary. Studio has no rider hold. }
-      if FWarmupHoldRider and (not FWarmupRiderPlaced) and
+      if FPointWarmup then
+      begin
+        StreamLL := FPointWarmupGeo;
+        StreamPos := FProj.Project(StreamLL, 0);
+      end
+      else if FWarmupHoldRider and (not FWarmupRiderPlaced) and
          (Length(FRoute) > 0) then
       begin
         if FSnappedReady and (Length(FRouteRide) > 0) then
@@ -7465,7 +7517,9 @@ begin
         tiles are held; all other eviction proceeds normally (no global
         freeze, no RELEASE burst). The worker lowers FSnapHoldEviction when
         done, and we clear the pins. }
-      if FSnapHoldEviction then
+      if FPointWarmup then
+        UpdatePointWarmup
+      else if FSnapHoldEviction then
       begin
         { ── Прогрев маршрута. Порядок важен: сначала защёлки готовности,
           потом WantTile/пины ТОЛЬКО для недоделанных тайлов. Готовый
@@ -7945,6 +7999,65 @@ begin
     FWarmup.SetError(AMsg);
 end;
 
+procedure TOsm3dStreamingMap.BeginPointWarmup(const Geo: TLatLon);
+var Tiles:TGeoTileIdArray; Points:Osm3dWarmupOverlay.TRouteLatLonArray; I:Integer;
+begin
+  if FDestroying or (FCache=nil) or (FWarmup=nil) then Exit;
+  FPointWarmup:=True;FPointWarmupGeo:=Geo;
+  FPointWarmupTile:=FCache.Grid.TileAt(Geo);
+  FPointWarmupNextUpdate:=0;
+  FWarmupRiderPlaced:=False;FWarmupHoldRider:=True;
+  for I:=0 to WARMUP_STAGE_COUNT-1 do FWuStageErr[I]:=False;
+  SetLength(Tiles,1);Tiles[0]:=FPointWarmupTile;
+  SetLength(Points,1);Points[0]:=Geo;
+  FWarmup.ShowWarmup(FCache.Grid,Tiles,Points,FAuxHttp,FCache.Recipes,True);
+  FWarmupShown:=True;
+  UpdatePointWarmup;
+end;
+
+procedure TOsm3dStreamingMap.UpdatePointWarmup;
+var Stage,ErrorText:string; Pct:Integer; P:TVector3; Ready:Boolean;
+begin
+  if not FPointWarmup or FDestroying then Exit;
+  if FWarmupRiderPlaced then
+  begin
+    FPointWarmup:=False;FWarmupShown:=False;
+    FStreamer.SetPinnedTiles([]);
+    FWarmup.HideWarmup;
+    Exit;
+  end;
+  { No disk polling or JSON allocation per frame. Progress comes from the
+    normal streaming pipeline, including cached scene assembly and retries. }
+  if GetTickCount64<FPointWarmupNextUpdate then Exit;
+  FPointWarmupNextUpdate:=GetTickCount64+200;
+  FStreamer.WantTile(FPointWarmupTile,SNAP_FORCE_PRIORITY,True);
+  FStreamer.SetPinnedTiles([FPointWarmupTile]);
+  P:=FProj.Project(FPointWarmupGeo,0);
+  GroundLoadStatusAt(P.X,P.Z,ErrorText);
+  Ready:=TileSceneReady(FPointWarmupTile);
+  if not LoadPhaseInfo(FPointWarmupTile,Stage,Pct) then
+  begin Stage:=UiText('Preparing tile');Pct:=-1 end;
+  FWarmup.SetTileState(0,Stage,Pct,Ready);
+  if ErrorText<>'' then
+  begin
+    FWarmup.SetStageState(1,wssError);
+    FWarmup.SetError(UiText('Map loading failed. Retrying automatically; Esc opens the menu.')+
+      LineEnding+ErrorText);
+  end
+  else
+  begin
+    if not FWuStageErr[5] then FWarmup.SetError('');
+    if Ready then FWarmup.SetStageState(1,wssDone)
+    else FWarmup.SetStageState(1,wssActive);
+  end;
+  if Ready then
+  begin
+    FWarmup.SetHeader(UiText('Placing rider at the start…'));
+    if not FWuStageErr[5] then FWarmup.SetStageState(5,wssActive);
+  end
+  else FWarmup.SetHeader(UiText('Loading starting tile…'));
+end;
+
 procedure TOsm3dStreamingMap.NotifyRiderPlaced;
 begin
   { Райдер поставлен на старт — оверлею можно гаснуть (условие гашения
@@ -7954,6 +8067,7 @@ begin
   FWarmupRiderPlaced := True;
   if (FWarmup <> nil) and (not FWuStageErr[5]) then
     FWarmup.SetStageState(5, wssDone);
+  if FPointWarmup then UpdatePointWarmup;
 end;
 
 procedure TOsm3dStreamingMap.BeginFitCorrectionOnly;

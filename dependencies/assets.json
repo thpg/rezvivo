@@ -182,8 +182,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/RIDER.glb",
-    "bytes": 15702452,
-    "sha256": "b970b5289c017268f0880ee563a6f87de825e13e3de65128381b82e988256616",
+    "bytes": 15717532,
+    "sha256": "5588198c066f1d6317aa16208a9ff3cc44186672b9a1d6b6a58415350f0eed33",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO; MakeHuman CC0 head asset data",
     "evidence": "Project-created rider with adapted CC0 head; data/licenses/makehuman/NOTICE.txt"
@@ -4263,8 +4263,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.vert",
-    "bytes": 16632,
-    "sha256": "60b3bc507261bd38ae2e31e90a394082b20e6668ab471d8ac33f5c50da47d1bd",
+    "bytes": 16653,
+    "sha256": "6b519ad114f1b4c30e5528861e5e132ef4fb8ae450388670156c3b05f5dfc102",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4279,8 +4279,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.vert",
-    "bytes": 18649,
-    "sha256": "d8f34635c07472dfa989a4c231781e7e8176a593fc18df1888043152481f9e62",
+    "bytes": 18759,
+    "sha256": "5953d14bc565cb1af7c1ee6b5018fb232de8647035018f84306f2f51552bd7bc",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4529,8 +4529,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 89337,
-    "sha256": "ef8fcb513e744b984519f1709b26e61ff3253ceb8ca370c427e045904fb8bf38",
+    "bytes": 91298,
+    "sha256": "80d7c7a5343a2b9b7bf2135c53f75248790cd92b6ba3b580f11ded328580d463",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4585,8 +4585,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 136313,
-    "sha256": "d177212ff21077a11f421e660224d577121553307c7567906266ffc72ecde1fc",
+    "bytes": 140078,
+    "sha256": "2c41d57c800bb6943d8cd3b9b49b674250e89b812cfc3ab7d1c08c9218e1fe31",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

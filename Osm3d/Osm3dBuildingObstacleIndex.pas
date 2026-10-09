@@ -102,6 +102,10 @@ type
       Returns True if a push was applied (X,Z updated). Y untouched. }
     function TryPushOutXZ(var WX, WZ: Single;
       out ABaseY, AMaxY: Single; Clearance: Single = 0): Boolean;
+    { Swept oriented body box; HalfSize=(width/2,height/2,length/2).
+      From/Target are foot/tyre positions. Slides along contacted walls. }
+    function ConstrainBoxMove(const From,Forward,HalfSize:TVector3;
+      var Target:TVector3):Boolean;
 
     { Bounded local visibility graph for the route preparation worker.
       Never called by the riding loop. }
@@ -134,7 +138,7 @@ function BuildingObstacleTileKey(Zone: Byte; North: Boolean;
 
 implementation
 
-uses Osm3dGroundOpenings;
+uses Osm3dGroundOpenings, Osm3dBuildingContact;
 
 function BuildingObstacleTileKey(Zone: Byte; North: Boolean;
   TX, TY: Integer): Int64;
@@ -516,6 +520,78 @@ begin
   end;
 end;
 
+
+function TBuildingObstacleIndex.ConstrainBoxMove(const From,Forward,HalfSize:TVector3;
+  var Target:TVector3):Boolean;
+var P,Move,Dir,Normal,Correction,Original:TVector3; Pass:Integer;
+  HalfX,HalfZ,Width,Long,HitT,Along,T:Double;
+  function Scan(Depenetrate:Boolean):Boolean;
+  var X0,X1,Z0,Z1,CX,CZ,OX,OZ,Idx,I,J:Integer; Arr:TIntegerDynArray;
+    QueryMinX,QueryMaxX,QueryMinZ,QueryMaxZ,Fraction,Best:Double; Push,N:TVector3;
+  begin
+    Result:=False;HitT:=1;Best:=1e30;
+    QueryMinX:=P.X-HalfX;QueryMaxX:=P.X+HalfX;QueryMinZ:=P.Z-HalfZ;QueryMaxZ:=P.Z+HalfZ;
+    if not Depenetrate then begin
+      QueryMinX:=Min(QueryMinX,P.X+Move.X-HalfX);QueryMaxX:=Max(QueryMaxX,P.X+Move.X+HalfX);
+      QueryMinZ:=Min(QueryMinZ,P.Z+Move.Z-HalfZ);QueryMaxZ:=Max(QueryMaxZ,P.Z+Move.Z+HalfZ);
+    end;
+    WorldToCell(QueryMinX,QueryMinZ,X0,Z0);WorldToCell(QueryMaxX,QueryMaxZ,X1,Z1);
+    for CZ:=Z0 to Z1 do for CX:=X0 to X1 do
+    if FCells.TryGetValue(CellKey(CX,CZ),Arr) then
+    for I:=0 to High(Arr) do begin
+      Idx:=Arr[I];
+      with FObs[Idx] do begin
+        if (Self.FObs[Idx].MaxX<QueryMinX) or (Self.FObs[Idx].MinX>QueryMaxX) or
+          (Self.FObs[Idx].MaxZ<QueryMinZ) or (Self.FObs[Idx].MinZ>QueryMaxZ) then Continue;
+        { BaseY is the TOP of a level foundation, often several metres
+          above the street on a slope. It is not an opening underneath
+          the house. Solid ground footprints include their foundations;
+          actual passages were already subtracted by CastersToObstacles. }
+        if Min(From.Y,Target.Y)>=MaxY-0.001 then Continue;
+        { A building spanning cells is visited exactly once, without a
+          temporary set or allocating a candidate array every physics step. }
+        WorldToCell(Self.FObs[Idx].MinX,Self.FObs[Idx].MinZ,OX,OZ);
+        if (CX<>Max(X0,OX)) or (CZ<>Max(Z0,OZ)) then Continue;
+        if Depenetrate then begin
+          if PushBuildingBox(P,Dir,Width,Long,Footprint,Push) and
+             (Push.LengthSqr<Best) then begin
+            Best:=Push.LengthSqr;Correction:=Push;Result:=True;
+          end;
+        end else
+          for J:=0 to High(Footprint) do
+            if SweepBuildingEdge(P,Move,Dir,Footprint[J],
+              Footprint[(J+1) mod Length(Footprint)],Width,Long,Fraction,N) and
+              (Fraction<=HitT) then begin
+              HitT:=Fraction;Normal:=N;Result:=True;
+            end;
+      end;
+    end;
+  end;
+begin
+  Result:=False;if FCount=0 then Exit;
+  Original:=Target;P:=From;Move:=Target-From;Move.Y:=0;
+  Dir:=Vector3(Forward.X,0,Forward.Z);
+  if Dir.LengthSqr<1e-12 then Dir:=Vector3(0,0,1) else Dir:=Dir.Normalize;
+  Width:=Max(0.01,HalfSize.X);Long:=Max(0.01,HalfSize.Z);
+  HalfX:=Abs(Dir.X)*Long+Abs(Dir.Z)*Width;
+  HalfZ:=Abs(Dir.Z)*Long+Abs(Dir.X)*Width;
+  for Pass:=0 to 3 do begin
+    if not Scan(True) then Break;
+    P:=P+Correction;Result:=True;
+  end;
+  for Pass:=0 to 2 do begin
+    if Move.LengthSqr<1e-12 then Break;
+    if not Scan(False) then begin P:=P+Move;Move:=Vector3(0,0,0);Break end;
+    Result:=True;
+    Along:=-(Double(Move.X)*Normal.X+Double(Move.Z)*Normal.Z);
+    T:=Max(0,HitT-BuildingContactSkin/Max(1e-9,Along));
+    P:=P+Move*T;Move:=Move*(1-T);
+    Along:=Double(Move.X)*Normal.X+Double(Move.Z)*Normal.Z;
+    if Along<0 then Move:=Move-Normal*Along;
+  end;
+  if Result then begin Target.X:=P.X;Target.Z:=P.Z end
+  else Target:=Original;
+end;
 
 function TBuildingObstacleIndex.SnapshotNear(WX, WZ, Radius: Single): TBuildingObstacleArray;
 var I,N: Integer;

@@ -54,6 +54,8 @@ type
     ForkTravel: Single;
     RearTravel: Single;
     CategoryName: string;
+    FixedGear:Boolean;
+    ChainringTeeth,RearSprocketTeeth:Integer;
   end;
 
   TBikeGeometryList = specialize TList<TBikeGeometryData>;
@@ -93,7 +95,7 @@ uses
   BikeParametric_Seat,
   BikeParametric_DropBar,
   BikeParametric_FlatBar,
-  BikeParametric_Crankset;
+  BikeParametric_Crankset, BikeParametric_Drivetrain;
 
 function InsightsCatalogDir: string;
 var
@@ -345,7 +347,9 @@ function ExtractBikeInsights(const FileName: string;
       UnitPath := Path + '_unit';
       UnitStr := GetStrPath(Obj, UnitPath, 'mm');
       if LowerCase(UnitStr) = 'cm' then
-        Result := Result * 10;
+        Result := Result * 10
+      else if LowerCase(UnitStr) = 'in' then
+        Result := Result * 25.4;
     end;
   end;
 
@@ -365,8 +369,6 @@ var
   Key: string;
   I: Integer;
   Geo: TBikeGeometryData;
-  RawBBDrop, RawTireWidth: Single;
-  BBDropUnit, TireWidthUnit: string;
   FirstBuildFound: Boolean;
   DiagStr: string;
   HTTopY, HTBotY, TTJctY, DTJctY, HTPxLen: Single;
@@ -417,8 +419,11 @@ begin
           flat-bar geometry path, including its shorter cockpit. }
         if SameText(ModelInfo.BarType,'moto')then ModelInfo.BarType:='flat';
         ModelInfo.SuspensionType := ObjGetStr(Obj, 'suspension_type', '');
-        ModelInfo.ForkTravel := ObjGetFloat(Obj, 'fork_travel', 0);
-        ModelInfo.RearTravel := ObjGetFloat(Obj, 'rear_travel', 0);
+        ModelInfo.ForkTravel := GetLengthMm(Obj, 'fork_travel', 0);
+        ModelInfo.RearTravel := GetLengthMm(Obj, 'rear_travel', 0);
+        ModelInfo.FixedGear:=SameText(ObjGetStr(Obj,'drivetrain_type',''),'fixed');
+        ModelInfo.ChainringTeeth:=ObjGetInt(Obj,'chainring_teeth',0);
+        ModelInfo.RearSprocketTeeth:=ObjGetInt(Obj,'sprocket_teeth',0);
       end;
 
       if Copy(Key, 1, 13) = 'BikeCategory:' then
@@ -435,25 +440,17 @@ begin
           'frame.head_tube_angle', 'calculated.frame.head_tube_angle', 0);
         Geo.SeatTubeAngle := GetFloatFallback(GeoObj,
           'frame.seat_tube_angle', 'calculated.frame.seat_tube_angle', 0);
-        Geo.ChainstayLength := GetFloatFallback(GeoObj,
+        Geo.ChainstayLength := GetLengthMmFallback(GeoObj,
           'frame.chainstay_length', 'calculated.frame.chainstay_length', 0);
-        Geo.Wheelbase := GetFloatFallback(GeoObj,
+        Geo.Wheelbase := GetLengthMmFallback(GeoObj,
           'frame.wheelbase', 'calculated.frame.wheelbase', 0);
 
-        RawBBDrop := GetFloatFallback(GeoObj,
+        Geo.BBDrop := GetLengthMmFallback(GeoObj,
           'frame.bottom_bracket_drop', 'calculated.frame.bottom_bracket_drop', 0);
-        BBDropUnit := GetStrPath(GeoObj, 'frame.bottom_bracket_drop_unit', 'mm');
-        if BBDropUnit = '' then
-          BBDropUnit := GetStrPath(GeoObj,
-            'calculated.frame.bottom_bracket_drop_unit', 'mm');
-        if LowerCase(BBDropUnit) = 'cm' then
-          Geo.BBDrop := RawBBDrop * 10
-        else
-          Geo.BBDrop := RawBBDrop;
 
-        Geo.Stack := GetFloatFallback(GeoObj,
+        Geo.Stack := GetLengthMmFallback(GeoObj,
           'frame.stack', 'calculated.frame.stack', 0);
-        Geo.Reach := GetFloatFallback(GeoObj,
+        Geo.Reach := GetLengthMmFallback(GeoObj,
           'frame.reach', 'calculated.frame.reach', 0);
 
         Geo.SeatTubeLength := GetLengthMm(GeoObj,
@@ -486,19 +483,19 @@ begin
           Geo.EffectiveTopTubeLength := GetLengthMm(GeoObj,
             'frame.effective_top_tube_length_unknown', 0);
 
-        Geo.ForkRake := GetFloatFallback(GeoObj,
+        Geo.ForkRake := GetLengthMmFallback(GeoObj,
           'fork.offset', 'calculated.fork.offset', 0);
-        Geo.ForkAxleToCrown := GetFloatPath(GeoObj,
+        Geo.ForkAxleToCrown := GetLengthMm(GeoObj,
           'fork.axle_to_crown_distance', 0);
         if Geo.ForkAxleToCrown = 0 then
-          Geo.ForkAxleToCrown := GetFloatPath(GeoObj,
+          Geo.ForkAxleToCrown := GetLengthMm(GeoObj,
             'calculated.fork.axle_to_crown_distance', 0);
         if Geo.ForkAxleToCrown = 0 then
-          Geo.ForkAxleToCrown := GetFloatPath(GeoObj, 'fork.length_unknown', 0);
+          Geo.ForkAxleToCrown := GetLengthMm(GeoObj, 'fork.length_unknown', 0);
         if Geo.ForkAxleToCrown = 0 then
-          Geo.ForkAxleToCrown := GetFloatPath(GeoObj, 'calculated.fork.length', 0);
+          Geo.ForkAxleToCrown := GetLengthMm(GeoObj, 'calculated.fork.length', 0);
         if Geo.ForkAxleToCrown = 0 then
-          Geo.ForkAxleToCrown := GetFloatPath(GeoObj, 'fork.length', 0);
+          Geo.ForkAxleToCrown := GetLengthMm(GeoObj, 'fork.length', 0);
 
         Geo.TopTubeSlope := GetFloatFallback(GeoObj,
           'calculated.frame.top_tube_slope', 'frame.top_tube_slope', 0);
@@ -541,7 +538,7 @@ begin
           end;
         end;
 
-        Geo.StemLength := GetFloatFallback(GeoObj,
+        Geo.StemLength := GetLengthMmFallback(GeoObj,
           'base_build.stem_length', 'calculated.base_build.stem_length', 0);
         if GeoObj.Find('base_build', JData) and (JData is TJSONObject) then
         begin
@@ -553,45 +550,20 @@ begin
           end;
         end;
 
-        Geo.CrankLength := GetFloatFallback(GeoObj,
+        Geo.CrankLength := GetLengthMmFallback(GeoObj,
           'base_build.crank_length', 'calculated.base_build.crank_length', 0);
         if Geo.CrankLength = 0 then
-          Geo.CrankLength := GetFloatPath(GeoObj, 'calculated.fit.crank_length', 0);
+          Geo.CrankLength := GetLengthMm(GeoObj, 'calculated.fit.crank_length', 0);
 
-        Geo.HandlebarWidth := GetFloatFallback(GeoObj,
+        Geo.HandlebarWidth := GetLengthMmFallback(GeoObj,
           'base_build.handlebar_width', 'calculated.base_build.handlebar_width', 0);
-        Geo.WheelBSD := GetFloatFallback(GeoObj,
+        Geo.WheelBSD := GetLengthMmFallback(GeoObj,
           'base_build.wheel_bsd', 'calculated.base_build.wheel_bsd', 0);
 
-        RawTireWidth := GetFloatFallback(GeoObj,
+        Geo.TireWidth := GetLengthMmFallback(GeoObj,
           'base_build.tire_width', 'calculated.base_build.tire_width', 0);
-        TireWidthUnit := GetStrPath(GeoObj, 'base_build.tire_width_unit', 'mm');
-        if LowerCase(TireWidthUnit) = 'in' then
-          Geo.TireWidth := RawTireWidth * 25.4
-        else
-          Geo.TireWidth := RawTireWidth;
-
-        Geo.TireOuterDiameter := GetFloatPath(GeoObj,
-          'base_build.tire_outer_diameter', 0);
-        if Geo.TireOuterDiameter > 0 then
-        begin
-          TireWidthUnit := GetStrPath(GeoObj,
-            'base_build.tire_outer_diameter_unit', 'mm');
-          if LowerCase(TireWidthUnit) = 'in' then
-            Geo.TireOuterDiameter := Geo.TireOuterDiameter * 25.4;
-        end
-        else
-        begin
-          Geo.TireOuterDiameter := GetFloatPath(GeoObj,
-            'calculated.base_build.tire_outer_diameter', 0);
-          if Geo.TireOuterDiameter > 0 then
-          begin
-            TireWidthUnit := GetStrPath(GeoObj,
-              'calculated.base_build.tire_outer_diameter_unit', 'mm');
-            if LowerCase(TireWidthUnit) = 'in' then
-              Geo.TireOuterDiameter := Geo.TireOuterDiameter * 25.4;
-          end;
-        end;
+        Geo.TireOuterDiameter := GetLengthMmFallback(GeoObj,
+          'base_build.tire_outer_diameter', 'calculated.base_build.tire_outer_diameter', 0);
 
         if (Geo.HeadTubeAngle > 0) and
            ((Geo.Wheelbase > 0) or ((Geo.Stack > 0) and (Geo.Reach > 0))) then
@@ -676,15 +648,19 @@ var
   WheelComp: TWheelComponent;
   SeatComp: TSeatComponent;
   CrankComp: TCranksetComponent;
+  DriveComp:TDrivetrainComponent;
   DropBar: TDropBarComponent;
   FlatBar: TFlatBarComponent;
   WantFlat, HaveFlat: Boolean;
   Comps: TBikeComponentClassArray;
-  WheelRadius, BB_Y, SinHA: Single;
+  SinHA: Single;
+  BikePreset:string;
 begin
   if Inst = nil then Exit;
 
   WantFlat := SameText(Info.BarType, 'flat');
+  BikePreset:='road';
+  if WantFlat then BikePreset:='mtb' else if Info.FixedGear then BikePreset:='fixed';
   HaveFlat := Inst.BarType = btFlat;
   if WantFlat then
     Comps := MTBComponents
@@ -698,8 +674,32 @@ begin
   WheelComp := TWheelComponent(Inst.Component(TWheelComponent));
   SeatComp  := TSeatComponent(Inst.Component(TSeatComponent));
   CrankComp := TCranksetComponent(Inst.Component(TCranksetComponent));
+  DriveComp := TDrivetrainComponent(Inst.Component(TDrivetrainComponent));
   DropBar   := TDropBarComponent(Inst.Component(TDropBarComponent));
   FlatBar   := TFlatBarComponent(Inst.Component(TFlatBarComponent));
+
+  if CrankComp<>nil then CrankComp.ApplyPreset(BikePreset);
+  if DriveComp<>nil then begin
+    DriveComp.ApplyPreset(BikePreset);
+    if Info.FixedGear and(Info.RearSprocketTeeth>=8)then
+      DriveComp.CassetteTeeth[0]:=EnsureRange(Info.RearSprocketTeeth,8,32);
+  end;
+  if DropBar<>nil then DropBar.ShowHoods:=not Info.FixedGear;
+  if ForkComp<>nil then begin
+    ForkComp.ForkAxleToCrown:=DEF_FORK_AXLE_TO_CROWN;
+    ForkComp.ForkRake:=DEF_FORK_RAKE;ForkComp.StemLength:=100;ForkComp.StemAngle:=7;
+    if WantFlat then begin ForkComp.StemLength:=50;ForkComp.StemAngle:=0 end;
+    if Info.ForkTravel>0 then ForkComp.ForkAxleToCrown:=410+Info.ForkTravel;
+  end;
+  if WheelComp<>nil then begin
+    WheelComp.WheelRadius:=DEF_WHEEL_RADIUS;WheelComp.TireWidth:=DEF_TIRE_WIDTH;
+    WheelComp.FrontRimHeight:=30;WheelComp.RearRimHeight:=30;WheelComp.SpokeCount:=16;
+    if WantFlat then begin
+      WheelComp.WheelRadius:=368;WheelComp.TireWidth:=29;
+      WheelComp.FrontRimHeight:=20;WheelComp.RearRimHeight:=20;WheelComp.SpokeCount:=28;
+    end;
+    if Info.FixedGear then WheelComp.SpokeCount:=24;
+  end;
 
   if ForkComp <> nil then
     ForkComp.ForkTravel := Info.ForkTravel;
@@ -718,21 +718,9 @@ begin
     FrameComp.EffectiveTopTubeLength := Geo.EffectiveTopTubeLength;
     if Geo.SeatTubeLength > 0 then
       FrameComp.SeatTubeLength := Geo.SeatTubeLength;
-    if Geo.HeadTubeLength > 0 then
-      FrameComp.HeadTubeLength := Geo.HeadTubeLength
-    else if Geo.Stack > 0 then
-    begin
-      if WheelComp <> nil then
-        WheelRadius := WheelComp.WheelRadius
-      else
-        WheelRadius := 339;
-      BB_Y := WheelRadius - Geo.BBDrop;
-      SinHA := Sin(DegToRad(Geo.HeadTubeAngle));
-      if SinHA > 0.01 then
-        FrameComp.HeadTubeLength := Max(20, (Geo.Stack - BB_Y) / SinHA)
-      else
-        FrameComp.HeadTubeLength := 120;
-    end;
+    if Geo.HeadTubeLength > 0 then FrameComp.HeadTubeLength := Geo.HeadTubeLength;
+    FrameComp.TopTubeHTRatio:=0.15;FrameComp.DownTubeHTRatio:=0.20;
+    FrameComp.TopTubeSeatRatio:=0.97;FrameComp.TopTubeSlope:=0;
     if Geo.HasJunctionRatios then
     begin
       if Geo.TopTubeHTRatio > 0 then
@@ -756,6 +744,12 @@ begin
       ForkComp.StemLength := Geo.StemLength;
     if Geo.StemAngleValid then
       ForkComp.StemAngle := Geo.StemAngle;
+    if(FrameComp<>nil)and(Geo.HeadTubeLength<=0)and(Geo.Stack>0)then begin
+      { Stack is measured from the bottom bracket, not from the ground. }
+      SinHA:=Sin(DegToRad(Geo.HeadTubeAngle));
+      if SinHA>0.01 then FrameComp.HeadTubeLength:=Max(20,
+        (Geo.Stack-Geo.BBDrop+ForkComp.ForkRake*Cos(DegToRad(Geo.HeadTubeAngle)))/SinHA-ForkComp.ForkAxleToCrown);
+    end;
   end;
 
   if WheelComp <> nil then
@@ -772,6 +766,8 @@ begin
 
   if (Geo.CrankLength > 0) and (CrankComp <> nil) then
     CrankComp.CrankLength := Geo.CrankLength;
+  if(CrankComp<>nil)and(Info.ChainringTeeth>=20)then
+    CrankComp.ChainringTeeth:=EnsureRange(Info.ChainringTeeth,20,64);
 
   if Geo.HandlebarWidth > 0 then
   begin
@@ -805,11 +801,6 @@ begin
     end;
     if SeatComp <> nil then
       SeatComp.SeatpostDia := 31.6;
-    if (CrankComp <> nil) and (CrankComp.ChainringTeeth > 42) then
-    begin
-      CrankComp.ChainringTeeth := 32;
-      CrankComp.ChainringRadius := 65;
-    end;
   end
   else
   begin
@@ -826,6 +817,7 @@ begin
       FrameComp.BBShellWidth := 68;
       FrameComp.RearDropoutSpacing := 130;
       FrameComp.FrontDropoutSpacing := 100;
+      if Info.FixedGear then FrameComp.RearDropoutSpacing:=120;
     end;
     if ForkComp <> nil then
     begin
@@ -837,8 +829,8 @@ begin
       SeatComp.SeatpostDia := 24;
   end;
 
-  if Info.BikeName <> '' then
-    Inst.Preset := Info.BikeName;
+  { Preset is a component-layout key in serialized bikes, not a caption. }
+  Inst.Preset := BikePreset;
 
   if WantFlat <> HaveFlat then
     Inst.BuildWithLOD(Comps, Inst.LastBuildColors, nil, 15, 40, 80)

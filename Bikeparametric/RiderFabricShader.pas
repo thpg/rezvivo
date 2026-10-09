@@ -19,7 +19,7 @@ type
 procedure ApplyRiderFabric(Root: TX3DNode);
 
 implementation
-uses SysUtils, Math, CastleRenderOptions,RiderSurfaceMotion;
+uses RenderComplexity, SysUtils, Math, CastleRenderOptions,RiderSurfaceMotion;
 const
   FabricVS =
     'attribute vec3 riderFabricRest;' + #10 +
@@ -33,6 +33,7 @@ const
     '  rfRestMetric=mat3(castle_ModelViewMatrix)*riderFabricMetric;' + #10 +
     '}';
   FabricFS =
+    'uniform float rz_complexity;' + #10 +
     'varying vec3 rfPosition;' + #10 +
     'varying vec3 rfRestMetric;' + #10 +
     'varying vec2 rfUV;uniform vec2 rfReach;uniform float rfRegion;' + #10 +
@@ -58,6 +59,8 @@ const
     '  return (wave.x+wave.y+wave.x*wave.y)*0.33;' + #10 +
     '}' + #10 +
     'void PLUG_fragment_eye_space(const vec4 v, inout vec3 n) {' + #10 +
+    '  if(rz_complexity<0.5)return;' + #10 +
+    '  if(rz_complexity<1.5){rfDetail=rfWeave(rfUV);return;}' + #10 +
     // Generalized metric eigenvalues give in-plane stretch without a CPU
     // cloth solve. The rest metric carries the same world/body scale; camera
     // rotation and rigid limb motion cannot create compression wrinkles.
@@ -99,15 +102,18 @@ const
     '    fold+=0.0015*flank*drape;compressedFold+=0.0015*flank*drape;' + #10 +
     // Irregular gathers start at sewn pocket corners and die inside the
     // panel. Their slope, length and width differ; no waist-wide accordion.
-    '    float pc=sign(p.x)*0.099*step(0.050,ax);' + #10 +
-    '    float u=(p.x-pc)/0.096+0.5;' + #10 +
-    '    float pv=(p.y-1.025)/mix(0.175,0.162,step(0.050,ax));' + #10 +
+    // The three pockets share a top edge; the outer panels sit on the back,
+    // clear of the lateral silhouette (refine_rider_pockets.py).
+    '    float pc=sign(p.x)*0.092*step(0.050,ax);' + #10 +
+    '    float pocketWidth=mix(0.096,0.084,step(0.050,ax));' + #10 +
+    '    float u=(p.x-pc)/pocketWidth+0.5;' + #10 +
+    '    float pv=(p.y-1.026)/0.164;' + #10 +
     '    float panel=back*smoothstep(0.0,0.12,u)*(1.0-smoothstep(0.88,1.0,u))*smoothstep(0.0,0.10,pv)*(1.0-smoothstep(0.88,1.02,pv));' + #10 +
-    '    float bias=pc/0.099,curve=0.10*pv*pv;' + #10 +
+    '    float bias=pc/0.092,curve=0.10*pv*pv;' + #10 +
     '    float gline=u+(0.48+0.09*bias)*pv+curve-0.31-0.025*bias;' + #10 +
-    '    float gathers=rfRidge(gline*0.096,0.0045)*rfBell((pv-0.25-0.05*bias)/0.28);' + #10 +
-    '    gathers+=(0.66-0.15*bias)*rfRidge((u-(0.32-0.05*bias)*pv-curve-0.67)*0.096,0.0055)*rfBell((pv-0.35+0.04*bias)/0.25);' + #10 +
-    '    gathers-=0.30*rfRidge((gline-0.10)*0.096,0.006)*rfBell((pv-0.23)/0.24);' + #10 +
+    '    float gathers=rfRidge(gline*pocketWidth,0.0045)*rfBell((pv-0.25-0.05*bias)/0.28);' + #10 +
+    '    gathers+=(0.66-0.15*bias)*rfRidge((u-(0.32-0.05*bias)*pv-curve-0.67)*pocketWidth,0.0055)*rfBell((pv-0.35+0.04*bias)/0.25);' + #10 +
+    '    gathers-=0.30*rfRidge((gline-0.10)*pocketWidth,0.006)*rfBell((pv-0.23)/0.24);' + #10 +
     '    fold+=0.00125*panel*gathers;' + #10 +
     '    fold+=0.0009*lower*rfBell((ax-0.09)/0.060)*(rfRidge(p.y+0.32*ax-1.077,0.005)-0.35*rfRidge(p.y+0.32*ax-1.088,0.008));' + #10 +
     // Cloth tension follows the actual left/right shoulder girdle, including
@@ -173,7 +179,7 @@ const
     // Charlie NDF (Estevez/Kulla 2017), Neubelt visibility; see Filament cloth model.
     // A modest fiber lobe suits cycling synthetics, rather than velvet.
     'void PLUG_physical_light_surface(inout vec3 diff,inout vec3 spec,const vec3 L,const vec3 N,const vec3 V) {' + #10 +
-    '  if(rfRegion>4.5)return;' + #10 +
+    '  if(rfRegion>4.5 || rz_complexity<2.5)return;' + #10 +
     '  float nl=max(dot(N,L),0.0),nv=max(dot(N,V),0.0);' + #10 +
     '  if(nl<=0.0 || nv<=0.0)return;' + #10 +
     '  vec3 H=L+V;H*=inversesqrt(max(dot(H,H),1e-8));float nh=clamp(dot(N,H),0.0,1.0);' + #10 +
@@ -322,6 +328,7 @@ begin
   Mat.NormalTexture:=nil;Mat.MetallicRoughnessTexture:=nil;
   Mat.Metallic:=0;Mat.Roughness:=Profile.Z;
   Eff:=TEffectNode.Create('RiderProceduralFabric');
+  AttachRenderComplexity(Eff,rdRider);
   Eff.Language:=slGLSL;Eff.UniformMissing:=umIgnore;
   Breath:=TSFFloat.Create(Eff,True,'riderSurfaceAmount',0);Eff.AddCustomField(Breath);
   SetLength(FBreathFields,Length(FBreathFields)+1);FBreathFields[High(FBreathFields)]:=Breath;

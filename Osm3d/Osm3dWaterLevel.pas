@@ -39,6 +39,7 @@ type
   private
     FFeatures: array of TWaterLevelFeature;
     FAxes: array of TWaterLevelAxis;
+    FFeatureCount, FAxisCount: Integer;
     FGrid: TWaterLevelGrid;
     FRoadGrid: TWaterLevelGrid;
     FRoads: array of TWaterLevelRoad;
@@ -59,6 +60,8 @@ type
     procedure AddArea(const MP, SampleMP: TPolygonMultipolygon;
       SampleProjection: TLocalProjection; Tags: TOSMTags);
     procedure AddAxis(const A,B: TScatterPoint; Width: Single; MinorWater: Boolean);
+    function AppendAxis(const Axis:TWaterLevelAxis):Integer;
+    procedure AppendFeature(const Feature:TWaterLevelFeature);
     procedure BuildGrid;
     procedure BuildRoadProtection(Dataset: TOSMDataset);
   public
@@ -84,9 +87,11 @@ const
   ROAD_WATER_BLEND = 4.0;
   FORD_RADIUS = 8.0;
 
-procedure Push(var A: TWaterLevelInts; V: Integer);
-var N: Integer;
-begin N:=Length(A);SetLength(A,N+1);A[N]:=V;end;
+procedure Push(var A: TWaterLevelInts; var Count:Integer; V: Integer);
+begin
+  if Count=Length(A) then SetLength(A,Max(4,Count*2));
+  A[Count]:=V;Inc(Count);
+end;
 
 function DistanceToSegment(X,Z:Double;const A,B:TScatterPoint;out T:Double):Double;
 var DX,DZ,L:Double;
@@ -144,22 +149,26 @@ begin
 end;
 
 procedure TWaterLevelField.IndexEdges(var F:TWaterLevelFeature);
-var K:Integer;
+var K,EdgeCount,EdgeCapacity:Integer;RowCounts:TWaterLevelInts;
   procedure Ring(const P:TPolygonRing);
   var I,J,N,R,R0,R1:Integer;
   begin
     J:=High(P);
     for I:=0 to High(P) do begin
-      N:=Length(F.Edges);SetLength(F.Edges,N+1);F.Edges[N].A:=P[J];F.Edges[N].B:=P[I];
+      N:=EdgeCount;Inc(EdgeCount);F.Edges[N].A:=P[J];F.Edges[N].B:=P[I];
       R0:=Max(0,Floor((Min(P[J].Z,P[I].Z)-FMinZ-BANK_BLEND-SHORE_PIN)/FCell));
       R1:=Min(FRows-1,Floor((Max(P[J].Z,P[I].Z)-FMinZ+BANK_BLEND+SHORE_PIN)/FCell));
-      for R:=R0 to R1 do Push(F.Rows[R],N);
+      for R:=R0 to R1 do Push(F.Rows[R],RowCounts[R],N);
       J:=I;
     end;
   end;
 begin
-  SetLength(F.Rows,FRows);Ring(F.Poly.Outer);
+  EdgeCapacity:=Length(F.Poly.Outer);
+  for K:=0 to High(F.Poly.Inners) do Inc(EdgeCapacity,Length(F.Poly.Inners[K]));
+  SetLength(F.Edges,EdgeCapacity);EdgeCount:=0;
+  SetLength(RowCounts,FRows);SetLength(F.Rows,FRows);Ring(F.Poly.Outer);
   for K:=0 to High(F.Poly.Inners) do Ring(F.Poly.Inners[K]);
+  for K:=0 to FRows-1 do SetLength(F.Rows[K],RowCounts[K]);
 end;
 
 function TWaterLevelField.PolygonAt(const F:TWaterLevelFeature;X,Z:Double;
@@ -180,6 +189,19 @@ begin
   if Distance<=SHORE_PIN then Result:=True;
 end;
 
+function TWaterLevelField.AppendAxis(const Axis:TWaterLevelAxis):Integer;
+begin
+  Result:=FAxisCount;
+  if FAxisCount=Length(FAxes) then SetLength(FAxes,Max(64,FAxisCount*2));
+  FAxes[FAxisCount]:=Axis;Inc(FAxisCount);
+end;
+
+procedure TWaterLevelField.AppendFeature(const Feature:TWaterLevelFeature);
+begin
+  if FFeatureCount=Length(FFeatures) then SetLength(FFeatures,Max(64,FFeatureCount*2));
+  FFeatures[FFeatureCount]:=Feature;Inc(FFeatureCount);
+end;
+
 procedure TWaterLevelField.AddAxis(const A,B:TScatterPoint;Width:Single;MinorWater:Boolean);
 var Axis:TWaterLevelAxis;F:TWaterLevelFeature;N:Integer;
 begin
@@ -190,12 +212,12 @@ begin
      (Min(A.Z,B.Z)-Width*1.5-BANK_BLEND>FMaxZ) then Exit;
   if not SampleLocal(A.X,A.Z,Axis.HA) or not SampleLocal(B.X,B.Z,Axis.HB) then Exit;
   Axis.A:=A;Axis.B:=B;Axis.HalfWidth:=Width*0.5;
-  N:=Length(FAxes);SetLength(FAxes,N+1);FAxes[N]:=Axis;
+  N:=AppendAxis(Axis);
   F:=Default(TWaterLevelFeature);F.LinearAxis:=N;F.River:=True;
   F.MinorWater:=MinorWater;
   F.MinX:=Min(A.X,B.X)-Width*1.5;F.MaxX:=Max(A.X,B.X)+Width*1.5;
   F.MinZ:=Min(A.Z,B.Z)-Width*1.5;F.MaxZ:=Max(A.Z,B.Z)+Width*1.5;
-  N:=Length(FFeatures);SetLength(FFeatures,N+1);FFeatures[N]:=F;
+  AppendFeature(F);
 end;
 
 function TWaterLevelField.AxisHeight(const F:TWaterLevelFeature;X,Z:Double;out H:Single):Boolean;
@@ -232,6 +254,7 @@ begin
 end;
 
 procedure TWaterLevelField.IndexAxes(var F:TWaterLevelFeature);
+var NodeCount:Integer;
   function Mid(I:Integer;AlongX:Boolean):Double;
   begin
     if AlongX then Result:=FAxes[I].A.X+FAxes[I].B.X
@@ -252,7 +275,8 @@ procedure TWaterLevelField.IndexAxes(var F:TWaterLevelFeature);
   function Build(L,R:Integer):Integer;
   var B:TWaterAxisNode;A:TWaterLevelAxis;I,N,M:Integer;
   begin
-    N:=Length(F.AxisTree);SetLength(F.AxisTree,N+1);
+    N:=NodeCount;Inc(NodeCount);
+    if NodeCount>Length(F.AxisTree) then SetLength(F.AxisTree,Max(16,Length(F.AxisTree)*2));
     B:=Default(TWaterAxisNode);B.MinX:=1e30;B.MinZ:=1e30;B.MaxX:=-1e30;B.MaxZ:=-1e30;
     for I:=L to R do begin
       A:=FAxes[F.Axes[I]];
@@ -267,19 +291,22 @@ procedure TWaterLevelField.IndexAxes(var F:TWaterLevelFeature);
     F.AxisTree[N]:=B;Result:=N;
   end;
 begin
+  NodeCount:=0;
   if Length(F.Axes)>0 then Build(0,High(F.Axes));
+  SetLength(F.AxisTree,NodeCount);
 end;
 
 procedure TWaterLevelField.FallbackAxes(var F:TWaterLevelFeature);
 type TSection=record A:TScatterPoint;Lo,Hi:Double;H:Single;end;
 var Prev,Curr:array of TSection;Cuts:array of Double;
-    I,J,K,N,Step,FirstStep,LastStep,Best:Integer;
+    I,J,K,N,Step,FirstStep,LastStep,Best,AxisCount:Integer;
     CX,CZ,XX,XZ,ZZ,DX,DZ,Angle,S,S0,S1,SA,SB,T,Q,Dist,BestD,Lo,Hi:Double;
     A,B:TScatterPoint;Axis:TWaterLevelAxis;Sec:TSection;
 begin
   { Missing OSM centre line: slice the actual polygon along its major
     direction. Pair intersections (including holes), sample each section's
     centre, connect neighbouring overlapping sections. Never one lake level. }
+  AxisCount:=Length(F.Axes);
   CX:=(F.MinX+F.MaxX)*0.5;CZ:=(F.MinZ+F.MaxZ)*0.5;
   XX:=0;XZ:=0;ZZ:=0;
   for I:=0 to High(F.Poly.Outer) do begin
@@ -328,17 +355,18 @@ begin
       if Best>=0 then begin
         Axis.A:=Prev[Best].A;Axis.B:=Sec.A;Axis.HA:=Prev[Best].H;Axis.HB:=Sec.H;
         Axis.HalfWidth:=0;
-        K:=Length(FAxes);SetLength(FAxes,K+1);FAxes[K]:=Axis;Push(F.Axes,K);
+        K:=AppendAxis(Axis);Push(F.Axes,AxisCount,K);
       end;
       K:=Length(Curr);SetLength(Curr,K+1);Curr[K]:=Sec;
     end;
     Prev:=Curr;
   end;
+  SetLength(F.Axes,AxisCount);
 end;
 
 procedure TWaterLevelField.AddArea(const MP,SampleMP:TPolygonMultipolygon;
   SampleProjection:TLocalProjection;Tags:TOSMTags);
-var F:TWaterLevelFeature;I,J,K,N,NS:Integer;D,X,Z,CX,CZ,H,Temp:Double;
+var F:TWaterLevelFeature;I,J,K,N,NS,AxisCount:Integer;D,X,Z,CX,CZ,H,Temp:Double;
     SX0,SX1,SZ0,SZ1:Double;
     SampleH:Single;Samples:array[0..24]of Double;
     Cuts:array of Double;CutCount:Integer;Unavailable:Boolean;
@@ -380,11 +408,13 @@ begin
   if F.River then begin
     { Prefer the actual meandering OSM axis. Never average river height
       over its length, nor impose a slope cap on mountain streams. }
-    for I:=0 to High(FAxes) do begin
+    AxisCount:=0;
+    for I:=0 to FAxisCount-1 do begin
       X:=(FAxes[I].A.X+FAxes[I].B.X)*0.5;Z:=(FAxes[I].A.Z+FAxes[I].B.Z)*0.5;
       if (X<F.MinX) or (X>F.MaxX) or (Z<F.MinZ) or (Z>F.MaxZ) then Continue;
-      if PolygonAt(F,X,Z,D) then Push(F.Axes,I);
+      if PolygonAt(F,X,Z,D) then Push(F.Axes,AxisCount,I);
     end;
+    SetLength(F.Axes,AxisCount);
     if Length(F.Axes)=0 then FallbackAxes(F);
     if Length(F.Axes)=0 then begin Inc(FSkipped);Exit;end;
     IndexAxes(F);
@@ -429,12 +459,12 @@ begin
     H:=(Samples[(NS-1) div 2]+Samples[NS div 2])*0.5;
     F.Level:=Round(H*64)/64;Inc(FLakes);
   end;
-  N:=Length(FFeatures);SetLength(FFeatures,N+1);FFeatures[N]:=F;
+  AppendFeature(F);
 end;
 
 procedure TWaterLevelField.BuildRoadProtection(Dataset: TOSMDataset);
 var Way:TOSMWay;A,B:TOSMNode;Params:TRoadParams;P:TVector3;
-    Road:TWaterLevelRoad;I,N,X,Z,X0,X1,Z0,Z1:Integer;R:Double;
+    Road:TWaterLevelRoad;I,N,X,Z,X0,X1,Z0,Z1:Integer;R:Double;Counts:TWaterLevelInts;
   function Ford(Tags:TOSMTags):Boolean;
   var V:string;
   begin
@@ -447,7 +477,7 @@ begin
   N:=0;
   for I:=0 to High(FFeatures) do if FFeatures[I].MinorWater then Inc(N);
   if N=0 then Exit;
-  SetLength(FRoadGrid,Length(FGrid));N:=0;
+  SetLength(FRoadGrid,Length(FGrid));SetLength(Counts,Length(FGrid));N:=0;
   for Way in Dataset.Ways.Values do begin
     if OsmWayIsBridge(Way.Tags) or OsmWayIsTunnel(Way.Tags) or
        Ford(Way.Tags) or (Way.Tags.GetLower('area')='yes') then Continue;
@@ -474,11 +504,12 @@ begin
       FRoads[N]:=Road;
       { Only water cells need road candidates; immutable after construction. }
       for Z:=Z0 to Z1 do for X:=X0 to X1 do
-        if Length(FGrid[Z*FCols+X])>0 then Push(FRoadGrid[Z*FCols+X],N);
+        if Length(FGrid[Z*FCols+X])>0 then Push(FRoadGrid[Z*FCols+X],Counts[Z*FCols+X],N);
       Inc(N);
     end;
   end;
   SetLength(FRoads,N);
+  for I:=0 to High(FRoadGrid) do SetLength(FRoadGrid[I],Counts[I]);
 end;
 
 function TWaterLevelField.RoadProtectionAt(X,Z:Double):Single;
@@ -508,15 +539,16 @@ begin
 end;
 
 procedure TWaterLevelField.BuildGrid;
-var I,X,Z,X0,X1,Z0,Z1:Integer;
+var I,X,Z,X0,X1,Z0,Z1:Integer;Counts:TWaterLevelInts;
 begin
   if Length(FFeatures)=0 then Exit;
-  SetLength(FGrid,FCols*FRows);
+  SetLength(FGrid,FCols*FRows);SetLength(Counts,Length(FGrid));
   for I:=0 to High(FFeatures) do with FFeatures[I] do begin
     X0:=Max(0,Floor((MinX-BANK_BLEND-FMinX)/FCell));X1:=Min(FCols-1,Floor((MaxX+BANK_BLEND-FMinX)/FCell));
     Z0:=Max(0,Floor((MinZ-BANK_BLEND-FMinZ)/FCell));Z1:=Min(FRows-1,Floor((MaxZ+BANK_BLEND-FMinZ)/FCell));
-    for Z:=Z0 to Z1 do for X:=X0 to X1 do Push(FGrid[Z*FCols+X],I);
+    for Z:=Z0 to Z1 do for X:=X0 to X1 do Push(FGrid[Z*FCols+X],Counts[Z*FCols+X],I);
   end;
+  for I:=0 to High(FGrid) do SetLength(FGrid[I],Counts[I]);
 end;
 
 constructor TWaterLevelField.Create(HM:THeightmap;Dataset:TOSMDataset;
@@ -601,6 +633,7 @@ begin
         finally SampleProjection.Free;end;
       end;
   finally Used.Free;end;
+  SetLength(FFeatures,FFeatureCount);SetLength(FAxes,FAxisCount);
   BuildGrid;
   if ProtectRoads then BuildRoadProtection(Dataset);
   { Runtime membership uses indexed edges, not another copy of the rings. }

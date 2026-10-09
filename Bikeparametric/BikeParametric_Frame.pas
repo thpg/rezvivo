@@ -556,13 +556,15 @@ var
   IFS: TIndexedFaceSetNode;
   Shape: TShapeNode;
   FrameXf: TTransformNode;
-  J, NJ, Slices, VBase, BotCenter, TopCenter, TubeI: Integer;
-  Theta, CT, ST, TubeLen: Single;
+  J, NJ, Slices, VBase, BotCenter, TopCenter, TubeI, RingI, RingCount, RingBase: Integer;
+  Theta, CT, ST, TubeLen, T, RadiusSide, RadiusDepth, Bend: Single;
   Dir, Perp1, Perp2, Up, Pos: TVector3;
   Wh: TWheelComponent; LocalWR: Single;
   Fk: TForkComponent; LocalFAC, LocalFR: Single;
+  Mountain: Boolean;
 begin
   M := Ctx.Skeleton.MM;
+  Mountain:=(Builder<>nil)and(TBikeBuilder(Builder).BarType=btFlat);
 
   Wh := TWheelComponent(FindComponent(TWheelComponent));
   if Wh <> nil then LocalWR := Wh.WheelRadius else LocalWR := DEF_WHEEL_RADIUS;
@@ -609,19 +611,35 @@ begin
     Perp1 := TVector3.CrossProduct(Dir, Up).Normalize;
     Perp2 := TVector3.CrossProduct(Dir, Perp1);
 
-    { Bottom ring: t=0 }
-    for J := 0 to Slices - 1 do begin
-      Theta := 2 * Pi * J / Slices;
-      CT := Cos(Theta); ST := Sin(Theta);
-      Pos := Tubes[TubeI].S + (Perp1 * CT + Perp2 * ST) * Tubes[TubeI].R;
-      Coord.FdPoint.Items.Add(Pos);
-    end;
-    { Top ring: t=1 }
-    for J := 0 to Slices - 1 do begin
-      Theta := 2 * Pi * J / Slices;
-      CT := Cos(Theta); ST := Sin(Theta);
-      Pos := Tubes[TubeI].E + (Perp1 * CT + Perp2 * ST) * Tubes[TubeI].R;
-      Coord.FdPoint.Items.Add(Pos);
+    { Hydroformed MTB tubes keep the fit anchors, with a wider down tube,
+      a flatter top tube and a tapered head tube. Other bicycles retain
+      their circular sections and original two-ring topology. }
+    RingCount:=2;
+    if Mountain and (TubeI in [FT_DOWN_TUBE,FT_TOP_TUBE]) then RingCount:=5;
+    for RingI:=0 to RingCount-1 do begin
+      T:=RingI/(RingCount-1);
+      RadiusSide:=Tubes[TubeI].R;RadiusDepth:=RadiusSide;Bend:=0;
+      if Mountain then case TubeI of
+        FT_DOWN_TUBE: begin
+          RadiusSide:=RadiusSide*(1.12+0.20*Sin(Pi*T));
+          RadiusDepth:=RadiusDepth*(1.44+0.18*Sin(Pi*T));
+          Bend:=0.003*Sin(Pi*T);
+        end;
+        FT_TOP_TUBE: begin
+          RadiusSide:=RadiusSide*(1.10+0.10*T);
+          RadiusDepth:=RadiusDepth*(0.88+0.12*T);
+          Bend:=-0.002*Sin(Pi*T);
+        end;
+        FT_HEAD_TUBE: begin
+          RadiusSide:=RadiusSide*(1.16-0.20*T);RadiusDepth:=RadiusSide;
+        end;
+      end;
+      for J:=0 to Slices-1 do begin
+        Theta:=2*Pi*J/Slices;CT:=Cos(Theta);ST:=Sin(Theta);
+        Pos:=Tubes[TubeI].S+(Tubes[TubeI].E-Tubes[TubeI].S)*T+
+          Perp1*(CT*RadiusSide)+Perp2*(ST*RadiusDepth+Bend);
+        Coord.FdPoint.Items.Add(Pos);
+      end;
     end;
     { Cap centers }
     BotCenter := Coord.FdPoint.Count;
@@ -631,12 +649,14 @@ begin
     Coord.FdPoint.Items.Add(Tubes[TubeI].E);
 
     { Body quads }
+    for RingI:=0 to RingCount-2 do
     for J := 0 to Slices - 1 do begin
+      RingBase:=VBase+RingI*Slices;
       NJ := (J + 1) mod Slices;
-      IFS.FdCoordIndex.Items.Add(VBase + J);
-      IFS.FdCoordIndex.Items.Add(VBase + NJ);
-      IFS.FdCoordIndex.Items.Add(VBase + Slices + NJ);
-      IFS.FdCoordIndex.Items.Add(VBase + Slices + J);
+      IFS.FdCoordIndex.Items.Add(RingBase + J);
+      IFS.FdCoordIndex.Items.Add(RingBase + NJ);
+      IFS.FdCoordIndex.Items.Add(RingBase + Slices + NJ);
+      IFS.FdCoordIndex.Items.Add(RingBase + Slices + J);
       IFS.FdCoordIndex.Items.Add(-1);
     end;
     { Bottom cap }
@@ -651,8 +671,8 @@ begin
     for J := 0 to Slices - 1 do begin
       NJ := (J + 1) mod Slices;
       IFS.FdCoordIndex.Items.Add(TopCenter);
-      IFS.FdCoordIndex.Items.Add(VBase + Slices + J);
-      IFS.FdCoordIndex.Items.Add(VBase + Slices + NJ);
+      IFS.FdCoordIndex.Items.Add(VBase + (RingCount-1)*Slices + J);
+      IFS.FdCoordIndex.Items.Add(VBase + (RingCount-1)*Slices + NJ);
       IFS.FdCoordIndex.Items.Add(-1);
     end;
   end;

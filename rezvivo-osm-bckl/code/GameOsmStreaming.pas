@@ -33,7 +33,7 @@ unit GameOsmStreaming;
 interface
 
 uses
-  Classes, SysUtils,
+  Classes, SysUtils, fpjson,
   CastleVectors, CastleViewport, CastleUIControls,
   Osm3dGeoMath, Osm3dMapUtils, Osm3dStudioSettings, Osm3dStreamingLauncher,
   FitFile, GamePath, GameFitLoadProfile;
@@ -171,7 +171,8 @@ type
 
     { BUILDING_OBSTACLE: soft XZ push if world point is inside a solid
       building footprint (session index on streaming map). }
-    function BuildingPushOutXZ(var WorldX, WorldZ: Single): Boolean;
+    function BuildingBodyMove(const From,Forward,HalfSize:TVector3;
+      var Target:TVector3):Boolean;
     { BUILDING_OBSTACLE: camera push-out + soft roof lift. }
     function ResolveCameraBuilding(var Cam: TVector3): Boolean;
 
@@ -191,6 +192,7 @@ type
     function RouteStartGroundY(out AY: Single): Boolean;
     { The start scene is still being generated, assembled or mounted. }
     function RouteStartGroundLoading: Boolean;
+    function RouteStartGroundStatus(out ErrorText: string; Diagnostics: TJSONObject = nil): string;
 
     { Подтвердить постановку райдера на старт: этап «Постановка на старт»
       на оверлее прогрева → done и оверлей гасится. AError <> '' — этап
@@ -406,15 +408,19 @@ begin
   Result:=False;
   if FActive or (AViewport=nil) then Exit;
   FPointStart:=True;FOrigin:=Geo;FViewport:=AViewport;
+  Logger.Info(Format('[Osm3d] Starting exploration at %.6f, %.6f; automatic map server selection',
+    [Geo.Lat,Geo.Lon]));
   SetLength(FRoute,1);FRoute[0]:=Geo;
   Config:=BuildSettings('');Config.GenerateRouteOnly:=False;
   Config.FitHeightCorrection:=False;
   FSession:=TOsm3dStreamingSession.Create(Config,Geo,@HandleStreamLog);
   AViewport.Items.Add(FSession.Map);
   FSession.Map.ShowFitPoints:=False;FSession.Map.ShowFitPointsSnapped:=False;
-  { No synthetic FIT, route snap or corridor warmup. Stream at the camera,
-    and hold movement until the exact starting surface has loaded. }
-  FSession.Map.WarmupHoldRider:=False;
+  { The common flat loading map waits only for the actual starting tile.
+    No synthetic FIT, snapping or route corridor is needed. }
+  AViewport.InsertFront(FSession.Map.WarmupOverlay);
+  FOverlayHost:=AViewport;
+  FSession.Map.BeginPointWarmup(Geo);
   AViewport.Camera.SetView(Vector3(0,40,10),Vector3(0,-0.8,-1),Vector3(0,1,0));
   FActive:=True;Result:=True;
 end;
@@ -449,8 +455,24 @@ begin
 end;
 
 function TGameOsmStreaming.RoutePrepDone: Boolean;
+var P:TVector3;
 begin
-  Result := FActive and (FSession <> nil) and (FPointStart or FSession.Map.RoutePrepDone);
+  Result := FActive and (FSession <> nil);
+  if not Result then Exit;
+  if FPointStart then begin
+    P:=FSession.GeoToLocal(FOrigin);
+    Result:=FSession.Map.GroundSceneReadyAt(P.X,P.Z);
+  end else Result:=FSession.Map.RoutePrepDone;
+end;
+
+function TGameOsmStreaming.RouteStartGroundStatus(out ErrorText: string; Diagnostics: TJSONObject): string;
+var P:TVector3;
+begin
+  Result:='';ErrorText:='';
+  if not FActive or (FSession=nil) or (Length(FRoute)=0) then Exit;
+  if SnapReady then P:=FSession.GeoToLocal(FSession.Map.RideRoute[0])
+  else P:=FSession.GeoToLocal(FRoute[0]);
+  Result:=FSession.Map.GroundLoadStatusAt(P.X,P.Z,ErrorText,Diagnostics);
 end;
 
 function TGameOsmStreaming.RouteStartGroundLoading: Boolean;
@@ -582,15 +604,14 @@ begin
   end;
 end;
 
-function TGameOsmStreaming.BuildingPushOutXZ(var WorldX, WorldZ: Single): Boolean;
-var
-  BaseY, MaxY: Single;
+function TGameOsmStreaming.BuildingBodyMove(const From,Forward,HalfSize:TVector3;
+  var Target:TVector3):Boolean;
 begin
   { BUILDING_OBSTACLE }
   Result := False;
   if not FActive then Exit;
   if FSession = nil then Exit;
-  Result := FSession.Map.BuildingPushOutXZ(WorldX, WorldZ, BaseY, MaxY);
+  Result := FSession.Map.BuildingBodyMove(From,Forward,HalfSize,Target);
 end;
 
 function TGameOsmStreaming.ResolveCameraBuilding(var Cam: TVector3): Boolean;

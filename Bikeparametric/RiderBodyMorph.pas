@@ -27,6 +27,7 @@ type
       FLast: TRiderBodyParameters;
       FApplied: Boolean;
       FRevision: Cardinal;
+      FBodyVertexCount: Integer;
       FInseamVertex:Integer;
       FHasInseamPoint:Boolean;
       FInseamPoint,FInseamFitted:TVector3;
@@ -34,6 +35,10 @@ type
   public
     function Load(const Path: string; Skin: TSkinNode; Rig: TTripoRig): Boolean;
     function Apply(const Value: TRiderBodyParameters; Rig: TTripoRig): Boolean;
+    procedure BindGarment(Source,Garment:TAbstractComposedGeometryNode;
+      RigFirst:Integer;Rig:TTripoRig);
+    procedure BindGarmentSurface(Garment:TAbstractComposedGeometryNode;
+      RigFirst:Integer;Rig:TTripoRig);
     procedure Measure(Rig:TTripoRig; out Height,Inseam:Single);
     property Revision: Cardinal read FRevision;
   end;
@@ -54,14 +59,15 @@ begin
   try
     if Info.Get('version',0)<>1 then raise EReadError.Create('Unsupported rider body shape version');
     Shapes:=ArrOf(Info,'shapes'); Targets:=ArrOf(Info,'targets');
+    FBodyVertexCount:=Info.Get('vertices',0);
     if (Shapes=nil) or (Targets=nil) or (Targets.Count<>5) or
-      (Info.Get('vertices',0)<>Rig.VertexCount) then
+      (FBodyVertexCount<=0) or (FBodyVertexCount>Rig.VertexCount) then
       raise EReadError.Create('Invalid rider body shape header');
-    if Data.Size<>Int64(Rig.VertexCount)*5*2*SizeOf(TVector3) then
+    if Data.Size<>Int64(FBodyVertexCount)*5*2*SizeOf(TVector3) then
       raise EReadError.Create('Invalid rider body shape length');
     SetLength(FShapes,Shapes.Count);
     FInseamVertex:=Info.Get('inseamVertex',-1);
-    if (FInseamVertex<0) or (FInseamVertex>=Rig.VertexCount) then
+    if (FInseamVertex<0) or (FInseamVertex>=FBodyVertexCount) then
       raise EReadError.Create('Invalid rider inseam reference');
     FHasInseamPoint:=False;
     PointData:=ArrOf(Info,'inseamPoint');DeltaData:=ArrOf(Info,'inseamDeltas');
@@ -80,7 +86,7 @@ begin
     for I:=0 to Shapes.Count-1 do
     begin
       Item:=Shapes.Objects[I]; Count:=Item.Get('vertices',0);
-      if (Count<=0) or (First+Count>Rig.VertexCount) or
+      if (Count<=0) or (Count>FBodyVertexCount-First) or
         (Item.Get('first',-1)<>First) then raise EReadError.Create('Invalid rider body vertex range');
       Shape:=nil;
       for J:=0 to Skin.FdShapes.Count-1 do
@@ -111,9 +117,81 @@ begin
         Data.ReadBuffer(P^.DeltaN[K][0],Count*SizeOf(TVector3));
       end;
     end;
-    if First<>Rig.VertexCount then raise EReadError.Create('Incomplete rider body shape');
+    if First<>FBodyVertexCount then raise EReadError.Create('Incomplete rider body shape');
     Result:=True;
   finally Info.Free; Data.Free end;
+end;
+
+procedure TRiderBodyMorph.BindGarment(Source,Garment:TAbstractComposedGeometryNode;
+  RigFirst:Integer;Rig:TTripoRig);
+var I,J,K,N,Index:Integer;
+begin
+  if(Source=nil)or(Garment=nil)or not(Garment.Coord is TCoordinateNode)or
+    not(Garment.Normal is TNormalNode)then Exit;
+  Index:=-1;
+  for I:=0 to High(FShapes)do begin
+    if FShapes[I].Geometry=Garment then Exit;
+    if FShapes[I].Geometry=Source then Index:=I;
+  end;
+  if Index<0 then Exit;
+  N:=Length(FShapes[Index].Position);
+  if(TCoordinateNode(Garment.Coord).FdPoint.Count<>N)or
+    (TNormalNode(Garment.Normal).FdVector.Count<>N)or
+    (RigFirst<FBodyVertexCount)or(N>Rig.VertexCount-RigFirst)then
+    raise EReadError.Create('Invalid garment body binding');
+  I:=Length(FShapes);SetLength(FShapes,I+1);
+  with FShapes[I]do begin
+    Geometry:=Garment;Coord:=TCoordinateNode(Garment.Coord);
+    Normal:=TNormalNode(Garment.Normal);First:=RigFirst;
+    SetLength(Position,N);SetLength(Normals,N);
+    for J:=0 to N-1 do begin Position[J]:=Coord.FdPoint.Items[J];Normals[J]:=Normal.FdVector.Items[J] end;
+    { Donor topology is preserved by the wardrobe. Share immutable authored
+      shape fields, retaining the garment's own rest offset and normals. }
+    for K:=0 to 4 do begin DeltaP[K]:=FShapes[Index].DeltaP[K];DeltaN[K]:=FShapes[Index].DeltaN[K] end;
+  end;
+end;
+
+procedure TRiderBodyMorph.BindGarmentSurface(Garment:TAbstractComposedGeometryNode;
+  RigFirst:Integer;Rig:TTripoRig);
+var I,J,K,V,N,R,Dest,Count:Integer;Point,D,Delta:TVector3;Distance,Total:Single;
+  NearShape,NearVertex:array[0..2]of Integer;NearDistance,Weight:array[0..2]of Single;
+begin
+  if(Garment=nil)or not(Garment.Coord is TCoordinateNode)or not(Garment.Normal is TNormalNode)then Exit;
+  for I:=0 to High(FShapes)do if FShapes[I].Geometry=Garment then Exit;
+  Count:=TCoordinateNode(Garment.Coord).FdPoint.Count;
+  if(RigFirst<FBodyVertexCount)or(Count>Rig.VertexCount-RigFirst)then raise EReadError.Create('Invalid tailored garment binding');
+  Dest:=Length(FShapes);SetLength(FShapes,Dest+1);
+  with FShapes[Dest]do begin
+    Geometry:=Garment;Coord:=TCoordinateNode(Garment.Coord);Normal:=TNormalNode(Garment.Normal);First:=RigFirst;
+    SetLength(Position,Count);SetLength(Normals,Count);
+    for K:=0 to 4 do begin SetLength(DeltaP[K],Count);SetLength(DeltaN[K],Count)end;
+  end;
+  { Generated panels and sewn details have their own topology. Transfer
+    only static body proportions, once at load, rather than giving them
+    the jersey's pose corrections or running another animation solver. }
+  for V:=0 to Count-1 do begin
+    Point:=FShapes[Dest].Coord.FdPoint.Items[V];FShapes[Dest].Position[V]:=Point;
+    FShapes[Dest].Normals[V]:=FShapes[Dest].Normal.FdVector.Items[V];
+    for K:=0 to 2 do begin NearDistance[K]:=1e20;NearShape[K]:=-1 end;
+    for I:=0 to Dest-1 do begin
+      if FShapes[I].First>=FBodyVertexCount then Continue;
+      for J:=0 to High(FShapes[I].Position)do begin
+        D:=FShapes[I].Position[J]-Point;Distance:=D.X*D.X+D.Y*D.Y+D.Z*D.Z;
+        if Distance>=NearDistance[2]then Continue;
+        N:=2;while(N>0)and(Distance<NearDistance[N-1])do begin
+          NearDistance[N]:=NearDistance[N-1];NearShape[N]:=NearShape[N-1];NearVertex[N]:=NearVertex[N-1];Dec(N);
+        end;
+        NearDistance[N]:=Distance;NearShape[N]:=I;NearVertex[N]:=J;
+      end;
+    end;
+    Total:=0;for K:=0 to 2 do begin Weight[K]:=0;if NearShape[K]>=0 then Weight[K]:=1/Max(1e-5,NearDistance[K]);Total:=Total+Weight[K]end;
+    if Total<=0 then Continue;
+    for R:=0 to 4 do begin
+      Delta:=TVector3.Zero;
+      for K:=0 to 2 do if NearShape[K]>=0 then Delta:=Delta+FShapes[NearShape[K]].DeltaP[R][NearVertex[K]]*(Weight[K]/Total);
+      FShapes[Dest].DeltaP[R][V]:=Delta;
+    end;
+  end;
 end;
 
 procedure TRiderBodyMorph.Measure(Rig:TTripoRig;out Height,Inseam:Single);
@@ -123,7 +201,8 @@ begin
   SetLength(M,Rig.JointCount);
   for J:=0 to Rig.JointCount-1 do M[J]:=Mat4Mul(Rig.BindWorld[J],Rig.InvBind[J]);
   Bottom:=1E10;Top:=-1E10;Crotch:=0;
-  for V:=0 to Rig.VertexCount-1 do begin
+  { Hats and shoes must not change the wearer's measured height or inseam. }
+  for V:=0 to FBodyVertexCount-1 do begin
     P:=V3(0,0,0);
     for K:=0 to 3 do begin
       Q:=Mat4MulPoint(M[Rig.Joints[V][K]],Rig.Positions[V]);

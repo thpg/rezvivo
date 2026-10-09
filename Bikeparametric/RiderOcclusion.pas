@@ -4,6 +4,7 @@ interface
 uses SysUtils, Math, CastleVectors, X3DNodes, X3DFields, RiderBodyParameters;
 type
   TRiderJointQuery = function(const Name: string; out P: TVector3): Boolean of object;
+  TRiderSkinQuery = function(const Name:string;out M:TMatrix4):Boolean of object;
   TRiderOcclusion = class
   private
     FCapsules: TMFVec4f;

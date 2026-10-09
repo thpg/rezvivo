@@ -160,6 +160,7 @@ type
   TOsm3dWarmupOverlay = class(TCastleUserInterface)
   private
     FShowing:    Boolean;
+    FPointStart: Boolean;
     FTiles:      array of TWarmupTile;
     FRouteMerc:  array of TMercPt;
     FMercMin:    TMercPt;          { общий bbox тайлов в меркаторе }
@@ -211,6 +212,8 @@ type
     procedure DrainRasterDecodes;
     procedure FreeRaster;
     procedure UpdateStageLabel(AIndex: Integer);
+    function StageRow(AIndex: Integer): Integer;
+    function GetTileCount: Integer;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -221,7 +224,7 @@ type
       (nil = без растра, останется тёмный фон). }
     procedure ShowWarmup(AGrid: TGeoTileGrid; const ATiles: TGeoTileIdArray;
       const ARoute: TRouteLatLonArray; AHttp: THTTPFetcherWithCache;
-      ARecipes:TKnowledgeRecipeSnapshot=nil);
+      ARecipes:TKnowledgeRecipeSnapshot=nil; APointStart:Boolean=False);
     procedure HideWarmup;
     { CPU join only, after HideWarmup on the main thread; no UI/GL disposal. }
     procedure JoinBackgroundStop;
@@ -274,6 +277,7 @@ type
     function Motion(const Event: TInputMotion): Boolean; override;
 
     property Showing: Boolean read FShowing;
+    property TileCount: Integer read GetTileCount;
   end;
 
 implementation
@@ -407,7 +411,7 @@ end;
 
 procedure TOsm3dWarmupOverlay.ShowWarmup(AGrid: TGeoTileGrid;
   const ATiles: TGeoTileIdArray; const ARoute: TRouteLatLonArray;
-  AHttp: THTTPFetcherWithCache;ARecipes:TKnowledgeRecipeSnapshot);
+  AHttp: THTTPFetcherWithCache;ARecipes:TKnowledgeRecipeSnapshot;APointStart:Boolean);
 var
   I, K, N, Step, X0, X1, Y0, Y1, RX, RY: Integer;
   MX, MY: Double;
@@ -423,6 +427,7 @@ begin
   if (Length(ATiles) = 0) and (Length(ARoute) < 2) then Exit;
   if (Length(ATiles) > 0) and (AGrid = nil) then Exit;
   FHttp := AHttp;
+  FPointStart := APointStart;
 
   { тайлы: гео-бокс -> меркатор, общий bbox }
   SetLength(FTiles, Length(ATiles));
@@ -469,26 +474,26 @@ begin
   FSnapTarget := -1;
   FRouteStep  := 1;
   N := Length(ARoute);
-  if N > 1 then
+  if N > 0 then
   begin
     Step := (N + WARMUP_ROUTE_MAX_PTS - 1) div WARMUP_ROUTE_MAX_PTS;
     if Step < 1 then Step := 1;
     FRouteStep := Step;
-    SetLength(FRouteMerc, 0);
+    SetLength(FRouteMerc, (N + Step - 1) div Step + 1);
     K := 0;
     I := 0;
     while I < N do
     begin
-      SetLength(FRouteMerc, K + 1);
       FRouteMerc[K] := MercOf(ARoute[I]);
       Inc(K);
       Inc(I, Step);
     end;
     if (N > 1) and ((N - 1) mod Step <> 0) then
     begin
-      SetLength(FRouteMerc, K + 1);
       FRouteMerc[K] := MercOf(ARoute[N - 1]);   { хвост маршрута не теряем }
+      Inc(K);
     end;
+    SetLength(FRouteMerc, K);
   end
   else
     SetLength(FRouteMerc, 0);
@@ -717,6 +722,10 @@ begin
   if (AIndex < 0) or (AIndex >= WARMUP_STAGE_COUNT) then Exit;
   L := FStageLabels[AIndex];
   if L = nil then Exit;
+  L.Exists := StageRow(AIndex) >= 0;
+  if not L.Exists then Exit;
+  L.Anchor(vpTop, -(WARMUP_HEADER_H + WARMUP_STAGE_TOP +
+    StageRow(AIndex) * WARMUP_STAGE_ROW_H + 4));
   if FStages[AIndex].Detail <> '' then
     Txt := UiText(WARMUP_STAGE_NAMES[AIndex]) + ' - ' + FStages[AIndex].Detail
   else
@@ -728,6 +737,21 @@ begin
     wssDone:    L.Color := Vector4(0.55, 0.95, 0.60, 0.95);
     wssError:   L.Color := Vector4(1.00, 0.45, 0.40, 0.98);
   end;
+end;
+
+function TOsm3dWarmupOverlay.StageRow(AIndex: Integer): Integer;
+begin
+  if not FPointStart then Exit(AIndex);
+  case AIndex of
+    1: Result := 0; { one tile, no FIT or route-snap stages }
+    5: Result := 1;
+    else Result := -1;
+  end;
+end;
+
+function TOsm3dWarmupOverlay.GetTileCount: Integer;
+begin
+  Result := Length(FTiles);
 end;
 
 procedure TOsm3dWarmupOverlay.SetStageState(AIndex: Integer;
@@ -966,7 +990,7 @@ begin
   SY := RR.Height / EffectiveHeight;
 
   { затемнённый фон на весь контрол }
-  DrawRectangle(RR, Vector4(0.04, 0.06, 0.08, 0.92));
+  DrawRectangle(RR, Vector4(0.04, 0.06, 0.08, 1.0));
 
   Panel := PanelRectLocal;
   Dev := DevRect(Panel.Left, Panel.Bottom, Panel.Width, Panel.Height);
@@ -1040,6 +1064,13 @@ begin
     end;
   end;
 
+  if FPointStart and (Length(FRouteMerc) = 1) then
+  begin
+    A := MercToLocal(FRouteMerc[0], Panel);
+    DrawRectangle(DevRect(A.X - 6, A.Y - 6, 12, 12), Vector4(0,0,0,0.7));
+    DrawRectangle(DevRect(A.X - 4, A.Y - 4, 8, 8), Vector4(1,0.3,0.15,1));
+  end;
+
   { Линия маршрута. Во время фазы притягивания уже ОБРАБОТАННЫЙ префикс
     [0..FSnapFront] перекрашен в зелёный, остаток — красный, на стыке —
     яркая «голова» фронтира: видно, как снап ползёт по маршруту. }
@@ -1087,11 +1118,12 @@ begin
   { ── маркеры списка этапов (текст строк — дочерние TCastleLabel) ── }
   for I := 0 to WARMUP_STAGE_COUNT - 1 do
   begin
+    if StageRow(I) < 0 then Continue;
     { левый край и вертикальный центр строки i (локальные координаты);
       привязка к верху контрола — как у лейблов строк в конструкторе }
     MkX  := WARMUP_MARGIN + 2;
     MkCY := EffectiveHeight - (WARMUP_HEADER_H + WARMUP_STAGE_TOP +
-            I * WARMUP_STAGE_ROW_H + WARMUP_STAGE_ROW_H * 0.5);
+            StageRow(I) * WARMUP_STAGE_ROW_H + WARMUP_STAGE_ROW_H * 0.5);
     case FStages[I].State of
       wssPending:
         { тусклый серый квадрат }
@@ -1147,6 +1179,8 @@ end;
 
 function TOsm3dWarmupOverlay.Press(const Event: TInputPressRelease): Boolean;
 begin
+  { The host must still be able to open its menu while loading/retrying. }
+  if FShowing and Event.IsKey(keyEscape) then Exit(False);
   Result := inherited;
   if FShowing then Result := True;     { навигация под оверлеем заблокирована }
 end;

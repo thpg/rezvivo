@@ -181,6 +181,7 @@ type
       сустава нет в риге или SendFrame ещё не считал позиции. }
     function ShadowContact(Index: Integer; out P: TVector3): Boolean;
     function ShadowJoint(const AName: string; out P: TVector3): Boolean;
+    function SpineSkin(const Name:string;out M:TMatrix4):Boolean;
     function ShadowHandFrame(Side:Integer;out Forward,Palm:TVector3;out Twist:Single):Boolean;
   end;
 
@@ -1447,7 +1448,13 @@ begin
           App := ShapeNode.Appearance;
           if (App = nil) or (Apps.IndexOf(App) >= 0) then Continue;
           Apps.Add(App);
-          App.FdEffects.Add(FEffect);
+          { Cloth displaces the posed surface. Keep it after GPU skinning,
+            just as after the native corrective effect in walking mode. }
+          J:=0;
+          while(J<App.FdEffects.Count)and
+            (App.FdEffects[J].X3DName<>'AvatarFreeCloth')and
+            (App.FdEffects[J].X3DName<>'AvatarSolvedCloth')do Inc(J);
+          App.FdEffects.Add(J,FEffect);
         end;
     finally
       if (FRider.Scene <> nil) then
@@ -1681,6 +1688,23 @@ begin
   for I := 0 to GPU_SHJ_COUNT - 1 do
     FShPts[I] := M.MultPoint(Vector3(FShRigPts[I].X, FShRigPts[I].Y, FShRigPts[I].Z));
   FShValid := True;
+end;
+
+function TGpuRiderSkin.SpineSkin(const Name:string;out M:TMatrix4):Boolean;
+var I,J:Integer;Q:TTripoVec4;D:TTripoMat4;
+begin
+  Result:=False;M:=TMatrix4.Identity;
+  if not FLastValid or(FRider.Rig=nil)then Exit;
+  J:=FRider.Rig.JointIndexByName(Name);
+  if(J<0)or(J>=FRestList.Count)then Exit;
+  M:=FRestList.Items[J];
+  if Name='Pelvis'then Exit(True);
+  for I:=0 to RiderSpineChainCount-1 do
+    if(Name=RiderSpineChainNames[I])and FSpineEx[I]then begin
+      Q:=QuatMul(FShRS[I],QuatConj(FShSpine[I].PR));
+      D:=Mat4FromTRS(V3Sub(FShPS[I],QuatRotateV3(Q,FShSpine[I].PP)),Q,V3(1,1,1));
+      M:=RestToCastle(D)*M;Exit(True);
+    end;
 end;
 
 function TGpuRiderSkin.ShadowJoint(const AName: string; out P: TVector3): Boolean;

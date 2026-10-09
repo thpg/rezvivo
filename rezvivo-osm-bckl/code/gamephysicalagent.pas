@@ -451,10 +451,11 @@ var
   DtGround: Single;
   Pos: TVector3;
 begin
-  if Assigned(FState.PositionConstraint) and Assigned(FActor.Transform) then
+  if Assigned(FState.PositionConstraint) and Assigned(FActor.Transform) and
+     (FVisualExtrapolated or not FState.AutoMove) then
   begin
     Pos := FActor.Transform.Translation;
-    if FState.PositionConstraint(Pos.X, Pos.Z) then
+    if FState.ConstrainBodyMove(FState.WorldPosition,Pos) then
     begin
       FActor.Transform.Translation := Pos;
       MotionTrace.Event(Self, meConstraint);

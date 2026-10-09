@@ -161,6 +161,7 @@ type
       DesiredPriority: Double;        { Pump-only }
       LastTouchFrame:  Int64;
       RetryFrame:      Int64;         { earliest frame to retry after a fail }
+      LastError:       string;        { retained while an automatic retry runs }
     end;
 
     TStreamResultItem = class
@@ -376,6 +377,8 @@ type
       (блок готов/не запланирован). }
     function BlockProgressForTile(const AId: TGeoTileId;
       out Rec: TBlockPhaseRec): Boolean;
+    function BlockErrorForTile(const AId: TGeoTileId): string;
+    function DescribeTile(const AId: TGeoTileId): string;
     { Worker-safe: does not read main-thread tile/block slots. }
     function LastProgressTickForTiles(const Tiles: TGeoTileIdArray): QWord;
     { True, если модель тайла готова (tssReadyInRAM) — сгенерена/загружена и
@@ -1189,6 +1192,14 @@ begin
             and (Slot.State = tssReadyInRAM);
 end;
 
+function TTileStreamer.BlockErrorForTile(const AId: TGeoTileId): string;
+var Slot: TBlockSlot;
+begin
+  Result:='';
+  if FBlocks.TryGetValue(BlockKeyOf(BlockOf(AId,FBlockSize)),Slot) then
+    Result:=Slot.LastError;
+end;
+
 function TTileStreamer.BlockProgressForTile(const AId: TGeoTileId;
   out Rec: TBlockPhaseRec): Boolean;
 var BKey: Int64; BSlot: TBlockSlot;
@@ -1558,6 +1569,16 @@ begin
   end;
 end;
 
+function TTileStreamer.DescribeTile(const AId: TGeoTileId): string;
+var Slot: TTileSlot;
+begin
+  if not FTiles.TryGetValue(AId.ToKey, Slot) then Exit('not requested');
+  Result:=Format('state=%d wanted=%s upload=%s queued=%s model=%s',
+    [Ord(Slot.State),BoolToStr(Slot.LastWantedFrame=FFrame,True),
+     BoolToStr(Slot.WithinUpload,True),BoolToStr(Slot.QueuedForUpload,True),
+     BoolToStr(Slot.Model<>nil,True)]);
+end;
+
 procedure TTileStreamer.ApplyBlockDone(AItem: TStreamResultItem);
 var
   BSlot: TBlockSlot;
@@ -1567,7 +1588,10 @@ var
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(977);{$ENDIF}
   if FBlocks.TryGetValue(BlockKeyOf(AItem.Block), BSlot) then
+  begin
     BSlot.State := bgsDone;
+    BSlot.LastError := '';
+  end;
 
   for I := 0 to High(AItem.Tiles) do
   begin
@@ -1647,6 +1671,7 @@ begin
   if FBlocks.TryGetValue(BlockKeyOf(AItem.Block), BSlot) then
   begin
     BSlot.State      := bgsFailed;
+    BSlot.LastError  := AItem.Error;
     BSlot.RetryFrame := FFrame + BlockFailCooldownFrames;
   end;
 

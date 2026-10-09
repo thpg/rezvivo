@@ -12,7 +12,7 @@ unit GameViewBikeFit;
 
 interface
 
-uses GameTravel, RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
+uses GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
   Classes, SysUtils, Math, fpjson,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
@@ -24,6 +24,7 @@ type
   TBikeFitPage = class(TMenuEmbeddedPage)
   private
     FOnFootPreview,FOnFootFramed:Boolean;
+    FPreviewAnimationPaused:Boolean;
     FWalkPreviewSpeed:Single;
     FDesign:      TCastleDesign;
     FLabelTitle:  TCastleLabel;
@@ -39,6 +40,7 @@ type
     FSection:Integer;
     FHairBox:TCastleUserInterface;
     FAppearanceRows:TMenuScrollView;
+    FWardrobePanel:TGameWardrobePanel;
     FHairSelect:TMenuButton;
     FHairPreview:TCastleImageControl;
     FHairTitle,FHairPopupTitle:TCastleLabel;
@@ -58,6 +60,7 @@ type
     FHeadYaw:Single;
     FHeadCameraReady:Boolean;
     procedure ClickHeadCategory(Sender:TObject);
+    procedure ClothingChanged(Sender:TObject);
     procedure ClickHeadView(Sender:TObject);
     procedure ClickHeadColor(Sender:TObject);
     procedure ScrollHeadSelection;
@@ -297,6 +300,9 @@ type
     procedure McpFillStatus(AResult: TJSONObject);
     procedure McpSetHair(const Id:String);
     procedure McpHead(AParams:TJSONObject;AResult:TJSONObject);
+    procedure McpClothing(AParams:TJSONObject;AResult:TJSONObject);
+    procedure McpCamera(AParams:TJSONObject;AResult:TJSONObject);
+    procedure McpAnimation(AParams,AResult:TJSONObject);
     function KeyboardRoot:TCastleUserInterface;
     { MCP: свет превью/результата (env = IBL-ambient райдера, key/fill =
       вьюпорт, rkey/rfill = свети сцены райдера). Не указанный аргумент
@@ -310,7 +316,7 @@ var
 
 implementation
 
-uses CastleApplicationProperties,UiTranslations,GameUserData,
+uses GameTravelUI, CastleApplicationProperties,UiTranslations,GameUserData,
   jsonparser, CastleKeysMouse,CastleImages,CastleRectangles,
   GameViewMenu, GameViewPlay, AppSettings, DebugLog, GameBikeAutoFit;
 
@@ -663,7 +669,7 @@ begin
     FSectionButtons[I].Tag:=I;FSectionButtons[I].OnClick:=@ClickSection;
     FColParams.InsertFront(FSectionButtons[I]);
   end;
-  BindUiText(FSectionButtons[0],'Bicycle');BindUiText(FSectionButtons[1],'Rider');
+  BindUiText(FSectionButtons[0],'Bicycle');BindTravelText(FSectionButtons[1], 'Rider');
   BindUiText(FSectionButtons[2],'Appearance');
 
   BikeBlock := TCastleRectangleControl.Create(FUiOwner);
@@ -1125,6 +1131,7 @@ begin
     BuildLayout;
   LayoutSections;
   ApplyHairStyle;
+  FWardrobePanel.Refresh;
   LoadBikeFitColors;   { восстановить цвета одежды/байка из настроек }
 
   ScanLibraries;
@@ -1169,6 +1176,7 @@ end;
 
 procedure TBikeFitPage.PageHidden;
 begin
+  FPreviewAnimationPaused:=False;
   { Bike BuildYield can dispatch a queued tab switch. Release the scene only
     after the active rebuild returns, never from inside that rebuild. }
   if FLoadingPreview then
@@ -1196,6 +1204,7 @@ begin
   Result := ResolveRiderGlbPath(Settings.SelectedRiderGlb);
   if Result = '' then
     Result := ResolveRiderGlbPath(RiderGlbUrlForGender(Settings.GetGender));
+  Result:=WardrobeRiderPath(Result);
 end;
 
 function TBikeFitPage.CurrentRiderName: string;
@@ -1259,7 +1268,8 @@ end;
 procedure TBikeFitPage.FillBikePopupList;
 var
   Filter, BikeName: string;
-  I, Shown, Hidden: Integer;
+  I, Pass, Shown, Hidden: Integer;
+  Featured: Boolean;
   Btn: TCastleButton;
   Hint: TCastleLabel;
 begin
@@ -1271,9 +1281,13 @@ begin
     Filter := '';
   Shown := 0;
   Hidden := 0;
+  for Pass := 0 to 1 do
   for I := 0 to FBikeNames.Count - 1 do
   begin
     BikeName := FBikeNames[I];
+    Featured := SameText(ExtractFileName(FBikePaths[I]),'rezvivo-trail-mtb.json') or
+      SameText(ExtractFileName(FBikePaths[I]),'rezvivo-track-fixed.json');
+    if Featured <> (Pass = 0) then Continue;
     if (Filter <> '') and (Pos(Filter, LowerCase(BikeName)) = 0) then
       Continue;
     if Shown >= BikePopupMaxRows then
@@ -1296,7 +1310,7 @@ begin
     Btn.CustomColorPressed := Vector4(0.13,0.30,0.34,1);
     Btn.Tag := I;
     Btn.OnClick := @ClickPopupBike;
-    FPopupList.InsertBack(Btn);
+    FPopupList.InsertFront(Btn);
     Inc(Shown);
   end;
   if Hidden > 0 then
@@ -1305,7 +1319,7 @@ begin
     Hint.Caption := Format(UiText('%d more — refine your search'), [Hidden]);
     Hint.Color := MenuMuted;
     Hint.FontScale := 0.8;
-    FPopupList.InsertBack(Hint);
+    FPopupList.InsertFront(Hint);
   end
   else if Shown = 0 then
   begin
@@ -1313,7 +1327,7 @@ begin
     BindUiText(Hint, 'no results');
     Hint.Color := MenuMuted;
     Hint.FontScale := 0.85;
-    FPopupList.InsertBack(Hint);
+    FPopupList.InsertFront(Hint);
   end;
 end;
 
@@ -1341,7 +1355,7 @@ begin
     Btn.CustomColorPressed := Vector4(0.13,0.30,0.34,1);
     Btn.Tag := I;
     Btn.OnClick := @ClickPopupSize;
-    FPopupList.InsertBack(Btn);
+    FPopupList.InsertFront(Btn);
   end;
 end;
 
@@ -1539,8 +1553,8 @@ begin
   { period of one crank revolution, seconds — same as play/remote riders }
   CrankIntv := 60.0 / FCadenceRpm;
   FResultBike.SetAnimationSpeed(CrankIntv, CrankIntv);
-  { rough road speed for wheel spin (~5.5 m per crank rev at mid gear) }
-  SpeedMps := (FCadenceRpm / 60.0) * 5.5;
+  { The fixed sprocket must keep the wheels and cranks in the same ratio. }
+  SpeedMps := (FCadenceRpm / 60.0) * FResultBike.DriveMetresPerCrankRevolution;
   FResultBike.SetWheelSpeedMps(SpeedMps);
 end;
 
@@ -1582,6 +1596,7 @@ begin
   ApplyResultPose;
   ReapplyHelmetColor;
   ApplyHairStyle;
+  ApplyRiderShaderDye;
 end;
 
 procedure TBikeFitPage.RequestResultRider(const APath: string);
@@ -1660,15 +1675,15 @@ begin
   ApplyRiderShapeToPreview;
   Logger.Info(Format('[BikeFit]   ApplyRiderShape %d ms', [GetTickCount64 - T0]));
   T0 := GetTickCount64;
-  FitCameraToItems(FVpResult);
+  if FLiveRide then UpdateLiveCamera(True)else FitCameraToItems(FVpResult);
   Logger.Info(Format('[BikeFit]   FitCamera %d ms', [GetTickCount64 - T0]));
   T0 := GetTickCount64;
   ApplyPreviewAnimation;
   FPoseTimer := 0;
   ApplyResultPose;
-  ReapplyHelmetColor;
-  ApplyHairStyle;
+  ReapplyColorsAfterBuild;
   Logger.Info(Format('[BikeFit]   Pose %d ms', [GetTickCount64 - T0]));
+  if FLiveRide then ViewPlay.BikeFitChanged;
   UpdateLabels;
 end;
 
@@ -1866,11 +1881,11 @@ begin
   if FLblResultInfo <> nil then
     FLblResultInfo.Caption := Format(UiText('%d rpm'), [Round(FCadenceRpm)]);
   if FLiveRide and (FLblPose <> nil) then
-    BindUiText(FLblPose, 'Ride pose and animation');
+    BindTravelText(FLblPose, 'Ride pose and animation');
   if FLabelStatus <> nil then
     BindUiText(FLabelStatus, 'Changes saved automatically');
   if FLiveRide and (FLabelStatus <> nil) then
-    BindUiText(FLabelStatus, 'Changes apply to the rider in the current ride');
+    BindTravelText(FLabelStatus, 'Changes apply to the rider in the current ride');
   if FLabelStatus<>nil then case FAutoFitStatus of
     1:BindUiText(FLabelStatus,'Bike fit applied and saved. You can fine-tune it below.');
     2:BindUiText(FLabelStatus,'Closest bike fit saved. This model has limited adjustment for these body proportions.');
@@ -1889,6 +1904,18 @@ const
   DyeIdxFrame  = 7;
   DyeIdxRim    = 8;
   DyeIdxHelmet = 9;
+
+function DyeSlotTitle(Index:Integer):string;
+begin
+  Result:=DyeSlotCaption[Index];
+  case Index of
+    0:if WardrobeSelection(2)<>''then Result:='Outer layer'
+      else if WardrobeSelection(0)<>''then Result:='Top';
+    1:if WardrobeSelection(1)<>''then Result:='Bottom';
+    3:Result:='Footwear';
+    9:if(WardrobeSelection(4)<>'')or(UserPreference('rider_headwear','helmet')<>'helmet')then Result:='Headwear';
+  end;
+end;
 
 const
   HeadCategories:array[0..3]of String=('Headwear','Hairstyle','Mustache','Beard');
@@ -1921,6 +1948,10 @@ end;
 procedure TBikeFitPage.BuildHairSelector;
 var C,I:Integer;B:TMenuButton;L:TCastleLabel;
 begin
+  FWardrobePanel:=TGameWardrobePanel.Create(FUiOwner);
+  FWardrobePanel.OnChange:=@ClothingChanged;
+  FWardrobePanel.OnColorClick:=@ClickDyeSlot;
+  FAppearanceRows.ScrollArea.InsertFront(FWardrobePanel);
   FHairBox:=TCastleUserInterface.Create(FUiOwner);
   FAppearanceRows.ScrollArea.InsertFront(FHairBox);
   FHairBox.Anchor(hpMiddle);FHairBox.Anchor(vpTop);
@@ -2025,12 +2056,58 @@ begin
   end;
   if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)then FResultBike.TripoRider.HairStyle:=Style;
   ApplyHeadAppearance;
+  UpdateDyeStripVisuals;
+end;
+
+procedure TBikeFitPage.ClothingChanged(Sender:TObject);
+begin
+  CloseHairList(nil);FOnFootFramed:=False;
+  UpdateDyeStripVisuals;
+  if FResultBike<>nil then RequestResultRider(CurrentRiderPath)
+  else FDirtyResult:=True;
+  LiveFitChanged;
+end;
+
+procedure TBikeFitPage.McpClothing(AParams:TJSONObject;AResult:TJSONObject);
+var I:Integer;Changed:Boolean;
+begin
+  Changed:=False;
+  for I:=0 to High(WardrobeSlots)do if AParams.Find(WardrobeSlots[I])<>nil then begin
+    SelectWardrobe(WardrobeSlots[I],AParams.Get(WardrobeSlots[I],''));Changed:=True;
+  end;
+  if Changed then begin FWardrobePanel.Refresh;ClothingChanged(nil) end;
+  FSection:=2;LayoutSections;McpFillStatus(AResult);AResult.Add('ok',True);
+end;
+
+procedure TBikeFitPage.McpCamera(AParams:TJSONObject;AResult:TJSONObject);
+var P,D,U,C,V:TVector3;Zoom,Yaw,SinY,CosY,TargetY:Single;
+begin
+  if FLiveRide then raise EArgumentException.Create('Use camera.set_view for an active ride');
+  if(FVpResult=nil)or(FResultBike=nil)then raise EArgumentException.Create('Avatar preview is not ready');
+  Zoom:=AParams.Get('zoom',1.0);Yaw:=AParams.Get('yaw',0.0);
+  if IsNan(Zoom)or IsInfinite(Zoom)or(Zoom<0.5)or(Zoom>4)or
+    IsNan(Yaw)or IsInfinite(Yaw)or(Abs(Yaw)>360)then
+    raise EArgumentException.Create('Invalid preview camera zoom/yaw');
+  FitCameraToItems(FVpResult);FOnFootFramed:=True;
+  FVpResult.Camera.GetWorldView(P,D,U);
+  if FOnFootPreview then C:=Vector3(0,CurrentBody.HeightCm/200,0)
+  else C:=FVpResult.Items.BoundingBox.Center;
+  V:=(P-C)/Zoom;SinY:=Sin(DegToRad(Yaw));CosY:=Cos(DegToRad(Yaw));
+  if AParams.Find('target_y')<>nil then begin
+    TargetY:=AParams.Get('target_y',Double(C.Y));
+    if IsNan(TargetY)or IsInfinite(TargetY)or(TargetY<0)or(TargetY>2.5)then
+      raise EArgumentException.Create('Invalid preview camera target_y');
+    C.Y:=TargetY;
+  end;
+  P:=C+Vector3(V.X*CosY-V.Z*SinY,V.Y,V.X*SinY+V.Z*CosY);
+  FVpResult.Camera.SetWorldView(P,(C-P).Normalize,U);
+  McpFillStatus(AResult);
 end;
 
 procedure TBikeFitPage.ApplyHeadAppearance;
 begin
   if (FResultBike=nil)or(FResultBike.TripoRider=nil)then Exit;
-  FResultBike.TripoRider.SetHeadAppearance(ParseHeadwear(UserPreference(HeadKeys[0],HeadDefaults[0])),
+  FResultBike.TripoRider.SetHeadAppearance(WardrobeHeadwear,
     ParseBeard(UserPreference(HeadKeys[3],HeadDefaults[3])),ParseMustache(UserPreference(HeadKeys[2],HeadDefaults[2])));
 end;
 
@@ -2047,6 +2124,9 @@ procedure TBikeFitPage.ClickHair(Sender:TObject);
 var C,I:Integer;
 begin
   C:=TMenuButton(Sender).Tag div 16;I:=TMenuButton(Sender).Tag mod 16;
+  if(C=0)and(WardrobeSelection(4)<>'')then begin
+    SelectWardrobe('head','');FWardrobePanel.Refresh;ClothingChanged(nil);
+  end;
   SetUserPreference(HeadKeys[C],HeadOptionId(C,I));ApplyHairStyle;LayoutHairList;
   if C=1 then UpdateHeadCamera(True);
 end;
@@ -2059,6 +2139,9 @@ begin
     Id:=AParams.Get(Params[C],'');Found:=False;
     for I:=0 to HeadOptionCount(C)-1 do if Id=HeadOptionId(C,I)then Found:=True;
     if not Found then raise Exception.Create('Unknown '+Params[C]+': '+Id);
+    if(C=0)and(WardrobeSelection(4)<>'')then begin
+      SelectWardrobe('head','');FWardrobePanel.Refresh;ClothingChanged(nil);
+    end;
     SetUserPreference(HeadKeys[C],Id);
   end;
   FSection:=2;ApplyHairStyle;LayoutSections;
@@ -2249,7 +2332,8 @@ begin
   for I := 0 to 9 do
   begin
     B := TMenuButton.Create(FUiOwner);
-    BindUiText(B, DyeSlotCaption[I]);
+    B.Name:='AppearanceColor'+IntToStr(I);
+    BindUiText(B, DyeSlotTitle(I));
     B.FontScale := 0.85;
     TMenuButton(B).AutoIcon := False;
     B.AutoSize := False;
@@ -2279,6 +2363,7 @@ begin
   for I := 0 to 12 do
   begin
     B := TMenuButton.Create(FUiOwner);
+    B.Name:='AppearanceSwatch'+IntToStr(I);
     B.AutoSize := False;
     B.Width := 40;
     B.Height := 40;
@@ -2387,7 +2472,7 @@ var
   Idx: Integer;
 begin
   Idx := TCastleButton(Sender).Tag;
-  FDyeTitle.Caption:=UiText(DyeSlotCaption[Idx]);
+  FDyeTitle.Caption:=UiText(DyeSlotTitle(Idx));
   if FDyePopSlot = Idx then
     CloseDyePopup
   else
@@ -2418,6 +2503,7 @@ begin
 end;
 
 procedure TBikeFitPage.UpdateDyeStripVisuals;
+const WardrobeColorSlots:array[0..4]of Integer=(0,1,0,3,9);
 var
   I: Integer;
   C: TVector4;
@@ -2426,6 +2512,7 @@ begin
   for I := 0 to 9 do
   begin
     if FDyeBtns[I] = nil then Continue;
+    BindUiText(FDyeBtns[I],DyeSlotTitle(I));
     if I <= Ord(High(TClothSlot)) then
     begin
       On_ := FDyeOn[TClothSlot(I)];
@@ -2457,6 +2544,10 @@ begin
       FDyeBtns[I].CustomTextColor:=Vector4(0.04,0.06,0.08,1)
     else FDyeBtns[I].CustomTextColor:=White;
   end;
+  if FWardrobePanel<>nil then
+    for I:=0 to High(WardrobeColorSlots)do
+      if FDyeBtns[WardrobeColorSlots[I]]<>nil then
+        FWardrobePanel.SetColor(I,FDyeBtns[WardrobeColorSlots[I]].CustomColorNormal);
 end;
 
 procedure TBikeFitPage.ApplyClothSlot(Slot: TClothSlot; const C: TVector3;
@@ -2472,17 +2563,12 @@ end;
 procedure TBikeFitPage.ApplyRiderShaderDye;
 var
   S: TClothSlot;
-  R: TTripoRiderScene;
 begin
-  { After mount, only uniforms. RefreshShaderClothDye is load-time only. }
-  if (FResultBike = nil) or (FResultBike.TripoRider = nil) then Exit;
-  R := FResultBike.TripoRider;
-  if R.ClothDyeMode <> cdmShader then Exit;
+  { Keep the preset used by asynchronous clothing reloads and the live
+    material in sync. The wardrobe also supports live tint on native skin. }
+  if FResultBike = nil then Exit;
   for S := Low(TClothSlot) to High(TClothSlot) do
-    if FDyeOn[S] then
-      R.SetClothColor(S, FDyeColor[S])
-    else
-      R.ClearClothColor(S);
+    FResultBike.SetRiderClothColorLive(S,FDyeColor[S],FDyeOn[S]);
 end;
 
 procedure TBikeFitPage.ApplyBikeColorLive(AFrame: Boolean; const C: TVector3;
@@ -2526,11 +2612,10 @@ end;
 
 procedure TBikeFitPage.ReapplyHelmetColor;
 begin
-  if (FResultBike = nil) or (FResultBike.TripoRider = nil) then Exit;
-  if FHelmetOn then
-    FResultBike.TripoRider.SetHeadwearColor(FHelmetC)
-  else
-    FResultBike.TripoRider.ApplyHelmetColor(Vector3(1, 1, 1), False);
+  if FResultBike = nil then Exit;
+  { Keep the instance preset and live material together: changing body/fit
+    reapplies the preset, so tinting only the current rider lost this color. }
+  FResultBike.SetHeadwearColorLive(FHelmetC,FHelmetOn);
 end;
 
 procedure TBikeFitPage.ReapplyColorsAfterBuild;
@@ -2766,7 +2851,9 @@ begin
   FLblEffort.FontScale:=1;FLblEffort.FontSize:=16/S;
   FAppearanceRows.Exists:=FSection=2;
   FAppearanceRows.Border.Top:=92/S;FAppearanceRows.Border.Bottom:=106/S;
-  FAppearanceRows.ScrollArea.Height:=394/S;
+  FAppearanceRows.ScrollArea.Height:=744/S;
+  FWardrobePanel.WidthFraction:=0;FWardrobePanel.Width:=W-20;
+  FWardrobePanel.Anchor(hpMiddle);FWardrobePanel.Anchor(vpTop,-116/S);FWardrobePanel.Resize;
   FHairBox.Width:=W-20;FHairBox.Height:=104/S;
   FHairTitle.FontScale:=1;FHairTitle.FontSize:=16/S;
   FHairSelect.Width:=W-28;FHairSelect.Height:=72/S;
@@ -2776,7 +2863,7 @@ begin
   FHairSelect.Caption:=MenuSummary(UiText('Head editor'),FHairSelect.Font,
     (FHairSelect.Width-122/S)*UIScale,2);
   FDyeStrip.Width:=W-20;FDyeStrip.Height:=266/S;
-  FDyeStrip.Anchor(vpTop,-120/S);
+  FDyeStrip.Anchor(vpTop,-470/S);
   for I:=0 to High(FDyeBtns)do begin
     FDyeBtns[I].Width:=(W-40)/2;FDyeBtns[I].Height:=40/S;
     FDyeBtns[I].FontScale:=1;FDyeBtns[I].FontSize:=14/S;
@@ -2842,6 +2929,7 @@ begin
   end;
   if FResultBike <> nil then
   begin
+    if FPreviewAnimationPaused then Exit;
     if FOnFootPreview then begin
       FResultBike.AnimateOnFoot(SecondsPassed,FWalkPreviewSpeed,0);
       if FResultBike.HasTripoRider and not FOnFootFramed then begin
@@ -2860,6 +2948,25 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TBikeFitPage.McpAnimation(AParams,AResult:TJSONObject);
+var I,Frames:Integer;Hz,Phase:Single;
+begin
+  if FLiveRide then raise Exception.Create('Use ride simulation controls during an activity');
+  if not FOnFootPreview then raise Exception.Create('Walking preview required');
+  if (FResultBike=nil)or not FResultBike.HasTripoRider or(FWantRiderPath<>'')then
+    raise Exception.Create('Wait for the avatar to finish loading');
+  FPreviewAnimationPaused:=AParams.Get('paused',True);
+  FWalkPreviewSpeed:=EnsureRange(AParams.Get('speed',Double(FWalkPreviewSpeed)),0.0,8.0);
+  Frames:=EnsureRange(AParams.Get('frames',0),0,600);
+  Hz:=EnsureRange(AParams.Get('fps',60.0),10.0,240.0);
+  Phase:=AParams.Get('phase',-1.0);
+  if Phase>=0 then FResultBike.AnimateOnFoot(0,FWalkPreviewSpeed,0,0,Frac(Phase));
+  for I:=1 to Frames do FResultBike.AnimateOnFoot(1/Hz,FWalkPreviewSpeed,0);
+  UpdateLabels;
+  McpFillStatus(AResult);
+  AResult.Add('animation_paused',FPreviewAnimationPaused);
 end;
 
 procedure TBikeFitPage.ClickCadenceDown(Sender: TObject);
@@ -3263,6 +3370,8 @@ end;
 procedure TBikeFitPage.McpFillStatus(AResult: TJSONObject);
 var FaceState, HairState: TJSONObject;
 begin
+  if FResultBike<>nil then WardrobeState(FResultBike.TripoRider,AResult)
+  else WardrobeState(nil,AResult);
   AResult.Add('auto_fit_pending',FAutoFitPending);
   AResult.Add('auto_fit_status',FAutoFitStatus);
   if(FSelBike>=0)and(FSelBike<FBikePaths.Count)then
@@ -3305,6 +3414,9 @@ begin
   if FResultBike <> nil then
   begin
     AResult.Add('gpu_animation', FResultBike.GpuAnim);
+    AResult.Add('fixed_gear', FResultBike.IsFixedGear);
+    AResult.Add('drive_metres_per_crank_rev', FResultBike.DriveMetresPerCrankRevolution);
+    AResult.Add('visual_cadence', FResultBike.RiderCadenceRpm);
     if (not FLoadingPreview) and (FResultBike.TripoRider <> nil) and
        FResultBike.TripoRider.Loaded then
     begin
@@ -3440,9 +3552,9 @@ begin
   SaveAvatarBody(CurrentBody);
   FLiveSettingsDirty := False;
   if FLiveRide then
-    BindUiText(FLabelStatus, 'Saved and applied to the current ride.')
+    BindTravelText(FLabelStatus, 'Saved and applied to the current ride.')
   else
-    BindUiText(FLabelStatus, 'Saved — applies to the next ride.');
+    BindTravelText(FLabelStatus, 'Saved — applies to the next ride.');
   Logger.Info(Format('[BikeFit] apply bike=%s size=%s rider=%s fit seat=%0.0f off=%0.0f sp=%0.0f stem=%0.0f h=%0.0f in=%0.0f bulk=%0.2f belly=%0.2f knee=%0.2f ankle=%0.0f',
     [Settings.SelectedBikeJson, Settings.SelectedBikeSize,
      Settings.SelectedRiderGlb, FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem,

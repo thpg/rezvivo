@@ -27,6 +27,8 @@ type
     FCrankTexturePathL: string;
     FUseModels: Boolean;
     FModelPathR, FModelPathL: string;
+    FSingleChainring:Boolean;
+    FChainline:Single;
   public
     constructor Create; override;
     class function ComponentName: string; override;
@@ -37,6 +39,8 @@ type
     function ChainringPlaneOffset: Single; { mm inward from the crank outer face }
     function PedalStanceHalf: Single; { mm from bicycle centre to cleat centre }
   published
+    property SingleChainring:Boolean read FSingleChainring write FSingleChainring;
+    property Chainline:Single read FChainline write FChainline; { mm from bicycle centre }
     property UseModels: Boolean read FUseModels write FUseModels;
     property ModelPathR: string read FModelPathR write FModelPathR;
     property ModelPathL: string read FModelPathL write FModelPathL;
@@ -48,6 +52,10 @@ type
     property CrankTexturePathR: string  read FCrankTexturePathR write FCrankTexturePathR;
     property CrankTexturePathL: string  read FCrankTexturePathL write FCrankTexturePathL;
   end;
+
+{ Shared thin sprocket with a solid rim and spider, emitted into Ctx's batch. }
+procedure BuildBikeSprocket(Ctx:TBikeBuildContext;const Center:TVector3;
+  PitchRadius:Single;Teeth,Spokes:Integer);
 
 implementation
 
@@ -82,18 +90,25 @@ begin
   FUseModels := True;
   FModelPathR := 'bike/cranks/crank_r.glb';
   FModelPathL := 'bike/cranks/crank_l.glb';
+  FChainline:=44;
 end;
 
 class function TCranksetComponent.ComponentName: string; begin Result := 'Crankset'; end;
 
 procedure TCranksetComponent.ApplyPreset(const APreset: string);
 begin
+  FSingleChainring:=SameText(APreset,'mtb')or SameText(APreset,'fixed');
+  FChainline:=44;
+  FCrankLength:=DEF_CRANK_LENGTH;FChainringTeeth:=DEF_CHAINRING_TEETH;
+  FChainringRadius:=DEF_CHAINRING_RADIUS;FQFactorHalf:=ROAD_QFACTOR_HALF;
   if SameText(APreset, 'mtb') then begin
     FCrankLength      := 170;
     FChainringRadius  := 65;
     FChainringTeeth   := 32;
     FQFactorHalf      := MTB_QFACTOR_HALF;
+    FChainline        := 52;
   end;
+  if FSingleChainring then FChainringRadius:=12.7/(2*Sin(Pi/FChainringTeeth));
 end;
 
 { ResolveTexURL now lives in the shared BikeGfxUtil unit (tag-parameterized). }
@@ -126,6 +141,7 @@ end;
 
 function TCranksetComponent.ChainringPitchRadius: Single;
 begin
+  if SingleChainring then Exit(12.7/(2*Sin(Pi/Max(10,ChainringTeeth))));
   if UseModels and (ResolveModelURL(ModelPathR) <> '') then
     Result := CrankLength * MODEL_CHAINRING_PITCH / MODEL_REFERENCE_CRANK
   else if ResolveTexURL(CrankTexturePathR, '[Crankset] ') <> '' then
@@ -135,9 +151,55 @@ end;
 
 function TCranksetComponent.ChainringPlaneOffset: Single;
 begin
+  if SingleChainring then Exit(EnsureRange(Chainline,35,60)-QFactorHalf);
   if UseModels and (ResolveModelURL(ModelPathR) <> '') then
     Result := CrankLength * MODEL_CHAINRING_OFFSET / MODEL_REFERENCE_CRANK
   else Result := 0;
+end;
+
+procedure BuildBikeSprocket(Ctx:TBikeBuildContext;const Center:TVector3;
+  PitchRadius:Single;Teeth,Spokes:Integer);
+var Coord:TCoordinateNode;IFS:TIndexedFaceSetNode;I,J,Side,N:Integer;
+    A,R,InnerR,Z:Single;P,Q:TVector3;
+  procedure Face(A,B,C,D:Integer);
+  begin
+    IFS.FdCoordIndex.Items.Add(A);IFS.FdCoordIndex.Items.Add(B);
+    IFS.FdCoordIndex.Items.Add(C);IFS.FdCoordIndex.Items.Add(D);
+    IFS.FdCoordIndex.Items.Add(-1);
+  end;
+begin
+  Teeth:=EnsureRange(Teeth,8,64);
+  N:=Teeth*4;if Ctx.DetailLevel<2 then N:=Max(24,Teeth);
+  InnerR:=Max(0.012,PitchRadius-0.009);
+  Coord:=TCoordinateNode.Create;IFS:=TIndexedFaceSetNode.Create;IFS.Coord:=Coord;
+  IFS.Solid:=True;IFS.CreaseAngle:=0.5;
+  for Side:=0 to 1 do begin
+    Z:=Center.Z+(1-2*Side)*0.0015;
+    for I:=0 to N-1 do begin
+      A:=2*Pi*I/N;R:=PitchRadius;
+      if Ctx.DetailLevel>=2 then
+        if(I mod 4=1)or(I mod 4=2)then R:=R+0.002 else R:=R-0.002;
+      Coord.FdPoint.Items.Add(Vector3(Center.X+Cos(A)*R,Center.Y+Sin(A)*R,Z));
+      Coord.FdPoint.Items.Add(Vector3(Center.X+Cos(A)*InnerR,Center.Y+Sin(A)*InnerR,Z));
+    end;
+  end;
+  for I:=0 to N-1 do begin
+    J:=(I+1)mod N;
+    Face(2*I,2*J,2*J+1,2*I+1);
+    Face(2*N+2*I+1,2*N+2*J+1,2*N+2*J,2*N+2*I);
+    Face(2*I,2*N+2*I,2*N+2*J,2*J);
+    Face(2*I+1,2*J+1,2*N+2*J+1,2*N+2*I+1);
+  end;
+  Ctx.EmitBatched(IFS,Coord,Vector3(0.14,0.15,0.16),Ctx.Colors.ChromeSpec,
+    0.65,0.5,TMatrix4.Identity);
+  for I:=0 to Spokes-1 do begin
+    A:=2*Pi*I/Spokes;
+    P:=Center+Vector3(Cos(A)*0.012,Sin(A)*0.012,0);
+    Q:=Center+Vector3(Cos(A)*(InnerR+0.004),Sin(A)*(InnerR+0.004),0);
+    Ctx.Add(Ctx.MakeCylinder(P,Q,0.004,Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.65));
+  end;
+  Ctx.Add(Ctx.MakeCylinder(Center-Vector3(0,0,0.003),Center+Vector3(0,0,0.003),
+    0.016,Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.65));
 end;
 
 type
@@ -316,9 +378,9 @@ procedure TCranksetComponent.BuildGeometry(Ctx: TBikeBuildContext);
     Result.AddChildren(Shape);
   end;
 
-var S: TBikeSkeleton; BB, RC, LC: TVector3;
+var S: TBikeSkeleton; BB, RC, LC, Hub,Arm: TVector3;
     QZ, CL: Single; CrankGroup, RotGroup, LeftFlip: TTransformNode;
-    DL: Integer;
+    DL,Side: Integer;
     UseTexR, UseTexL, ModelR, ModelL: Boolean;
     TexURLR, TexURLL: string;
 begin
@@ -336,7 +398,22 @@ begin
   Ctx.EndAccum;
 
   ModelR := False; ModelL := False;
-  if UseModels then
+  if SingleChainring then begin
+    Ctx.BeginAccum(RotGroup);
+    BuildBikeSprocket(Ctx,Vector3(0,0,(QFactorHalf+ChainringPlaneOffset)*S.MM),
+      ChainringPitchRadius*S.MM,ChainringTeeth,5);
+    for Side:=0 to 1 do begin
+      Hub:=Vector3(0,0,QZ*(1-2*Side));
+      if Side=0 then Arm:=S['crank_right']-S['bb'] else Arm:=S['crank_left']-S['bb'];
+      Ctx.Add(Ctx.MakeCylinder(Hub,Arm,0.013,Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.7,0.009));
+      Ctx.Add(Ctx.MakeCylinder(Hub-Vector3(0,0,0.007),Hub+Vector3(0,0,0.007),
+        0.018,Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.7));
+      Ctx.Add(Ctx.MakeCylinder(Arm-Vector3(0,0,0.007),Arm+Vector3(0,0,0.007),
+        0.011,Ctx.Colors.Dark,Ctx.Colors.ChromeSpec,0.7));
+    end;
+    Ctx.EndAccum;
+    ModelR:=True;ModelL:=True; { complete single-ring geometry already supplied }
+  end else if UseModels then
   begin
     ModelR := BuildCrankModel(RotGroup, ModelPathR, CrankLength/MODEL_REFERENCE_CRANK, QZ);
     ModelL := BuildCrankModel(RotGroup, ModelPathL, CrankLength/MODEL_REFERENCE_CRANK, -QZ);
