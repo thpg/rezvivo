@@ -1,7 +1,7 @@
 {
-  "version": "0.3.2-alpha.1",
-  "build": 9,
-  "file_version": "0.3.2.9",
+  "version": "0.3.3-alpha.1",
+  "build": 10,
+  "file_version": "0.3.3.10",
   "channel": "alpha",
-  "notes": "Stop the full rider and bicycle body before building walls, including corners and fast movement. Show the starting tile on the flat map before free exploration begins. Reduce memory allocation and repeated work during city tile generation. Improve walking, running, clothing and transport controls; keep keyboard exploration out of recorded trainer activities. Send spoken Assistant commands directly."
+  "notes": "Turn a stopped bicycle in free exploration: stand ahead of the saddle, hold the frame and handlebar, lift the bicycle and step around before setting it down and riding away. Retry temporary OSM failures, prefer servers that have responded successfully, and show request destinations and responses while loading. Apply unlimited FPS only to the active 3D world; keep menus and the globe capped."
 }

@@ -348,6 +348,12 @@ var
   AttackIndex,I:Integer;Intensity:Single;
 begin
   if not Assigned(FBike) then Exit;
+  if FBike.GroundTurn.Active then begin
+    { Ground turning owns the complete support pose, including both hands.
+      Do not trigger an idle look-back or a racing pose during the lift. }
+    FBike.SetRiderAttention(Default(TRiderAttentionFrame));
+    Exit;
+  end;
   FBike.SetRiderEffort(IntensityOf(S));
   Grounded := (FCurIdx >= 0) and (FCurIdx < FPoses.Count) and FPoses[FCurIdx].Grounded;
   WantsStop := (Abs(S.SpeedKmh) < 0.5) and (S.CadenceRpm < 4) and (S.PowerW < 10);

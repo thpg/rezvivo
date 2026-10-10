@@ -1810,5 +1810,12 @@
   "Footwear": "Обувь",
   "Following route. Power: W/S or +/-. Keyboard riding is not recorded.": "По маршруту. Мощность: W/S или +/-. Езда с клавиш не записывается.",
   "Map loading failed. Retrying automatically; Esc opens the menu.": "Ошибка загрузки карты. Повторяем автоматически; Esc — меню.",
-  "Loading starting tile…": "Загрузка стартового тайла…"
+  "Loading starting tile…": "Загрузка стартового тайла…",
+  "Map servers": "Серверы карты",
+  "No map requests": "Нет запросов к серверам",
+  "Request %d/%d · %d s": "Запрос %d/%d · %d с",
+  "Incomplete response": "Неполный ответ",
+  "Connection timed out": "Истекло время ожидания",
+  "Retry in %d s": "Повтор через %d с",
+  "From cache": "Из кэша"
 }

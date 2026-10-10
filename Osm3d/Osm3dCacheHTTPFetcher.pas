@@ -470,7 +470,13 @@ begin
         200, Response.Size, MilliSecondsBetween(Now, Started));
     except
       on E: EAbort do Result := TFetchResult.Failure('aborted');
-      on E: Exception do Result := TFetchResult.Failure('OSM authenticated request failed');
+      on E: Exception do begin
+        { Preserve native timeout/connection codes for the loading display.
+          Other exceptions may originate in the credential provider. }
+        if Pos('OSM HTTPS transport failed (',E.Message)=1 then
+          Result:=TFetchResult.Failure(E.Message)
+        else Result:=TFetchResult.Failure('OSM request failed');
+      end;
     end;
   finally
     Token := '';

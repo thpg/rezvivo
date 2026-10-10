@@ -794,6 +794,7 @@ type
       and seat the pelvis on the saddle. }
     function PelvisBindLocal: TVector3;
     function LegReach: Single;
+    function GroundSupportHeight(Scale, StanceHalf:Single):Single;
     function PedallingSupport(const SeatedSupport, BottomBracket, Offset: TVector3;
       CrankRadius, ParentBikeLean, Standing: Single): TVector3;
     function PedallingSupportAtTransform(const SeatedSupport, BottomBracket, Offset: TVector3;
@@ -8733,6 +8734,15 @@ begin
   RiderSupportInBikeFrame(Result.Y,Result.Z,1,ParentBikeLean);
   Result := Result - PoseTransform.MultDirection(FStandingHipFromSeat);
   Result := SeatedSupport + (Result-SeatedSupport)*EnsureRange(Standing,0.0,1.0);
+end;
+
+function TTripoRiderScene.GroundSupportHeight(Scale, StanceHalf:Single):Single;
+var Reach,Lateral:Single;
+begin
+  Reach:=FStandingPedalReach*Abs(Scale);
+  Lateral:=Max(0,StanceHalf-0.09*Abs(Scale));
+  Result:=Sqrt(Max(0,Sqr(Reach*0.985)-Sqr(Lateral))) -
+    FStandingHipFromSeat.Y*Abs(Scale)+0.018;
 end;
 
 function TTripoRiderScene.LegReach: Single;

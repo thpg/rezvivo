@@ -29,7 +29,7 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion, RiderDynamics, RiderAttention, RiderHandGrip, AvatarGait,
+  RiderMotion, RiderDynamics, RiderAttention, RiderHandGrip, AvatarGait, RiderGroundTurn,
   RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
@@ -369,6 +369,7 @@ type
     Rider: TRiderPoseReplay;
     AnimElapsed: Double;
     TripoPrevElapsed: Double;
+    GroundTurn: TGroundTurnFrame;
     Phase: Single;
     WheelPhase: Single;
     AccumTime: Double;
@@ -406,6 +407,7 @@ type
     FOnFootPhase: Single;
     FOnFootDynamics: TGaitDynamicsState;
     FOnFootFrame: TGaitFrame;
+    FGroundTurn: TGroundTurnFrame;
     FOwner: TComponent;
     FGroup: TCastleTransform;
     { ЕДИНАЯ сцена байка: весь байк (рама/колёса/шатун/райдер) + райдер GLB +
@@ -792,6 +794,7 @@ type
       PhaseOverride: Single = -1);
     property OnFoot: Boolean read FOnFoot write SetOnFoot;
     property OnFootFrame: TGaitFrame read FOnFootFrame;
+    property GroundTurn: TGroundTurnFrame read FGroundTurn write FGroundTurn;
     procedure SetRiderEffort(Intensity: Single);
     procedure SetRiderAttention(const Value: TRiderAttentionFrame);
     procedure SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
@@ -2527,6 +2530,7 @@ begin
   Result.PedalLeanDeg:=FPedalLeanDeg;
   Result.AnimElapsed:=FAnimElapsed;
   Result.TripoPrevElapsed:=FTripoPrevElapsed;
+  Result.GroundTurn:=FGroundTurn;
   Result.Phase:=FPhase;
   Result.WheelPhase:=FWheelPhase;
   Result.AccumTime:=FAccumTime;
@@ -2575,6 +2579,7 @@ begin
   FPedalLeanApplied:=-9999;
   FAnimElapsed:=Saved.AnimElapsed;
   FTripoPrevElapsed:=Saved.TripoPrevElapsed;
+  FGroundTurn:=Saved.GroundTurn;
   FPhase:=Saved.Phase;
   FWheelPhase:=Saved.WheelPhase;
   FAccumTime:=Saved.AccumTime;
@@ -2960,6 +2965,7 @@ procedure TBikeInstance.SetOnFoot(Value: Boolean);
 begin
   if FOnFoot=Value then Exit;
   FOnFoot:=Value;
+  FGroundTurn:=Default(TGroundTurnFrame);
   FOnFootDynamics:=Default(TGaitDynamicsState);
   ResetRiderDynamics(FBodyDynamics);
   if Value then begin
@@ -3053,7 +3059,8 @@ begin
   else P := BuildRiderPose('');
   { A fixed drive cannot coast while a foot is being placed on its pedal.
     Free-foot IK still handles the departure; the crank remains driven. }
-  if IsFixedGear then FPedalRate := RequestedRate
+  if FGroundTurn.Active then FPedalRate:=0
+  else if IsFixedGear then FPedalRate := RequestedRate
   else FPedalRate := AdvancePedalRate(FPedalRate, RequestedRate, Dt,
     PedalContactsReady(P.Motion.Pedalling, P.LegFreeR, P.LegFreeL,
       FBaseRiderPose.Grounded));
@@ -4568,6 +4575,10 @@ begin
   Result.Add('stance_half_mm', GetRiderStanceHalf);
   Result.Add('foot_yaw_deg', FTripoFootYawDeg);
   Result.Add('grounded_target', FBaseRiderPose.Grounded);
+  Result.Add('ground_turn',FGroundTurn.Active);
+  Result.Add('ground_turn_blend',FGroundTurn.Blend);
+  Result.Add('bike_lift',FGroundTurn.BikeLift);
+  Result.Add('step_lift',TJSONArray.Create([FGroundTurn.FootLift[0],FGroundTurn.FootLift[1]]));
   P := BuildRiderPose('');
   if (FTripoRider <> nil) and FTripoRider.PoseAnimating then P := FTripoRider.CurrentPose;
   Result.Add('free_feet', TJSONArray.Create([P.LegFreeR, P.LegFreeL]));
@@ -4740,7 +4751,9 @@ var
   AnkleR, AnkleL, Pelvis, PelvisRot, LiveOffset, Support: TVector3;
   BoneA, BoneB: TVector3;   { scratch для TryGetBone-резолвов }
   Rot4: TVector4;                          { rider orientation (axis+angle), for P^-1 }
-  LivePose, GoalPose: TRiderPose;
+  LivePose, GoalPose, TurnPose: TRiderPose;
+  TurnGrip,TurnFoot,TurnBar: TVector3;
+  TurnStance:Single;
   GoalTransform: TMatrix4;
   Dt, progHR, progHL, twistDeg, freeR, freeL: Single;
   FromFrameR,FromFrameL:TRiderGripFrame;
@@ -4909,6 +4922,43 @@ begin
   T1u := Timer;
   FDiagPoseApply := FDiagPoseApply * 0.95 + TimerSeconds(T1u, T0u) * 1000 * 0.05;
   LivePose   := FTripoRider.CurrentPose;
+  if FGroundTurn.Active then begin
+    { The support is measured from this rig's legs, independent of saddle
+      height. Both feet straddle the top tube; the saddle stays behind. }
+    TurnPose:=DefaultRiderPose;
+    TurnPose.Grounded:=True;TurnPose.Motion:=Default(TRiderMotionProfile);
+    TurnPose.Motion.Breathing:=0.5;
+    TurnPose.SpineManual:=True;
+    TurnPose.SpineAngles[0]:=-38;TurnPose.SpineAngles[4]:=12;
+    TurnStance:=0.23*S;
+    TurnPose.OffsetX:=0.24;
+    TurnPose.OffsetY:=FTripoRider.GroundSupportHeight(S,TurnStance)-Saddle.Y-0.035*S;
+    TurnPose.OffsetZ:=FGroundTurn.WeightShift;
+    TurnPose.LegFreeR:=1;TurnPose.LegFreeL:=1;
+    for i:=0 to 1 do begin
+      TurnFoot:=RotatePointAroundAxis(Vector4(0,1,0,FGroundTurn.FootAngle[i]),
+        Vector3(Saddle.X+TurnPose.OffsetX-CenterX,0,(1-2*i)*TurnStance));
+      TurnFoot.X:=TurnFoot.X+CenterX;
+      TurnFoot.Y:=0.018+FGroundTurn.FootLift[i];
+      if i=0 then TurnPose.LegFreeRPos:=TurnFoot else TurnPose.LegFreeLPos:=TurnFoot;
+    end;
+    TurnPose.HandPosR:=0;TurnPose.HandPosL:=1;TurnPose.HandLevel:=1;
+    { The bind rig may face either way. Resolve outward in bicycle space,
+      so the lifting forearm passes alongside the torso, not through it. }
+    Rot4:=FTripoRider.OrientedRotationVec4(YawRad);
+    GoalTransform:=RotationMatrixRad(Rot4.W,Rot4.X,Rot4.Y,Rot4.Z);
+    TurnBar:=GoalTransform.MultDirection(FTripoRider.FlareAxis);
+    TurnPose.ElbowFlare:=1.4;
+    if TurnBar.Z<0 then TurnPose.ElbowFlare:=-TurnPose.ElbowFlare;
+    if not FBikeSkeleton.TryGetBone('seat_tube_top',BoneA)then BoneA:=BB+Vector3(0,0.4,0);
+    if not FBikeSkeleton.TryGetBone('head_tube_top',BoneB)then BoneB:=BoneA+Vector3(0.5,0,0);
+    { Hold the front of the tube, ahead of the thigh. A grip at its midpoint
+      is reachable but pulls the wrist through the rider's hip. }
+    TurnGrip:=BoneA*0.10+BoneB*0.90+Vector3(0,-0.025,0.035);
+    TurnGrip.Y:=TurnGrip.Y+FGroundTurn.BikeLift;
+    TurnPose.HandFreeRPos:=TurnGrip;
+    LivePose:=LerpRiderPose(LivePose,TurnPose,FGroundTurn.Blend);
+  end;
   LiveOffset := Vector3(LivePose.OffsetX, LivePose.OffsetY, LivePose.OffsetZ);
   Alpha := 1 - Exp(-Dt / 0.65);
   FRiderEffort := FRiderEffort + (FRiderEffortTarget - FRiderEffort) * Alpha;
@@ -5054,7 +5104,7 @@ begin
     FBikeContainer.Matrix :=
       ScalingMatrix(Vector3(1 / S, 1 / S, 1 / S)) *
       RotationMatrixRad(-Rot4.W, Rot4.X, Rot4.Y, Rot4.Z) *
-      TranslationMatrix(-FTripoRider.Scene.Translation);
+      TranslationMatrix(-FTripoRider.Scene.Translation+Vector3(0,FGroundTurn.BikeLift,0));
   end;
   { видимость райдера — switch-обёртка glb-контента в его сцене }
   if FVisSwitch <> nil then
@@ -5095,7 +5145,7 @@ begin
   end;
   FTripoRider.FootPitchR := FootPitchR;   { roll the foot bone by the same angle }
   FTripoRider.FootPitchL := FootPitchL;
-  FTripoRider.FootYawDeg := FTripoFootYawDeg;
+  FTripoRider.FootYawDeg := FTripoFootYawDeg*(1-FGroundTurn.Blend);
 
   { hand grips: positions come from the bar's place_*_n bones, chosen by the pose's
     HandPos index. A change moves the hands one after the other (staggered windows
@@ -5146,6 +5196,16 @@ begin
   else FromFrameL:=GripFrame(FHandFromL,1);
   LivePose.HandFrameR:=BlendGripFrame(FromFrameR,GripFrame(FTripoHandPosR,0),progHR);
   LivePose.HandFrameL:=BlendGripFrame(FromFrameL,GripFrame(FTripoHandPosL,1),progHL);
+  if FGroundTurn.Active then begin
+    GripR:=GripR*(1-FGroundTurn.Blend)+O(TurnGrip)*FGroundTurn.Blend;
+    TurnBar:=SteerPoint(GripPlace('l',1,TVector3.Zero,0));
+    TurnBar.Y:=TurnBar.Y+FGroundTurn.BikeLift;
+    GripL:=GripL*(1-FGroundTurn.Blend)+TurnBar*FGroundTurn.Blend;
+    FromFrameR.Forward:=Vector3(0,0,-1);FromFrameR.Palm:=Vector3(0,1,0);
+    FromFrameR.Weight:=1;
+    LivePose.HandFrameR:=BlendGripFrame(LivePose.HandFrameR,FromFrameR,FGroundTurn.Blend);
+    LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,GripFrame(1,1),FGroundTurn.Blend);
+  end;
   FFrameHandR:=LivePose.HandFrameR;FFrameHandL:=LivePose.HandFrameL;
 
   { shoulder twist: when the hands are at different fore-aft positions (e.g. mid-way

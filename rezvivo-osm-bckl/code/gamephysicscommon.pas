@@ -5,7 +5,7 @@ interface
 uses
   Classes,
   CastleVectors, CastleTransform, CastleViewport, CastleScene,
-  CastleThirdPersonNavigation, CastleShapes;
+  CastleThirdPersonNavigation, CastleShapes, RiderGroundTurn;
 
 type
   TRiderMoveConstraint = function(Tag: Pointer; const Position, Movement: TVector3;
@@ -96,6 +96,7 @@ type
   end;
 
   TPhysicsReplayState = record
+    GroundTurn: TGroundTurnState;
     AutoMove: Boolean;
     WorldPosition: TVector3;
     MovementVelocity: TVector3;
@@ -164,6 +165,7 @@ type
       with no route carrot, lane pull or endpoint turnaround. }
     FreeTravel, Walking: Boolean;
     TravelSteering, TravelTargetSpeed, TravelBrake: Single;
+    GroundTurn: TGroundTurnState;
     PositionConstraint: TPositionConstraint;
     CollisionHalfWidth, CollisionBodyHeight: Single;
     function ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
@@ -655,6 +657,7 @@ end;
 function TPhysicsState.CaptureReplay: TPhysicsReplayState;
 begin
   Result.AutoMove:=AutoMove;
+  Result.GroundTurn:=GroundTurn;
   Result.WorldPosition:=WorldPosition;
   Result.MovementVelocity:=MovementVelocity;
   Result.ForwardDir:=ForwardDir;
@@ -701,6 +704,7 @@ end;
 procedure TPhysicsState.RestoreReplay(const Saved: TPhysicsReplayState);
 begin
   AutoMove:=Saved.AutoMove;
+  GroundTurn:=Saved.GroundTurn;
   WorldPosition:=Saved.WorldPosition;
   MovementVelocity:=Saved.MovementVelocity;
   ForwardDir:=Saved.ForwardDir;
@@ -787,6 +791,7 @@ end;
 
 procedure TPhysicsState.ResetDynamic;
 begin
+  GroundTurn:=Default(TGroundTurnState);
   AutoMove := false;
   CurrentYawRad := 0;
   PrevWorldPosition := Vector3(0, 0, 0);

@@ -14,6 +14,7 @@ const
   HEIGHT_PUBLIC_TEMPLATE =
     'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
   HEIGHT_DATASET_REVISION = 'mapzen-geotiff-v1';
+  OSM_ENDPOINT_FAILURE_COOLDOWN_MS = 30000;
 
 type
   TOsmRequestLimits=record
@@ -21,6 +22,14 @@ type
     Group:string;
   end;
   TOsmRequestStats=record Active,Peak:Integer;end;
+  TOsmEndpointSnapshot=record
+    URL,ErrorText:string;
+    Active,Attempt,Attempts,StatusCode:Integer;
+    Bytes,ElapsedMs:Int64;
+    StartedAt,UpdatedAt,RetryAt:QWord;
+    Success,Cancelled,FromCache:Boolean;
+  end;
+  TOsmEndpointSnapshots=array of TOsmEndpointSnapshot;
 
 { Called from OSM fetch workers, never from constructors/UI initialization. }
 function OsmServerCandidates(const Query: string): TStringArray;
@@ -31,8 +40,19 @@ function HeightServerCandidates(const South, West, North, East: Double;
   AllowRefresh: Boolean = True): TStringArray;
 function HeightDatasetCacheKey(const URLTemplate: string): string;
 function OsmEndpointCanTry(const URL: string): Boolean;
-procedure OsmEndpointResult(const URL: string; Success: Boolean; const ErrorText:string='');
+procedure OsmEndpointResult(const URL: string; Success: Boolean;
+  const ErrorText:string=''; StatusCode:Integer=0);
 function OsmEndpointLastError(const URL:string):string;
+function OsmEndpointLastStatus(const URL:string):Integer;
+{ Re-evaluated by queued workers: a successful mirror takes precedence only
+  within this query's coverage-filtered candidates. No reachability probes. }
+function OsmPreferredEndpoint(const URLs:TStringArray;
+  const Excluded:array of Boolean):Integer;
+procedure OsmEndpointRequestBegin(const URL:string;Attempt,Attempts:Integer);
+procedure OsmEndpointRequestEnd(const URL,ErrorText:string;StatusCode:Integer;
+  Bytes,ElapsedMs:Int64;Success,Cancelled,FromCache:Boolean);
+procedure OsmEndpointRetryAt(const URL:string;Tick:QWord);
+function OsmEndpointSnapshots(Since:QWord):TOsmEndpointSnapshots;
 { Nonblocking reservation. The caller waits cancellably outside the lock;
   a lease remembers its group even if discovery changes in flight. }
 function OsmTryAcquireRequest(const URL:string;out Lease:string):Boolean;
@@ -56,6 +76,9 @@ type
     URL: string;
     FailedUntil: QWord;
     LastError: string;
+    LastStatus: Integer;
+    SuccessOrder: QWord;
+    Snapshot:TOsmEndpointSnapshot;
   end;
   TRequestBudget=record Key:string;Active:Integer;LastStart:QWord;end;
   TLimitedStream = class(TMemoryStream)
@@ -75,6 +98,7 @@ var
   GHealth: array of TEndpointHealth;
   GBudgets:array of TRequestBudget;
   GRequestActive,GRequestPeak:Integer;
+  GSuccessOrder:QWord;
 
 function DefaultRequestLimits(const URL:string):TOsmRequestLimits;
 begin
@@ -538,14 +562,115 @@ begin
   finally LeaveCriticalSection(GGuard);end;
 end;
 
-procedure OsmEndpointResult(const URL: string; Success: Boolean; const ErrorText:string);
+function OsmEndpointLastStatus(const URL:string):Integer;
+var I:Integer;
+begin
+  EnterCriticalSection(GGuard);
+  try I:=HealthIndex(URL);Result:=GHealth[I].LastStatus;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+procedure OsmEndpointResult(const URL: string; Success: Boolean;
+  const ErrorText:string; StatusCode:Integer);
 var I: Integer;
 begin
   EnterCriticalSection(GGuard);
   try
     I:=HealthIndex(URL);
-    if Success then begin GHealth[I].FailedUntil:=0;GHealth[I].LastError:='' end
-    else begin GHealth[I].FailedUntil:=GetTickCount64+30000;GHealth[I].LastError:=ErrorText end;
+    GHealth[I].LastStatus:=StatusCode;
+    if Success then begin
+      GHealth[I].FailedUntil:=0;GHealth[I].LastError:='';
+      if StatusCode=200 then begin Inc(GSuccessOrder);GHealth[I].SuccessOrder:=GSuccessOrder;end;
+    end
+    else begin
+      GHealth[I].SuccessOrder:=0;
+      GHealth[I].FailedUntil:=GetTickCount64+OSM_ENDPOINT_FAILURE_COOLDOWN_MS;
+      GHealth[I].LastError:=ErrorText;
+    end;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+function OsmPreferredEndpoint(const URLs:TStringArray;
+  const Excluded:array of Boolean):Integer;
+var I,K,Rank,BestRank:Integer;Order,BestOrder,Tick:QWord;
+begin
+  Result:=-1;BestRank:=-1;BestOrder:=0;Tick:=GetTickCount64;
+  EnterCriticalSection(GGuard);
+  try
+    for I:=0 to High(URLs)do begin
+      if (I<=High(Excluded))and Excluded[I]then Continue;
+      K:=HealthIndex(URLs[I]);Order:=GHealth[K].SuccessOrder;
+      if GHealth[K].FailedUntil>Tick then Rank:=0
+      else if Order>0 then Rank:=2 else Rank:=1;
+      if (Rank>BestRank)or((Rank=BestRank)and(Order>BestOrder))then begin
+        Result:=I;BestRank:=Rank;BestOrder:=Order;
+      end;
+    end;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+procedure OsmEndpointRequestBegin(const URL:string;Attempt,Attempts:Integer);
+var I:Integer;
+begin
+  EnterCriticalSection(GGuard);
+  try
+    I:=HealthIndex(URL);
+    GHealth[I].Snapshot.URL:=URL;
+    Inc(GHealth[I].Snapshot.Active);
+    GHealth[I].Snapshot.Attempt:=Attempt;
+    GHealth[I].Snapshot.Attempts:=Attempts;
+    GHealth[I].Snapshot.StartedAt:=GetTickCount64;
+    GHealth[I].Snapshot.UpdatedAt:=GetTickCount64;
+    GHealth[I].Snapshot.RetryAt:=0;
+    GHealth[I].Snapshot.Cancelled:=False;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+procedure OsmEndpointRequestEnd(const URL,ErrorText:string;StatusCode:Integer;
+  Bytes,ElapsedMs:Int64;Success,Cancelled,FromCache:Boolean);
+var I:Integer;
+begin
+  EnterCriticalSection(GGuard);
+  try
+    I:=HealthIndex(URL);
+    GHealth[I].Snapshot.URL:=URL;
+    if GHealth[I].Snapshot.Active>0 then Dec(GHealth[I].Snapshot.Active);
+    GHealth[I].Snapshot.ErrorText:=Copy(ErrorText,1,160);
+    GHealth[I].Snapshot.StatusCode:=StatusCode;
+    GHealth[I].Snapshot.Bytes:=Bytes;
+    GHealth[I].Snapshot.ElapsedMs:=ElapsedMs;
+    GHealth[I].Snapshot.Success:=Success;
+    GHealth[I].Snapshot.Cancelled:=Cancelled;
+    GHealth[I].Snapshot.FromCache:=FromCache;
+    GHealth[I].Snapshot.UpdatedAt:=GetTickCount64;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+procedure OsmEndpointRetryAt(const URL:string;Tick:QWord);
+var I:Integer;
+begin
+  EnterCriticalSection(GGuard);
+  try
+    I:=HealthIndex(URL);
+    GHealth[I].Snapshot.URL:=URL;
+    GHealth[I].Snapshot.RetryAt:=Max(GHealth[I].Snapshot.RetryAt,Tick);
+    GHealth[I].Snapshot.UpdatedAt:=GetTickCount64;
+  finally LeaveCriticalSection(GGuard);end;
+end;
+
+function OsmEndpointSnapshots(Since:QWord):TOsmEndpointSnapshots;
+var I,N:Integer;
+begin
+  Result:=nil;
+  EnterCriticalSection(GGuard);
+  try
+    SetLength(Result,Length(GHealth));N:=0;
+    for I:=0 to High(GHealth)do
+      if (GHealth[I].Snapshot.URL<>'')and
+         ((GHealth[I].Snapshot.Active>0)or(GHealth[I].Snapshot.UpdatedAt>=Since))then begin
+        Result[N]:=GHealth[I].Snapshot;Inc(N);
+      end;
+    SetLength(Result,N);
   finally LeaveCriticalSection(GGuard);end;
 end;
 

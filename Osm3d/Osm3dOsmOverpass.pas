@@ -33,6 +33,7 @@ const
   OVERPASS_TILE_ZOOM_DEFAULT = 14;
 
   OVERPASS_CACHE_PREFIX = 'overpass:';
+  OVERPASS_REQUEST_ATTEMPTS = 3;
 
   UNHEALTHY_THRESHOLD = 3;
   HEALTH_COOLDOWN_SEC = 60;
@@ -336,6 +337,9 @@ uses
   StrUtils, URIParser, Osm3dGenerationProgress,
   MD5;
 
+type
+  TThreadAccess = class(TThread);
+
 threadvar
   GResolvedOverpassEndpoint: string;
 
@@ -386,11 +390,50 @@ function OverpassFetchOnEndpoint(Fetcher: THTTPFetcherWithCache;
   ConnectTimeoutLimitMs: Integer): Boolean;
 var
   R: TFetchResult;
-  T0: TDateTime;
+  Started,WaitUntil,RequestStarted: QWord;
   Candidates: TStringArray;
-  I: Integer;
-  AttemptMs: Int64;
+  I,Attempt: Integer;
+  RetryPass:Boolean;
+  PermanentFailure,Tried:array of Boolean;
   Lease,Errors,Failure:string;
+
+  function Cancelled:Boolean;
+  begin
+    Result:=Fetcher.Aborted or
+      ((GenerationProgressContext.Cancel<>nil)and GenerationProgressContext.Cancel^) or
+      ((TThread.CurrentThread<>nil)and TThreadAccess(TThread.CurrentThread).Terminated);
+    if Result then ErrMsg:='aborted';
+  end;
+
+  function Retryable(const Status:Integer):Boolean;
+  begin
+    { 200 can carry a truncated body or an Overpass runtime-error envelope.
+      0 is a transport failure. Authentication/query errors need a change,
+      not another identical request. }
+    Result:=(Status=0)or(Status=200)or(Status=408)or(Status=429)or
+      ((Status>=500)and(Status<=599));
+  end;
+
+  function Cached:Boolean;
+  begin
+    R:=Fetcher.GetCachedByKey(OVERPASS_ENDPOINT_DEFAULT,OverpassCacheKey(Query));
+    Result:=R.Success and(OverpassEnvelopeError(R.Data)='');
+    if Result then begin
+      Bytes:=R.Data;ErrMsg:='';GResolvedOverpassEndpoint:='cache';
+    end else if R.Success and(Fetcher.Cache<>nil)then
+      Fetcher.Cache.Delete(OverpassCacheKey(Query));
+  end;
+
+  procedure RememberError(const Index:Integer;const ErrorText:string;
+    const Status:Integer);
+  begin
+    PermanentFailure[Index]:=not Retryable(Status);
+    RetryPass:=RetryPass or not PermanentFailure[Index];
+    if ErrorText<>'' then begin
+      if Errors<>'' then Errors:=Errors+'; ';
+      Errors:=Errors+ParseURI(Candidates[Index]).Host+': '+ErrorText;
+    end;
+  end;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(615);{$ENDIF}
   Bytes     := nil;
@@ -404,81 +447,98 @@ begin
     Exit;
   end;
 
-  T0 := Now;
+  Started:=GetTickCount64;
   GResolvedOverpassEndpoint := Endpoint;
-  if SameText(Trim(Endpoint), OSM_DIRECTORY_MODE) then
-  begin
-    { Cached map data must not trigger directory or reachability requests. }
-    R := Fetcher.GetCachedByKey(OVERPASS_ENDPOINT_DEFAULT, OverpassCacheKey(Query));
-    if R.Success and (OverpassEnvelopeError(R.Data) = '') then
-    begin
-      Bytes := R.Data;
-      GResolvedOverpassEndpoint := 'cache';
-      Exit(True);
-    end;
-    if R.Success and (Fetcher.Cache <> nil) then Fetcher.Cache.Delete(OverpassCacheKey(Query));
-    if Fetcher.Aborted then begin ErrMsg := 'aborted'; Exit; end;
-    Candidates := OsmServerCandidates(Query);
-    Errors:='';
-    ErrMsg := 'No reachable OSM servers';
-    for I := 0 to High(Candidates) do
-    begin
-      if Fetcher.Aborted then begin ErrMsg := 'aborted'; Break; end;
-      if OsmEndpointCanTry(Candidates[I]) then begin
-        Result := OverpassFetchOnEndpoint(Fetcher, Candidates[I], Query, Bytes, AttemptMs, Failure, 3000);
-        if not Fetcher.Aborted then OsmEndpointResult(Candidates[I], Result,Failure);
-      end else Failure:=OsmEndpointLastError(Candidates[I]);
-      if Result then Break;
-      if Failure<>'' then begin
-        if Errors<>'' then Errors:=Errors+'; ';
-        Errors:=Errors+ParseURI(Candidates[I]).Host+': '+Failure;
-      end;
-    end;
-    if not Result and (Errors<>'') then ErrMsg:=Errors;
-    ElapsedMs := Round((Now-T0)*86400000);
-    Exit;
-  end;
-  { Manual endpoints use the same cache-first path and process-wide budgets
-    as automatic routing. Waiting must not hold a shared lock. }
-  R:=Fetcher.GetCachedByKey(Endpoint,OverpassCacheKey(Query));
-  if R.Success and(OverpassEnvelopeError(R.Data)='')then begin Bytes:=R.Data;Exit(True);end;
-  if R.Success and(Fetcher.Cache<>nil)then Fetcher.Cache.Delete(OverpassCacheKey(Query));
-  if Fetcher.Aborted then begin ErrMsg:='aborted';Exit;end;
-  while not OsmTryAcquireRequest(Endpoint,Lease)do begin
-    if Fetcher.Aborted then begin ErrMsg:='aborted';Exit;end;
-    Sleep(10);
-  end;
   try
-    try
-      if Fetcher.Aborted then begin ErrMsg:='aborted';Exit;end;
-      R := Fetcher.PostString(Endpoint, Query,
-                              'text/plain; charset=utf-8',
-                              OverpassCacheKey(Query), ConnectTimeoutLimitMs, 1);
-    except
-      on E: Exception do
-      begin
-        ErrMsg    := E.ClassName + ': ' + E.Message;
-        ElapsedMs := Round((Now - T0) * 86400 * 1000);
-        Exit;
+    { Flat-map and 3D consumers share the same query key. Recheck it between
+      attempts: another worker may finish while this one is cooling down. }
+    if Cancelled then Exit;
+    if Cached then Exit(True);
+    if SameText(Trim(Endpoint),OSM_DIRECTORY_MODE)then begin
+      Candidates:=OsmServerCandidates(Query);
+      if ConnectTimeoutLimitMs<=0 then ConnectTimeoutLimitMs:=3000;
+    end else begin SetLength(Candidates,1);Candidates[0]:=Endpoint;end;
+    SetLength(PermanentFailure,Length(Candidates));
+    ErrMsg:='No reachable OSM servers';
+    for Attempt:=1 to OVERPASS_REQUEST_ATTEMPTS do begin
+      if Cancelled then Exit;
+      if Cached then Exit(True);
+      Errors:='';RetryPass:=False;
+      Tried:=Copy(PermanentFailure);
+      while True do begin
+        if Cancelled then Exit;
+        I:=OsmPreferredEndpoint(Candidates,Tried);
+        if I<0 then Break;
+        if not OsmEndpointCanTry(Candidates[I])then begin
+          Tried[I]:=True;
+          RememberError(I,OsmEndpointLastError(Candidates[I]),
+            OsmEndpointLastStatus(Candidates[I]));Continue;
+        end;
+        if not OsmTryAcquireRequest(Candidates[I],Lease)then begin
+          { Re-select after waiting: another worker may have found a working
+            mirror while this one was queued behind an unavailable server. }
+          Sleep(25);Continue;
+        end;
+        Tried[I]:=True;
+        try
+          if Cancelled then Exit;
+          if Cached then Exit(True);
+          { Another request can fail while this worker waits for the lease.
+            Respect its cooldown instead of releasing a queue of repeats. }
+          if not OsmEndpointCanTry(Candidates[I])then begin
+            RememberError(I,OsmEndpointLastError(Candidates[I]),
+              OsmEndpointLastStatus(Candidates[I]));Continue;
+          end;
+          GResolvedOverpassEndpoint:=Candidates[I];
+          RequestStarted:=GetTickCount64;
+          OsmEndpointRequestBegin(Candidates[I],Attempt,OVERPASS_REQUEST_ATTEMPTS);
+          R:=TFetchResult.Failure('aborted');
+          try
+          try
+            { Exactly one HTTP attempt here. Retries belong only to this
+              loop, not to both endpoint fallback and the generic fetcher. }
+            R:=Fetcher.PostString(Candidates[I],Query,'text/plain; charset=utf-8',
+              OverpassCacheKey(Query),ConnectTimeoutLimitMs,1);
+          except
+            on E:EAbort do begin ErrMsg:='aborted';Exit;end;
+            on E:Exception do R:=TFetchResult.Failure(E.ClassName+': '+E.Message);
+          end;
+          if Cancelled then Exit;
+          if R.Success then begin
+            Failure:=OverpassEnvelopeError(R.Data);
+            if Failure<>'' then begin
+              R.Success:=False;R.ErrorMsg:=Failure;
+              if Fetcher.Cache<>nil then Fetcher.Cache.Delete(OverpassCacheKey(Query));
+            end;
+          end;
+          { A cache hit is not evidence that this endpoint is reachable. }
+          if not R.FromCache then
+            OsmEndpointResult(Candidates[I],R.Success,R.ErrorMsg,R.StatusCode);
+          if R.Success then begin Bytes:=R.Data;ErrMsg:='';Exit(True);end;
+          { Keep this response's classification even if another request
+            concurrently updates the same endpoint's health. }
+          RememberError(I,R.ErrorMsg,R.StatusCode);
+          finally
+            OsmEndpointRequestEnd(Candidates[I],R.ErrorMsg,R.StatusCode,
+              Length(R.Data),GetTickCount64-RequestStarted,R.Success,
+              ErrMsg='aborted',R.FromCache);
+          end;
+        finally OsmReleaseRequest(Lease);end;
+      end;
+      if Errors<>'' then ErrMsg:=Errors;
+      if not RetryPass or(Attempt=OVERPASS_REQUEST_ATTEMPTS)then Break;
+      { 30/60 s backoff. No request lease or cache lock is held while waiting.
+        Flat-map termination and map-generation cancellation stay responsive. }
+      WaitUntil:=GetTickCount64+QWord(OSM_ENDPOINT_FAILURE_COOLDOWN_MS)*QWord(Attempt);
+      for I:=0 to High(Candidates)do
+        if not PermanentFailure[I]and(OsmEndpointLastError(Candidates[I])<>'')then
+          OsmEndpointRetryAt(Candidates[I],WaitUntil);
+      while GetTickCount64<WaitUntil do begin
+        if Cancelled then Exit;
+        Sleep(25);
       end;
     end;
-  finally OsmReleaseRequest(Lease);end;
-  ElapsedMs := Round((Now - T0) * 86400 * 1000);
-
-  if R.Success then
-  begin
-    ErrMsg := OverpassEnvelopeError(R.Data);
-    if ErrMsg <> '' then
-    begin
-      if Fetcher.Cache <> nil then Fetcher.Cache.Delete(OverpassCacheKey(Query));
-      Exit(False);
-    end;
-    Bytes  := R.Data;
-    Result := True;
-    Exit;
-  end;
-
-  ErrMsg := R.ErrorMsg;
+  finally ElapsedMs:=GetTickCount64-Started;end;
 end;
 
 constructor TOverpassClient.Create(AFetcher: THTTPFetcherWithCache;

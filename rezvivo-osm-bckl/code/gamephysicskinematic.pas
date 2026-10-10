@@ -27,7 +27,7 @@ implementation
 
 uses
   SysUtils, CastleVectors, CastleScene, GamePath, GameProfiler, DebugLog,
-  GameMath;     { DistanceXZ — was FPath.DistanceXZ before migration }
+  GameMath, RiderGroundTurn;
 
 const
   { Полосное смещение райдера как доля ПОЛУШИРИНЫ дороги.
@@ -93,9 +93,16 @@ begin
   FState.SimulationTime:=FState.SimulationTime+Dt;
   FState.LaneOffset:=0;FState.CurrentRoadWidth:=0;
   OldSpeed:=FState.CurrentSpeed;
+  AdvanceGroundTurn(FState.GroundTurn,Dt,FState.TravelSteering,OldSpeed,
+    FState.AppliedPowerWatts,not FState.Walking);
   if FState.Walking then begin
     Accel:=EnsureRange((FState.TravelTargetSpeed-OldSpeed)*5,-5,3);
     Turn:=FState.TravelSteering*1.8;
+  end else if FState.GroundTurn.Frame.Active then begin
+    { Lift and set down before riding away; zero travel does not become
+      artificial metres or power in the recorded activity. }
+    Accel:=0;FState.CurrentSpeed:=0;OldSpeed:=0;
+    Turn:=FState.GroundTurn.Frame.YawDelta/Dt;
   end else begin
     Accel:=CalculateAcceleration(Dt);
     { Bicycle steering: large handlebar angle at low speed, bounded lateral

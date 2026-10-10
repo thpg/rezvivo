@@ -1,4 +1,4 @@
-﻿# Build all application and CGE units with the same Release options.
+# Build all application and CGE units with the same Release options.
 # Uses only authoritative source directories, with separate PPUs and symbols.
 param(
     [Parameter(Mandatory=$true)][string]$EngineRoot,
@@ -20,7 +20,7 @@ $unitRoot = Join-Path $buildRoot 'units'
 New-Item -ItemType Directory -Path $unitRoot -Force | Out-Null
 $options = @('-MObjFPC', '-Scghi', '-Ci', '-O2', '-gw3', '-gl', '-Xg', '-l', '-vewnibq', '-vh-', '-dRELEASE')
 $projectDirs = @($projectRoot, (Join-Path $projectRoot 'code'))
-foreach ($dir in @('Bikeparametric', 'Osm3d', 'Mcp', 'tree-editor\core', 'tree-editor\render', 'avatareditor-avatar')) {
+foreach ($dir in @('Bikeparametric', 'Osm3d', 'Mcp', 'tree-editor\core', 'tree-editor\render')) {
     $projectDirs += Join-Path $repoRoot $dir
 }
 foreach ($dir in $projectDirs) { $options += '-Fu' + $dir; $options += '-Fi' + $dir }

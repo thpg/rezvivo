@@ -12,7 +12,7 @@ unit GameViewPlay;
 
 interface
 
-uses Classes,fpjson,GameTravel,Osm3dGeoMath,
+uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleKeysMouse, CastleViewport, CastleScene, CastleVectors, CastleCameras,
   CastleTransform, CastleInputs, CastleThirdPersonNavigation, CastleDebugTransform,
@@ -661,6 +661,7 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure Render; override;
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
   end;
 
   {$IFDEF MSWINDOWS}
@@ -671,6 +672,7 @@ var
   GFpsMode:         TFpsLimitMode = flmConfigured;
   GFpsSimFrameHold: Boolean = False;
   GFpsGraphicsBenchmark: Boolean = False;
+  GFpsActiveWorld: Boolean = False;
   GFpsSwapPending:  Boolean = False;
   GFpsDesiredSwap:  LongInt = 1;
   {$IFDEF MSWINDOWS}
@@ -684,9 +686,18 @@ function WglGetProcAddress(ProcName: PChar): Pointer; stdcall;
   external 'opengl32.dll' name 'wglGetProcAddress';
 {$ENDIF}
 
-procedure ApplyGameFpsMode;
-var Limit: Integer;
+function HasActiveFpsWorld:Boolean;
 begin
+  Result:=(ViewPlay<>nil)and(ViewPlay.Container<>nil)and
+    (ViewPlay.Container.PendingFrontView=ViewPlay)and ViewPlay.HasActiveState and
+    not ViewPlay.RidePreparationHeld and not ViewPlay.TrainingFocusMode and
+    (ViewPlay.MainViewport<>nil)and ViewPlay.MainViewport.Exists;
+end;
+
+procedure ApplyGameFpsMode;
+var Limit: Integer; MenuLimit:Single;
+begin
+  GFpsActiveWorld:=HasActiveFpsWorld;
   case GFpsMode of
     flmVsyncOn:     begin ApplicationProperties.LimitFPS := 0;  GFpsDesiredSwap := 1; end;
     flmVsyncOffMax: begin ApplicationProperties.LimitFPS := 0;  GFpsDesiredSwap := 0; end;
@@ -697,13 +708,22 @@ begin
       GFpsDesiredSwap := Ord(Limit < 0);
     end;
   end;
+  MenuLimit:=ApplicationProperties.LimitFPS;
+  if (MenuLimit<=0)or(MenuLimit>60)then MenuLimit:=60;
   if GFpsGraphicsBenchmark then begin
     ApplicationProperties.LimitFPS:=0; GFpsDesiredSwap:=0;
-    SetVegetationFrameLimit(0,False);
-  end else if GFpsSimFrameHold then begin
+  end else if GFpsSimFrameHold and GFpsActiveWorld then begin
     ApplicationProperties.LimitFPS:=1; GFpsDesiredSwap:=0;
-    SetVegetationFrameLimit(0,False);
-  end else SetVegetationFrameLimit(ApplicationProperties.LimitFPS,GFpsDesiredSwap<>0);
+  end;
+  { Keep the chosen setting intact. Menu overlays, the globe, loading maps
+    and training-only views always have a finite limit, even after debug V. }
+  if not GFpsActiveWorld then begin
+    ApplicationProperties.LimitFPS:=MenuLimit;
+    GFpsDesiredSwap:=0;
+  end;
+  if GFpsGraphicsBenchmark or(GFpsSimFrameHold and GFpsActiveWorld)then
+    SetVegetationFrameLimit(0,False)
+  else SetVegetationFrameLimit(ApplicationProperties.LimitFPS,GFpsDesiredSwap<>0);
   {$IFDEF MSWINDOWS}
   // CGE subtracts rendering time before Sleep. The default Windows timer
   // quantum can still stretch 33 ms frames to 47 ms (about 21 FPS).
@@ -811,6 +831,12 @@ begin
       GWglSwapInterval(GFpsDesiredSwap);
     {$ENDIF}
   end;
+end;
+
+procedure TFpsSwapApplier.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+begin
+  inherited;
+  if HasActiveFpsWorld<>GFpsActiveWorld then ApplyGameFpsMode;
 end;
 
 function CreateGameFpsControl(AOwner:TComponent):TCastleUserInterface;
@@ -1135,6 +1161,9 @@ begin
     Result.Add('speed',FActiveAvatarAgent.State.CurrentSpeed);
     Result.Add('distance',FActiveAvatarAgent.State.CumulativeDistance);
     Result.Add('steer',FActiveAvatarAgent.State.TravelSteering);
+    Result.Add('ground_turn_stage',Ord(FActiveAvatarAgent.State.GroundTurn.Stage));
+    Result.Add('ground_turn_blend',FActiveAvatarAgent.State.GroundTurn.Frame.Blend);
+    Result.Add('bike_lift',FActiveAvatarAgent.State.GroundTurn.Frame.BikeLift);
     Result.Add('forward_x',FActiveAvatarAgent.State.ForwardDir.X);
     Result.Add('forward_z',FActiveAvatarAgent.State.ForwardDir.Z);
     Result.Add('camera_y',MainViewport.Camera.Translation.Y);
@@ -1153,6 +1182,7 @@ begin
     FActiveAvatarAgent.State.FreeTravel:=FFreeExplore;
     FActiveAvatarAgent.State.Walking:=FTravelMode=travelWalk;
     FActiveAvatarAgent.State.TravelSteering:=0;
+    FActiveAvatarAgent.State.GroundTurn:=Default(TGroundTurnState);
     FActiveAvatarAgent.State.TravelBrake:=0;
     FActiveAvatarAgent.State.TravelTargetSpeed:=0;
     ApplyWheelProbeFromBike;
@@ -1167,6 +1197,7 @@ begin
   if FLocalBots<>nil then FLocalBots.SetRenderEnabled(FPerfRiders and not FFreeExplore);
   if FRemoteRiders<>nil then FRemoteRiders.SetRidersVisible(FPerfRiders and not FFreeExplore);
   if FBikeInstance<>nil then begin
+    FBikeInstance.GroundTurn:=Default(TGroundTurnFrame);
     FBikeInstance.OnFoot:=FTravelMode=travelWalk;
     FBikeInstance.Group.Exists:=FPerfRiders and(FTravelMode<>travelFlight);
     if FTravelMode=travelWalk then FBikeInstance.AnimateOnFoot(0,0,Pi/2);
@@ -5180,6 +5211,7 @@ begin
     FPerfAnim=False (MCP perf.set) — весь блок пропускается. }
   if not FFocusMode and (FTravelMode=travelBicycle) and (PhysDt>0) and FPerfAnim and Assigned(FBikeInstance) then
   begin
+    if HasActiveState then FBikeInstance.GroundTurn:=FActiveAvatarAgent.State.GroundTurn.Frame;
     { Каденс → шатун, скорость → колёса: покадрово и без гейта RideClient —
       иначе в соло-заезде UpdateRiderList не бежит и аватар не педалирует.
       Источник каденса — тот же, что у HUD (DeviceService.Cadence, FIT-сим

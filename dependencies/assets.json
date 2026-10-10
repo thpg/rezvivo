@@ -4585,8 +4585,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 140078,
-    "sha256": "2c41d57c800bb6943d8cd3b9b49b674250e89b812cfc3ab7d1c08c9218e1fe31",
+    "bytes": 140463,
+    "sha256": "eceaa6175c77890d27d98427eb9ed157925e7ab80a01a1c6862a4128757f0468",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

@@ -48,6 +48,7 @@ uses UiTranslations,
   CastleGLImages,
   Osm3dGeoMath,
   Osm3dGeoTileGrid,
+  Osm3dOsmDirectory,
   Osm3dCacheHTTPFetcher,
   Osm3dKnowledgeRecipe,
   Osm3dImageCodecLock;
@@ -200,6 +201,9 @@ type
     { красная плашка ошибки поверх карты (SetError) }
     FErrorMsg:    string;
     FErrorLabel:  TCastleLabel;
+    FNetworkTitle:TCastleLabel;
+    FNetworkLabels:array[0..5]of TCastleLabel;
+    FNetworkSince,FNetworkNextUpdate:QWord;
 
     function  MercOf(const P: TLatLon): TMercPt;
     { Прямоугольник панели карты в ЛОКАЛЬНЫХ (немасштабированных)
@@ -214,6 +218,7 @@ type
     procedure UpdateStageLabel(AIndex: Integer);
     function StageRow(AIndex: Integer): Integer;
     function GetTileCount: Integer;
+    procedure UpdateNetworkLabels;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -283,7 +288,7 @@ type
 implementation
 
 uses
-  StrUtils, Osm3dFlatMap, CastleGLUtils, Osm3dPhotoStatusText;
+  StrUtils, URIParser, Osm3dFlatMap, CastleGLUtils, Osm3dPhotoStatusText;
 
 { ── TWarmupRasterThread ───────────────────────────────────────────── }
 
@@ -363,6 +368,17 @@ begin
   end;
   FStagePulse := 0;
 
+  FNetworkTitle:=TCastleLabel.Create(Self);
+  FNetworkTitle.Name:='OsmNetworkTitle';
+  FNetworkTitle.FontScale:=0.8;
+  FNetworkTitle.Color:=Vector4(0.75,0.85,0.90,1);
+  BindUiText(FNetworkTitle,'Map servers');InsertFront(FNetworkTitle);
+  for I:=0 to High(FNetworkLabels)do begin
+    L:=TCastleLabel.Create(Self);L.Name:='OsmNetworkStatus'+IntToStr(I);
+    L.FontScale:=0.65;L.MaxWidth:=WARMUP_STAGE_COL_W-28;
+    L.Exists:=False;InsertFront(L);FNetworkLabels[I]:=L;
+  end;
+
   FErrorMsg := '';
   FErrorLabel := TCastleLabel.Create(Self);
   FErrorLabel.Color := Vector4(1, 1, 1, 0.97);
@@ -428,6 +444,8 @@ begin
   if (Length(ATiles) > 0) and (AGrid = nil) then Exit;
   FHttp := AHttp;
   FPointStart := APointStart;
+  FNetworkSince:=GetTickCount64;FNetworkNextUpdate:=0;
+  if FNetworkSince>1000 then Dec(FNetworkSince,1000);
 
   { тайлы: гео-бокс -> меркатор, общий bbox }
   SetLength(FTiles, Length(ATiles));
@@ -940,6 +958,9 @@ procedure TOsm3dWarmupOverlay.Update(const SecondsPassed: Single;
 begin
   inherited;
   if not FShowing then Exit;
+  if (GetTickCount64>=FNetworkNextUpdate)or
+    (EffectiveWidth<>FLayoutW)or(EffectiveHeight<>FLayoutH)then
+    UpdateNetworkLabels;
   DrainRasterDecodes;
   FStagePulse := FStagePulse + SecondsPassed;   { пульс маркера active }
 
@@ -956,6 +977,76 @@ begin
       FErrorLabel.MaxWidth := EffectiveWidth * 0.7;
   end;
   HandleInput := False;                { ввод дальше вниз не проходит }
+end;
+
+procedure TOsm3dWarmupOverlay.UpdateNetworkLabels;
+var Rows:TOsmEndpointSnapshots;Tmp:TOsmEndpointSnapshot;
+    I,J,N,StageRows:Integer;Tick:QWord;Top,Available:Single;
+    Caption,Status,Host:string;U:TURI;L:TCastleLabel;
+begin
+  { Read-only snapshots; no network work, callbacks into workers or per-frame
+    text allocation. Hidden overlays do not poll at all. }
+  Tick:=GetTickCount64;FNetworkNextUpdate:=Tick+500;
+  Rows:=OsmEndpointSnapshots(FNetworkSince);
+  for I:=0 to High(Rows)do for J:=I+1 to High(Rows)do
+    if (Ord(Rows[J].Active>0)>Ord(Rows[I].Active>0))or
+      ((Ord(Rows[J].Active>0)=Ord(Rows[I].Active>0))and
+       (Rows[J].UpdatedAt>Rows[I].UpdatedAt))then begin
+      Tmp:=Rows[I];Rows[I]:=Rows[J];Rows[J]:=Tmp;
+    end;
+  StageRows:=WARMUP_STAGE_COUNT;if FPointStart then StageRows:=2;
+  Top:=WARMUP_HEADER_H+WARMUP_STAGE_TOP+StageRows*WARMUP_STAGE_ROW_H+24;
+  FNetworkTitle.FontScale:=1;
+  FNetworkTitle.FontSize:=14/Max(0.25,FNetworkTitle.UIScale);
+  FNetworkTitle.Anchor(hpLeft,WARMUP_MARGIN);
+  FNetworkTitle.Anchor(vpTop,-Top);Top:=Top+FNetworkTitle.EffectiveHeight+10;
+  Available:=EffectiveHeight-24;
+  if FErrorLabel.Exists then Available:=Available-FErrorLabel.EffectiveHeight-20;
+  N:=Min(Length(Rows),Length(FNetworkLabels));
+  for I:=0 to High(FNetworkLabels)do FNetworkLabels[I].Exists:=False;
+  for I:=0 to High(FNetworkLabels)do begin
+    L:=FNetworkLabels[I];L.Exists:=False;
+    L.FontScale:=1;L.FontSize:=12/Max(0.25,L.UIScale);
+    if (I>=N)and not((I=0)and(N=0))then Continue;
+    L.Color:=Vector4(0.62,0.68,0.72,1);
+    if N=0 then Caption:=UiText('No map requests')
+    else begin
+      U:=ParseURI(Rows[I].URL);Host:=U.Host;
+      if U.Port<>0 then Host:=Host+':'+IntToStr(U.Port);
+      Caption:=Host;
+      if Rows[I].Active>0 then begin
+        Caption:=Caption+LineEnding+Format(UiText('Request %d/%d · %d s'),
+          [Rows[I].Attempt,Rows[I].Attempts,(Tick-Rows[I].StartedAt)div 1000]);
+        L.Color:=Vector4(0.95,0.78,0.38,1);
+      end;
+      Status:='';
+      if Rows[I].Cancelled then Status:=UiText('Cancelled')
+      else if Rows[I].FromCache then Status:=UiText('From cache')
+      else if Rows[I].StatusCode>0 then begin
+        Status:='HTTP '+IntToStr(Rows[I].StatusCode);
+        if Rows[I].Success then begin
+          Status:=Status+Format(' · %.1f MiB · %.1f s',
+            [Rows[I].Bytes/(1024.0*1024.0),Rows[I].ElapsedMs/1000.0]);
+          if Rows[I].Active=0 then L.Color:=Vector4(0.40,0.85,0.58,1);
+        end else begin
+          if Rows[I].StatusCode=200 then Status:=Status+': '+UiText('Incomplete response');
+          if Rows[I].Active=0 then L.Color:=Vector4(0.95,0.57,0.40,1);
+        end;
+      end else if Rows[I].ErrorText<>'' then begin
+        if Pos('12002',Rows[I].ErrorText)>0 then Status:=UiText('Connection timed out')
+        else Status:=UiText('Connection failed');
+        if Rows[I].Active=0 then L.Color:=Vector4(0.95,0.57,0.40,1);
+      end;
+      if Status<>'' then Caption:=Caption+LineEnding+Status;
+      if (Rows[I].Active=0)and(Rows[I].RetryAt>Tick)then
+        Caption:=Caption+LineEnding+Format(UiText('Retry in %d s'),
+          [(Rows[I].RetryAt-Tick+999)div 1000]);
+    end;
+    if L.Caption<>Caption then L.Caption:=Caption;
+    L.Anchor(hpLeft,WARMUP_MARGIN);L.Anchor(vpTop,-Top);
+    if Top+L.EffectiveHeight>Available then Break;
+    L.Exists:=True;Top:=Top+L.EffectiveHeight+12;
+  end;
 end;
 
 procedure TOsm3dWarmupOverlay.Render;
