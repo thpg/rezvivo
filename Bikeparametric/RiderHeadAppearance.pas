@@ -265,7 +265,7 @@ begin
     TextureField:=TSFNode.Create(E,True,'rhAtlas',[TImageTextureNode]);TextureField.Value:=Tex;E.AddCustomField(TextureField);
     V.Contents:=
       'attribute vec2 haUV;attribute vec3 haFlow;attribute float haSeed;'+#10+
-      'attribute vec3 haPose0,haPose1,haPose2,haPose3;uniform vec4 haFace;uniform mat3 castle_NormalMatrix;'+#10+
+      'attribute vec3 haPose0,haPose1,haPose2,haPose3;uniform vec4 haFace;' + #10 + '#ifndef GL_ES' + #10 + 'uniform mat3 castle_NormalMatrix;' + #10 + '#endif' + #10 + ''+#10+
       'varying vec2 rhUV;varying vec3 rhFlow;varying float rhSeed;'+#10+
       'void PLUG_vertex_object_space_change(inout vec4 p,inout vec3 n){'+#10+
       ' float squint=(1.0-haFace.w)*min(1.0,0.35*haFace.y+0.75*haFace.z);'+#10+

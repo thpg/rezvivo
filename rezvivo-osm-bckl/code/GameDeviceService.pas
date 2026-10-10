@@ -33,7 +33,7 @@ uses
   Classes, SysUtils, fgl,
   TrainerData, GameTransportBase, GameDeviceManager, GameTrainerControl,
   GameDeviceTypes, GameDeviceSensor, GameDeviceAssignments, GameActivitySource,
-  BLEManager, SimpleBLEProvider, WinRTBLEProvider, ANTPlus, GameDeviceSim,
+  GameDeviceSim,
   AppSettings, DebugLog;
 
 type
@@ -130,7 +130,7 @@ type
       пока не готова интеграция в игровой цикл — устройства видны на
       странице, но не подключаются автоматически и не назначаются
       активными сенсорами. Ручной клик по карточке остаётся доступным. }
-    function IsTransportEnabledInGame(ATransport: TTransportType): Boolean;
+    function IsTransportEnabledInGame(ATransport: TTransportType; Steering: Boolean = False): Boolean;
 
     procedure Log(const S: String);
     function MapState(const S: TConnectionState): TGameDeviceConnectionState;
@@ -240,6 +240,8 @@ type
     function Cadence: TCadenceSensor; inline;
     function Speed: TSpeedSensor; inline;
 
+    function ReadSteering(out Degrees: Single): Boolean;
+    function CenterSteering: Boolean;
     function HasSensor(AKind: TSensorKind): Boolean; inline;
     function HasAnySensor: Boolean;
     function ActivitySourceFlags: Byte;
@@ -299,6 +301,9 @@ var
 implementation
 
 uses Math,
+  {$ifdef MSWINDOWS}WinRTBLEProvider, ANTPlus,{$endif}
+  {$ifdef ANDROID}AndroidBLEProvider,{$endif}
+  {$if (defined(LINUX) or defined(DARWIN)) and not defined(ANDROID)}SimpleBLEProvider,{$endif}
   CastleApplicationProperties, fpjson, GameUserData, GameRouteLibraryData, VeloSiteAPI;
 
 { ═══════════════════════════════════════════════════════════════════
@@ -329,6 +334,7 @@ begin
   IsolatedHardware:=(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
     (GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1');
   if not IsolatedHardware then begin
+  {$ifdef MSWINDOWS}
   if WinRTBLEAvailable then
   begin
     FManager.RegisterProvider(TWinRTBLEProvider.Create);
@@ -344,6 +350,15 @@ begin
     Logger.Info('[DeviceService] ANT+ provider registered (stick present)')
   else
     Logger.Info('[DeviceService] ANT+ provider registered (no stick)');
+  {$endif}
+  {$ifdef ANDROID}
+  if AndroidBLEAvailable then
+    FManager.RegisterProvider(TAndroidBLEProvider.Create);
+  {$endif}
+  {$if (defined(LINUX) or defined(DARWIN)) and not defined(ANDROID)}
+  if SimpleBLEAvailable then
+    FManager.RegisterProvider(TSimpleBLEProvider.Create);
+  {$endif}
   end;
 
   { Sim provider регистрируется всегда — он сам ничего не эмитит,
@@ -405,12 +420,12 @@ begin
 end;
 
 function TGameDeviceService.IsTransportEnabledInGame(
-  ATransport: TTransportType): Boolean;
+  ATransport: TTransportType; Steering: Boolean): Boolean;
 begin
   { BLE and ANT+ feed the same sensor slots and trainer-control interface.
     Only FIT simulation is exclusive; adapter availability and the saved
     per-role selection are checked by the manager/assignment layer. }
-  if FSimulationEnabled then Result := ATransport = ttSim
+  if FSimulationEnabled then Result := (ATransport = ttSim) or Steering
   else Result := ATransport <> ttSim;
 end;
 
@@ -520,7 +535,7 @@ begin
     симуляции sim-устройство не появится в списке, потому что
     провайдер ничего не эмитит без Settings.SimulationEnabled. }
   if Settings.GetSimulationEnabled and
-     (Entry.DeviceInfo.TransportType <> ttSim) then
+     (Entry.DeviceInfo.TransportType <> ttSim) and not Entry.DeviceInfo.SupportsSteering then
   begin
     Log(Format('Skip auto-connect %s — simulation mode active',
       [Entry.DisplayName]));
@@ -530,7 +545,7 @@ begin
   { Auto-connect new devices, or reconnect known fitness devices }
   if FAutoConnect and
      ShouldAutoConnect(Entry) and
-     IsTransportEnabledInGame(Entry.DeviceInfo.TransportType) and
+     IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) and
      (not Entry.TestedNotFitness) and
      (Entry.ConnectionState in [gdcsDisconnected, gdcsError]) then
   begin
@@ -739,7 +754,7 @@ begin
     begin
       E := FDevices[I];
       if (E.ConnectionState in [gdcsDisconnected, gdcsError]) and
-        not E.TestedNotFitness and IsTransportEnabledInGame(E.DeviceInfo.TransportType) and
+        not E.TestedNotFitness and IsTransportEnabledInGame(E.DeviceInfo.TransportType, E.DeviceInfo.SupportsSteering) and
         ShouldAutoConnect(E) then ConnectDevice(E);
     end;
   if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
@@ -748,7 +763,7 @@ end;
 procedure TGameDeviceService.SaveAssignments;
 var O: TJSONObject;
 begin
-  if not FAssignmentsReady or FSimulationEnabled or (FAssignmentFile = '') then Exit;
+  if not FAssignmentsReady or (FAssignmentFile = '') then Exit;
   O := FAssignments.ToJSON;
   try
     try WriteAccountJSON(FAssignmentFile, O);
@@ -762,7 +777,7 @@ begin
   Result := False;
   if not FAssignmentsReady or (AEntry = nil) then Exit;
   D := AEntry.DeviceInfo;
-  if FSimulationEnabled then Exit(AcceptSimulationDevice(D));
+  if FSimulationEnabled and not D.SupportsSteering then Exit(D.TransportType = ttSim);
   if D.TransportType = ttSim then Exit;
   if AEntry = FPendingDevice then Exit(True);
   if not FAssignments.HasRemembered then Exit(True);
@@ -772,6 +787,7 @@ begin
   Result := (D.SupportsHeartRate and (FAssignments.Selection[drHeartRate].Mode = dsmAutomatic)) or
     (D.SupportsPower and (FAssignments.Selection[drPower].Mode = dsmAutomatic)) or
     (D.SupportsCadence and (FAssignments.Selection[drCadence].Mode = dsmAutomatic)) or
+    (D.SupportsSteering and (FAssignments.Selection[drSteering].Mode = dsmAutomatic)) or
     (D.SupportsControl and (FAssignments.Selection[drControllable].Mode = dsmAutomatic));
 end;
 
@@ -779,7 +795,7 @@ procedure TGameDeviceService.SelectDeviceForRoles(AEntry: TGameDeviceEntry);
 begin
   RefreshAssignmentsProfile;
   if (AEntry = nil) or not FAssignmentsReady or
-    (FSimulationEnabled <> (AEntry.DeviceInfo.TransportType = ttSim)) or
+    ((FSimulationEnabled <> (AEntry.DeviceInfo.TransportType = ttSim)) and not AEntry.DeviceInfo.SupportsSteering) or
     not AcceptSimulationDevice(AEntry.DeviceInfo) then Exit;
   FPendingDevice := AEntry;
   if AEntry.ConnectionState = gdcsConnected then
@@ -812,7 +828,7 @@ function TGameDeviceService.IsSensorSelected(AKind: TSensorKind;
   AEntry: TGameDeviceEntry): Boolean;
 begin
   if AEntry = nil then Exit(False);
-  if FSimulationEnabled then Exit((FActiveSensors[AKind] <> nil) and
+  if FSimulationEnabled and (AKind<>skSteering) then Exit((FActiveSensors[AKind] <> nil) and
     (AEntry.FindSensor(AKind) = FActiveSensors[AKind]));
   Result := FAssignments.Matches(TDeviceRole(Ord(AKind)),
     TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType], AEntry.DeviceInfo.Address);
@@ -822,7 +838,7 @@ function TGameDeviceService.SelectedSensorName(AKind: TSensorKind): String;
 var S: TDeviceSelection;
 begin
   Result := '';
-  if FSimulationEnabled then Exit;
+  if FSimulationEnabled and (AKind<>skSteering) then Exit;
   S := FAssignments.Selection[TDeviceRole(Ord(AKind))];
   if S.Mode <> dsmDevice then Exit;
   Result := S.Name;
@@ -831,7 +847,7 @@ end;
 
 function TGameDeviceService.SensorDisabled(AKind: TSensorKind): Boolean;
 begin
-  Result := not FSimulationEnabled and
+  Result := (not FSimulationEnabled or (AKind=skSteering)) and
     (FAssignments.Selection[TDeviceRole(Ord(AKind))].Mode = dsmNone);
 end;
 
@@ -894,15 +910,16 @@ begin
     begin
       Entry := FDevices[I];
       if Entry.ConnectionState <> gdcsConnected then Continue;
-      if not IsTransportEnabledInGame(Entry.DeviceInfo.TransportType) then Continue;
+      if not IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) then Continue;
       if not AcceptSimulationDevice(Entry.DeviceInfo) then Continue;
-      if not FSimulationEnabled and not FAssignments.Allows(TDeviceRole(Ord(K)),
+      if (FSimulationEnabled <> (Entry.DeviceInfo.TransportType=ttSim)) and (K<>skSteering) then Continue;
+      if (not FSimulationEnabled or (K=skSteering)) and not FAssignments.Allows(TDeviceRole(Ord(K)),
         TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType], Entry.DeviceInfo.Address) then Continue;
       S := Entry.FindSensor(K);
       if Assigned(S) then
       begin
         FActiveSensors[K] := S;
-        if not FSimulationEnabled then
+        if not FSimulationEnabled or (K=skSteering) then
           Changed := FAssignments.Select(TDeviceRole(Ord(K)),
             TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType], Entry.DeviceInfo.Address,
             Entry.DeviceInfo.Name) or Changed;
@@ -919,7 +936,7 @@ begin
     begin
       Entry := FDevices[I];
       if (Entry.ConnectionState = gdcsConnected) and
-         IsTransportEnabledInGame(Entry.DeviceInfo.TransportType) and
+         IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) and
          AcceptSimulationDevice(Entry.DeviceInfo) and
          Entry.IsControllable and
          (FSimulationEnabled or FAssignments.Allows(drControllable,
@@ -1046,7 +1063,7 @@ begin
     Это требование из task-описания: "при симуляции не подключать
     найденные датчики к игре". }
   if Settings.GetSimulationEnabled
-     and (AEntry.DeviceInfo.TransportType <> ttSim) then
+     and (AEntry.DeviceInfo.TransportType <> ttSim) and not AEntry.DeviceInfo.SupportsSteering then
   begin
     Log(Format('Skip connect %s — simulation mode active',
       [AEntry.DisplayName]));
@@ -1254,13 +1271,13 @@ begin
   if Assigned(ASensor) then
   begin
     if ASensor.SensorKind <> AKind then Exit;
-    if FSimulationEnabled <> (Pos('sim:', ASensor.DeviceAddress) = 1) then Exit;
-    if FSimulationEnabled and not SameFileName(ASensor.DeviceAddress,FSimAddress) then Exit;
+    if (AKind<>skSteering) and (FSimulationEnabled <> (Pos('sim:', ASensor.DeviceAddress) = 1)) then Exit;
+    if FSimulationEnabled and (AKind<>skSteering) and not SameFileName(ASensor.DeviceAddress,FSimAddress) then Exit;
     E := FindDeviceByAddress(ASensor.DeviceAddress);
     if (E = nil) or (E.FindSensor(AKind) <> ASensor) then Exit;
   end;
   Changed := False;
-  if not FSimulationEnabled then
+  if not FSimulationEnabled or (AKind=skSteering) then
     if E = nil then Changed := FAssignments.Disable(TDeviceRole(Ord(AKind)))
     else Changed := FAssignments.Select(TDeviceRole(Ord(AKind)),
       TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType], E.DeviceInfo.Address, E.DeviceInfo.Name);
@@ -1296,6 +1313,25 @@ begin
 end;
 
 { ── Чтение активных сенсоров ── }
+
+function TGameDeviceService.ReadSteering(out Degrees: Single): Boolean;
+var S: TDeviceSensor;
+begin
+  Degrees:=0; S:=FActiveSensors[skSteering];
+  { STERZO may notify only on changes. An unmoved handlebar is not signal
+    loss: disconnection/health events clear the active slot instead. }
+  Result:=(S<>nil) and S.HasData;
+  if Result then Degrees:=S.Instant-FAssignments.SteeringCenter;
+end;
+
+function TGameDeviceService.CenterSteering: Boolean;
+var S:TDeviceSensor;
+begin
+  S:=FActiveSensors[skSteering];
+  Result:=(S<>nil) and S.HasData;
+  if Result then Result:=FAssignments.CenterSteering(S.Instant);
+  if Result then SaveAssignments;
+end;
 
 function TGameDeviceService.Sensor(AKind: TSensorKind): TDeviceSensor;
 begin

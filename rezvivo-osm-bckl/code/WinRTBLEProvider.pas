@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs,
-  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol;
+  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol;
 
 type
   TScannedDev = record Name, Address: string; RSSI: Int16; end;
@@ -37,6 +37,10 @@ type
     FLastFECWind: Single;
     FFECUserConfigured, FFECWindConfigured: Boolean;
     FHasPower, FHasFEC, FHasHR, FHasCSC: Boolean;
+    FHasSteering, FSteeringSubscribed, FSteeringReceived: Boolean;
+    FSterzoControl: Pointer;
+    FSterzoChallengeEvent: TEvent;
+    FSterzoResponse: TBytes;
     FFTMSCtrlChar: Pointer;
     FFECWriteChar: Pointer;  { FE-C control write (6e40fec3) }
     FFECChannel: Byte;
@@ -49,6 +53,7 @@ type
     FConnStatusToken: Int64;  { ConnectionStatusChanged event token }
     FConnStatusUD: Pointer;   { callback gate, owned by FConnStatusDel }
     FConnStatusDel: Pointer;  { PDelegate, released on disconnect }
+    function ActivateSteering: Boolean;
     procedure DiscoverAndSubscribe;
     procedure CleanupSubscriptions;
     { IClosable.Close + Release на BLE-объектах. Без Close Windows
@@ -635,6 +640,27 @@ procedure TWinRTBLESession.ReceiveCharacteristicData(const UUID: string; const D
 var U: string; Parsed: TTrainerDataRecord; Page: TBytes; Channel: Byte; Valid: Boolean;
 begin
   U:=LowerCase(UUID);
+  if Pos(SterzoChallengeUUID,U)>0 then
+  begin
+    Page:=SterzoChallengeResponse(Data);
+    if Length(Page)>0 then
+    begin
+      FLock.Enter;
+      try FSterzoResponse:=Page finally FLock.Leave end;
+      FSterzoChallengeEvent.SetEvent;
+    end;
+    Exit;
+  end;
+  if Pos(SterzoAngleUUID,U)>0 then
+  begin
+    if ParseSterzoAngle(Data,Parsed) then
+    begin
+      FLock.Enter;
+      try FSteeringReceived:=True finally FLock.Leave end;
+      PublishMeasurement(Parsed);
+    end;
+    Exit;
+  end;
   if Pos('2ad9',U)>0 then begin ReceiveControlPoint(Data); Exit end;
   if Pos('2ada',U)>0 then
   begin
@@ -834,6 +860,7 @@ end;
 constructor TWinRTBLESession.Create(const AAddress: string; const AFriendlyName: string);
 begin
   inherited Create(AAddress, AFriendlyName);
+  FSterzoChallengeEvent := TEvent.Create(nil, False, False, '');
   FDevice := nil;
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
@@ -888,9 +915,37 @@ destructor TWinRTBLESession.Destroy;
 begin
   ShutdownControl;
   Disconnect;
+  FreeAndNil(FSterzoChallengeEvent);
   FFTMSParser.Free;
   FFECParser.Free;
   inherited;
+end;
+
+function TWinRTBLESession.ActivateSteering: Boolean;
+var Response: TBytes; Receiving: Boolean;
+begin
+  Result:=FSteeringSubscribed;
+  if not Result then Exit;
+  FLock.Enter;
+  try Receiving:=FSteeringReceived finally FLock.Leave end;
+  if Receiving then Exit;
+  if FSterzoControl=nil then Exit;
+  { Connect runs in the manager's worker. GATT callbacks only copy the
+    challenge and signal this event; never block or write inside a callback. }
+  FSterzoChallengeEvent.ResetEvent;
+  if not WriteFTMSControl(FSterzoControl,TBytes.Create($03,$10)) then Exit(False);
+  if FSterzoChallengeEvent.WaitFor(3000)<>wrSignaled then
+  begin
+    FLock.Enter;
+    try Result:=FSteeringReceived finally FLock.Leave end;
+    Exit;
+  end;
+  FLock.Enter;
+  try Response:=Copy(FSterzoResponse) finally FLock.Leave end;
+  Result:=WriteFTMSControl(FSterzoControl,Response);
+  if not Result then Exit;
+  Sleep(1000);
+  Result:=WriteFTMSControl(FSterzoControl,TBytes.Create($02,$02));
 end;
 
 function TWinRTBLESession.Connect: Boolean;
@@ -905,6 +960,7 @@ var
   ConnUD: TTrainerCallbackGate;
   ConnDel: PDelegate;
   ConnToken: TEvtToken;
+  InitialData: TTrainerDataRecord;
 begin
   Result := False;
   { Повторный Connect без Close старого BluetoothLEDevice копит
@@ -916,6 +972,11 @@ begin
   FFECUserConfigured:=False; FFECWindConfigured:=False;
   FHasFTMS := False; FHasPower := False; FHasFEC := False;
   FHasHR := False; FHasCSC := False;
+  FHasSteering:=False; FSteeringSubscribed:=False; FSteeringReceived:=False;
+  FSterzoResponse:=nil; FSterzoChallengeEvent.ResetEvent;
+  FDeviceInfo.SupportsSteering:=False;
+  FLock.Enter;
+  try FLastData:=Default(TTrainerDataRecord) finally FLock.Leave end;
 
   HR := _RoInit(1); { RO_INIT_MULTITHREADED — match async BLE callbacks }
   Logger.Info(Format('[WinRT] RoInitialize(MTA): $%.8X', [HR]));
@@ -998,6 +1059,14 @@ begin
     FDeviceInfo.SupportsCadence := FDeviceInfo.SupportsCadence or FTrainerFeatures.SupportsCadence;
     FDeviceInfo.SupportsSpeed := FDeviceInfo.SupportsSpeed or FHasFEC or FHasFTMS;
     FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
+    FDeviceInfo.SupportsSteering := FHasSteering;
+
+    if FHasSteering and not ActivateSteering then
+    begin
+      Disconnect;
+      SetConnectionState(csError, 'STERZO activation failed. Wake the steering plate and reconnect.');
+      Exit;
+    end;
 
     Logger.Info(Format('[WinRT] Caps: FTMS=%s Power=%s HR=%s CSC=%s FEC=%s',
       [BoolToStr(FHasFTMS,True), BoolToStr(FHasPower,True),
@@ -1006,7 +1075,7 @@ begin
 
     { Не фитнес-устройство — отключаемся, не засоряем список }
     if (not FHasFTMS) and (not FHasPower) and (not FHasFEC)
-       and (not FHasHR) and (not FHasCSC) then
+       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) then
     begin
       Logger.Info('[WinRT] No fitness services — disconnecting');
       Disconnect;
@@ -1054,6 +1123,12 @@ begin
     except
       on E: Exception do
         Logger.Warning('[WinRT] ConnectionStatusChanged subscribe error: ' + E.ClassName + ': ' + E.Message);
+    end;
+    if FHasSteering then
+    begin
+      FLock.Enter;
+      try InitialData:=FLastData finally FLock.Leave end;
+      if tmSteering in InitialData.ValidMetrics then PublishMeasurement(InitialData);
     end;
     Result := True;
   finally
@@ -1375,6 +1450,7 @@ begin
           if Pos('6e40fec1', SvcS) > 0 then FHasFEC := True;
           if Pos('0000180d', SvcS) > 0 then FHasHR := True;
           if Pos('00001816', SvcS) > 0 then FHasCSC := True;
+          if Pos(SterzoServiceUUID, SvcS) > 0 then FHasSteering := True;
 
           Svc3 := nil;
           if QI(Svc, IID_ISvc3, Svc3) = S_OK then
@@ -1450,6 +1526,11 @@ begin
                           Logger.Debug(Format('[WinRT]     Char[%d]: %s props=$%.2X', [J, ChS, Props]));
 
                           { Save write chars for trainer control }
+                          if (Pos(SterzoControlUUID,ChS)>0) and ((Props and $08)<>0) then
+                          begin
+                            FSterzoControl:=Ch;
+                            TVtNoArg(VT(Ch)^[1])(Ch);
+                          end;
                           if ((Props and $02)<>0) and
                             ((Pos('2acc',ChS)>0) or (Pos('2ad8',ChS)>0) or
                              (Pos('2ad6',ChS)>0) or (Pos('2ad5',ChS)>0) or
@@ -1468,7 +1549,8 @@ begin
                             if (Pos('2ad2', ChS) > 0) or (Pos('2a63', ChS) > 0) or
                                (Pos('6e40fec2', ChS) > 0) or (Pos('2a37', ChS) > 0) or
                                (Pos('2a5b', ChS) > 0) or (Pos('2ad9', ChS) > 0) or
-                               (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) then
+                               (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) or
+                               (Pos(SterzoAngleUUID,ChS)>0) or (Pos(SterzoChallengeUUID,ChS)>0) then
                             begin
                               { Don't set ProtectionLevel — let Windows handle encryption transparently }
 
@@ -1510,6 +1592,7 @@ begin
                                 FSubs[FSubCount].UserData := Pointer(ND);
                                 FSubs[FSubCount].DelegateHandle := Del;
                                 Inc(FSubCount);
+                                if Pos(SterzoAngleUUID,ChS)>0 then FSteeringSubscribed:=True;
 
                                 { Check for FTMS Control Point }
                                 if Pos('2ad9', ChS) > 0 then
@@ -1607,6 +1690,7 @@ begin
   FSubCount := 0;
   SetLength(FSubs, 0);
   FFTMSCtrlChar := nil;
+  if FSterzoControl<>nil then begin SafeRelease(PIUnk(FSterzoControl)); FSterzoControl:=nil end;
   if FFECWriteChar <> nil then begin SafeRelease(PIUnk(FFECWriteChar)); FFECWriteChar := nil; end;
 end;
 
@@ -2019,6 +2103,7 @@ begin
         DevInfo.TransportType := ttBLE;
         DevInfo.ProviderName := 'WinRT';
         DevInfo.RSSI := Snap[J].RSSI;
+        DevInfo.SupportsSteering := IsSterzoName(DevInfo.Name);
 
         if Assigned(OnDeviceFound) then
           OnDeviceFound(DevInfo);

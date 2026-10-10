@@ -69,7 +69,7 @@ var MotionTrace: TMotionTrace;
 
 implementation
 
-uses Math, DebugLog;
+uses AppRuntimePaths, Math, DebugLog;
 
 const
   StageNames: array[TMotionStage] of String = ('begin', 'inherited',
@@ -94,8 +94,8 @@ begin
   inherited;
   { Diagnostic capture is opt-in; ordinary rides must not write frame data. }
   Requested := GetEnvironmentVariable('REZVIVO_MOTION_TRACE') = '1';
-  for I := 1 to ParamCount do
-    if ParamStr(I) = '--no-motion-trace' then Requested := False;
+  for I := 1 to AppParamCount do
+    if AppParamStr(I) = '--no-motion-trace' then Requested := False;
 end;
 
 destructor TMotionTrace.Destroy;

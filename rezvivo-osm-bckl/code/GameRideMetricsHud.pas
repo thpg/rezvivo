@@ -52,15 +52,12 @@ type
 implementation
 
 uses SysUtils, Math, CastleVectors, CastleRectangles, CastleImages,
-  CastleGLUtils, GameMenuTheme, GameRideCommands, UiTranslations;
+  CastleGLUtils, GameMenuTheme, GameRideLayout, UiTranslations;
 
 const
   HudWidth = 1000;
   HudHeight = 148;
   HudHeaderHeight = 42;
-  { At 100% UI size, keep the same physical size as in a 1280-pixel-wide
-    window. Wider/taller windows must not magnify the ride metrics. }
-  HudMaxPixelWidth = 800;
   HudInk: TCastleColor = (X:0.047; Y:0.125; Z:0.341; W:1);
   HudBlue: TCastleColor = (X:0.035; Y:0.357; Z:0.98; W:1);
   HudHeart: TCastleColor = (X:1; Y:0.357; Z:0.294; W:1);
@@ -288,7 +285,8 @@ begin
 end;
 
 procedure TRideMetricsHud.Resize;
-var Available, S, NumberWidth, UnitWidth, RowX: Single; I: Integer;
+var Available, AvailableHeight, S, NumberWidth, UnitWidth, RowX: Single;
+  I: Integer; L:TRideHudLayout;
   procedure Place(const C: TCastleUserInterface; const X, Y, W, H: Single);
   begin
     C.Width:=W*S; C.Height:=H*S; C.Anchor(hpLeft,X*S); C.Anchor(vpTop,-Y*S);
@@ -303,17 +301,12 @@ begin
   if not FReady or FArranging then Exit;
   FArranging:=True;
   try
-    Available:=HudWidth+400;
-    if Parent<>nil then Available:=Parent.EffectiveWidth;
-    S:=Min(1,Max(0.1,(Available-24)/HudWidth));
-    { The container's reference-size scaling applies again when rendering.
-      Counteract only its automatic enlargement; preserve the user's
-      explicit accessibility scale and shrinking in smaller windows. }
-    S:=Min(S,HudMaxPixelWidth*UserInterfaceScale/(HudWidth*Max(0.01,UIScale)));
+    Available:=HudWidth+400;AvailableHeight:=900;
+    if Parent<>nil then begin Available:=Parent.EffectiveWidth;AvailableHeight:=Parent.EffectiveHeight end;
+    L:=RideHudLayout(Available,AvailableHeight);S:=L.MetricsWidth/HudWidth;
     FLayoutScale:=S;
     Width:=HudWidth*S; Height:=HudHeight*S;
-    if Available>=HudWidth*S+340 then Anchor(vpTop,-12)
-    else Anchor(vpTop,-108);
+    Anchor(hpLeft,L.MetricsLeft);Anchor(vpTop,-L.MetricsTop);
     for I:=0 to 2 do
     begin
       Place(FMetrics[I].Root,I*HudWidth/3,HudHeaderHeight,HudWidth/3,HudHeight-HudHeaderHeight);

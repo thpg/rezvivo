@@ -31,7 +31,7 @@ const
     Only position is interpolated here. Use the final material normal in the
     fragment stage: clothing can replace the geometric normal at pocket seams. }
   RiderOcclusionVS =
-    'uniform mat4 castle_ModelViewMatrix;' + #10 +
+    '#ifndef GL_ES' + #10 + 'uniform mat4 castle_ModelViewMatrix;' + #10 + '#endif' + #10 +
     '#ifdef CASTLE_CACHE_DEFORMATION' + #10 +
     'varying vec3 castle_CachedPosition;' + #10 +
     '#endif' + #10 +

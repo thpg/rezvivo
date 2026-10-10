@@ -1,4 +1,5 @@
 unit Osm3dRiderShadow;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
@@ -8,6 +9,10 @@ uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, 
 
 type
   TRiderShadowMatrices = array[0..3] of TMatrix4;
+  TProjectedShadowBounds = record
+    Caster: TCastleTransform;
+    MinX, MaxX, MinY, MaxY, MinD, MaxD: Single;
+  end;
 
   { Additional viewports share the depth atlas, but use their own receiver
     coordinates. Restore the previous binding for subsequent UI viewports. }
@@ -35,6 +40,8 @@ type
     FOptions: TCastleRenderOptions;
     FCasters, FSelected, FWorldCasters: TCastleTransformList;
     FWorldSet: specialize TDictionary<TCastleTransform,Boolean>;
+    FWorldMembership: array of TCastleTransform;
+    FBounds: array of TProjectedShadowBounds;
     FProbe: TShadowGroundProbe;
     FProbePoint, FProbeClip: TVector3;
     FProbeEnabled: Boolean;
@@ -297,7 +304,7 @@ const
 implementation
 
 uses SysUtils, Math, CastleBoxes, CastleRectangles, CastleTimeUtils, CastleApplicationProperties,
-  CastleSceneCore, CastleInternalRenderer, CastleGL, Osm3dRenderInstanced, Osm3dStudioSettings,
+  CastleSceneCore, CastleInternalRenderer, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, Osm3dRenderInstanced, Osm3dStudioSettings,
   CastleRendererInternalShader, CastleRendererInternalTextureEnv;
 
 type
@@ -669,7 +676,7 @@ procedure TRiderShadowAtlas.Configure(const ASize, AFilter, ADistance: Integer);
 begin
   { Only change CPU configuration here. GL resources are resized in Render,
     with the context current, without exposing a freed sampler to receivers. }
-  if (ASize = 1024) or (ASize = 2048) or (ASize = 4096) then
+  if (ASize = 512) or (ASize = 1024) or (ASize = 2048) or (ASize = 4096) then
     FAtlasSize := ASize else FAtlasSize := AtlasSize;
   FTileSize := FAtlasSize div 2;
   if AFilter in [1, 4, 16] then FFilter := AFilter else FFilter := 16;
@@ -795,13 +802,7 @@ end;
 
 procedure TRiderShadowAtlas.Render(const Viewport: TCastleViewport;
   const Focus, SunDirection: TVector3; const Strength: Single);
-type
-  TProjectedBounds = record
-    Caster: TCastleTransform;
-    MinX, MaxX, MinY, MaxY, MinD, MaxD: Single;
-  end;
 var
-  Bounds: array of TProjectedBounds;
   Box: TBox3D;
   D, Side, Up, UpHint, P, Q, Eye, CameraPosition, CameraDirection, CameraUp: TVector3;
   Angles: TVector2;
@@ -818,12 +819,27 @@ var
   RayOrigin,RayU,RayV:TVector3;
   RayMatrix:TMatrix4;
   RayEnd,RayRow:TVector3;
+  MembershipChanged: Boolean;
 begin
   FWorldShapeCount := 0;
-  { External caster lists can change on every tile mount. Rebuild once,
-    then all shape tests and cascades use constant-time membership. }
-  FWorldSet.Clear;
-  for I:=0 to FWorldCasters.Count-1 do FWorldSet.AddOrSetValue(FWorldCasters[I],True);
+  { Callers refill the list every frame, but the resident world usually
+    stays the same. Compare borrowed pointers without dereferencing them;
+    rebuild membership only when the list changes. }
+  MembershipChanged := Length(FWorldMembership) <> FWorldCasters.Count;
+  if not MembershipChanged then
+    for I := 0 to FWorldCasters.Count - 1 do
+      if FWorldMembership[I] <> FWorldCasters[I] then
+      begin MembershipChanged := True; Break end;
+  if MembershipChanged then
+  begin
+    FWorldSet.Clear;
+    SetLength(FWorldMembership, FWorldCasters.Count);
+    for I := 0 to FWorldCasters.Count - 1 do
+    begin
+      FWorldMembership[I] := FWorldCasters[I];
+      FWorldSet.AddOrSetValue(FWorldCasters[I], True);
+    end;
+  end;
   if FWorldShadows then
     for I := 0 to FWorldCasters.Count - 1 do FCasters.Add(FWorldCasters[I]);
   FillChar(FZoneCasterCount, SizeOf(FZoneCasterCount), 0);
@@ -853,16 +869,17 @@ begin
   FProbeZone := -1;
   MinDepth := FLayout.MinDepth;
   MaxDepth := FLayout.MaxDepth;
-  SetLength(Bounds, FCasters.Count);
+  if Length(FBounds) < FCasters.Count then
+    SetLength(FBounds, Max(FCasters.Count, Length(FBounds) * 2));
   N := 0;
   for I := 0 to FCasters.Count - 1 do
     if FCasters[I].ExistsInRoot and FCasters[I].HasWorldTransform then
     begin
       Box := FCasters[I].WorldBoundingBox;
       if Box.IsEmpty then Continue;
-      Bounds[N].Caster := FCasters[I];
-      Bounds[N].MinX := 1e30; Bounds[N].MinY := 1e30; Bounds[N].MinD := 1e30;
-      Bounds[N].MaxX := -1e30; Bounds[N].MaxY := -1e30; Bounds[N].MaxD := -1e30;
+      FBounds[N].Caster := FCasters[I];
+      FBounds[N].MinX := 1e30; FBounds[N].MinY := 1e30; FBounds[N].MinD := 1e30;
+      FBounds[N].MaxX := -1e30; FBounds[N].MaxY := -1e30; FBounds[N].MaxD := -1e30;
       for J := 0 to 7 do
       begin
         P := Vector3(Box.Data[J and 1].X, Box.Data[(J shr 1) and 1].Y,
@@ -870,16 +887,16 @@ begin
         X := TVector3.DotProduct(Side, P);
         Y := TVector3.DotProduct(Up, P);
         Z := TVector3.DotProduct(D, P);
-        Bounds[N].MinX := Min(Bounds[N].MinX, X); Bounds[N].MaxX := Max(Bounds[N].MaxX, X);
-        Bounds[N].MinY := Min(Bounds[N].MinY, Y); Bounds[N].MaxY := Max(Bounds[N].MaxY, Y);
-        Bounds[N].MinD := Min(Bounds[N].MinD, Z); Bounds[N].MaxD := Max(Bounds[N].MaxD, Z);
+        FBounds[N].MinX := Min(FBounds[N].MinX, X); FBounds[N].MaxX := Max(FBounds[N].MaxX, X);
+        FBounds[N].MinY := Min(FBounds[N].MinY, Y); FBounds[N].MaxY := Max(FBounds[N].MaxY, Y);
+        FBounds[N].MinD := Min(FBounds[N].MinD, Z); FBounds[N].MaxD := Max(FBounds[N].MaxD, Z);
       end;
       { Cull by projected footprint, not by distance: a distant rider can
         still cast into the receiving region at low sun. }
-      if (Bounds[N].MaxX < FLayout.MinX - 1) or (Bounds[N].MinX > FLayout.MaxX + 1) or
-         (Bounds[N].MaxY < FLayout.MinY - 1) or (Bounds[N].MinY > FLayout.MaxY + 1) then Continue;
-      MinDepth := Min(MinDepth, Bounds[N].MinD - 1);
-      MaxDepth := Max(MaxDepth, Bounds[N].MaxD + 1);
+      if (FBounds[N].MaxX < FLayout.MinX - 1) or (FBounds[N].MinX > FLayout.MaxX + 1) or
+         (FBounds[N].MaxY < FLayout.MinY - 1) or (FBounds[N].MinY > FLayout.MaxY + 1) then Continue;
+      MinDepth := Min(MinDepth, FBounds[N].MinD - 1);
+      MaxDepth := Max(MaxDepth, FBounds[N].MaxD + 1);
       Inc(N);
     end;
   FVisibleCasterCount := N;
@@ -980,21 +997,21 @@ begin
       FSelected.Clear;
       for I := 0 to N - 1 do
       begin
-        if (Bounds[I].MaxX < CenterX - H - Step * 2) or
-           (Bounds[I].MinX > CenterX + H + Step * 2) or
-           (Bounds[I].MaxY < CenterY - H - Step * 2) or
-           (Bounds[I].MinY > CenterY + H + Step * 2) then Continue;
+        if (FBounds[I].MaxX < CenterX - H - Step * 2) or
+           (FBounds[I].MinX > CenterX + H + Step * 2) or
+           (FBounds[I].MaxY < CenterY - H - Step * 2) or
+           (FBounds[I].MinY > CenterY + H + Step * 2) then Continue;
         if Zone > 0 then
         begin
           { The finer zone supplies this interior. Leave a band wider than
             the shader blend and PCF footprint on both sides of the seam. }
           Inner := FZoneHalfExtent[Zone - 1] * 0.80 - Step * 2;
-          if (Bounds[I].MinX > PreviousX - Inner) and
-             (Bounds[I].MaxX < PreviousX + Inner) and
-             (Bounds[I].MinY > PreviousY - Inner) and
-             (Bounds[I].MaxY < PreviousY + Inner) then Continue;
+          if (FBounds[I].MinX > PreviousX - Inner) and
+             (FBounds[I].MaxX < PreviousX + Inner) and
+             (FBounds[I].MinY > PreviousY - Inner) and
+             (FBounds[I].MaxY < PreviousY + Inner) then Continue;
         end;
-        FSelected.Add(Bounds[I].Caster);
+        FSelected.Add(FBounds[I].Caster);
       end;
       FZoneCasterCount[Zone] := FSelected.Count;
       { Clear even an empty tile, otherwise old silhouettes survive motion. }

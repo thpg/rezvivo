@@ -52,9 +52,10 @@ function GameHttpPost(const AUrl, AContentType, ABody: String;
 implementation
 
 uses
-  URIParser,
+  URIParser, StrUtils,
   {$ifdef MSWINDOWS} Windows, {$endif}
-  {$ifndef MSWINDOWS} fphttpclient, {$endif}
+  {$ifdef ANDROID} GameAndroidPlatform, {$else}
+  {$ifndef MSWINDOWS} fphttpclient, {$endif}{$endif}
   CastleLog, GameBuildInfo;
 
 {$ifdef MSWINDOWS}
@@ -550,6 +551,26 @@ end;
 
 {$else}
 
+{$ifdef ANDROID}
+procedure FpcRequest(const AMethod, AUrl: String;
+  AHeaders: TStrings; ARequestBody: TStream;
+  AConnectTimeoutMs, AIOTimeoutMs: Integer;
+  AResponse: TStream; out AStatus: Integer;
+  Cancellation: TGameHttpCancellation; ResponseHeaders: TStrings);
+var Id: Int64;
+begin
+  Id := AndroidNewHttpRequest;
+  try
+    try
+      if Cancellation <> nil then Cancellation.Attach(Pointer(PtrUInt(Id)));
+      AndroidHttpRequest(Id, AMethod, AUrl, AHeaders, ARequestBody,
+        AConnectTimeoutMs, AIOTimeoutMs, AResponse, AStatus, ResponseHeaders);
+    finally
+      if Cancellation <> nil then Cancellation.Detach(Pointer(PtrUInt(Id)));
+    end;
+  finally AndroidFinishHttpRequest(Id) end;
+end;
+{$else}
 procedure FpcRequest(const AMethod, AUrl: String;
   AHeaders: TStrings; ARequestBody: TStream;
   AConnectTimeoutMs, AIOTimeoutMs: Integer;
@@ -606,6 +627,7 @@ begin
 end;
 
 {$endif}
+{$endif}
 
 constructor TGameHttpCancellation.Create;
 begin
@@ -638,7 +660,11 @@ begin
       WinHttpCloseHandle(FRequest);
       FRequest := nil;
       {$else}
+      {$ifdef ANDROID}
+      AndroidCancelHttpRequest(PtrUInt(FRequest));
+      {$else}
       TFPHTTPClient(FRequest).Terminate;
+      {$endif}
       {$endif}
     end;
   finally FLock.Leave end;

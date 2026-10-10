@@ -1,4 +1,5 @@
 unit GameGraphicsAuto;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
@@ -54,7 +55,7 @@ type
 
 implementation
 
-uses Math, SysUtils, CastleVectors, CastleColors, CastleGL, AppSettings,
+uses Math, SysUtils, CastleVectors, CastleColors, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, AppSettings,
   GameGraphicsAutoPolicy, GameViewPlay, UiTranslations, DebugLog;
 
 type
@@ -149,7 +150,7 @@ begin
   FMemoryAt := GetTickCount64;
   FMemoryAttempted := True;
   if FMemory = nil then FMemory := TGLMemoryInfo.Create else FMemory.Refresh;
-  FMemoryKnown := (FMemory.TotalAvailableMemory > 0) or GL_ATI_meminfo;
+  FMemoryKnown := (FMemory.TotalAvailableMemory > 0){$ifndef OpenGLES} or GL_ATI_meminfo{$endif};
   if FMemory.TotalAvailableMemory > 0 then
   begin
     FFreeMiB := Max(Int64(0), Int64(FMemory.CurrentAvailableVideoMemory)) div 1024;

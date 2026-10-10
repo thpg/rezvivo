@@ -19,7 +19,7 @@ procedure ObserveUiLanguage(Owner: TComponent; Callback: TNotifyEvent);
 
 implementation
 
-uses fpjson, jsonparser, fgl, SyncObjs, TypInfo;
+uses AppRuntimePaths, fpjson, jsonparser, fgl, SyncObjs, TypInfo;
 
 type
   TCatalog = specialize TFPGMap<String, String>;
@@ -201,9 +201,9 @@ procedure InitializeEditorTranslations;
 var Dir, Lang, SettingsPath: String; I: Integer; Data: TJSONData;
     Stream: TFileStream; UI: TJSONData;
 begin
-  Dir := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))) + 'data/translations';
+  Dir := IncludeTrailingPathDelimiter(AppDirectory) + 'data/translations';
   if not DirectoryExists(Dir) then
-    Dir := ExpandFileName(ExtractFilePath(ParamStr(0)) + '../rezvivo-osm-bckl/data/translations');
+    Dir := ExpandFileName(AppDirectory + '../rezvivo-osm-bckl/data/translations');
   Lang := 'en';
   SettingsPath := IncludeTrailingPathDelimiter(GetEnvironmentVariable('LOCALAPPDATA')) +
     'third_person_navigation/settings.json';
@@ -219,8 +219,8 @@ begin
   end;
   if GetEnvironmentVariable('REZVIVO_LANGUAGE') <> '' then
     Lang := GetEnvironmentVariable('REZVIVO_LANGUAGE');
-  for I := 1 to ParamCount do
-    if Copy(ParamStr(I), 1, 11) = '--language=' then Lang := Copy(ParamStr(I), 12, MaxInt);
+  for I := 1 to AppParamCount do
+    if Copy(AppParamStr(I), 1, 11) = '--language=' then Lang := Copy(AppParamStr(I), 12, MaxInt);
   if (Pos('/', Lang) > 0) or (Pos('\', Lang) > 0) or (Pos('..', Lang) > 0) then Lang := 'en';
   SetUiLanguage(Lang, Dir);
 end;

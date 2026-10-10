@@ -24,7 +24,7 @@ const
   FabricVS =
     'attribute vec3 riderFabricRest;' + #10 +
     'attribute vec2 riderFabricUV;' + #10 +
-    'attribute vec3 riderFabricMetric;uniform mat4 castle_ModelViewMatrix;' + #10 +
+    'attribute vec3 riderFabricMetric;' + #10 + '#ifndef GL_ES' + #10 + 'uniform mat4 castle_ModelViewMatrix;' + #10 + '#endif' + #10 + '' + #10 +
     'varying vec2 rfUV;' + #10 +
     'varying vec3 rfPosition;' + #10 +
     'varying vec3 rfRestMetric;' + #10 +

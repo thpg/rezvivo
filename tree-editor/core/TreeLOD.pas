@@ -26,7 +26,9 @@ uses Math, Classes, TreeRecipe, TreeFoliageLOD, FPImage, FPWritePNG, FPReadPNG, 
 function LODProfileKey(const Profile: TTreeParams): string;
 var S: string; I: Integer; H: LongWord;
 begin
-  S:=TreeToJSON(Profile); H:=Hash32(TREE_LOD_VERSION);
+  { Atlas keys were authored on Windows. FormatJSON uses the host line ending;
+    hash the same CRLF representation on Android/Linux without rebaking images. }
+  S:=AdjustLineBreaks(TreeToJSON(Profile),tlbsCRLF); H:=Hash32(TREE_LOD_VERSION);
   if IsConifer(Profile.Species) then H:=Hash32(H xor (NEEDLE_COVERAGE_VERSION shl 24));
   if Profile.Species=tsBirch then H:=Hash32(H xor (TREE_BIRCH_GEOMETRY_VERSION shl 16));
   if HasTreeFruit(Profile.Species) then H:=Hash32(H xor (TREE_FRUIT_GEOMETRY_VERSION shl 12));

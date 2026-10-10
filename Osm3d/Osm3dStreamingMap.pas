@@ -282,6 +282,8 @@ type
     FFarLogLast:  QWord;        { гейт бёрст-лога [far] (раз в ~2 c) }
     FFarLogBurst: Boolean;
     FFarClipLog:  string;       { последняя сводка клипа — лог по изменению }
+    FFarClipDirty: Boolean;
+    FFarClipUnloadM: Single;
     FFarCenterX, FFarCenterZ: Single;
 
     FZone:      Byte;
@@ -2355,6 +2357,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(840);{$ENDIF}
   if (ATile = nil) or ATile.Active then Exit;
   ATile.Active := True;
+  FFarClipDirty := True;
   if ATile.Scene <> nil then
     { Активируем (Exists=True) только когда сцена уже наполнена фоновым потоком.
       Если монтаж ещё не закончил — оставляем инертной; SyncMountedExists в
@@ -2381,6 +2384,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(841);{$ENDIF}
   if (ATile = nil) or (not ATile.Active) then Exit;
   ATile.Active := False;
+  FFarClipDirty := True;
   if ATile.Scene <> nil then
     ATile.Scene.Exists := False;
   Dec(FActiveTiles);
@@ -5688,6 +5692,7 @@ begin
   FFarCenterX := ACamPos.X;
   FFarCenterZ := ACamPos.Z;
   FFarHasCenter := True;
+  FFarClipDirty := True;
 end;
 
 { Посекторное покрытие показанным грунтом лучом из центра дальней земли.
@@ -5708,6 +5713,11 @@ var
   Shown: Boolean;
 begin
   if (FFarGround = nil) or (not FFarHasCenter) then Exit;
+  { Coverage depends on the far-ground centre and mounted tile visibility,
+    not the camera's position inside the current cell. Keep the last clip
+    until one of those inputs (or the unload distance) actually changes. }
+  if not FFarClipDirty and
+     (FFarClipUnloadM = GlobalLODConfig.StreamSceneUnloadM) then Exit;
   S := FFarGround.Sectors;
   if S < 1 then Exit;
   SetLength(Radii, S);
@@ -5740,6 +5750,8 @@ begin
   end;
   LogFarClip(Radii);
   FFarGround.SetClip(Radii);
+  FFarClipUnloadM := GlobalLODConfig.StreamSceneUnloadM;
+  FFarClipDirty := False;
 end;
 
 { Сводка радиусов внутренней кромки дальней земли; лог только по изменению.
@@ -6991,6 +7003,7 @@ procedure TOsm3dStreamingMap.EvictBatch(ABatch: TCacheBatch);
 var
   CT: TCacheTile;
   I:  Integer;
+  RetiredTileKeys: array of Int64;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1333);{$ENDIF}
   if ABatch = nil then Exit;
@@ -7066,8 +7079,12 @@ begin
 
   { BUILDING_OBSTACLE: drop footprints with the tile (same ToKey as mount). }
   if FBuildingObstacles <> nil then
-    for CT in ABatch.Tiles do
-      FBuildingObstacles.RemoveTile(CT.Tile.ToKey);
+  begin
+    SetLength(RetiredTileKeys, ABatch.Tiles.Count);
+    for I := 0 to ABatch.Tiles.Count - 1 do
+      RetiredTileKeys[I] := ABatch.Tiles[I].Tile.ToKey;
+    FBuildingObstacles.RemoveTiles(RetiredTileKeys);
+  end;
 
   FBatchList.Remove(ABatch);
 
@@ -7724,17 +7741,21 @@ begin
       Budget := UploadsPerFrame;
       if FWarmupShown then Budget := Budget * 4;
       if Budget < 1 then Budget := 1;
-      SetLength(BatchIds,    Budget);
-      SetLength(BatchModels, Budget);
-      BatchN := 0;
-      while (BatchN < Budget) and FStreamer.NextUpload(Id, Model) do
+      { Most frames have nothing to upload. Allocate the owned batch only
+        after the first ready model has actually been taken from the queue. }
+      if FStreamer.NextUpload(Id, Model) then
       begin
-        BatchIds[BatchN]    := Id;
-        BatchModels[BatchN] := Model;
-        Inc(BatchN);
-      end;
-      if BatchN > 0 then
-      begin
+        SetLength(BatchIds,    Budget);
+        SetLength(BatchModels, Budget);
+        BatchIds[0] := Id;
+        BatchModels[0] := Model;
+        BatchN := 1;
+        while (BatchN < Budget) and FStreamer.NextUpload(Id, Model) do
+        begin
+          BatchIds[BatchN]    := Id;
+          BatchModels[BatchN] := Model;
+          Inc(BatchN);
+        end;
         SetLength(BatchIds,    BatchN);
         SetLength(BatchModels, BatchN);
         if GlobalAssembleInWorker then
@@ -8447,6 +8468,7 @@ var
   Job: TMountJob;
 begin
   if Sc = nil then Exit;
+  if Sc.Exists then FFarClipDirty := True;
   Sc.Exists := False;
   Sc.MountRoot := Root; Sc.MountErrorHandled := False;
   Sc.MountLoaded := False; Sc.MountFailed := False;
@@ -8539,7 +8561,10 @@ begin
       end;
       Want := CT.Active and Sc.MountLoaded;
       if Sc.Exists <> Want then
+      begin
         Sc.Exists := Want;
+        FFarClipDirty := True;
+      end;
       if Sc.MountLoaded and (FAsmPending = 0) and (FMountPending = 0) then
         Sc.ReleasePreparedTextureImages;
     end;

@@ -59,6 +59,7 @@ type
     procedure ClickBack(Sender:TObject);
     procedure ClickCreate(Sender:TObject);
     procedure ClickUpload(Sender:TObject);
+    procedure FilePicked(const FileName:String);
     procedure ClickAttribution(Sender:TObject);
     procedure MapChanged(Sender:TObject);
     procedure MapSelected(Sender:TObject);
@@ -72,7 +73,7 @@ type
   end;
 implementation
 uses UiTranslations, Math,CastleVectors,CastleURIUtils,CastleWindow,CastleOpenDocument,
-  VeloSiteAPI,GameViewMenu;
+  VeloSiteAPI,GameViewMenu,GameFilePicker;
 
 procedure TRouteLibraryPage.ClickCreate(Sender:TObject);
 begin ViewMenu.OpenTab('route-create');end;
@@ -269,10 +270,12 @@ end;
 procedure TRouteLibraryPage.ClickBack(Sender:TObject);
 begin ViewMenu.ShowRoutesPage;end;
 procedure TRouteLibraryPage.ClickUpload(Sender:TObject);
-var URL,FileName:String;
 begin
-  URL:='';if not Application.MainWindow.FileDialog(UiText('Add route'),URL,True,'FIT / GPX|*.fit;*.gpx')then Exit;
-  FileName:=URIToFilenameSafe(URL);if not FileExists(FileName)then Exit;
+  PickGameFile(Self,UiText('Add route'),'FIT / GPX|*.fit;*.gpx',@FilePicked);
+end;
+procedure TRouteLibraryPage.FilePicked(const FileName:String);
+begin
+  if not FileExists(FileName)then Exit;
   try ViewMenu.AcceptFile(FileName);except on E:Exception do FStatus.Caption:=E.Message;end;
 end;
 procedure TRouteLibraryPage.ClickAttribution(Sender:TObject);

@@ -31,7 +31,9 @@ interval workouts offer more ways to ride.
   and automatic uploads of completed smart-trainer sessions. Simulated sessions
   are excluded from uploads.
 - **Devices and simulation:** Bluetooth trainer and sensor integration, plus
-  FIT-based simulation for exploring without connected equipment.
+  FIT-based simulation for exploring without connected equipment. Elite STERZO
+  Smart supports steering in free exploration and lane changes on routes,
+  including while FIT simulation supplies power and cadence.
 - **Bike fitting:** adjustable avatars, riding positions and parametric bicycles,
   with automatic frame sizing and saddle, stem and spacer adjustment.
 

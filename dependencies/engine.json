@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/thpg/castle-engine.git",
   "branch": "rezvivo",
-  "commit": "5cac1a752b15c62197372bd71724e6639d6a2406",
+  "commit": "8cd14747a5602672b369b6a24cbfc395115f5ef2",
   "upstream_repository": "https://github.com/castle-engine/castle-engine.git",
   "upstream_commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "modified_files": [
@@ -10,8 +10,12 @@
       "sha256_lf": "23745837cb92ccc2ece39505e3943a724bfdecee6de37d2ced422e99ede79497"
     },
     {
+      "path": "src/base_rendering/castleglimages_rendertotexture.inc",
+      "sha256_lf": "afcd26fa45fe3f7bd9aff5fdc014a1ecd9737e7c92846e2bf33385d6ce1cef7b"
+    },
+    {
       "path": "src/base_rendering/castleglshaders.pas",
-      "sha256_lf": "039de6718618033d079e2270b5bea08dbcee56743be25cc6e6db83543a606ac0"
+      "sha256_lf": "04b146776fb5c261d8b2cd92fb0e306dececfd5b02ddcd76c9c051a082a783b0"
     },
     {
       "path": "src/base_rendering/castlerendercontext.pas",
@@ -172,6 +176,10 @@
     {
       "path": "src/window/castlewindow.pas",
       "sha256_lf": "c8465e1dbabca7c206060d681ca5f5ae0576ae68bbec16bc157db3d18fca6894"
+    },
+    {
+      "path": "tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java",
+      "sha256_lf": "3c2ea221eba74f232ad66ddf1444b1bbc4575a2eb2ee4d0f699bac185cae1d65"
     }
   ]
 }

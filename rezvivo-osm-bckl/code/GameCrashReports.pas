@@ -12,7 +12,7 @@ function RedactClientLog(const Text:String):String;
 
 implementation
 uses SyncObjs,fpjson,jsonparser,CustApp,CastleWindow,DebugLog,GameBuildInfo,
-  GameHttpClient,GameMachineInfo{$ifdef MSWINDOWS},Windows{$endif};
+  GameHttpClient,GameMachineInfo,CastleFilesUtils,CastleURIUtils{$ifdef MSWINDOWS},Windows{$endif};
 
 type
   TCrashUpload=class(TThread)
@@ -39,9 +39,13 @@ var Root:String;
 begin
   Root:=SysUtils.GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR');
   if (SysUtils.GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')='')or(Root='')then begin
+    {$ifdef ANDROID}
+    Root:=URIToFilenameSafe(ApplicationConfig(''));
+    {$else}
     Root:=SysUtils.GetEnvironmentVariable('LOCALAPPDATA');
     if Root='' then Root:=GetAppConfigDir(False);
     Root:=IncludeTrailingPathDelimiter(Root)+'REZVIVO';
+    {$endif}
   end;
   Result:=IncludeTrailingPathDelimiter(Root)+'diagnostics'+PathDelim;
 end;

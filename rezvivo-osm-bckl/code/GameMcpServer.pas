@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses GameTravel,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses AppRuntimePaths, GameTravel,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -54,7 +54,8 @@ uses GameTravel,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAs
   CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog, CastleRendererInternalShader,
   CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
-  AppSettings, GameDeviceService, GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
+  AppSettings, GameDeviceService, GameDeviceTypes, GameDeviceSensor, TrainerData,
+  GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
   BikeParametric, RiderPoseCatalog, RiderAttention, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, TreeSeason, TreeRenderer, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
@@ -117,8 +118,8 @@ var
   I: Integer;
 begin
   Result := False;
-  for I := 1 to ParamCount do
-    if ParamStr(I) = '--mcp-stdio' then
+  for I := 1 to AppParamCount do
+    if AppParamStr(I) = '--mcp-stdio' then
       Exit(True);
 end;
 
@@ -1448,7 +1449,7 @@ begin
     raise Exception.Create('play session is not alive (no ride started?)');
   F := Trim(AParams.Get('file', ''));
   if F = '' then
-    F := ExtractFilePath(ParamStr(0)) + 'path_dump.json';
+    F := AppDirectory + 'path_dump.json';
   ViewPlay.DumpRidePath(F);
   AResult.Add('ok', True);
   AResult.Add('file', F);
@@ -1494,7 +1495,7 @@ begin
   Js := ViewPlay.Osm.AnalyzeSnapPathJSON(Refresh, ClearM);
   F := Trim(AParams.Get('file', ''));
   if F = '' then
-    F := ExtractFilePath(ParamStr(0)) + 'snap_analyze.json';
+    F := AppDirectory + 'snap_analyze.json';
   SL := TStringList.Create;
   try
     SL.Text := Js;
@@ -1547,7 +1548,7 @@ begin
   Js := ViewPlay.Osm.DumpRouteArraysJSON(Refresh, MaxPts, Step);
   F := Trim(AParams.Get('file', ''));
   if F = '' then
-    F := ExtractFilePath(ParamStr(0)) + 'route_arrays.json';
+    F := AppDirectory + 'route_arrays.json';
   SL := TStringList.Create;
   try
     SL.Text := Js;
@@ -1671,7 +1672,7 @@ begin
   begin
     F := Trim(AParams.Get('path', ''));
     if F = '' then
-      F := ExtractFilePath(ParamStr(0)) + 'logs' + PathDelim +
+      F := AppDirectory + 'logs' + PathDelim +
         'wheel_ground_' + FormatDateTime('yyyymmdd_hhnnss', Now) + '.csv';
     ForceDirectories(ExtractFilePath(F));
     PhysicsGroundLogStart(F);
@@ -2504,6 +2505,32 @@ begin
   AResult.Add('ok', True);
 end;
 
+procedure CmdDeviceInspect(const AParams: TJSONObject; AResult: TJSONObject);
+var Items:TJSONArray; Item,Values:TJSONObject; E:TGameDeviceEntry;
+  S:TDeviceSensor; K:TSensorKind; I:Integer; Degrees:Single; Available:Boolean;
+begin
+  if DeviceService=nil then raise Exception.Create('DeviceService not available');
+  Available:=DeviceService.ReadSteering(Degrees);
+  AResult.Add('steering_active',Available);
+  if Available then AResult.Add('steering_degrees',Degrees);
+  Items:=TJSONArray.Create; AResult.Add('devices',Items);
+  for I:=0 to DeviceService.Devices.Count-1 do
+  begin
+    E:=DeviceService.Devices[I];
+    Item:=TJSONObject.Create(['name',E.DeviceInfo.Name,'state',Ord(E.ConnectionState),
+      'transport',E.TransportLabel,'steering',E.DeviceInfo.SupportsSteering,
+      'control',E.IsControllable,'message',E.LastMessage]);
+    Items.Add(Item); Values:=TJSONObject.Create; Item.Add('sensors',Values);
+    for K:=Low(TSensorKind) to High(TSensorKind) do
+    begin
+      S:=E.FindSensor(K); if S=nil then Continue;
+      if (E.ConnectionState=gdcsConnected) and S.HasData then
+        Values.Add(SENSOR_KIND_KEYS[K],TJSONObject.Create(['value',S.Instant,
+          'age_s',S.DataAgeSec,'selected',DeviceService.Sensor(K)=S]));
+    end;
+  end;
+end;
+
 procedure CmdDeviceScanStart(const AParams: TJSONObject; AResult: TJSONObject);
 begin
   if not Assigned(DeviceService) then
@@ -2739,6 +2766,8 @@ begin
     'Start BLE/ANT+ device scan via DeviceService.',
     '',
     @CmdDeviceScanStart);
+  RegisterMcpCommand('device.inspect', 'Read connected devices, sensor roles and steering angle.',
+    '', @CmdDeviceInspect);
   RegisterMcpCommand('device.scan_stop',
     'Stop device scan via DeviceService.',
     '',
@@ -3010,7 +3039,7 @@ begin
   Endpoint:='';Command:='';
   if S.Enabled then begin
     Endpoint:=S.Endpoint;
-    Command:='"'+ExpandFileName(ParamStr(0))+'" --mcp-connect '+Endpoint;
+    Command:='"'+ExpandFileName(AppParamStr(0))+'" --mcp-connect '+Endpoint;
   end;
   Result:=TJSONObject.Create(['supported',Supported,'stdio',McpModeRequested,
     'enabled',S.Enabled,'client_connected',S.ClientConnected,

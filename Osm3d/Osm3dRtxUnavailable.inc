@@ -1,0 +1,30 @@
+{ GLES renderer capability boundary. The Windows Vulkan/OpenGL bridge is
+  deliberately absent; callers keep using the ordinary raster shadow pass. }
+constructor TRtxShadow.Create;
+begin inherited; FFailed:=True; FError:='RTX is unavailable in the GLES renderer' end;
+destructor TRtxShadow.Destroy;
+begin inherited end;
+procedure TRtxShadow.SetReflections(Value:Boolean);
+begin FReflections:=False end;
+procedure TRtxShadow.Prepare(const Casters:TCastleTransformList;Revision:QWord;
+  const Focus,Sun:TVector3;Size:Integer;HalfExtent:Single;Accept:TRtxShapeFilter);
+begin end;
+function TRtxShadow.Intersects(const Box:TBox3D):Boolean;
+begin Result:=False end;
+function TRtxShadow.AddTree(const Instance:TreeModel.TTreeInstance;const Profile:TTreeParams;
+  const Position:TVector3;Renderer,Shared:TTreeRenderer;Season:Single):Boolean;
+begin Result:=False end;
+function TRtxShadow.TimeAvailable:Boolean;
+begin Result:=False end;
+function TRtxShadow.Trace(const Zones:TRtxZones):Boolean;
+begin Result:=False end;
+procedure TRtxShadow.CopyDepth;
+begin end;
+procedure TRtxShadow.DrawCachedRaster(Zone:Integer);
+begin end;
+procedure TRtxShadow.Snapshot(const J:TJSONObject);
+begin J.Add('available',False);J.Add('error',FError) end;
+procedure TRtxShadow.DiagnosticDepth(const J:TJSONObject);
+begin J.Add('available',False) end;
+procedure TRtxShadow.RenderReflections(const Params:TRenderParams;Draw:TRtxDrawReflectors);
+begin end;

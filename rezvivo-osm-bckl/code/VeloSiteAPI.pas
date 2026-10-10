@@ -1885,7 +1885,9 @@ begin
 end;
 
 initialization
+  {$ifndef ANDROID}
   VeloSite := TVeloSiteAPI.Create;
+  {$endif}
 
 finalization
   FreeAndNil(VeloSite);

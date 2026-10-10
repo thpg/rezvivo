@@ -39,6 +39,7 @@ type
     RouteDist: Single;        { absolute distance on route, for sorting }
     IsSelf: Boolean;
     constructor Create(AOwner: TComponent); override;
+    procedure SetCardWidth(const Value:Single);
     procedure SetData(const AName: string; ARouteDist, ASpeed: Single;
       APower, ACadence, AHR: Integer; ASelf: Boolean);
   end;
@@ -92,6 +93,8 @@ type
     FExploreHint:TCastleLabel;
     FExploreInputOverride:Boolean;
     FExploreSteer,FExplorePowerAxis,FExploreWalkAxis:Single;
+    FHardwareSteer: Single;
+    FHardwareSteering: Boolean;
     FWalkHold:THeldMovement;
     procedure ConfigureTravel;
     procedure UpdateTravelInput(Dt:Single;AllowInput:Boolean);
@@ -250,7 +253,8 @@ type
     FRiderScroll: TCastleScrollView;
     FHasOtherRiders: Boolean;
     FAdminLayoutValid, FAdminLayoutShown: Boolean;
-    FAdminLayoutHeight: Single;
+    FAdminLayoutHeight,FAdminLayoutWidth,FAdminLayoutScale: Single;
+    FRiderListCount:Integer;
     FRiderInner: TCastleVerticalGroup;
     FRiderCards: array of TRiderCard;
 
@@ -628,11 +632,12 @@ function CreateGameFpsControl(AOwner:TComponent):TCastleUserInterface;
 implementation
 
 
-uses RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
+uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
   GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
-  Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap;
+  Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap,GameRideLayout,
+  EliteSterzoProtocol;
 
 const
   MaxPower = 2500.0;
@@ -861,9 +866,9 @@ begin
     GCliFlags.CaseSensitive := False;
     GCliFlags.Sorted := True;
     GCliFlags.Duplicates := dupIgnore;
-    for I := 1 to ParamCount do
+    for I := 1 to AppParamCount do
     begin
-      S := ParamStr(I);
+      S := AppParamStr(I);
       if (Length(S) = 0) or not (S[1] in ['-', '/']) then Continue;
       while (Length(S) > 0) and (S[1] in ['-', '/']) do Delete(S, 1, 1);
       GCliFlags.Add(S);
@@ -884,11 +889,11 @@ procedure ParseShadowLiftCli;
 var
   I: Integer;
 begin
-  for I := 1 to ParamCount do
-    if Copy(ParamStr(I), 1, 13) = '--shadowlift=' then
+  for I := 1 to AppParamCount do
+    if Copy(AppParamStr(I), 1, 13) = '--shadowlift=' then
     begin
       BikeShadowQuadLift := StrToFloatDef(
-        StringReplace(Copy(ParamStr(I), 14, MaxInt), '.',
+        StringReplace(Copy(AppParamStr(I), 14, MaxInt), '.',
           DefaultFormatSettings.DecimalSeparator, [rfReplaceAll]), 0.003);
       Logger.Info(Format('[DIAG] --shadowlift: квады теней подняты на %.3f м',
         [BikeShadowQuadLift]));
@@ -914,8 +919,8 @@ var
 constructor TRiderCard.Create(AOwner: TComponent);
 begin
   inherited;
-  Width := 260;
-  Height := 44;
+  Width := 178;
+  Height := RideRiderCardHeight;
   AutoSizeToChildren := False;
 
   Bg := TCastleRectangleControl.Create(Self);
@@ -924,22 +929,25 @@ begin
   InsertFront(Bg);
 
   LblTop := TCastleLabel.Create(Self);
-  LblTop.FontSize := 15;
+  LblTop.FontSize := 12;
   LblTop.Color := Vector4(1, 1, 1, 1);
   LblTop.Anchor(vpTop, -2);
   LblTop.Anchor(hpLeft, 6);
   InsertFront(LblTop);
 
   LblBottom := TCastleLabel.Create(Self);
-  LblBottom.FontSize := 13;
+  LblBottom.FontSize := 10;
   LblBottom.Color := Vector4(0.7, 0.8, 0.9, 1);
-  LblBottom.Anchor(vpTop, -22);
+  LblBottom.Anchor(vpTop, -19);
   LblBottom.Anchor(hpLeft, 6);
   InsertFront(LblBottom);
 
   RouteDist := 0;
   IsSelf := False;
 end;
+
+procedure TRiderCard.SetCardWidth(const Value:Single);
+begin Width:=Value;Height:=RideRiderCardHeight end;
 
 procedure TRiderCard.SetData(const AName: string; ARouteDist, ASpeed: Single;
   APower, ACadence, AHR: Integer; ASelf: Boolean);
@@ -966,16 +974,18 @@ begin
 
   if ASelf then
   begin
-    LblTop.Caption := AName + UiText('  (you)');
+    LblTop.Caption := MenuEllipsis(AName,LblTop.Font,
+      Math.Max(1,(Width-50)*UIScale))+UiText('  (you)');
     LblTop.Color := Vector4(0.3, 1.0, 0.3, 1);
     Bg.Color := Vector4(0.1, 0.25, 0.1, 0.9);
   end else begin
-    LblTop.Caption := AName + '   ' + DistStr;
+    LblTop.Caption := MenuEllipsis(AName,LblTop.Font,
+      Math.Max(1,(Width-65)*UIScale))+'  '+DistStr;
     LblTop.Color := Vector4(1, 1, 1, 1);
     Bg.Color := Vector4(0.15, 0.15, 0.2, 0.85);
   end;
 
-  LblBottom.Caption := Format(UiText('%.1f km/h   %dW   %drpm   %dbpm'), [
+  LblBottom.Caption := Format(UiText('%.1f km/h  %dW  %drpm  %dbpm'), [
     ASpeed * 3.6, APower, ACadence, AHR]);
 end;
 
@@ -1161,6 +1171,9 @@ begin
     Result.Add('speed',FActiveAvatarAgent.State.CurrentSpeed);
     Result.Add('distance',FActiveAvatarAgent.State.CumulativeDistance);
     Result.Add('steer',FActiveAvatarAgent.State.TravelSteering);
+    Result.Add('hardware_steering',FHardwareSteering);
+    Result.Add('hardware_steer_axis',FHardwareSteer);
+    Result.Add('lane_offset',FActiveAvatarAgent.State.LaneOffset);
     Result.Add('ground_turn_stage',Ord(FActiveAvatarAgent.State.GroundTurn.Stage));
     Result.Add('ground_turn_blend',FActiveAvatarAgent.State.GroundTurn.Frame.Blend);
     Result.Add('bike_lift',FActiveAvatarAgent.State.GroundTurn.Frame.BikeLift);
@@ -1229,7 +1242,7 @@ begin
   end;
 end;
 procedure TViewPlay.UpdateTravelInput(Dt:Single;AllowInput:Boolean);
-var PowerAxis,Steer,WalkAxis,WalkStart:Single;KeyState:TKeysPressed;
+var PowerAxis,Steer,WalkAxis,WalkStart,SteeringDegrees:Single;KeyState:TKeysPressed;
   Sensor,Simulated,Fast,SimPaused:Boolean;SimCurrent,SimTotal:Integer;
   LoadStage,LoadError:string;
 begin
@@ -1248,6 +1261,16 @@ begin
     if KeyState[keyS]or KeyState[keyArrowDown]then WalkAxis:=-1;
     Fast:=KeyState[keyShift];
   end;
+  FHardwareSteering:=(FTravelMode=travelBicycle) and not FExploreInputOverride and
+    not RidePreparationHeld and Assigned(DeviceService) and
+    DeviceService.ReadSteering(SteeringDegrees);
+  if FHardwareSteering then
+  begin
+    FHardwareSteer:=SmoothSteering(FHardwareSteer,SteeringAxis(SteeringDegrees),Dt);
+    Steer:=FHardwareSteer;
+  end else FHardwareSteer:=0;
+  if FLaneManager<>nil then
+    FLaneManager.SetSteering(FLocalLaneHandle,FHardwareSteering and not FFreeExplore,Steer);
   if not FFreeExplore then begin Steer:=0;WalkAxis:=0 end;
   FActiveAvatarAgent.State.TravelSteering:=Steer;
   if (FTravelMode<>travelWalk)or RidePreparationHeld then WalkAxis:=0;
@@ -2769,8 +2792,8 @@ begin
     frame, saving only a few draw calls. Keep their prepared geometry. }
   MainViewport.DynamicBatching := False;
   MainViewport.OcclusionCulling := Settings.GetOcclusionCulling;
-  for I := 1 to ParamCount do
-    if ParamStr(I) = '--no-occlusion' then
+  for I := 1 to AppParamCount do
+    if AppParamStr(I) = '--no-occlusion' then
       MainViewport.OcclusionCulling := False;
   FPerfRiders := True;
   FPerfTerrain := True;
@@ -2824,7 +2847,7 @@ begin
     dies with the process. FreezeDiagLog flushes after every line, so
     the last line we see in freeze_direct_*.log is genuinely the last
     thing the process did. File is written next to the executable. }
-  FreezeDiagInit(ExtractFilePath(ParamStr(0)));
+  FreezeDiagInit(AppDirectory);
   FreezeDiagWrite('TViewPlay.Start: session begun');
   { Start the watchdog AFTER init. Watchdog writes a tick every 200 ms
     regardless of main thread state. If watchdog tics continue but
@@ -2870,11 +2893,11 @@ begin
   end
   else
   begin
-    for I := 1 to ParamCount do
-      if Copy(ParamStr(I), 1, 14) = '--path-wobble=' then
+    for I := 1 to AppParamCount do
+      if Copy(AppParamStr(I), 1, 14) = '--path-wobble=' then
       begin
         PathTestWobbleConfigure(True,
-          StrToFloatDef(StringReplace(Copy(ParamStr(I), 15, MaxInt), '.',
+          StrToFloatDef(StringReplace(Copy(AppParamStr(I), 15, MaxInt), '.',
             DefaultFormatSettings.DecimalSeparator, [rfReplaceAll]), 2.0),
           8.0);
         Logger.Info(Format(
@@ -2981,6 +3004,7 @@ begin
   { ── Rider list panel — scrollable card list ── }
   FHasOtherRiders := False;
   FAdminLayoutValid := False;
+  FRiderListCount:=0;
   if Assigned(VerticalGroup1) then
   begin
     VerticalGroup1.AutoSizeHeight := True;
@@ -3138,8 +3162,9 @@ begin
   FCamera.InitDefaults;
 
   FMenuButton := TMenuButton.Create(FreeAtStop);
+  TMenuButton(FMenuButton).AutoIcon:=False;
   FMenuButton.Name:='RideMenu';
-  BindUiText(FMenuButton, 'Menu  Esc');
+  {$ifdef ANDROID}BindUiText(FMenuButton,'Menu');{$else}BindUiText(FMenuButton, 'Menu  Esc');{$endif}
   FMenuButton.AutoSize := False;
   FMenuButton.Width := 136;
   FMenuButton.Height := 44;
@@ -3152,6 +3177,7 @@ begin
   BindUiText(FAssistantButton,'Assistant');FAssistantButton.OnClick:=@ClickAssistant;
   InsertFront(FAssistantButton);
   FFocusButton:=TMenuButton.Create(FreeAtStop);BindUiText(FFocusButton,'Training focus');
+  TMenuButton(FFocusButton).AutoIcon:=False;
   FFocusButton.Name:='RideTrainingFocus';
   FFocusButton.AutoSize:=False;FFocusButton.Width:=180;FFocusButton.Height:=44;FFocusButton.FontSize:=15;
   FFocusButton.Anchor(hpLeft,160);FFocusButton.Anchor(vpTop,-278);
@@ -4009,16 +4035,26 @@ begin
 end;
 
 procedure TViewPlay.UpdateAdminPanels;
-var ShowPanels: Boolean; LayoutHeight,S,MenuTop: Single;
+var ShowPanels: Boolean; LayoutHeight,LayoutWidth,S,MenuTop: Single;
+  L:TRideHudLayout;I:Integer;
 begin
   ShowPanels := AdminPanelsVisible and not FFocusMode;
-  LayoutHeight := 0;
-  if Container <> nil then LayoutHeight := Container.UnscaledHeight;
+  LayoutHeight := 0;LayoutWidth:=0;
+  if Container <> nil then begin
+    LayoutHeight := Container.UnscaledHeight;LayoutWidth:=Container.UnscaledWidth;
+  end;
   if FAdminLayoutValid and (FAdminLayoutShown = ShowPanels) and
-     (FAdminLayoutHeight = LayoutHeight) then Exit;
+     (FAdminLayoutHeight = LayoutHeight) and(FAdminLayoutWidth=LayoutWidth)and
+     (FAdminLayoutScale=UIScale)then Exit;
   FAdminLayoutValid := True;
   FAdminLayoutShown := ShowPanels;
   FAdminLayoutHeight := LayoutHeight;
+  FAdminLayoutWidth:=LayoutWidth;FAdminLayoutScale:=UIScale;
+  L:=RideHudLayout(LayoutWidth,LayoutHeight);
+  if ShowPanels then begin
+    L.RidersTop:=Math.Max(L.RidersTop,250);
+    L.RidersMaxHeight:=Math.Max(RideRiderCardHeight,Math.Min(L.RidersMaxHeight,LayoutHeight-L.RidersTop-12));
+  end;
   if FFxPanel <> nil then FFxPanel.Exists := ShowPanels;
   if FBotPanel <> nil then FBotPanel.Exists := ShowPanels;
   if LabelFps <> nil then LabelFps.Exists := ShowPanels;
@@ -4028,29 +4064,34 @@ begin
   { VerticalGroup1 also holds the normal rider list: keep that list visible. }
   if FRiderScroll <> nil then
   begin
-    if Container <> nil then
-      if ShowPanels then FRiderScroll.Height := Math.Max(80.0, Math.Min(600.0, Container.UnscaledHeight - 350))
-      else FRiderScroll.Height := Math.Max(80.0, Math.Min(600.0, Container.UnscaledHeight - 180));
+    FRiderScroll.Width:=L.RidersWidth;
+    FRiderScroll.ScrollBarWidth:=4;
+    FRiderScroll.Height:=Math.Min(L.RidersMaxHeight,
+      Math.Max(RideRiderCardHeight+4,FRiderListCount*(RideRiderCardHeight+RideRiderCardGap)+4));
+    if FRiderInner<>nil then begin
+      FRiderInner.AutoSizeWidth:=False;FRiderInner.Width:=L.RidersWidth-6;
+      FRiderInner.Spacing:=RideRiderCardGap;
+    end;
+    for I:=0 to High(FRiderCards)do FRiderCards[I].SetCardWidth(L.RidersWidth-10);
   end;
   if VerticalGroup1 <> nil then
   begin
-    if ShowPanels then VerticalGroup1.Translation := Vector2(-10, -250)
-    else VerticalGroup1.Translation := Vector2(-10, -138);
+    VerticalGroup1.Translation := Vector2(-L.Margin,-L.RidersTop);
   end;
-  S:=Math.Max(0.65,Math.Min(1.0,UIScale));MenuTop:=12;
+  S:=1;MenuTop:=L.ButtonsTop;
   if FFocusMode then S:=TrainingFocusScale(UIScale);
   if ShowPanels then MenuTop:=278;
   if FMenuButton <> nil then begin
-    FMenuButton.Width:=136/S;FMenuButton.Height:=44/S;FMenuButton.FontSize:=16/S;
-    FMenuButton.Anchor(hpLeft,12/S);FMenuButton.Anchor(vpTop,-MenuTop/S);
+    FMenuButton.Width:=L.ButtonWidth/S;FMenuButton.Height:=L.ButtonHeight/S;FMenuButton.FontSize:=12/S;
+    FMenuButton.Anchor(hpLeft,L.Margin/S);FMenuButton.Anchor(vpTop,-MenuTop/S);
   end;
   if FFocusButton<>nil then begin
-    FFocusButton.Width:=180/S;FFocusButton.Height:=44/S;FFocusButton.FontSize:=15/S;
-    FFocusButton.Anchor(hpLeft,12/S);FFocusButton.Anchor(vpTop,-(MenuTop+52)/S);
+    FFocusButton.Width:=L.ButtonWidth/S;FFocusButton.Height:=L.ButtonHeight/S;FFocusButton.FontSize:=12/S;
+    FFocusButton.Anchor(hpLeft,L.Margin/S);FFocusButton.Anchor(vpTop,-(MenuTop+2*(L.ButtonHeight+L.ButtonGap))/S);
   end;
   if FAssistantButton<>nil then begin
-    FAssistantButton.Width:=136/S;FAssistantButton.Height:=44/S;FAssistantButton.FontSize:=15/S;
-    FAssistantButton.Anchor(hpLeft,160/S);FAssistantButton.Anchor(vpTop,-MenuTop/S);
+    FAssistantButton.Width:=L.ButtonWidth/S;FAssistantButton.Height:=L.ButtonHeight/S;FAssistantButton.FontSize:=12/S;
+    FAssistantButton.Anchor(hpLeft,L.Margin/S);FAssistantButton.Anchor(vpTop,-(MenuTop+L.ButtonHeight+L.ButtonGap)/S);
   end;
   if FFocusMode and(FMenuButton<>nil)and(FFocusButton<>nil)then begin
     FMenuButton.Width:=100/S;FMenuButton.Height:=34/S;FMenuButton.FontSize:=13/S;
@@ -4214,6 +4255,9 @@ begin
   if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do
     if TLocalBotAgent(FBotAgents[I]).Visible then Inc(LocalCount);
   Total:=Length(Riders)+1+LocalCount;
+  if FRiderListCount<>Total then begin
+    FRiderListCount:=Total;FAdminLayoutValid:=False;UpdateAdminPanels;
+  end;
   if HasActiveState then
   begin
     LocalSpeed := FActiveAvatarAgent.State.CurrentSpeed;
@@ -4240,6 +4284,7 @@ begin
   while Length(FRiderCards) < Total do
   begin
     Card := TRiderCard.Create(FreeAtStop);
+    if FRiderScroll<>nil then Card.SetCardWidth(FRiderScroll.Width-10);
     FRiderInner.InsertFront(Card);
     SetLength(FRiderCards, Length(FRiderCards) + 1);
     FRiderCards[High(FRiderCards)] := Card;
@@ -4295,12 +4340,12 @@ begin
   if Assigned(FRiderScroll) then
   begin
     ScrollH := FRiderScroll.Height;
-    ContentH := Total * (44 + 3);
+    ContentH := Total * (RideRiderCardHeight + RideRiderCardGap);
     if ContentH > ScrollH then
     begin
-      SelfY := SelfIdx * (44 + 3);
-      FRiderScroll.Scroll := EnsureRange(SelfY - ScrollH / 2 + 22, 0, ContentH - ScrollH);
-    end;
+      SelfY := SelfIdx * (RideRiderCardHeight + RideRiderCardGap);
+      FRiderScroll.Scroll := EnsureRange(SelfY - ScrollH / 2 + RideRiderCardHeight/2, 0, ContentH - ScrollH);
+    end else FRiderScroll.Scroll:=0;
   end;
 end;
 

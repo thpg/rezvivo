@@ -1,4 +1,5 @@
 unit Osm3dRtxShadow;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}
 interface
 uses Classes, SysUtils, Dynlibs, Generics.Collections, CastleVectors, CastleBoxes,
@@ -86,6 +87,7 @@ type
     FCardVAO,FCardBuffer,FCardProgram:Cardinal;
     FRasterCards:Integer;
     FLastZones:TRtxZones;
+    {$ifndef OpenGLES}
     procedure Initialize(Size:Integer);
     procedure Release;
     procedure Fail(const Msg:string);
@@ -101,6 +103,7 @@ type
     procedure UploadCards;
     function AllocateLayer:Integer;
     function AlphaTexture:Cardinal;
+    {$endif}
     procedure SetReflections(Value:Boolean);
   public
     constructor Create;
@@ -125,7 +128,11 @@ type
     property DebugReflections:Boolean read FDebugReflections write FDebugReflections;
   end;
 implementation
-uses Math, CastleGL, CastleLog, CastleScene, CastleSceneCore,
+
+{$ifdef OpenGLES}
+{$I Osm3dRtxUnavailable.inc}
+{$else}
+uses Math, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleLog, CastleScene, CastleSceneCore,
   CastleUriUtils, TreeMath, TreeLOD, TreeSeason, Osm3dProceduralVegetation,
   Osm3dStudioSettings, Osm3dRenderInstanced, Osm3dRtxMaterials,
   CastleRenderContext, CastleRectangles, CastleRenderOptions, X3DFields,
@@ -771,4 +778,5 @@ begin
     SetRtxMaterialPass(False,Tex,Vector4(OldView.Left,OldView.Bottom,OldView.Width,OldView.Height));
   end;
 end;
+{$endif}
 end.

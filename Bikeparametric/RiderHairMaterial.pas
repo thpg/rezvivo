@@ -14,7 +14,7 @@ begin
     'varying vec3 rhSurface;'+#10+
     'attribute vec3 riderHairRest,riderHairGuide,riderHairStrand,riderHairHelmet;'+#10+
     'uniform vec3 rhGuides['+IntToStr(HairPointCount)+'];'+#10+
-    'uniform float rhHelmet,rhStyle; uniform mat3 castle_NormalMatrix;'+#10+
+    'uniform float rhHelmet,rhStyle; ' + #10 + '#ifndef GL_ES' + #10 + 'uniform mat3 castle_NormalMatrix;' + #10 + '#endif' + #10 + ''+#10+
     'varying vec3 rhFlow; varying vec4 rhParam;'+#10+
     'vec3 rhPosedFlow;'+#10+
     'vec3 rhRotate(vec3 p,vec3 a,vec3 b) {'+#10+

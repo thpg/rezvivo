@@ -123,7 +123,7 @@ function SimpleBLEAvailable: Boolean;
 implementation
 
 uses
-  Math, StrUtils, DynLibs, DebugLog, GameTrainerControl, GameCallbackRegistry;
+  AppRuntimePaths, Math, StrUtils, DynLibs, DebugLog, GameTrainerControl, GameCallbackRegistry;
 
 var
   GSimpleBLEChecked: Boolean = False;
@@ -215,7 +215,7 @@ begin
   if not GSimpleBLEChecked then
   begin
     GSimpleBLEChecked := True;
-    ExeDir := ExtractFilePath(ParamStr(0));
+    ExeDir := AppDirectory;
 
     Logger.Info('[SimpleBLE] ═══════ SimpleBLE availability check ═══════');
     Logger.Info('[SimpleBLE] Exe dir: ' + ExeDir);

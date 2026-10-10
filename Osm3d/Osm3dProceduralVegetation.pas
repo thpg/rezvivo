@@ -1,4 +1,5 @@
 unit Osm3dProceduralVegetation;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}
 interface
 uses Classes, SysUtils, Generics.Collections, CastleTransform, CastleVectors,
@@ -73,6 +74,7 @@ type
   TOsmProceduralVegetation = class(TCastleTransform)
   private
     FCells: specialize TObjectList<TProceduralCell>;
+    FVisibleCells: TProceduralCells;
     FDetails: specialize TObjectList<TProceduralDetail>;
     FBatches: array[0..5] of TProceduralFarBatch;
     FBatchUse: QWord;
@@ -106,7 +108,8 @@ type
     procedure UploadCell(Cell: TProceduralCell);
     procedure ReleaseDetail(Index: Integer);
     procedure RebuildBounds;
-    function FarBatch(const Cells:TProceduralCells;const Origin:TTreeWorldPosition):TProceduralFarBatch;
+    function FarBatch(const Cells:TProceduralCells;CellCount:Integer;
+      const Origin:TTreeWorldPosition):TProceduralFarBatch;
     function CellInRange(Cell: TProceduralCell; const Camera: TVector3): Boolean;
     function FindCell(ID: Integer): TProceduralCell;
   protected
@@ -126,7 +129,7 @@ type
 function ProceduralVegetationDiagnostics: string;
 function ProceduralTreeQuality(const Distance: Single): Single;
 implementation
-uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Math, CastleGL, CastleRenderContext, CastleRenderOptions,
+uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Math, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleRenderContext, CastleRenderOptions,
   CastleApplicationProperties, CastleUriUtils, Osm3dProceduralTreeData,
   Osm3dStudioSettings, Osm3dRenderInstanced, Osm3dWind, TreeSeason, TreeLOD, CastleLog,
   Osm3dVegetationQuality, CastleTimeUtils, Osm3dRtxMaterials;
@@ -356,8 +359,8 @@ begin
   FFreeVram:=-1;
   if FMemory.TotalAvailableMemory>0 then
     FFreeVram:=Int64(FMemory.CurrentAvailableVideoMemory)*1024
-  else if GL_ATI_meminfo then
-    FFreeVram:=Int64(FMemory.VboFreeMemory)*1024;
+  {$ifndef OpenGLES}else if GL_ATI_meminfo then
+    FFreeVram:=Int64(FMemory.VboFreeMemory)*1024{$endif};
   NewBudget:=Min(TreeCacheBudget(FDetailBytes,FFreeVram,Total),
     Int64(VegetationDetail.TreeCacheMiB)*1024*1024);
   if NewBudget<>FCacheBudget then begin FCacheBudget:=NewBudget;FPlanTime:=0;end;
@@ -537,7 +540,7 @@ begin
   Cell.Dirty:=False;Cell.Uploaded:=True;
 end;
 
-function TOsmProceduralVegetation.FarBatch(const Cells:TProceduralCells;
+function TOsmProceduralVegetation.FarBatch(const Cells:TProceduralCells;CellCount:Integer;
   const Origin:TTreeWorldPosition):TProceduralFarBatch;
 var B:TProceduralFarBatch;C:TProceduralCell;I,J,K,N,Slot,First:Integer;S:TTreeSpecies;
     Match,SameCells,Changed,Rebuild:Boolean;Oldest:QWord;
@@ -560,9 +563,9 @@ begin
     B:=FBatches[I];
     if B=nil then begin Slot:=I;Oldest:=0;Continue;end;
     if B.LastUse<Oldest then begin Slot:=I;Oldest:=B.LastUse;end;
-    Match:=(Length(B.CellIDs)=Length(Cells)) and
+    Match:=(Length(B.CellIDs)=CellCount) and
       (B.Origin.X=Origin.X) and (B.Origin.Y=Origin.Y) and (B.Origin.Z=Origin.Z);
-    if Match then for J:=0 to High(Cells) do
+    if Match then for J:=0 to CellCount-1 do
       if B.CellIDs[J]<>Cells[J].ID then begin Match:=False;Break;end;
     if Match then begin Slot:=I;SameCells:=True;Break;end;
   end;
@@ -570,7 +573,7 @@ begin
   B:=FBatches[Slot];B.LastUse:=FBatchUse;B.Origin:=Origin;
   for S:=Low(S) to High(S) do begin
     Changed:=not SameCells;Rebuild:=not SameCells;N:=0;
-    for I:=0 to High(Cells) do begin
+    for I:=0 to CellCount-1 do begin
       C:=Cells[I];Inc(N,C.FarCount[S]);
       if SameCells then begin
         if B.CellVersions[I][S]<>C.FarVersion[S] then Changed:=True;
@@ -586,11 +589,11 @@ begin
     end;
     if Rebuild then begin
       SetLength(PackedItems,N);First:=0;
-      for C in Cells do begin CopyCell(C,First);Inc(First,C.FarCount[S]);end;
+      for I:=0 to CellCount-1 do begin C:=Cells[I];CopyCell(C,First);Inc(First,C.FarCount[S]);end;
       B.Renderer[S].UploadDistantItems(PackedItems);Inc(FUploadCount);
     end else begin
       First:=0;
-      for I:=0 to High(Cells) do begin
+      for I:=0 to CellCount-1 do begin
         C:=Cells[I];K:=C.FarCount[S];
         if (K>0) and (B.CellVersions[I][S]<>C.FarVersion[S]) then begin
           SetLength(PackedItems,K);CopyCell(C,0);
@@ -600,8 +603,8 @@ begin
       end;
     end;
   end;
-  SetLength(B.CellIDs,Length(Cells));SetLength(B.CellVersions,Length(Cells));SetLength(B.CellCounts,Length(Cells));
-  for I:=0 to High(Cells) do begin
+  SetLength(B.CellIDs,CellCount);SetLength(B.CellVersions,CellCount);SetLength(B.CellCounts,CellCount);
+  for I:=0 to CellCount-1 do begin
     B.CellIDs[I]:=Cells[I].ID;B.CellVersions[I]:=Cells[I].FarVersion;B.CellCounts[I]:=Cells[I].FarCount;
   end;
   Result:=B;
@@ -610,14 +613,14 @@ end;
 procedure TOsmProceduralVegetation.LocalRender(const Params:TRenderParams);
 var Projection,View,Model:TTreeMat4;M,V:TMatrix4;Frustum:TFrustum;
     Camera,LocalCamera,Sun,Right:TVector3;Eye:TTreeVec3;Env:TTreeRenderEnvironment;
-    Depth,FreshColor:Boolean;C:TProceduralCell;D:TProceduralDetail;S:TTreeSpecies;I,UploadBudget:Integer;
+    Depth,FreshColor:Boolean;C:TProceduralCell;D:TProceduralDetail;S:TTreeSpecies;I,CellIndex,UploadBudget:Integer;
     Instance:TreeModel.TTreeInstance;
     Target,OldQ,DetailDistance,LeafDistance,AdaptiveDetail:Single;
     Stats:TTreeRenderStats;Tick:QWord;OldLevel:Integer;
     OldProgram,OldVAO,OldBuffer,OldActive,OldTexture,OldDepthFunc:GLint;OldRange:TDepthRange;
     OldPolygon:array[0..1]of GLint;Viewport:array[0..3]of GLint;
     WasDepth,WasBlend,WasCull,OldDepthMask:GLBoolean;
-    VisibleCells:TProceduralCells;VisibleCount:Integer;Batch:TProceduralFarBatch;BatchOrigin:TTreeWorldPosition;
+    VisibleCount:Integer;Batch:TProceduralFarBatch;BatchOrigin:TTreeWorldPosition;
 begin
   if RtxReflectionCaptureActive then Exit;
   if not ProceduralVegetationActive then begin
@@ -658,7 +661,8 @@ begin
   glGetIntegerv(GL_ARRAY_BUFFER_BINDING,@OldBuffer);glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);
   glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@OldTexture);
   glGetIntegerv(GL_DEPTH_FUNC,@OldDepthFunc);glGetBooleanv(GL_DEPTH_WRITEMASK,@OldDepthMask);
-  glGetIntegerv(GL_POLYGON_MODE,@OldPolygon[0]);glGetIntegerv(GL_VIEWPORT,@Viewport[0]);
+  {$ifndef OpenGLES}glGetIntegerv(GL_POLYGON_MODE,@OldPolygon[0]);{$endif}
+  glGetIntegerv(GL_VIEWPORT,@Viewport[0]);
   WasDepth:=glIsEnabled(GL_DEPTH_TEST);WasBlend:=glIsEnabled(GL_BLEND);WasCull:=glIsEnabled(GL_CULL_FACE);
   OldRange:=RenderContext.DepthRange;
   try
@@ -742,7 +746,9 @@ begin
     Env.OutputGamma:=1/2.2; { game postprocessing supplies distance fog }
     Projection:=ToTreeMatrix(RenderContext.ProjectionMatrix);View:=ToTreeMatrix(V);
     Eye:=TreeMath.Vec(Camera.X,Camera.Y,Camera.Z);
-    UploadBudget:=2;VisibleCount:=0;SetLength(VisibleCells,FCells.Count);
+    UploadBudget:=2;VisibleCount:=0;
+    if Length(FVisibleCells)<FCells.Count then
+      SetLength(FVisibleCells,Max(FCells.Count,Length(FVisibleCells)*2));
     for C in FCells do begin
       if not CellInRange(C,LocalCamera) or not Frustum.Box3DCollisionPossibleSimple(C.Bounds) then Continue;
       if not Depth then begin
@@ -755,13 +761,12 @@ begin
         end;
         if C.Dirty and (UploadBudget>0) then begin UploadCell(C);Dec(UploadBudget);end;
       end;
-      VisibleCells[VisibleCount]:=C;Inc(VisibleCount);
+      FVisibleCells[VisibleCount]:=C;Inc(VisibleCount);
     end;
-    SetLength(VisibleCells,VisibleCount);
     BatchOrigin:=Default(TTreeWorldPosition);
     BatchOrigin.X:=Floor(LocalCamera.X/CELL_METERS)*CELL_METERS;
     BatchOrigin.Z:=Floor(LocalCamera.Z/CELL_METERS)*CELL_METERS;
-    Batch:=FarBatch(VisibleCells,BatchOrigin);
+    Batch:=FarBatch(FVisibleCells,VisibleCount,BatchOrigin);
     FShared.BeginBatch(Projection,View,Eye,Env,WindNow);
     M:=WorldTransform*TranslationMatrix(WorldPos(BatchOrigin));Model:=ToTreeMatrix(M);
     for S:=Low(S) to High(S) do if (Batch.Renderer[S]<>nil) and (Batch.Count[S]>0) then begin
@@ -774,7 +779,8 @@ begin
           Inc(FDrawCalls,Stats.DrawCalls);Inc(FTriangles,Stats.Triangles);Inc(FFarTrees,Stats.FarTrees);
         end;
     end;
-    for C in VisibleCells do begin
+    for CellIndex:=0 to VisibleCount-1 do begin
+      C:=FVisibleCells[CellIndex];
       for I:=0 to C.Count-1 do begin
         D:=C.Entries[I].Detail;if (D=nil) or (D.Renderer=nil) or (D.Quality<=0) then Continue;
         if not Frustum.Box3DCollisionPossibleSimple(C.Entries[I].Bounds) then Continue;
@@ -822,7 +828,8 @@ begin
     RenderContext.DepthRange:=OldRange;
     glUseProgram(OldProgram);glBindVertexArray(OldVAO);glBindBuffer(GL_ARRAY_BUFFER,OldBuffer);
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture);glActiveTexture(OldActive);
-    glPolygonMode(GL_FRONT_AND_BACK,OldPolygon[0]);glDepthFunc(OldDepthFunc);glDepthMask(OldDepthMask);
+    {$ifndef OpenGLES}glPolygonMode(GL_FRONT_AND_BACK,OldPolygon[0]);{$endif}
+    glDepthFunc(OldDepthFunc);glDepthMask(OldDepthMask);
     if WasDepth=GL_TRUE then glEnable(GL_DEPTH_TEST) else glDisable(GL_DEPTH_TEST);
     if WasBlend=GL_TRUE then glEnable(GL_BLEND) else glDisable(GL_BLEND);
     if WasCull=GL_TRUE then glEnable(GL_CULL_FACE) else glDisable(GL_CULL_FACE);

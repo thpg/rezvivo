@@ -139,19 +139,24 @@ end;
 procedure TStartPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 begin inherited;if(FScheduleRevision<>WorkoutSchedule.Revision)or(FScheduleLanguage<>UiLanguage)then UpdateToday;end;
 procedure TStartPage.Resize;
-var S,W,Top,TitleY,HintY,ButtonY,CardY,CardW:Single;I:Integer;
+var S,W,Top,TitleY,HintY,ButtonY,CardY,CardW:Single;I:Integer;Compact,ShortLayout:Boolean;
 begin
   inherited;if FButtons[3]=nil then Exit;S:=Max(0.65,Min(1,UIScale));
+  Compact:=(Container<>nil) and ((Container.UnscaledWidth<1180) or (Container.UnscaledHeight<690));
+  ShortLayout:=Compact and (Container.UnscaledHeight<560);
   W:=Min(580/S,Max(360/S,(EffectiveWidth-48/S)*0.51));
   W:=Min(W,EffectiveWidth-48/S);Top:=Max(24/S,Min(96/S,EffectiveHeight*0.12));
   if EffectiveHeight<720/S then Top:=24/S;
+  if Compact and ((EffectiveWidth<700/S) or ShortLayout) then W:=EffectiveWidth-48/S;
+  FEyebrow.Exists:=not Compact;
   FEyebrow.FontSize:=12/S;FEyebrow.Anchor(hpLeft,24/S);FEyebrow.Anchor(vpTop,-Top);
-  TitleY:=Top+38/S;
+  TitleY:=Top+38/S;if Compact then TitleY:=12/S;
   FTitle.FontSize:=Min(52/S,W*0.115);FTitle.MaxWidth:=W;
+  if Compact then FTitle.FontSize:=32/S;if ShortLayout then FTitle.FontSize:=28/S;
   FTitle.Anchor(hpLeft,24/S);FTitle.Anchor(vpTop,-TitleY);
-  HintY:=TitleY+FTitle.EffectiveHeight+24/S;
+  HintY:=TitleY+FTitle.EffectiveHeight+IfThen(Compact,10,24)/S;
   FHint.FontSize:=16/S;FHint.MaxWidth:=W-8/S;FHint.Anchor(hpLeft,24/S);FHint.Anchor(vpTop,-HintY);
-  ButtonY:=HintY+FHint.EffectiveHeight+28/S;
+  ButtonY:=HintY+FHint.EffectiveHeight+IfThen(Compact,14,28)/S;
   if(FContinue<>nil)and FContinue.Exists then begin
     FContinue.Width:=(W-12/S)/2;FContinue.Height:=44/S;FContinue.FontSize:=15/S;
     FContinue.Anchor(hpLeft,24/S);FContinue.Anchor(vpTop,-ButtonY);
@@ -161,18 +166,25 @@ begin
   end;
   FButtons[0].Width:=Min(244/S,W);FButtons[0].Height:=54/S;FButtons[0].FontSize:=18/S;
   FButtons[0].Anchor(hpLeft,24/S);FButtons[0].Anchor(vpTop,-ButtonY);
-  CardY:=ButtonY+88/S;CardW:=(W-16/S)/2;
+  CardY:=ButtonY+IfThen(Compact,66,88)/S;CardW:=(W-16/S)/2;
+  if ShortLayout and (EffectiveWidth>660/S) then begin
+    CardY:=ButtonY;CardW:=(W-24/S)/3;
+    FButtons[0].Width:=CardW;FButtons[0].Height:=112/S;
+  end;
   for I:=1 to 2 do begin
-    FCards[I].Width:=CardW;FCards[I].Height:=168/S;
+    FCards[I].Width:=CardW;FCards[I].Height:=IfThen(Compact,132,168)/S;
     FCards[I].Anchor(hpLeft,24/S+(I-1)*(CardW+16/S));FCards[I].Anchor(vpTop,-CardY);
+    if ShortLayout and (EffectiveWidth>660/S) then begin
+      FCards[I].Height:=112/S;FCards[I].Anchor(hpLeft,24/S+I*(CardW+12/S));
+    end;
     FCardIcons[I].Width:=26/S;FCardIcons[I].Height:=26/S;
-    FCardIcons[I].Anchor(hpLeft,18/S);FCardIcons[I].Anchor(vpTop,-20/S);
+    FCardIcons[I].Anchor(hpLeft,18/S);FCardIcons[I].Anchor(vpTop,-IfThen(Compact,12,20)/S);
     FCardArrows[I].Width:=20/S;FCardArrows[I].Height:=20/S;
     FCardArrows[I].Anchor(hpRight,-16/S);FCardArrows[I].Anchor(vpTop,-23/S);
     FCardTitles[I].FontSize:=16/S;FCardTitles[I].MaxWidth:=CardW-32/S;
-    FCardTitles[I].Anchor(hpLeft,18/S);FCardTitles[I].Anchor(vpTop,-66/S);
+    FCardTitles[I].Anchor(hpLeft,18/S);FCardTitles[I].Anchor(vpTop,-IfThen(Compact,48,66)/S);
     FCardHints[I].FontSize:=13/S;FCardHints[I].MaxWidth:=CardW-36/S;
-    FCardHints[I].Anchor(hpLeft,18/S);FCardHints[I].Anchor(vpTop,-(66/S+FCardTitles[I].EffectiveHeight+12/S));
+    FCardHints[I].Anchor(hpLeft,18/S);FCardHints[I].Anchor(vpTop,-(IfThen(Compact,48,66)/S+FCardTitles[I].EffectiveHeight+10/S));
   end;
   if FTodayOnly<>nil then begin
     FTodayOnly.Width:=CardW-20/S;FTodayOnly.Height:=32/S;FTodayOnly.FontSize:=13/S;
@@ -187,7 +199,7 @@ begin
     end;
   end;
   FButtons[3].Width:=W;FButtons[3].Height:=44/S;FButtons[3].FontSize:=14/S;
-  FButtons[3].Anchor(hpLeft,24/S);FButtons[3].Anchor(vpTop,-(CardY+190/S));
+  FButtons[3].Anchor(hpLeft,24/S);FButtons[3].Anchor(vpTop,-(CardY+IfThen(Compact,142,190)/S));
 end;
 procedure TStartPage.ClickAction(Sender:TObject);
 begin case TComponent(Sender).Tag of

@@ -123,6 +123,9 @@ begin
     'rotating',FRotate,'animated',FAnimate,'riders',GraphicsBenchmarkRiderCount,
     'buildings',24,'trees',180,'view',FViewIndex]);
   Result.Add('camera',TJSONArray.Create([P.X,P.Y,P.Z]));
+  Result.Add('grass_active',FGrass.Exists);Result.Add('procedural_trees_active',FProcedural.Exists);
+  Result.Add('shadows_active',FValues[goShadowSize]>0);
+  Result.Add('shadow_atlas',FShadow.DebugInfo);
 end;
 
 
@@ -556,7 +559,8 @@ begin
     FFpsLabel.MaxWidth:=Max(100,EffectiveWidth-24);
     if FError<>'' then FFpsLabel.Caption:=UiText('Test scene failed to load.')+#10+FError
     else if not FReady then FFpsLabel.Caption:=UiText('Preparing test scene...')
-    else FFpsLabel.Caption:=Format('%.0f FPS  |  GPU %.1f ms',[FFps,FGpuMs]);
+    else if FGpuMs > 0 then FFpsLabel.Caption:=Format('%.0f FPS  |  GPU %.1f ms',[FFps,FGpuMs])
+    else FFpsLabel.Caption:=Format('%.0f FPS',[FFps]);
   end;
 end;
 

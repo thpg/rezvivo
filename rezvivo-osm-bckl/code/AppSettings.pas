@@ -30,6 +30,7 @@ type
   TAppSettings = class
   private
     FFileName: string;
+    FStorageInitialized: Boolean;
     FLock: TCriticalSection;
     FUpdateDepth: Integer;
     FSavePending: Boolean;
@@ -103,6 +104,7 @@ type
     procedure SaveToFile;
   public
     constructor Create;
+    procedure InitializeStorage;
     destructor Destroy; override;
 
     { Pair on the same thread, with EndUpdate in a finally block. The lock
@@ -118,6 +120,7 @@ type
     { A preview may span frames. It only snapshots graphics; other settings
       keep saving normally with the pre-preview graphics values. Call End
       with False when cancelling or leaving the temporary tuning flow. }
+    procedure ApplyGraphicsPreset(Preset: TGraphicsPreset);
     procedure BeginGraphicsPreview;
     procedure EndGraphicsPreview(Commit: Boolean);
     property GraphicsPreviewActive: Boolean read GetGraphicsPreviewActive;
@@ -283,7 +286,7 @@ function ResolveRiderGlbPath(const AUrlOrPath: string): string;
 implementation
 
 uses
-  fpjson, jsonparser, CastleFilesUtils, CastleURIUtils,
+  fpjson, jsonparser, CastleFilesUtils, CastleURIUtils, Osm3dRenderProfile, Osm3dGpuGround,
   RenderComplexity, TreeRenderer, GrassRenderer, DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair, GameUserData;
 
 const
@@ -397,11 +400,23 @@ begin
   // на sorted list запрещён. У нас всего ~единицы адаптеров, lookup
   // всё равно будет O(N) — sorting не нужен.
 
+  {$ifndef ANDROID}InitializeStorage;{$endif}
+end;
+
+procedure TAppSettings.InitializeStorage;
+begin
+  if FStorageInitialized then Exit;
+  { Android provides its private files directory only in OnInitialize. }
   FFileName := URIToFilenameSafe(ApplicationConfig(SETTINGS_FILE));
   if(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'')and(GetEnvironmentVariable('REZVIVO_TEST_SETTINGS_FILE')<>'')then
     FFileName:=UTF8Encode(UnicodeString(GetEnvironmentVariable('REZVIVO_TEST_SETTINGS_FILE')));
   Logger.Info('[Settings] File: ' + FFileName);
   LoadFromFile;
+  SetRenderProfile(TOsmRenderProfile(FGraphics[goRenderer]));
+  if SameText(GetEnvironmentVariable('REZVIVO_RENDERER'), 'universal') then
+    SetRenderProfile(orpUniversal);
+  if UniversalRenderer then GpuGroundMode:=ggCpu;
+  FStorageInitialized := True;
   ApplyGraphicsGlobals;
   ProceduralVegetationSeason := FTreeSeason;
 end;
@@ -612,6 +627,7 @@ var
   TempID: TGUID;
   Stream: TFileStream;
 begin
+  if not FStorageInitialized then Exit;
   FSavePending := True;
   if FUpdateDepth > 0 then Exit;
   Root := TJSONObject.Create;
@@ -944,16 +960,16 @@ end;
 
 procedure TAppSettings.ApplyGraphicsGlobals;
 begin
-  SetRenderComplexity(rdRider,FGraphics[goRiderComplexity]);
-  SetRenderComplexity(rdWorld,FGraphics[goWorldComplexity]);
-  TreeRenderComplexity:=FGraphics[goVegetationComplexity];
+  SetRenderComplexity(rdRider,GetGraphicsOption(Ord(goRiderComplexity)));
+  SetRenderComplexity(rdWorld,GetGraphicsOption(Ord(goWorldComplexity)));
+  TreeRenderComplexity:=GetGraphicsOption(Ord(goVegetationComplexity));
   GrassRenderComplexity:=TreeRenderComplexity;
-  RiderHairQuality:=FGraphics[goHair];
-  GlobalTextureQuality := TTextureQuality(FGraphics[goTextures]);
+  RiderHairQuality:=GetGraphicsOption(Ord(goHair));
+  GlobalTextureQuality := TTextureQuality(GetGraphicsOption(Ord(goTextures)));
   RenderGrassActive := FGraphics[goGrass] <> 0;
   FProceduralTrees := FGraphics[goTrees] <> 0;
   ProceduralVegetationActive := FProceduralTrees;
-  SetVegetationQuality(FGraphics[goTrees],FGraphics[goVegetationCache],FGraphics[goVegetationAdaptive]<>0);
+  SetVegetationQuality(GetGraphicsOption(Ord(goTrees)),FGraphics[goVegetationCache],FGraphics[goVegetationAdaptive]<>0);
   ProceduralTreeDistance:=VegetationDetail.TreeDistance;
 end;
 
@@ -978,14 +994,36 @@ end;
 
 function TAppSettings.GetGraphicsOption(Index: Integer): Integer;
 begin
+  if (Index < Ord(Low(TGraphicsOption))) or (Index > Ord(High(TGraphicsOption))) then
+    raise ERangeError.Create('Unknown graphics option');
   FLock.Enter;
   try Result := FGraphics[TGraphicsOption(Index)]; finally FLock.Leave end;
+  { Keep the full-renderer preferences on disk. Capability limits apply only
+    to the active renderer and never destroy the user's other profile. }
+  Result := EffectiveGraphicsValue(TGraphicsOption(Index), Result);
 end;
 
 function TAppSettings.GetGraphicsPreviewActive: Boolean;
 begin
   FLock.Enter;
   try Result:=FGraphicsPreviewActive;finally FLock.Leave end;
+end;
+
+procedure TAppSettings.ApplyGraphicsPreset(Preset: TGraphicsPreset);
+var Values:TGraphicsValues;O:TGraphicsOption;Changed:set of TGraphicsOption;
+begin
+  Changed:=[];
+  FLock.Enter;
+  try
+    Values:=GraphicsPresetValues(Preset,FGraphics);
+    for O:=Low(O) to High(O) do
+      if Values[O]<>FGraphics[O] then Include(Changed,O);
+    FGraphics:=Values;
+    ApplyGraphicsGlobals;Inc(FGraphicsRevision);
+    if not FGraphicsPreviewActive then SaveToFile;
+  finally FLock.Leave end;
+  for O:=Low(O) to High(O) do
+    if (O in Changed) and Assigned(FOnGraphicsChanged) then FOnGraphicsChanged(Self,O);
 end;
 
 procedure TAppSettings.BeginGraphicsPreview;
@@ -1050,16 +1088,16 @@ begin
   try
     FGraphics[Option] := Value;
     case Option of
-      goHair:RiderHairQuality:=Value;
-      goRiderComplexity:SetRenderComplexity(rdRider,Value);
-      goWorldComplexity:SetRenderComplexity(rdWorld,Value);
-      goVegetationComplexity:begin TreeRenderComplexity:=Value;GrassRenderComplexity:=Value end;
-      goTextures: GlobalTextureQuality := TTextureQuality(Value);
+      goHair:RiderHairQuality:=GetGraphicsOption(Index);
+      goRiderComplexity:SetRenderComplexity(rdRider,GetGraphicsOption(Index));
+      goWorldComplexity:SetRenderComplexity(rdWorld,GetGraphicsOption(Index));
+      goVegetationComplexity:begin TreeRenderComplexity:=GetGraphicsOption(Index);GrassRenderComplexity:=TreeRenderComplexity end;
+      goTextures: GlobalTextureQuality := TTextureQuality(GetGraphicsOption(Index));
       goGrass: RenderGrassActive := Value <> 0;
       goTrees, goVegetationCache, goVegetationAdaptive: begin
         FProceduralTrees := FGraphics[goTrees] <> 0;
         ProceduralVegetationActive := FProceduralTrees;
-        SetVegetationQuality(FGraphics[goTrees],FGraphics[goVegetationCache],FGraphics[goVegetationAdaptive]<>0);
+        SetVegetationQuality(GetGraphicsOption(Ord(goTrees)),FGraphics[goVegetationCache],FGraphics[goVegetationAdaptive]<>0);
         ProceduralTreeDistance:=VegetationDetail.TreeDistance;
       end;
     end;

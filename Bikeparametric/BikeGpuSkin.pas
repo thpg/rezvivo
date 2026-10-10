@@ -187,7 +187,7 @@ type
 
 implementation
 
-uses RiderRuntimeAudit,
+uses AppRuntimePaths, RiderRuntimeAudit,
   BikeLog,       { StartupLog — итог Build и путь к дампу GLSL }
   BikeGfxUtil;   { GNum — GLSL-литералы }
 
@@ -925,13 +925,13 @@ begin
       атрибуты объявляем сами — совпадающее объявление в чанке
       skin_animation легально (так работает и сам движок: линк мержит
       глобальный скоуп). }
-    SL.Add('attribute vec4 castle_Vertex;');
-    SL.Add('attribute vec3 castle_Normal;');
+    SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;' + #10 + '#endif' + #10 + '');
+    SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec3 castle_Normal;' + #10 + '#endif' + #10 + '');
     SL.Add('#ifdef RIDER_SURFACE_MOTION');
     SL.Add('vec3 riderSurfaceOffset();');
     SL.Add('#endif');
-    SL.Add('attribute vec4 castle_SkinJoints0;');
-    SL.Add('attribute vec4 castle_SkinWeights0;');
+    SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_SkinJoints0;' + #10 + '#endif' + #10 + '');
+    SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_SkinWeights0;' + #10 + '#endif' + #10 + '');
     SL.Add('');
     { глобальная skinMatrix движкового skin-чанка (skin_animation.vs) —
       линкер мержит global-scope. Содержит УЖЕ применённый движком скиннинг
@@ -940,7 +940,7 @@ begin
       перекрёстные члены D_i·S_k — мятый меш. Отматываем движковый скиннинг
       обратно к bind-вершине и применяем СВОЙ LBS: вершина = M·inverse(S)·v,
       что тождественно Σw·D·bind при любом состоянии суставов. }
-    SL.Add('mat4 skinMatrix;');
+    SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + '');
     SL.Add('uniform mat4 uInvP;');
     SL.Add('uniform float uScalars[61];');
     SL.Add('uniform mat4 uGskHandRest[' + IntToStr(Length(FHandJointIndices)) + '];');
@@ -1426,8 +1426,8 @@ begin
       Только при BikeDumpShaders — запись на диск в горячем пути билда. }
     if BikeDumpShaders then
       try
-        ForceDirectories(ExtractFilePath(ParamStr(0)) + 'logs');
-        SL.SaveToFile(ExtractFilePath(ParamStr(0)) + 'logs' + PathDelim + 'gpu_skin.vs');
+        ForceDirectories(AppDirectory + 'logs');
+        SL.SaveToFile(AppDirectory + 'logs' + PathDelim + 'gpu_skin.vs');
       except
         { дамп — диагностика, не повод падать }
       end;

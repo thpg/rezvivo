@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<build_gradle_merge>
+  <plugins>
+    <plugin>
+android {
+    sourceSets {
+        debug.manifest.srcFile 'src/rezvivo/AndroidManifest.xml'
+        release.manifest.srcFile 'src/rezvivo/AndroidManifest.xml'
+    }
+}
+    </plugin>
+  </plugins>
+</build_gradle_merge>

@@ -54,7 +54,7 @@ type
     FPath,FError:string;
     FWorld:TDreamWorld;
     FLock:TCriticalSection;
-    FDone:Boolean;
+    FDone,FJoined:Boolean;
   protected
     procedure Execute;override;
     function LoadWorld:TDreamWorld;virtual;
@@ -69,7 +69,7 @@ type
   end;
 function DreamWorldFiles(const Directory:string):TStringList;
 implementation
-uses {$IFDEF MSWINDOWS}Windows,{$ENDIF}Math,jsonparser,Osm3dGeomMesh;
+uses AppRuntimePaths, {$IFDEF MSWINDOWS}Windows,{$ENDIF}Math,jsonparser,Osm3dGeomMesh;
 type TThreadAccess=class(TThread);
 procedure CheckCancel(Cancel:TThread);
 begin if(Cancel<>nil)and TThreadAccess(Cancel).Terminated then raise EAbort.Create('World loading cancelled');end;
@@ -211,7 +211,7 @@ begin
     Needed:=Needed or(M.GroundMaterial>=0);
     Buildings:=Buildings or(M.BuildingMaterial>=0);Fences:=Fences or(M.FenceMaterial>=0);
   end;
-  CacheDir:=ExtractFilePath(ParamStr(0))+'cache'+PathDelim+'dream-materials';
+  CacheDir:=AppDirectory+'cache'+PathDelim+'dream-materials';
   if Buildings and(BuildingAtlas=nil)then begin
     CheckCancel(Cancel);BuildingAtlas:=TBuildingAtlas.Create(DefaultBuildingAtlasLayout);
     if not BuildingAtlas.TryLoadFromCache(CacheDir,nil)then begin
@@ -227,7 +227,7 @@ begin
   if not Needed then Exit;
   CheckCancel(Cancel);
   GroundAtlas:=TGroundAtlas.Create(DefaultGroundAtlasLayout);
-  CacheDir:=ExtractFilePath(ParamStr(0))+'cache'+PathDelim+'dream-materials';
+  CacheDir:=AppDirectory+'cache'+PathDelim+'dream-materials';
   if not GroundAtlas.TryLoadFromCache(CacheDir,nil)then begin
     GroundAtlas.BuildChannelsParallel(nil);CheckCancel(Cancel);
     GroundAtlas.SaveToCache(CacheDir,nil);
@@ -333,6 +333,10 @@ constructor TDreamWorldTask.Create(const FileName:string);
 begin inherited Create(True);FreeOnTerminate:=False;FPath:=FileName;FLock:=SyncObjs.TCriticalSection.Create;end;
 procedure TDreamWorldTask.JoinWithoutEvents;
 begin
+  { Both the visual descendant and this base class must stop the worker
+    before releasing their resources. A POSIX thread can only be joined
+    once: FPC 3.2.2 WaitFor does not guard a second explicit call. }
+  if FJoined then Exit;
   Terminate;
   { Constructor failure/cancellation may free a task before Start. Let the
     RTL exit it without executing the cancelled CPU load. }
@@ -345,6 +349,7 @@ begin
   {$ELSE}
   WaitFor;
   {$ENDIF}
+  FJoined:=True;
 end;
 destructor TDreamWorldTask.Destroy;
 begin JoinWithoutEvents;FWorld.Free;FLock.Free;inherited;end;

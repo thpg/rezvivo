@@ -43,8 +43,8 @@ unit AndroidBLEProvider;
 interface
 
 uses
-  Classes, SysUtils, SyncObjs,
-  TrainerData, GameTransportBase, FTMSProtocol;
+  Classes, SysUtils, SyncObjs, CastleStringUtils,
+  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol;
 
 {$ifdef ANDROID}
 
@@ -63,12 +63,13 @@ type
   { ═══════════════════════════════════════════════════════════════════
     TAndroidBLESession — одно соединение через Java BluetoothGatt
     ═══════════════════════════════════════════════════════════════════ }
-  TAndroidBLESession = class(TTransportSession)
+  TAndroidBLESession = class(TFTMSCapableSession)
   private
     FProvider: TAndroidBLEProvider;
     FFTMSParser: TFTMSParser;
 
-    FHasFTMS, FHasPower, FHasFEC, FHasHR, FHasCSC: Boolean;
+    FHasPower, FHasFEC, FHasHR, FHasCSC: Boolean;
+    FFECParser: TCyclingANTParser;
 
     procedure ProcessNotification(const CharUUID: string; const Data: TBytes);
     procedure ProcessFTMSData(const Buf: TBytes);
@@ -79,7 +80,8 @@ type
 
     function WriteCharacteristic(const SvcUUID, CharUUID: string;
       const Data: TBytes; UseRequest: Boolean): Boolean;
-    function WriteFTMSCommand(const Data: TBytes): Boolean;
+    protected
+    function WriteFTMSCommand(const Data: TBytes): Boolean; override;
   public
     constructor Create(const AAddress: string;
       const AFriendlyName: string = ''); override;
@@ -87,17 +89,6 @@ type
 
     function Connect: Boolean; override;
     procedure Disconnect; override;
-
-    function RequestControl: Boolean; override;
-    function SetTargetPower(Watts: Word): Boolean; override;
-    function SetResistanceLevel(Level: Byte): Boolean; override;
-    function SetIncline(InclinePercent: Single): Boolean; override;
-    function SetSimulation(Grade: Single; WindSpeed: Single = 0;
-      RiderWeight: Single = 75; BikeWeight: Single = 10): Boolean; override;
-    function Start: Boolean; override;
-    function Stop: Boolean; override;
-    function Pause: Boolean; override;
-    function Reset: Boolean; override;
 
     { Маркируется true когда session создалась и есть в списке провайдера }
     procedure SetProvider(AProv: TAndroidBLEProvider);
@@ -141,7 +132,8 @@ type
     { Точка входа для CastleMessaging.OnReceive — статически зарегистрирована
       в конструкторе провайдера. Возвращает True если сообщение распознано
       и обработано (в этом случае CGE не передаёт его другим обработчикам). }
-    function HandleMessageFromJava(const Received: TCastleStringList): Boolean;
+    function HandleMessageFromJava(const Received: TCastleStringList;
+      const ReceivedStream: TMemoryStream): Boolean;
   end;
 
 {$endif}
@@ -155,7 +147,7 @@ implementation
 {$ifdef ANDROID}
 
 uses
-  CastleMessaging, CastleStringUtils, DebugLog;
+  CastleMessaging, DebugLog;
 
 { ═══════════════════════════════════════════════════════════════════
   Hex helpers — Java сервис передаёт payload как hex-строку.
@@ -206,16 +198,19 @@ constructor TAndroidBLESession.Create(const AAddress: string;
 begin
   inherited Create(AAddress, AFriendlyName);
   FFTMSParser := TFTMSParser.Create;
+  FFECParser := TCyclingANTParser.Create;
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'AndroidBLE';
 end;
 
 destructor TAndroidBLESession.Destroy;
 begin
+  ShutdownControl;
   if Assigned(FProvider) then
     FProvider.UnregisterSession(Self);
   Disconnect;
   FreeAndNil(FFTMSParser);
+  FreeAndNil(FFECParser);
   inherited;
 end;
 
@@ -235,6 +230,7 @@ end;
 
 procedure TAndroidBLESession.Disconnect;
 begin
+  PrepareDisconnect;
   if FConnectionState = csDisconnected then Exit;
   Messaging.Send(['ble-disconnect', FDeviceInfo.Address]);
   SetConnectionState(csDisconnected, 'Android: disconnected');
@@ -253,7 +249,8 @@ end;
 procedure TAndroidBLESession.OnGattServicesDiscovered(const ServicesJson: string);
 begin
   { ServicesJson — список UUID-ов. Простейшая проверка через Pos. }
-  FHasFTMS  := Pos('00001826', LowerCase(ServicesJson)) > 0;
+  FHasFTMS := (Pos('00001826', LowerCase(ServicesJson)) > 0) and
+    (Pos('00002ad9', LowerCase(ServicesJson)) > 0);
   FHasPower := Pos('00001818', LowerCase(ServicesJson)) > 0;
   FHasFEC   := Pos('6e40fec1', LowerCase(ServicesJson)) > 0;
   FHasHR    := Pos('0000180d', LowerCase(ServicesJson)) > 0;
@@ -303,6 +300,7 @@ procedure TAndroidBLESession.ProcessNotification(const CharUUID: string;
   const Data: TBytes);
 begin
   case ClassifyBLECharacteristic(CharUUID) of
+    fctFitnessMachineCP:       ReceiveControlPoint(Data);
     fctIndoorBikeData:          ProcessFTMSData(Data);
     fctCyclingPowerMeasurement: ProcessCyclingPowerData(Data);
     fctHeartRateMeasurement:    ProcessHRMData(Data);
@@ -317,9 +315,7 @@ var
 begin
   ParsedData := FFTMSParser.ParseIndoorBikeData(Buf);
   if not FFTMSParser.LastPacketValid then Exit;
-  FLastData := ParsedData;
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
+  PublishMeasurement(ParsedData);
 end;
 
 procedure TAndroidBLESession.ProcessCyclingPowerData(const Buf: TBytes);
@@ -328,19 +324,14 @@ var
 begin
   ParsedData := FFTMSParser.ParseCyclingPowerMeasurement(Buf);
   if not FFTMSParser.LastPacketValid then Exit;
-  FLastData := ParsedData;
-  NotifyDataReceived;
+  PublishMeasurement(ParsedData);
 end;
 
 procedure TAndroidBLESession.ProcessHRMData(const Buf: TBytes);
+var Parsed: TTrainerDataRecord;
 begin
-  if Length(Buf) < 2 then Exit;
-  if (Buf[0] and $01) = 0 then
-    FLastData.HeartRate := Buf[1]
-  else if Length(Buf) >= 3 then
-    FLastData.HeartRate := Buf[1];  { 16-bit form, low byte still in [1] for HR<=255 }
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
+  Parsed := FFTMSParser.ParseHeartRateData(Buf);
+  if FFTMSParser.LastPacketValid then PublishMeasurement(Parsed);
 end;
 
 procedure TAndroidBLESession.ProcessCSCData(const Buf: TBytes);
@@ -349,18 +340,16 @@ var
 begin
   ParsedData := FFTMSParser.ParseCSCMeasurement(Buf);
   if not FFTMSParser.LastPacketValid then Exit;
-  FLastData := ParsedData;
-  NotifyDataReceived;
+  PublishMeasurement(ParsedData);
 end;
 
 procedure TAndroidBLESession.ProcessFECData(const Buf: TBytes);
+var Page: TBytes; Channel: Byte; Parsed: TTrainerDataRecord;
 begin
-  { FE-C over BLE: общий формат как в BLEManager.ProcessFECData.
-    Для краткости здесь — стаб; реальная реализация копируется
-    из BLEManager без изменений (она платформенно-независимая). }
-  if Length(Buf) < 1 then Exit;
-  FLastData.Timestamp := Now;
-  NotifyDataReceived;
+  if not DecodeFECFrame(Buf, Page, Channel) then Exit;
+  if Page[0] = 71 then begin ReceiveFECStatus(Page); Exit end;
+  FFECParser.WheelCircumferenceM := WheelCircumferenceMm / 1000.0;
+  if FFECParser.Parse(17, Page, Parsed) then PublishMeasurement(Parsed);
 end;
 
 function TAndroidBLESession.WriteCharacteristic(const SvcUUID, CharUUID: string;
@@ -383,114 +372,6 @@ begin
     '00002ad9-0000-1000-8000-00805f9b34fb',
     Data, True);
 end;
-
-function TAndroidBLESession.RequestControl: Boolean;
-begin
-  Result := False;
-  if not FHasFTMS then Exit;
-  Result := WriteFTMSCommand(TFTMSParser.CreateRequestControlCommand);
-  if Result then FHasControl := True;
-end;
-
-function TAndroidBLESession.SetTargetPower(Watts: Word): Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateSetTargetPowerCommand(Watts))
-  else
-    Result := False;
-end;
-
-function TAndroidBLESession.SetResistanceLevel(Level: Byte): Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateSetResistanceLevelCommand(Level))
-  else
-    Result := False;
-end;
-
-function TAndroidBLESession.SetIncline(InclinePercent: Single): Boolean;
-var
-  Data: TBytes;
-  GradeFTMS: SmallInt;
-  GradeRaw: Word;
-begin
-  Result := False;
-  if not FHasFTMS then Exit;
-
-  { FTMS opcode 0x03 — Set Target Inclination, value in 0.1% units }
-  GradeFTMS := Round(InclinePercent * 10.0);
-  GradeRaw := Word(GradeFTMS);
-
-  SetLength(Data, 3);
-  Data[0] := $03;
-  Data[1] := Lo(GradeRaw);
-  Data[2] := Hi(GradeRaw);
-  Result := WriteFTMSCommand(Data);
-end;
-
-function TAndroidBLESession.SetSimulation(Grade: Single; WindSpeed: Single;
-  RiderWeight: Single; BikeWeight: Single): Boolean;
-var
-  Data: TBytes;
-  WindRaw: SmallInt;
-  WindRawWord: Word;
-  GradeValue: SmallInt;
-  GradeRaw: Word;
-begin
-  Result := False;
-  if not FHasFTMS then Exit;
-
-  WindRaw := Round(WindSpeed * 1000.0);
-  WindRawWord := Word(WindRaw);
-  GradeValue := Round(Grade * 100.0);
-  GradeRaw := Word(GradeValue);
-
-  SetLength(Data, 7);
-  Data[0] := $11;
-  Data[1] := Lo(WindRawWord);
-  Data[2] := Hi(WindRawWord);
-  Data[3] := Lo(GradeRaw);
-  Data[4] := Hi(GradeRaw);
-  Data[5] := 40;             { Crr }
-  Data[6] := 51;             { Cw  }
-  Result := WriteFTMSCommand(Data);
-end;
-
-function TAndroidBLESession.Start: Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateStartCommand)
-  else
-    Result := False;
-end;
-
-function TAndroidBLESession.Stop: Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateStopCommand)
-  else
-    Result := False;
-end;
-
-function TAndroidBLESession.Pause: Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateStopCommand(True))
-  else
-    Result := False;
-end;
-
-function TAndroidBLESession.Reset: Boolean;
-begin
-  if FHasFTMS then
-    Result := WriteFTMSCommand(TFTMSParser.CreateResetCommand)
-  else
-    Result := False;
-end;
-
-{ ═══════════════════════════════════════════════════════════════════
-  TAndroidBLEProvider
-  ═══════════════════════════════════════════════════════════════════ }
 
 constructor TAndroidBLEProvider.Create;
 begin
@@ -594,16 +475,25 @@ begin
 end;
 
 function TAndroidBLEProvider.HandleMessageFromJava(
-  const Received: TCastleStringList): Boolean;
+  const Received: TCastleStringList; const ReceivedStream: TMemoryStream): Boolean;
 var
   Tag, Address: string;
   S: TAndroidBLESession;
   Dev: TDeviceInfo;
-  RssiInt: Integer;
+  RssiInt, I, Slot: Integer;
 begin
   Result := False;
   if Received.Count < 1 then Exit;
   Tag := Received[0];
+
+  if (Received.Count >= 2) and (Pos('android.permission.', Received[1]) = 1) then
+  begin
+    if (Tag = 'permission-granted') and FScanning then
+      Messaging.Send(['ble-scan-start'])
+    else if Tag = 'permission-cancelled' then FScanning := False;
+    { Permission notifications may also be needed by other services. }
+    Exit;
+  end;
 
   { Все наши сообщения начинаются с 'ble-' }
   if Copy(Tag, 1, 4) <> 'ble-' then Exit;
@@ -615,15 +505,19 @@ begin
     Address := Received[1];
     FLock.Enter;
     try
+      Slot := -1;
+      for I := 0 to FScannedCount - 1 do
+        if SameText(FScanned[I].Address, Address) then begin Slot := I; Break end;
+      if Slot < 0 then begin Slot := FScannedCount; Inc(FScannedCount) end;
       if FScannedCount >= Length(FScanned) then
         SetLength(FScanned, FScannedCount + 16);
-      FScanned[FScannedCount].Address := Address;
-      FScanned[FScannedCount].Name := Received[2];
+      FScanned[Slot].Address := Address;
+      FScanned[Slot].Name := Received[2];
       RssiInt := StrToIntDef(Received[3], 0);
       if RssiInt < -128 then RssiInt := -128
       else if RssiInt > 127 then RssiInt := 127;
-      FScanned[FScannedCount].RSSI := RssiInt;
-      Inc(FScannedCount);
+      FScanned[Slot].RSSI := RssiInt;
+
     finally
       FLock.Leave;
     end;

@@ -385,6 +385,8 @@ type
     PassageKey: QWord;
     PassageForward, PassageInside, PassageExclusive: Boolean;
     PassageDistance, PassageAge: Single;
+    ManualSteering: Boolean;
+    SteeringAxis: Single;
   end;
 
   TLaneReplayState = array of TLaneRider;
@@ -441,6 +443,7 @@ type
     procedure ReplaceRiderTag(OldTag,NewTag:Pointer);
     procedure SetRiderPos(AHandle: TLaneRiderHandle; ALoopPos: Single);
     procedure SetRiderActive(AHandle: TLaneRiderHandle; AActive: Boolean);
+    procedure SetSteering(AHandle: TLaneRiderHandle; Enabled: Boolean; Axis: Single);
     function GetLane(AHandle: TLaneRiderHandle): Integer;
     function GetLaneOffset(ALane: Integer): Single;
     { Smooth offset — use this for positioning (smooth lane transitions) }

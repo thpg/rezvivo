@@ -62,7 +62,8 @@ function OsmRequestStats:TOsmRequestStats;
 
 implementation
 
-uses Math, StrUtils, fpjson, jsonparser, fphttpclient, opensslsockets, URIParser;
+uses Math, StrUtils, fpjson, jsonparser, fphttpclient, opensslsockets, URIParser, Osm3dPlatformHttp
+  {$ifdef ANDROID}, CastleFilesUtils, CastleURIUtils{$endif};
 
 type
   TBounds = array[0..3] of Double; { south, west, north, east }
@@ -150,8 +151,11 @@ begin
     H.AddHeader('User-Agent','REZVIVO/1.0 (+https://rezvivo.com)');
     H.AddHeader('Accept','*/*');
     try
-      H.HTTPMethod('GET',URL,S,[200,400,404,405,429,500,502,503,504]);
-      Code:=H.ResponseStatusCode;
+      if not TryPlatformHttp('GET',URL,H.RequestHeaders,nil,H.ConnectTimeout,H.IOTimeout,S,Code,nil) then
+      begin
+        H.HTTPMethod('GET',URL,S,[200,400,404,405,429,500,502,503,504]);
+        Code:=H.ResponseStatusCode;
+      end;
       SetLength(Body,S.Size);
       if S.Size>0 then Move(S.Memory^,Body[1],S.Size);
       Result:=Code=200;
@@ -386,7 +390,11 @@ end;
 function DirectoryCacheFile:string;
 var Root:string;
 begin
+  {$ifdef ANDROID}
+  Root:=URIToFilenameSafe(ApplicationConfig(''));
+  {$else}
   Root:=GetAppConfigDir(False);
+  {$endif}
   if (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
     (GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT')<>'') then
     Root:=GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT');

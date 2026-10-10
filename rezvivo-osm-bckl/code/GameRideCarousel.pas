@@ -1,4 +1,5 @@
 unit GameRideCarousel;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
 uses Classes,SysUtils,fpjson,CastleUIControls,CastleControls,CastleKeysMouse,
@@ -89,7 +90,7 @@ type
 implementation
 uses Math,UiTranslations,CastleColors,CastleURIUtils,CastleCameras,CastleTransform,
   CastleImages,CastleFonts,CastleTextureImages,GameMenuTheme,
-  CastleGL,CastleGLUtils,CastleRenderContext,GameAudio;
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},CastleGLUtils,CastleRenderContext,GameAudio;
 const CardWidth=3.40;CardHeight=1.80;CardFront=0.045;
   WheelDiameterRatio=1.20;CarouselRenderScale=2;
 
@@ -544,8 +545,8 @@ begin
   TDrawableImage.BatchingFlush;
   if FMultisample<>nil then begin
     OldViewport:=RenderContext.Viewport;
-    WasMultisample:=glIsEnabled(GL_MULTISAMPLE)<>0;
-    glEnable(GL_MULTISAMPLE);
+    {$ifndef OpenGLES}    WasMultisample:=glIsEnabled(GL_MULTISAMPLE)<>0;{$endif}
+    {$ifndef OpenGLES}    glEnable(GL_MULTISAMPLE);{$endif}
     FMultisample.RenderBegin;
     try
       if FRenderSamples=0 then begin
@@ -563,7 +564,7 @@ begin
     finally
       FMultisample.RenderEnd;
       RenderContext.Viewport:=OldViewport;
-      if not WasMultisample then glDisable(GL_MULTISAMPLE);
+    {$ifndef OpenGLES}      if not WasMultisample then glDisable(GL_MULTISAMPLE);{$endif}
     end;
   end else begin
     FImage.RenderToImageBegin;

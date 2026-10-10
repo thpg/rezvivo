@@ -1,10 +1,11 @@
 unit GameRiderShaderWarmup;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}
 
 interface
 
 uses CastleViewport, CastleTransform, CastleScene, CastleShapes, CastleGLImages,
-  CastleGL, fpjson;
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, fpjson;
 
 type
   { A loading-time draw, not a second scene/model. Reuses the exact viewport,
@@ -145,7 +146,7 @@ begin
   OldDelta := RenderContext.ViewportDelta;
   HadScissor := RenderContext.FinalScissor(OldScissor);
   OldOcclusion := Viewport.OcclusionCulling;
-  OldMultisample := glIsEnabled(GL_MULTISAMPLE) <> 0;
+    {$ifndef OpenGLES}  OldMultisample := glIsEnabled(GL_MULTISAMPLE) <> 0;{$endif}
   OldShapeFilter := nil;
   if RiderScene <> nil then
   begin
@@ -175,8 +176,8 @@ begin
     Viewport.OcclusionCulling := False;
     RenderContext.ScissorDisable;
     RenderContext.ViewportDelta := Vector2Integer(0, 0);
-    if (FPass = 0) and OldMultisample then glEnable(GL_MULTISAMPLE)
-    else glDisable(GL_MULTISAMPLE);
+    {$ifndef OpenGLES}    if (FPass = 0) and OldMultisample then glEnable(GL_MULTISAMPLE){$endif}
+    {$ifndef OpenGLES}    else glDisable(GL_MULTISAMPLE);{$endif}
     Target.RenderBegin;
     try
       RenderContext.Viewport := Rectangle(0, 0, BufferSize, BufferSize);
@@ -199,7 +200,7 @@ begin
     RenderContext.Viewport := OldViewport;
     if HadScissor then RenderContext.ScissorEnable(OldScissor)
     else RenderContext.ScissorDisable;
-    if OldMultisample then glEnable(GL_MULTISAMPLE) else glDisable(GL_MULTISAMPLE);
+    {$ifndef OpenGLES}    if OldMultisample then glEnable(GL_MULTISAMPLE) else glDisable(GL_MULTISAMPLE);{$endif}
     FTotalMs := FTotalMs + GetTickCount64 - Started;
     FMaxMs := Max(FMaxMs, GetTickCount64 - Started);
   end;

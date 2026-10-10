@@ -38,6 +38,7 @@ type
     procedure Rebuild;
     procedure ClickDevice(Sender:TObject);
     procedure ClickDisconnect(Sender:TObject);
+    procedure ClickCenterSteering(Sender:TObject);
     procedure ClickScan(Sender:TObject);
     procedure ClickAdvanced(Sender:TObject);
     procedure WheelChanged(Sender:TObject);
@@ -45,6 +46,7 @@ type
     procedure ToggleSimulation(Sender:TObject);
     procedure UseRouteFit(Sender:TObject);
     procedure PickSimulationFit(Sender:TObject);
+    procedure SimulationFitPicked(const Path:String);
     procedure RefreshSimulation;
   public
     constructor Create(AOwner:TComponent);override;
@@ -58,7 +60,7 @@ var ViewDevices:TDevicesPage;
 implementation
 uses Math,CastleColors,CastleVectors,UiTranslations,GameDeviceService,GameDeviceTypes,
   GameDeviceSensor,GameTransportBase,GameDeviceManager,GameSensorPanel,AppSettings,TrainerData,
-  CastleWindow,CastleURIUtils;
+  CastleWindow,CastleURIUtils,GameFilePicker;
 
 function VisibleDevice(const E:TGameDeviceEntry):Boolean;
 begin
@@ -189,7 +191,7 @@ begin
   if FPoll<0.4 then Exit;FPoll:=0;Refresh;
 end;
 procedure TDevicesPage.Refresh;
-var I,Count:Integer;E:TGameDeviceEntry;Sig,Text:String;K:TSensorKind;Sensor:TDeviceSensor;
+var I,Count:Integer;E:TGameDeviceEntry;Sig,Text:String;K:TSensorKind;Sensor:TDeviceSensor;Angle:Single;
 begin
   if DeviceService=nil then Exit;Sig:='';Count:=0;
   RefreshSimulation;
@@ -211,12 +213,16 @@ begin
       for K:=Low(TSensorKind)to High(TSensorKind)do begin
         Sensor:=E.FindSensor(K);if Sensor=nil then Continue;
         if Text<>''then Text:=Text+'  ·  ';
-        if Sensor.HasData and((E.DeviceInfo.TransportType=ttSim)or(Sensor.DataAgeSec<3))then Text:=Text+Sensor.FormatInstant
+        if (K=skSteering) and (DeviceService.Sensor(K)=Sensor) and DeviceService.ReadSteering(Angle) then
+          Text:=Text+UiText('Steering')+': '+FormatFloat('0.0',Angle)+'°'
+        else if Sensor.HasData and((E.DeviceInfo.TransportType=ttSim)or(K=skSteering)or(Sensor.DataAgeSec<3))then Text:=Text+Sensor.FormatInstant
         else Text:=Text+UiText('Waiting for signal');
       end;
       if Text=''then Text:=UiText('Connected');
     end else if(E.DeviceInfo.TransportType=ttSim)and(E.ConnectionState=gdcsError)then
       Text:=UiText('Could not read the simulation FIT. Choose another file.')
+    else if E.DeviceInfo.SupportsSteering and(E.ConnectionState=gdcsError)then
+      Text:=UiText(E.LastMessage)
     else Text:=UiText('Available');
     FValues[I].Caption:=Text;
   end;
@@ -249,12 +255,25 @@ begin
     if E.ConnectionState=gdcsConnected then begin
       B:=TMenuButton.Create(Card);B.Name:='DisconnectDevice'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickDisconnect;
       BindUiText(B,'Disconnect');B.FontSize:=14/S;B.Anchor(hpRight,-14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
+      if E.DeviceInfo.SupportsSteering then begin
+        B:=TMenuButton.Create(Card);B.Name:='CenterSteering'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickCenterSteering;
+        BindUiText(B,'Center steering');B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
+      end;
     end;
     Y:=Y+138/S;
   end;
   FContent.Width:=W;FContent.Height:=Max(100,Y);FScroll.ScrollArea.Height:=FContent.Height;
   if FSensorPanel<>nil then TSensorPanel(FSensorPanel).Rebuild;
 end;
+procedure TDevicesPage.ClickCenterSteering(Sender:TObject);
+var I:Integer;
+begin
+  I:=TComponent(Sender).Tag;
+  if(DeviceService=nil)or(I<0)or(I>=DeviceService.Devices.Count)then Exit;
+  DeviceService.SelectDeviceForRoles(DeviceService.Devices[I]);
+  DeviceService.CenterSteering;
+end;
+
 procedure TDevicesPage.ClickDevice(Sender:TObject);
 var I:Integer;E:TGameDeviceEntry;
 begin
@@ -338,15 +357,16 @@ begin
 end;
 
 procedure TDevicesPage.PickSimulationFit(Sender:TObject);
-var Url,Path:String;
+var Url:String;
 begin
   Url:=Settings.GetSimulationFitPath;
   if Url=''then Url:=Settings.EffectiveSimulationFitPath;
-  if Application.MainWindow.FileDialog(UiText('Choose FIT file for simulation'),Url,True,
-    UiText('FIT files (*.fit)|*.fit'))then begin
-    Path:=URIToFilenameSafe(Url);if Path=''then Path:=Url;
-    Settings.SetSimulationFitPath(Path);Settings.SetSimulationUseRoute(False);
-    FSignature:='#refresh';Refresh;Layout;
-  end;
+  PickGameFile(Self,UiText('Choose FIT file for simulation'),UiText('FIT files (*.fit)|*.fit'),
+    @SimulationFitPicked,Url);
+end;
+procedure TDevicesPage.SimulationFitPicked(const Path:String);
+begin
+  Settings.SetSimulationFitPath(Path);Settings.SetSimulationUseRoute(False);
+  FSignature:='#refresh';Refresh;Layout;
 end;
 end.

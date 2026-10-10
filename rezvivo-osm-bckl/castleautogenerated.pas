@@ -37,7 +37,7 @@ initialization
     for standalone programs (when "not IsLibrary").
     This allows to handle --version and --help command-line parameters
     without any extra output on Unix, and to set --log-file . }
-  EnsureCgeLog;
+  {$ifndef ANDROID}EnsureCgeLog;{$endif}
 
   {$ifdef DEBUG}
   { Enable debug features, like inspector and file monitor, in debug mode.

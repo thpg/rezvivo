@@ -612,10 +612,10 @@ begin
   TRNet := Timer;
   FRideClient.UpdateRemoteRiders;
   NewDataArrived := FRideClient.HasNewData;
-  Riders := FRideClient.GetAllRemoteRiders;
 
   if NewDataArrived then
   begin
+    Riders := FRideClient.GetAllRemoteRiders;
     SetLength(ActiveIds, Length(Riders));
     for I := 0 to High(Riders) do
     begin

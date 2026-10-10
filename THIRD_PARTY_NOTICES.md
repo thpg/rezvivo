@@ -6,6 +6,7 @@ libraries, datasets or assets. Existing notices inside source files remain intac
 | Component | License / source | Handling |
 | --- | --- | --- |
 | Castle Game Engine | [LGPL 2.0 or later with static-linking exception](https://castle-engine.io/license) | Fetch the pinned commit from [our CGE fork](https://github.com/thpg/castle-engine/tree/rezvivo). Changes are committed on the `rezvivo` branch. Preserve upstream notices, including licenses of bundled subcomponents. |
+| STERZO challenge-response table | [pycycling, MIT, copyright 2020 Zachary Bull](https://github.com/zacharyedwardbull/pycycling) | Full MIT notice preserved in rezvivo-osm-bckl/code/EliteSterzoChallenge.inc. |
 | Free Pascal runtime | [Modified LGPL / linking exception](https://www.freepascal.org/faq.html#general-license) | Install compiler separately. |
 | Streets GL textures and adapted rendering algorithms | [MIT, copyright 2020–2023 StrandedKitty](https://github.com/StrandedKitty/streets-gl/blob/dev/LICENSE) | Full notice in LICENSES/Streets-GL-MIT.txt. Exact texture matches are identified in dependencies/assets.json. |
 | Audio ambiences | CC0; original sources and authors in data/audio/credits.json | Original REZVIVO cues use the project license. |

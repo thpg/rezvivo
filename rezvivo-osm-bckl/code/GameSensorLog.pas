@@ -141,7 +141,7 @@ implementation
 
 
 uses
-  SysUtils, Classes, DateUtils, Math, DebugLog;
+  AppRuntimePaths, SysUtils, Classes, DateUtils, Math, DebugLog;
 
 const
   CSVSep = ',';
@@ -211,7 +211,7 @@ begin
   FStartTick:=GetTickCount64;FResumeElapsed:=0;FLastElapsed:=0;FClockElapsed:=0;
   FHasFrameData:=False;FSourceFlags:=0;FLastSourceFlags:=0;
   FHasLast:=False;FLastWasZero:=False;FLastWriteTime:=0;FTotalLines:=0;FLinesSinceFlush:=0;
-  Dir := ExtractFilePath(ParamStr(0)) + FSessionDir;
+  Dir := AppDirectory + FSessionDir;
   if ExtractFileDrive(FSessionDir)<>''then Dir:=FSessionDir;
   if GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'' then
     if GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR')<>'' then
@@ -531,7 +531,7 @@ end;
 
 class function TSensorLog.SessionDir: string;
 begin
-  Result := ExtractFilePath(ParamStr(0)) + 'sessions';
+  Result := AppDirectory + 'sessions';
   if GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'' then
     if GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR')<>'' then
       Result:=GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR');

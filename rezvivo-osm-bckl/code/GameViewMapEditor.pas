@@ -302,7 +302,7 @@ var
 
 implementation
 
-uses UiTranslations,
+uses AppRuntimePaths, UiTranslations, GameFilePicker,
   Math,
   CastleURIUtils, CastleWindow,
   CastleImages,             { TRGBAlphaImage, SaveImage — мини-карты ленты }
@@ -373,7 +373,7 @@ begin
   if VeloSite.IsAuthorized and VeloSite.HasCachedProfile and
      (VeloSite.CachedProfile.Nickname <> '') then
     Nick := SanitizeFolderName(VeloSite.CachedProfile.Nickname);
-  Result := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))
+  Result := IncludeTrailingPathDelimiter(AppDirectory)
     + 'users' + PathDelim + Nick + PathDelim + 'routes' + PathDelim;
   if not ForceDirectories(Result) then
     Logger.Info('[Routes] Не удалось создать папку: ' + Result);
@@ -1625,11 +1625,9 @@ end;
 { ── Кнопки ─────────────────────────────────────────────────────────── }
 
 procedure TRoutesPage.ClickAddFit(Sender:TObject);
-var Url:String;
 begin
-  Url:='';
-  if Application.MainWindow.FileDialog(UiText('Add a route file (FIT or GPX)'),Url,True,'FIT / GPX|*.fit;*.gpx')then
-    ImportFile(URIToFilenameSafe(Url));
+  PickGameFile(Self,UiText('Add a route file (FIT or GPX)'),
+    'FIT / GPX|*.fit;*.gpx',@ImportFile);
 end;
 procedure TRoutesPage.ImportFile(const FileName:String);
 var Dest,Base,Ext:String;N:Integer;
@@ -3231,9 +3229,9 @@ begin
   FBatchFitParsed := True;
   FBatchFitPath := '';
   I := 1;
-  while I <= ParamCount do
+  while I <= AppParamCount do
   begin
-    S := ParamStr(I);
+    S := AppParamStr(I);
     if (Length(S) > 0) and (S[1] in ['-', '/']) then
     begin
       while (Length(S) > 0) and (S[1] in ['-', '/']) do
@@ -3244,10 +3242,10 @@ begin
         if SameText(Copy(S, 1, P - 1), 'fitstats') then
           FBatchFitPath := StripQuotes(Copy(S, P + 1, MaxInt));
       end
-      else if SameText(S, 'fitstats') and (I < ParamCount) then
+      else if SameText(S, 'fitstats') and (I < AppParamCount) then
       begin
         Inc(I);
-        FBatchFitPath := StripQuotes(ParamStr(I));
+        FBatchFitPath := StripQuotes(AppParamStr(I));
       end
       else if SameText(S, 'fitcorr') then
       begin

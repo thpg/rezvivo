@@ -1,7 +1,8 @@
 unit TreeRenderer;
 {$mode objfpc}{$H+}
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
-uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, GL, GLExt;
+uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, {$ifdef OpenGLES}CastleGLES{$else}GL, GLExt{$endif};
 type
   TTreeGPUItem = packed array[0..15] of Single;
   TTreeGPUItems = array of TTreeGPUItem;
@@ -120,7 +121,7 @@ type
 var TreePassBatching:Boolean=True;
     TreeRenderComplexity:Integer=3;
 implementation
-uses Classes, Math, TreeFruits;
+uses Classes, Math, TreeFruits, TreeShaderSource;
 function TTreeRenderer.ShadowLOD(const Profile: TTreeParams; out Texture: Cardinal;
   out Frames: TLODFrames; out Seasonal, Fruit: Boolean): Boolean;
 begin
@@ -130,9 +131,10 @@ begin
   Result:=(Texture<>0) and HasLODAtlas(Profile);
 end;
 function CompileShader(Kind: GLenum; const Source: string): GLuint;
-var P: PChar; OK,Len: GLint; Log: string;
+var P: PChar; OK,Len: GLint; Log, ShaderText: string;
 begin
-  Result:=glCreateShader(Kind); P:=PChar(Source); glShaderSource(Result,1,@P,nil); glCompileShader(Result);
+  ShaderText:=RenderShaderSource(Source, {$ifdef OpenGLES}True{$else}False{$endif});
+  Result:=glCreateShader(Kind); P:=PChar(ShaderText); glShaderSource(Result,1,@P,nil); glCompileShader(Result);
   glGetShaderiv(Result,GL_COMPILE_STATUS,@OK);
   if OK=0 then begin
     glGetShaderiv(Result,GL_INFO_LOG_LENGTH,@Len); SetLength(Log,Max(1,Len));
@@ -141,8 +143,7 @@ begin
   end;
 end;
 function ReadText(const Path: string): string;
-var S: TStringList;
-begin S:=TStringList.Create; try S.LoadFromFile(Path); Result:=S.Text; finally S.Free; end; end;
+begin Result:=ReadRenderShader(Path); end;
 procedure TTreeRenderer.Initialize(const ShaderDirectory: string; SharedWith: TTreeRenderer);
 var VS,FS: GLuint; OK,Len,I,J: GLint; Log: string;
 begin
@@ -150,7 +151,8 @@ begin
   FShared:=SharedWith;
   if Assigned(FShared) then begin
     if not FShared.Ready or Assigned(FShared.FShared) then raise Exception.Create('Shared renderer must be a ready resource owner');
-  end else if not Load_GL_version_3_3_CORE then raise Exception.Create('OpenGL 3.3 is required');
+  end
+  {$ifndef OpenGLES}else if not Load_GL_version_3_3_CORE then raise Exception.Create('OpenGL 3.3 is required'){$endif};
   VS:=0; FS:=0;
   try
     if Assigned(FShared) then FProgram:=FShared.FProgram else begin
@@ -286,13 +288,16 @@ begin
   end;
 end;
 procedure TTreeRenderer.UploadLODAtlas(const Prepared: TPreparedTreeLOD);
-var OldTexture: GLint; Tex: GLuint; S: TTreeSpecies; Parts: Integer;
+var OldTexture: GLint; Tex, ErrorCode: GLuint; S: TTreeSpecies; Parts: Integer;
 begin
   if Assigned(FShared) then begin FShared.UploadLODAtlas(Prepared); Exit; end;
   S:=Prepared.Species; Parts:=1; if Prepared.Seasonal then Parts:=2;
   if Prepared.FruitLayer then Parts:=3;
   if Length(Prepared.Pixels)<>LOD_SIZE*LOD_SIZE*LOD_VIEWS*LOD_AGES*4*Parts then
     raise EArgumentException.Create('Invalid prepared tree atlas');
+  { Attribute/texture setup in another renderer can leave a stale GL error.
+    Attribute an upload failure only to calls in this operation. }
+  while glGetError()<>GL_NO_ERROR do ;
   Tex:=0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@OldTexture);
   try
     glGenTextures(1,@Tex); glBindTexture(GL_TEXTURE_2D_ARRAY,Tex);
@@ -302,7 +307,8 @@ begin
     glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
-    if glGetError()<>GL_NO_ERROR then raise Exception.Create('Cannot upload LOD texture array');
+    ErrorCode:=glGetError();
+    if ErrorCode<>GL_NO_ERROR then raise Exception.CreateFmt('Cannot upload LOD texture array (GL $%x)',[ErrorCode]);
     if FLODTextures[S]<>0 then glDeleteTextures(1,@FLODTextures[S]);
     FLODTextures[S]:=Tex; Tex:=0; FLODFrames[S]:=Prepared.Frames; FLODKeys[S]:=Prepared.Key; FLODSeasonParts[S]:=Prepared.Seasonal;
     FLODFruitLayer[S]:=Prepared.FruitLayer;
@@ -528,7 +534,8 @@ begin
     { Largest density group and fascicle fit in 16-bit IDs. One shared table,
       no needle positions or geometry on the CPU. Prefixes serve every LOD. }
     SetLength(Indices,NEEDLE_GROUP_PAIRS[NEEDLE_DENSITY_GROUPS-1]*8*9);
-    for I:=0 to Length(Indices) div 9-1 do for J:=0 to 8 do Indices[I*9+J]:=I*9+Corners[J];
+    for I:=0 to Length(Indices) div 9-1 do for J:=0 to 8 do
+      Indices[I*9+J]:=GLushort(I)*9+GLushort(Corners[J]);
     FNeedleIndices:=UploadIndices(Indices);
   end;
   Result:=FNeedleIndices;
@@ -554,11 +561,17 @@ end;
 function TTreeRenderer.VerifyPackedType(Expected: TTreeTypeCode): Boolean;
 const GL_VERTEX_ATTRIB_ARRAY_DIVISOR_QUERY = $88FE; { core 3.3; absent in this FPC header }
 var OldVAO,OldBuffer,IsInteger,Kind,Divisor: GLint; Code: TTreeTypeCode;
+  {$ifdef OpenGLES}Mapped: Pointer;{$endif}
 begin
   glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO); glGetIntegerv(GL_ARRAY_BUFFER_BINDING,@OldBuffer);
   try
     glBindVertexArray(FVAO[3]); glBindBuffer(GL_ARRAY_BUFFER,FVBO[3]);
-    Code:=0; glGetBufferSubData(GL_ARRAY_BUFFER,52,SizeOf(Code),@Code);
+    Code:=0;
+    {$ifdef OpenGLES}
+    Mapped:=glMapBufferRange(GL_ARRAY_BUFFER,52,SizeOf(Code),GL_MAP_READ_BIT);
+    if Mapped=nil then Exit(False);
+    Move(Mapped^,Code,SizeOf(Code)); glUnmapBuffer(GL_ARRAY_BUFFER);
+    {$else}glGetBufferSubData(GL_ARRAY_BUFFER,52,SizeOf(Code),@Code);{$endif}
     glGetVertexAttribiv(4,GL_VERTEX_ATTRIB_ARRAY_INTEGER,@IsInteger);
     glGetVertexAttribiv(4,GL_VERTEX_ATTRIB_ARRAY_TYPE,@Kind);
     glGetVertexAttribiv(4,GL_VERTEX_ATTRIB_ARRAY_DIVISOR_QUERY,@Divisor);
@@ -628,7 +641,8 @@ begin
   glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActiveTexture); glActiveTexture(GL_TEXTURE0);
   glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@OldTexture);
   glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram); glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
-  glGetIntegerv(GL_ARRAY_BUFFER_BINDING,@OldBuffer); glGetIntegerv(GL_POLYGON_MODE,@OldPolygon[0]);
+  glGetIntegerv(GL_ARRAY_BUFFER_BINDING,@OldBuffer);
+  {$ifndef OpenGLES}glGetIntegerv(GL_POLYGON_MODE,@OldPolygon[0]);{$endif}
   glGetIntegerv(GL_DEPTH_FUNC,@OldDepthFunc); glGetBooleanv(GL_DEPTH_WRITEMASK,@OldDepthMask);
   WasDepth:=glIsEnabled(GL_DEPTH_TEST); WasBlend:=glIsEnabled(GL_BLEND); WasCull:=glIsEnabled(GL_CULL_FACE);
   end;
@@ -673,7 +687,7 @@ begin
     glUniform1f(UDensity,P.LeafDensity*Ord(ShowLeaves));
     glUniform1f(UQuality,Quality);
     if ShowGround then Draw(4,3,6,1,0,CardIndices);
-    if Wireframe then glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+    {$ifndef OpenGLES}if Wireframe then glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);{$endif}
     if ShowForest and (FForestCount>1) and (Quality<=0.35) then begin
       glUniform1f(UQuality,0); Draw(3,3,6,FForestCount,0,CardIndices); FStats.FarTrees:=FForestCount;
       glUniform1f(UQuality,Quality);
@@ -776,7 +790,8 @@ begin
     if PreserveGLState then begin
     glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture); glActiveTexture(OldActiveTexture);
     glUseProgram(OldProgram); glBindVertexArray(OldVAO); glBindBuffer(GL_ARRAY_BUFFER,OldBuffer);
-    glPolygonMode(GL_FRONT_AND_BACK,OldPolygon[0]); glDepthFunc(OldDepthFunc); glDepthMask(OldDepthMask);
+    {$ifndef OpenGLES}glPolygonMode(GL_FRONT_AND_BACK,OldPolygon[0]);{$endif}
+    glDepthFunc(OldDepthFunc); glDepthMask(OldDepthMask);
     if WasDepth=GL_TRUE then glEnable(GL_DEPTH_TEST) else glDisable(GL_DEPTH_TEST);
     if WasBlend=GL_TRUE then glEnable(GL_BLEND) else glDisable(GL_BLEND);
     if WasCull=GL_TRUE then glEnable(GL_CULL_FACE) else glDisable(GL_CULL_FACE);

@@ -4263,24 +4263,24 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.vert",
-    "bytes": 16653,
-    "sha256": "6b519ad114f1b4c30e5528861e5e132ef4fb8ae450388670156c3b05f5dfc102",
+    "bytes": 16941,
+    "sha256": "0e8b2297e635f97aa87e257d511fc9580ca002840add8824ac12c3c453419715",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.frag",
-    "bytes": 19889,
-    "sha256": "c8917facd4bfe178d711267475a24e42ec6af4bfab2f98690a44b5423cf4486a",
+    "bytes": 20100,
+    "sha256": "02ef04fae837df4be68ac2f71b4d97b9360dfa122d5237a8a946062c558ffcef",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.vert",
-    "bytes": 18759,
-    "sha256": "5953d14bc565cb1af7c1ee6b5018fb232de8647035018f84306f2f51552bd7bc",
+    "bytes": 19083,
+    "sha256": "6668684855adc1882bcdc8d80dab2e11b0805ba7e8e057fd6b1c7103081987a2",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4585,8 +4585,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 140463,
-    "sha256": "eceaa6175c77890d27d98427eb9ed157925e7ab80a01a1c6862a4128757f0468",
+    "bytes": 142406,
+    "sha256": "ecaf4f6d37ec048986cd1ab43c077a00b17c104d43076d2f2f4408ff35a64160",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

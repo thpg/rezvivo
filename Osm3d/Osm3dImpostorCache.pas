@@ -1,4 +1,5 @@
 unit Osm3dImpostorCache;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
@@ -9,7 +10,7 @@ unit Osm3dImpostorCache;
 interface
 
 uses Classes, SysUtils, Math, fpjson, CastleVectors, CastleViewport,
-  CastleTransform, CastleRectangles, CastleGL, CastleInternalShapesRenderer,
+  CastleTransform, CastleRectangles, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, CastleInternalShapesRenderer,
   CastleTimeUtils, CastleRenderOptions, Osm3dGpuTimer, GameFrameStatistics, Osm3dRtxShadow, CastleShapes;
 
 type

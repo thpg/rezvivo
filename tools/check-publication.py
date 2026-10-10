@@ -15,12 +15,12 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 BLOCKED_SUFFIXES = {'.exe', '.dll', '.dbg', '.ppu', '.o', '.a', '.res', '.rsp',
                     '.fit', '.gpx', '.tcx', '.db', '.sqlite', '.sqlite3', '.log',
-                    '.pem', '.key', '.p12', '.pfx', '.blend', '.bak', '.zip', '.7z'}
+                    '.pem', '.key', '.p12', '.pfx', '.blend', '.bak', '.zip', '.7z', '.apk', '.aab', '.keystore', '.jks'}
 BLOCKED_PARTS = {'users', 'profiles', 'cache', 'logs', 'crash-reports', '.ssh',
                  'node_modules', 'castle-engine-output', '__pycache__'}
 TEXT_SUFFIXES = {'.pas', '.inc', '.dpr', '.py', '.ps1', '.json', '.xml', '.x3d', '.ini', '.cfg', '.toml', '.sh', '.bat',
                  '.txt', '.md', '.patch', '.yml', '.glsl', '.vert', '.frag', '.zwo',
-                 '.castle-user-interface', '.cpp', '.c', '.h', '.hpp', '.comp'}
+                 '.castle-user-interface', '.cpp', '.c', '.h', '.hpp', '.comp', '.java', '.gradle'}
 # Matches identify locations only. Never print matched values.
 RULES = {
     'private-key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),

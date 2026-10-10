@@ -294,11 +294,11 @@
   '        color = mix(color,color*vec3(0.92,0.94,0.85),damp*age*0.26*nonGlass);' + #10 +
   '        // Old plaster fades and loses its coating locally, with a roughness change.' + #10 +
   '        bool plaster = matId==0 || matId==2 || matId>=12;' + #10 +
-  '        float patch = smoothstep(0.64,0.82,macro)*age*nonGlass;' + #10 +
-  '        if (plaster) color = mix(color,color*0.92+vec3(0.055,0.050,0.044),patch*0.38);' + #10 +
+  '        float plasterPatch = smoothstep(0.64,0.82,macro)*age*nonGlass;' + #10 +
+  '        if (plaster) color = mix(color,color*0.92+vec3(0.055,0.050,0.044),plasterPatch*0.38);' + #10 +
   '        float chip = smoothstep(0.66,0.78,fine)*smoothstep(0.50,0.75,macro)*age*nonGlass;' + #10 +
   '        if (!plaster) chip *= 0.25;' + #10 +
-  '        bldRoughness = clamp(bldRoughness+dirt*0.5+patch*0.09-damp*age*0.09,0.18,1.0);' + #10 +
+  '        bldRoughness = clamp(bldRoughness+dirt*0.5+plasterPatch*0.09-damp*age*0.09,0.18,1.0);' + #10 +
   '        // Height-gradient normal; derivatives evaluated for all wall fragments.' + #10 +
   '        // Fine wear fades by projected footprint, macro ageing keeps its mean tone.' + #10 +
   '        float wearHeight = -chip*0.012;' + #10 +

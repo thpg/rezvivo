@@ -5,16 +5,18 @@ unit GameDeviceAssignments;
 interface
 uses SysUtils, fpjson;
 type
-  TDeviceRole = (drHeartRate, drPower, drCadence, drSpeed, drControllable);
+  TDeviceRole = (drHeartRate, drPower, drCadence, drSpeed, drSteering, drControllable);
   TDeviceSelectionMode = (dsmAutomatic, dsmNone, dsmDevice);
   TDeviceSelection = record
     Mode: TDeviceSelectionMode;
     Transport, Address, Name: String;
+    CenterDegrees: Single;
   end;
   TDeviceRoleAssignments = class
   private
     FSelections: array[TDeviceRole] of TDeviceSelection;
     function GetSelection(Role: TDeviceRole): TDeviceSelection;
+    function GetSteeringCenter: Single;
   public
     procedure Reset(Disabled: Boolean = False);
     { nil = a new profile; malformed/unknown schema fails closed. }
@@ -27,12 +29,15 @@ type
     function Allows(Role: TDeviceRole; const Transport, Address: String): Boolean;
     function HasRemembered: Boolean;
     function UsesDevice(const Transport, Address: String): Boolean;
+    function CenterSteering(Degrees: Single): Boolean;
+    property SteeringCenter: Single read GetSteeringCenter;
     property Selection[Role: TDeviceRole]: TDeviceSelection read GetSelection;
   end;
 const
   DeviceRoleKeys: array[TDeviceRole] of String =
-    ('heart_rate', 'power', 'cadence', 'speed', 'controllable');
+    ('heart_rate', 'power', 'cadence', 'speed', 'steering', 'controllable');
 implementation
+uses Math;
 
 function JsonString(O: TJSONObject; const Key: String): String;
 var D: TJSONData;
@@ -67,14 +72,27 @@ function TDeviceRoleAssignments.Select(Role: TDeviceRole;
 var S: TDeviceSelection;
 begin
   if (Trim(Transport) = '') or (Trim(Address) = '') then Exit(Disable(Role));
+  S := Default(TDeviceSelection);
   S.Mode := dsmDevice;
   S.Transport := LowerCase(Trim(Transport));
   S.Address := LowerCase(Trim(Address));
   S.Name := Trim(Name);
+  if (Role=drSteering) and Matches(Role,S.Transport,S.Address) then
+    S.CenterDegrees:=FSelections[Role].CenterDegrees;
   Result := (FSelections[Role].Mode <> S.Mode) or
     (FSelections[Role].Transport <> S.Transport) or
     (FSelections[Role].Address <> S.Address) or (FSelections[Role].Name <> S.Name);
   FSelections[Role] := S;
+end;
+
+function TDeviceRoleAssignments.GetSteeringCenter: Single;
+begin Result:=FSelections[drSteering].CenterDegrees end;
+
+function TDeviceRoleAssignments.CenterSteering(Degrees: Single): Boolean;
+begin
+  Result:=(FSelections[drSteering].Mode=dsmDevice) and
+    not IsNan(Degrees) and not IsInfinite(Degrees) and (Abs(Degrees)<=90);
+  if Result then FSelections[drSteering].CenterDegrees:=Degrees;
 end;
 
 function TDeviceRoleAssignments.Matches(Role: TDeviceRole;
@@ -147,6 +165,11 @@ begin
     if Mode = 'device' then Select(R, JsonString(V, 'transport'),
       JsonString(V, 'address'), JsonString(V, 'name'))
     else if Mode = 'auto' then FSelections[R] := Default(TDeviceSelection);
+    if (R=drSteering) and (Mode='device') then
+    begin
+      D:=V.Find('center_degrees');
+      if (D<>nil) and (D.JSONType=jtNumber) then CenterSteering(D.AsFloat);
+    end;
   end;
 end;
 
@@ -161,6 +184,7 @@ begin
     if S.Mode = dsmNone then O := TJSONObject.Create(['mode', 'none'])
     else O := TJSONObject.Create(['mode', 'device', 'transport', S.Transport,
       'address', S.Address, 'name', S.Name]);
+    if (R=drSteering) and (S.Mode=dsmDevice) then O.Add('center_degrees',S.CenterDegrees);
     Result.Add(DeviceRoleKeys[R], O);
   end;
 end;

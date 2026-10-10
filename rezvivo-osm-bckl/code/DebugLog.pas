@@ -59,7 +59,7 @@ var
 implementation
 
 uses
-  CastleLog, CastleApplicationProperties, CastleURIUtils, CastleGLUtils,
+  AppRuntimePaths, CastleLog, CastleApplicationProperties, CastleURIUtils, CastleGLUtils, CastleFilesUtils,
   Osm3dStudioLog, GameMachineInfo;
 
 procedure Osm3dToCge(Level: Osm3dStudioLog.TLogLevel; const Msg: string);
@@ -76,10 +76,10 @@ function DetectLogParam: Boolean;
 var
   I: Integer;
 begin
-  for I := 1 to ParamCount do
-    if SameText(ParamStr(I), '/log') or
-       SameText(ParamStr(I), '-log') or
-       SameText(ParamStr(I), '--log') then
+  for I := 1 to AppParamCount do
+    if SameText(AppParamStr(I), '/log') or
+       SameText(AppParamStr(I), '-log') or
+       SameText(AppParamStr(I), '--log') then
       Exit(True);
   Result := False;
 end;
@@ -105,7 +105,7 @@ begin
   WritelnLog('Env', 'Caption: ' + ApplicationProperties.Caption);
   WritelnLog('Env', 'FPC: ' + {$I %FPCVERSION%} + '  target: ' +
     {$I %FPCTARGETCPU%} + '-' + {$I %FPCTARGETOS%});
-  WritelnLog('Env', 'Exe: ' + ParamStr(0));
+  WritelnLog('Env', 'Exe: ' + AppParamStr(0));
   WritelnLog('Env', 'Cwd: ' + GetCurrentDir);
   DataPath := URIToFilenameSafe('castle-data:/');
   if DataPath = '' then
@@ -115,10 +115,10 @@ begin
   WritelnLog('Env', 'LogFile: ' + LogFileName);
   WritelnLog('Env', 'GLogEnabled (/log): ' + BoolYes(GLogEnabled));
 
-  if ParamCount > 0 then
+  if AppParamCount > 0 then
   begin
-    for I := 1 to ParamCount do
-      WritelnLog('Env', Format('Arg[%d]: %s', [I, ParamStr(I)]));
+    for I := 1 to AppParamCount do
+      WritelnLog('Env', Format('Arg[%d]: %s', [I, AppParamStr(I)]));
   end else
     WritelnLog('Env', 'Args: (none)');
 
@@ -181,7 +181,11 @@ begin
     if LogFileName = '' then
     begin
       Name:=FormatDateTime('yyyy-mm-dd_hh-nn-ss',Now)+'.log';
-      LogFileName:=WritableLog(ExtractFilePath(ParamStr(0))+'log');
+      {$ifdef ANDROID}
+      LogFileName:=WritableLog(URIToFilenameSafe(ApplicationConfig('log/')));
+      {$else}
+      LogFileName:=WritableLog(AppDirectory+'log');
+      {$endif}
       { Program Files and other read-only installation folders are valid.
         Check the actual write, not just whether the directory exists. }
       if LogFileName='' then

@@ -1,4 +1,5 @@
 unit Osm3dRenderInstanced;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 { overflow/range-проверки выключены намеренно: хеши/упаковка битов рассчитывают на заворот }
 {$Q-}{$R-}
@@ -21,7 +22,7 @@ uses
   CastleGLImages,
   CastleImages,
   CastleRenderContext,
-  CastleGL,
+  {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif},
   Osm3dGeomVegetation,
   Osm3dProfiler,
   {$IFDEF TILE_MEM_PROFILE}Osm3dMemCensus,{$ENDIF}
@@ -335,7 +336,7 @@ function CameraWorldPosFromView(const ViewMat: TMatrix4): TVector3;
 
 implementation
 
-uses
+uses TreeShaderSource,
   CastleLog, CastleUriUtils, Math, Generics.Collections,
   Osm3dGlslLib, Osm3dVegetationBranchMesh, Osm3dRtxMaterials;
 
@@ -382,11 +383,13 @@ var
   LogBuf: AnsiString;
   PSrc: PAnsiChar;
   SrcLen: GLint;
+  PortableSource: AnsiString;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(674);{$ENDIF}
   Result := glCreateShader(SType);
-  PSrc := PAnsiChar(Src);
-  SrcLen := Length(Src);
+  PortableSource := RenderShaderSource(Src, {$ifdef OpenGLES}True{$else}False{$endif});
+  PSrc := PAnsiChar(PortableSource);
+  SrcLen := Length(PortableSource);
   glShaderSource(Result, 1, @PSrc, @SrcLen);
   glCompileShader(Result);
 

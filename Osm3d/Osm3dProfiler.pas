@@ -1,4 +1,5 @@
 unit Osm3dProfiler;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 { overflow/range-проверки выключены намеренно: хеши/упаковка битов рассчитывают на заворот }
 {$Q-}{$R-}
@@ -17,8 +18,8 @@ uses
   Classes,
   SysUtils,
   CastleUIControls,
-  Windows,
-  CastleGL,
+  {$ifdef MSWINDOWS}Windows,{$endif}
+  {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif},
   Osm3dGpuAccount,
   Osm3dStudioSettings,
   Osm3dStudioLog,
@@ -33,7 +34,7 @@ uses
 
 const
   { ARB_pipeline_statistics_query tokens — declared locally in case
-    CastleGL doesn't export them. GL 4.6 core values. }
+    {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif} doesn't export them. GL 4.6 core values. }
   GL_VERTICES_SUBMITTED_ARB          = $82EE;
   GL_PRIMITIVES_SUBMITTED_ARB        = $82EF;
   GL_VERTEX_SHADER_INVOCATIONS_ARB   = $82F0;
@@ -315,7 +316,20 @@ var
 
 implementation
 
-uses CastleApplicationProperties, Osm3dGpuTimer;
+uses CastleApplicationProperties, Osm3dGpuTimer, CastleTimeUtils;
+
+{$ifndef MSWINDOWS}
+var ProfileEpoch: TTimerResult;
+
+function QueryPerformanceFrequency(out Value: Int64): Boolean; inline;
+begin Value := 1000000; Result := True; end;
+
+function QueryPerformanceCounter(out Value: Int64): Boolean; inline;
+begin
+  Value := Round(TimerSeconds(Timer, ProfileEpoch) * 1000000) + 1;
+  Result := True;
+end;
+{$endif}
 
 { Forward unit-level state used across the file's procedures. Declared
   at the very top of the implementation so TProfiledSceneTick.Render
@@ -341,7 +355,7 @@ begin
 end;
 
 const
-  { GL 4.2 core. Declared locally in case CastleGL doesn't expose it. }
+  { GL 4.2 core. Declared locally in case {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif} doesn't expose it. }
   GL_ATOMIC_COUNTER_BUFFER = $92C0;
 
 constructor TShaderProfiler.Create;
@@ -419,6 +433,7 @@ var
   I, B: Integer;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(650);{$ENDIF}
+  {$ifdef OpenGLES}Exit;{$endif}
   if not EnableShaderAtomicCounters then Exit;
   if FAtomicReady then Exit;
   for I := 0 to PROF_COUNTER_SLOTS - 1 do
@@ -523,9 +538,9 @@ begin
       SumVS := 0; SumFS := 0;
       for K := 0 to FSections[I].Used[Slot] - 1 do
       begin
-        glGetQueryObjectui64v(FSections[I].QVS[Slot][K], GL_QUERY_RESULT, @V);
+        {$ifndef OpenGLES}glGetQueryObjectui64v(FSections[I].QVS[Slot][K], GL_QUERY_RESULT, @V);{$else}V:=0;{$endif}
         Inc(SumVS, Int64(V));
-        glGetQueryObjectui64v(FSections[I].QFS[Slot][K], GL_QUERY_RESULT, @V);
+        {$ifndef OpenGLES}glGetQueryObjectui64v(FSections[I].QFS[Slot][K], GL_QUERY_RESULT, @V);{$else}V:=0;{$endif}
         Inc(SumFS, Int64(V));
       end;
       FSections[I].LastVS := SumVS; FSections[I].LastFS := SumFS;
@@ -646,6 +661,7 @@ begin
   { Master gate: profiling off → no-op. Leaving FActiveSection at -1 makes
     the matching EndSection a no-op too, so a begin/end pair can never
     desync even if the flag flips between them. }
+  {$ifdef OpenGLES}Exit;{$endif}
   if not EnableShaderAtomicCounters then Exit;
   if FActiveSection >= 0 then Exit;          { nesting not supported }
   Idx  := FindOrAdd(AName);
@@ -696,6 +712,7 @@ begin
   Result := '';
   { Profiling off → nothing to report. Keeps the FPS overlay clean and
     makes the disabled state unambiguous (no stale zeros lingering). }
+  {$ifdef OpenGLES}Exit;{$endif}
   if not EnableShaderAtomicCounters then Exit;
 
   for I := 0 to FCount - 1 do
@@ -1261,6 +1278,7 @@ begin
 end;
 
 initialization
+  {$ifndef MSWINDOWS}ProfileEpoch := Timer;{$endif}
   GlobalShaderProfiler := TShaderProfiler.Create;
   TProfiledScene.ThisFrameEntered     := 0;
   TProfiledScene.ThisFrameDrew        := 0;

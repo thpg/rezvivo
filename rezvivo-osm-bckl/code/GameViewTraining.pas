@@ -78,7 +78,7 @@ type
 var ViewTraining:TTrainingPage;
 implementation
 uses Math,fpjson,CastleColors,CastleVectors,CastleWindow,CastleURIUtils,CastleApplicationProperties,
-  UiTranslations,GameUserData,GameViewMenu,GameViewWorkoutEditor,VeloSiteAPI;
+  UiTranslations,GameUserData,GameViewMenu,GameViewWorkoutEditor,VeloSiteAPI,GameFilePicker;
 
 function LowerUtf(const S:String):String;
 begin Result:=UTF8Encode(UnicodeLowerCase(UTF8Decode(S)));end;
@@ -398,8 +398,7 @@ begin Result:=FDetails<>nil;if Result then ClickClose(nil);end;
 procedure TTrainingPage.ClickEdit(Sender:TObject);
 begin if FSelected<>nil then begin ViewWorkoutEditor.SetWorkout(FSelected);ViewMenu.OpenChildView(ViewWorkoutEditor);end;end;
 procedure TTrainingPage.ClickImport(Sender:TObject);
-var Url:String;
-begin Url:='';if Application.MainWindow.FileDialog(UiText('Import workout'),Url,True,'ZWO|*.zwo')then ImportFile(URIToFilenameSafe(Url));end;
+begin PickGameFile(Self,UiText('Import workout'),'ZWO|*.zwo',@ImportFile);end;
 procedure TTrainingPage.ImportFile(const FileName:String);
 var W:TWorkoutFile;Dest:String;
 begin

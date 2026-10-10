@@ -750,6 +750,10 @@ procedure SyncLatticeGlobals;
 
 implementation
 
+{$ifdef ANDROID}
+uses CastleFilesUtils, CastleURIUtils;
+{$endif}
+
 function EffectiveWorldScaleLat(const S: TStudioSettings;
   ALatDeg: Double): Double;
 begin
@@ -768,8 +772,12 @@ begin
   if (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE') <> '') and
      (GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT') <> '') then
     Exit(UTF8Encode(UnicodeString(GetEnvironmentVariable('REZVIVO_TEST_CACHE_ROOT'))));
+  {$ifdef ANDROID}
+  Result := URIToFilenameSafe(ApplicationConfig('map-cache/'));
+  {$else}
   Result := IncludeTrailingPathDelimiter(GetUserDir) +
             '.cache' + PathDelim + 'osm3d';
+  {$endif}
 end;
 
 { Локальный культурно-независимый формат (точка-разделитель, без разряд.

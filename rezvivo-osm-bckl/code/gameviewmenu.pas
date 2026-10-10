@@ -20,7 +20,7 @@ unit GameViewMenu;
 
 interface
 
-uses GameMenuTheme,
+uses GameMenuLayout, GameMenuTheme,
   Classes, SysUtils, fpjson, WorkoutFile, GameViewStart,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleKeysMouse, GameGlobeMap,
@@ -77,6 +77,14 @@ type
     { Правая область сплита: сюда встраиваются страницы разделов.
       FullSize с Border.Left = ширина колонки плашек. }
     FPageHost:   TCastleUserInterface;
+    FPageScroll,FNavScroll: TCastleScrollView;
+    FNavPanel: TMenuPanel;
+    FMenuButton,FNavShade: TMenuButton;
+    FCompact,FNavigationOpen: Boolean;
+    procedure BuildNavigation;
+    procedure ClickNavigation(Sender:TObject);
+    procedure CloseNavigation;
+  private
     FPendingTab: String;
     FStartPage:TStartPage;
     FHistoryPage:THistoryPage;
@@ -239,7 +247,7 @@ var
 
 implementation
 
-uses GameTravelUI, UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
+uses AppRuntimePaths, GameTravelUI, UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
   Math, GameDeviceSensor, GameDeviceTypes, CastleApplicationProperties, CastleWindow, CastleLog, CastleURIUtils,
   GameViewPlay,GameViewTrainingOnly,GameAssistantUI,
   GameViewLogin,
@@ -284,9 +292,9 @@ begin
   AFit := '';
   if GFreeRideCliDone then Exit;
   GFreeRideCliDone := True;   { парсим один раз; возврат в меню не перезапускает }
-  for I := 1 to ParamCount do
+  for I := 1 to AppParamCount do
   begin
-    S := ParamStr(I);
+    S := AppParamStr(I);
     if (Length(S) = 0) or (not (S[1] in ['-', '/'])) then Continue;
     while (Length(S) > 0) and (S[1] in ['-', '/']) do Delete(S, 1, 1);
     P := Pos('=', S);
@@ -396,14 +404,11 @@ begin
 
   { Правая область страниц: весь вью минус колонка плашек слева.
     Сверху без отступа — вкладка идёт от края окна. }
-  FPageHost := TCastleUserInterface.Create(FreeAtStop);
-  FPageHost.FullSize := True;
-  FPageHost.Border.Left   := TILE_W + 24;
-  FPageHost.Border.Top    := 80; { account header must never cover a page }
-  FPageHost.Border.Right  := 8;
-
-  FPageHost.Border.Bottom := 0;
-  InsertFront(FPageHost);
+  FPageScroll:=TMenuScrollView.Create(FreeAtStop);FPageScroll.FullSize:=True;
+  InsertFront(FPageScroll);FPageScroll.ScrollArea.AutoSizeToChildren:=False;
+  FPageHost:=TCastleUserInterface.Create(FreeAtStop);FPageHost.WidthFraction:=1;
+  FPageHost.Height:=700;FPageHost.Anchor(vpTop);
+  FPageScroll.ScrollArea.InsertFront(FPageHost);
   FWorldModeBar:=TCastleHorizontalGroup.Create(FreeAtStop);FWorldModeBar.Spacing:=8;
   FWorldModeBar.Anchor(hpLeft,8);FWorldModeBar.Anchor(vpTop,-2);FWorldModeBar.Exists:=False;
   FPageHost.InsertFront(FWorldModeBar);
@@ -426,6 +431,7 @@ begin
     FRouteCreatorPage := nil;
 
   BuildTiles;
+  BuildNavigation;
   BindTravelText(FTileBikeFit.TitleLabel,'Rider and bicycle');
   BindTravelText(FTileHistory.TitleLabel,'My rides');
 
@@ -560,8 +566,41 @@ begin
   FTileAssistant.Name:='MenuAssistant';Col.InsertFront(FTileAssistant);
 end;
 
+procedure TViewMenu.BuildNavigation;
+  procedure Move(C:TCastleUserInterface);
+  begin if C=nil then Exit;C.Parent.RemoveControl(C);FNavPanel.InsertFront(C) end;
+begin
+  FNavigationOpen:=False;
+  FNavShade:=TMenuButton.Create(FreeAtStop);FNavShade.FullSize:=True;
+  FNavShade.AutoIcon:=False;FNavShade.Caption:='';FNavShade.Exists:=False;
+  FNavShade.CustomBackground:=True;FNavShade.CustomColorNormal:=Vector4(0,0,0,0.6);
+  FNavShade.CustomColorFocused:=FNavShade.CustomColorNormal;
+  FNavShade.CustomColorPressed:=FNavShade.CustomColorNormal;
+  FNavShade.OnClick:=@ClickNavigation;InsertFront(FNavShade);
+  FNavPanel:=TMenuPanel.Create(FreeAtStop);FNavPanel.Color:=MenuBackground;
+  FNavPanel.HeightFraction:=1;FNavPanel.Anchor(hpLeft);InsertFront(FNavPanel);
+  Move(FNavBackground);Move(LabelTitle);Move(FVersionButton);Move(ButtonQuit);Move(FTileProfile);
+  FNavScroll:=TMenuScrollView.Create(FreeAtStop);FNavScroll.FullSize:=True;
+  FNavPanel.InsertFront(FNavScroll);
+  FTileCol.Parent.RemoveControl(FTileCol);FNavScroll.ScrollArea.InsertFront(FTileCol);
+  FMenuButton:=TMenuButton.Create(FreeAtStop);FMenuButton.Name:='MenuNavigation';
+  FMenuButton.AutoIcon:=False;FMenuButton.AutoSize:=False;
+  BindUiText(FMenuButton,'Menu');FMenuButton.OnClick:=@ClickNavigation;
+  InsertFront(FMenuButton);
+end;
+
+procedure TViewMenu.ClickNavigation(Sender:TObject);
+begin
+  FNavigationOpen:=not FNavigationOpen;LayoutTiles;
+end;
+procedure TViewMenu.CloseNavigation;
+begin
+  if not FNavigationOpen then Exit;
+  FNavigationOpen:=False;LayoutTiles;
+end;
+
 procedure TViewMenu.LayoutTiles;
-var S,TileW,TileH,BottomInset,PageLeft:Single;
+var S,TileW,TileH,BottomInset,PageLeft,H:Single; L:TMenuLayout;
   procedure SizeTile(Tile:TMenuTile);
   begin
     if Tile=nil then Exit;Tile.SetTileSize(TileW,TileH,S);
@@ -570,9 +609,11 @@ var S,TileW,TileH,BottomInset,PageLeft:Single;
 begin
   if(EffectiveWidth<=0)or(EffectiveHeight<=0)then Exit;
   S:=Max(0.65,Min(1,UIScale));BottomInset:=8;
-  TileW:=EnsureRange(EffectiveWidth*0.14,190/S,220/S);
+  L:=MenuLayout(EffectiveWidth,EffectiveHeight,{$ifdef ANDROID}True{$else}False{$endif},SessionUnderneath);
+  FCompact:=L.Compact;
+  TileW:=L.NavigationWidth-24;
   TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-7*TILE_GAP)/8);
-  TileH:=Max(32/S,TileH);PageLeft:=TileW+40/S;
+  TileH:=Max(44/S,TileH);PageLeft:=L.PageLeft;
   SizeTile(FTileHome);SizeTile(FTileHistory);SizeTile(FTileAssistant);SizeTile(FTileRoutes);SizeTile(FTileDream);SizeTile(FTileDevices);
   SizeTile(FTileSchedule);SizeTile(FTileBikeFit);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
   if FTileCol<>nil then begin FTileCol.Anchor(vpTop,-100/S);FTileCol.Anchor(hpLeft,12/S);end;
@@ -581,10 +622,10 @@ begin
   if LabelTitle<>nil then begin LabelTitle.FontScale:=1;LabelTitle.CustomFont:=MenuFont(True);LabelTitle.FontSize:=22/S;LabelTitle.Anchor(hpLeft,26/S);LabelTitle.Anchor(vpTop,-34/S);end;
   if FVersionButton<>nil then begin FVersionButton.FontSize:=12/S;FVersionButton.Anchor(hpLeft,22/S);FVersionButton.Anchor(vpTop,-64/S);end;
   if FPageHost<>nil then begin
-    FPageHost.Border.Left:=PageLeft;
-    if SessionUnderneath then FPageHost.Border.Top:=160/S else FPageHost.Border.Top:=124/S;
-    FPageHost.Border.Right:=24/S;
-    if FTopBar<>nil then FTopBar.Height:=FPageHost.Border.Top;
+    FPageScroll.Border.Left:=PageLeft;
+    if SessionUnderneath then FPageScroll.Border.Top:=160/S else FPageScroll.Border.Top:=124/S;
+    FPageScroll.Border.Right:=24/S;
+    if FTopBar<>nil then FTopBar.Height:=FPageScroll.Border.Top;
   end;
   if FProfilePane<>nil then begin
     FProfilePane.Width:=230/S;FProfilePane.Height:=48/S;
@@ -621,8 +662,58 @@ begin
   end;
   if FGlobeCredit<>nil then FGlobeCredit.Anchor(vpBottom,BottomInset);
   if(FStartPage<>nil)and FStartPage.Exists and(FGlobe<>nil)then begin
+    FGlobe.Exists:=(EffectiveWidth-PageLeft>=700/S) and (EffectiveHeight>=560/S);FGlobe.SetActive(FGlobe.Exists);
     FGlobe.Width:=Max(220/S,Min(800/S,(EffectiveWidth-PageLeft)*0.53));
     FGlobe.Height:=Min(FGlobe.Width,EffectiveHeight*0.82);
+  end;
+  if FCompact then begin
+    if FMenuButton<>nil then begin
+      FMenuButton.Width:=92;FMenuButton.Height:=44;FMenuButton.FontSize:=16;
+      FMenuButton.Anchor(hpLeft,8);FMenuButton.Anchor(vpTop,-8);
+      SelectMenuButton(FMenuButton,FNavigationOpen);
+    end;
+    FPageScroll.Border.Left:=8;FPageScroll.Border.Right:=8;
+    FPageScroll.Border.Top:=L.HeaderHeight;FTopBar.Height:=L.HeaderHeight;
+    if FProfilePane<>nil then begin
+      FProfilePane.Width:=Min(180,EffectiveWidth-120);FProfilePane.Height:=44;
+      FProfilePane.Anchor(hpRight,-12);FProfilePane.Anchor(vpTop,-8);
+    end;
+    FTravelSelector.Anchor(hpLeft,108);FTravelSelector.Anchor(vpTop,-10);
+    FDevicesSummary.Width:=210;FDevicesSummary.Height:=40;FDevicesSummary.FontSize:=14;
+    FDevicesSummary.Anchor(hpLeft,108);FDevicesSummary.Anchor(vpTop,-60);
+    FRoomButton.Width:=220;FRoomButton.Height:=40;FRoomButton.FontSize:=14;
+    FRoomButton.Anchor(hpLeft,330);FRoomButton.Anchor(vpTop,-60);
+    if EffectiveWidth<660 then begin
+      FTravelSelector.Anchor(hpLeft,12);FTravelSelector.Anchor(vpTop,-60);
+      FDevicesSummary.Width:=(EffectiveWidth-36)/2;FDevicesSummary.Anchor(hpLeft,12);FDevicesSummary.Anchor(vpTop,-108);
+      FRoomButton.Width:=FDevicesSummary.Width;FRoomButton.Anchor(hpRight,-12);FRoomButton.Anchor(vpTop,-108);
+    end;
+    if SessionUnderneath then begin
+      FResumeButton.Width:=Min(190,(EffectiveWidth-36)/2);FEndRideButton.Width:=FResumeButton.Width;
+      FResumeButton.Anchor(hpLeft,12);FEndRideButton.Anchor(hpRight,-12);
+      FResumeButton.Anchor(vpTop,-L.HeaderHeight+44);FEndRideButton.Anchor(vpTop,-L.HeaderHeight+44);
+    end;
+    FSessionLabel.Exists:=False;
+    LabelTitle.Anchor(hpLeft,108);LabelTitle.Anchor(vpTop,-16);LabelTitle.FontSize:=18;
+    FVersionButton.Anchor(hpLeft,104);FVersionButton.Anchor(vpTop,-40);
+  end;
+  if FNavPanel<>nil then begin
+    FNavPanel.Width:=L.NavigationWidth;
+    FNavPanel.Exists:=not FCompact or FNavigationOpen;
+    FNavShade.Exists:=FCompact and FNavigationOpen;FMenuButton.Exists:=FCompact;
+    FNavScroll.Border.Top:=IfThen(FCompact,80,100)/S;
+    FNavScroll.Border.Bottom:=120/S;
+    FTileCol.Anchor(hpLeft,12/S);FTileCol.Anchor(vpTop);
+    FNavScroll.ScrollArea.Height:=Max(FNavScroll.EffectiveHeightForChildren,FTileCol.EffectiveHeight+8);
+  end;
+  if FPageScroll<>nil then begin
+    FPageScroll.ScrollArea.Width:=FPageScroll.EffectiveWidthForChildren;
+    H:=FPageScroll.EffectiveHeightForChildren;
+    { Pages with internal lists keep their full remaining viewport. Forms
+      and the bike editor get a scrollable canvas instead of clipped feet/buttons. }
+    if not ((FProfilePage<>nil) and FProfilePage.Exists) then H:=Max(H,700);
+    if (FBikeFitPage<>nil) and FBikeFitPage.Exists and (EffectiveWidth<760) then H:=Max(H,1040);
+    FPageHost.Height:=H;FPageScroll.ScrollArea.Height:=H;
   end;
   FLastLayoutW:=EffectiveWidth;FLastLayoutH:=EffectiveHeight;
 end;
@@ -701,7 +792,7 @@ begin
   inherited;
   FGlobe := nil;
   FGlobeCredit := nil;
-  FPageHost := nil;
+  FPageHost := nil;FPageScroll:=nil;FNavScroll:=nil;FNavPanel:=nil;FMenuButton:=nil;FNavShade:=nil;
   FProfilePane:=nil;FProfileButton:=nil;FProfileLabelName:=nil;FProfileLabelDetail:=nil;
   FTileCol:=nil;FTileRoutes:=nil;FTileDream:=nil;FTileDevices:=nil;
   FTileBikeFit:=nil;FTileTraining:=nil;FTileProfile:=nil;FTileEvents:=nil;
@@ -745,6 +836,7 @@ begin inherited;if FKeyboard<>nil then FKeyboard.Render;end;
 function TViewMenu.Press(const Event:TInputPressRelease):Boolean;
 begin
   if Event.IsKey(keyEscape) then begin
+    if FNavigationOpen then begin CloseNavigation;Exit(True) end;
     if FLaunchPane<>nil then begin CancelLaunch(nil);Exit(True);end;
     if Assigned(FSchedulePage)and FSchedulePage.Exists and FSchedulePage.HandleBack then Exit(True);
     if Assigned(FHistoryPage)and FHistoryPage.Exists and FHistoryPage.HandleBack then Exit(True);
@@ -951,6 +1043,9 @@ procedure TViewMenu.HideEmbeddedPage;
   end;
 
 begin
+  CloseNavigation;
+  if FPageScroll<>nil then FPageScroll.Scroll:=0;
+  FLastLayoutW:=-1;
   if FWorldModeBar<>nil then FWorldModeBar.Exists:=False;
   if FExplorePage<>nil then begin FExplorePage.HideMap;FExplorePage.Exists:=False end;
   if Assigned(FRoutesPage) and FRoutesPage.Exists then
@@ -991,6 +1086,7 @@ procedure TViewMenu.TogglePage(var APage; AClass: TMenuEmbeddedPageClass;
 var
   P: TMenuEmbeddedPage;
 begin
+  CloseNavigation;
   P := TMenuEmbeddedPage(APage);
   if P = nil then
   begin
@@ -1009,6 +1105,7 @@ begin
   HideEmbeddedPage;   { свернуть другую открытую страницу }
   P.Exists := True;
   P.PageShown;
+  LayoutTiles;
   if Assigned(ATile) then ATile.Selected := True;
 end;
 
@@ -1196,7 +1293,7 @@ procedure TViewMenu.ClickHistory(Sender:TObject);
 begin TogglePage(FHistoryPage,THistoryPage,FTileHistory);end;
 
 procedure TViewMenu.ClickAssistant(Sender:TObject);
-begin ShowAssistant(Container);end;
+begin CloseNavigation;ShowAssistant(Container);end;
 procedure TViewMenu.LoadLastMap;
 var Kind:TRideMapKind;MapId:String;
 begin
@@ -1373,6 +1470,7 @@ begin
   end;
 
 
+  ApplyUserInterfaceScale(Container);
   if (EffectiveWidth <> FLastLayoutW) or
      (EffectiveHeight <> FLastLayoutH) then
     LayoutTiles;

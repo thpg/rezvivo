@@ -1,4 +1,5 @@
 unit Osm3dGpuAccount;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 { Учёт GL-ресурсов, создаваемых проектом напрямую (трава, деревья, профайлер).
   Тонкие обёртки над glGen*/glDelete* считают живые объекты по типам (текстуры,
@@ -12,7 +13,7 @@ unit Osm3dGpuAccount;
 interface
 
 uses
-  CastleGL;     { glGen*/glDelete*, GLsizei, PGLuint }
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif};     { glGen*/glDelete*, GLsizei, PGLuint }
 
 {$IFDEF TILE_MEM_PROFILE}
 var

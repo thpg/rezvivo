@@ -194,6 +194,8 @@ begin
     FSensors.Add(TSpeedSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
   if DeviceInfo.SupportsHeartRate and (HRSensor = nil) then
     FSensors.Add(THRSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
+  if DeviceInfo.SupportsSteering and (FindSensor(skSteering) = nil) then
+    FSensors.Add(TSteeringSensor.Create(DeviceInfo.Address, DeviceInfo.Name));
   TestedNotFitness := False;
 end;
 
@@ -203,7 +205,9 @@ var
 begin
   if not Assigned(FSensors) then Exit;
   for I := 0 to FSensors.Count - 1 do
-    FSensors[I].ResetSession;
+    { Steering is an absolute input, independent of workout statistics.
+      Keeping a held angle is essential for change-only notifications. }
+    if FSensors[I].SensorKind<>skSteering then FSensors[I].ResetSession;
 end;
 
 procedure TGameDeviceEntry.RebuildSensors;

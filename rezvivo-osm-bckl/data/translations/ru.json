@@ -1817,5 +1817,21 @@
   "Incomplete response": "Неполный ответ",
   "Connection timed out": "Истекло время ожидания",
   "Retry in %d s": "Повтор через %d с",
-  "From cache": "Из кэша"
+  "From cache": "Из кэша",
+  "Renderer": "Рендер",
+  "Universal": "Универсальный",
+  "Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.": "Универсальный режим сохраняет анимацию на GPU и процедурные шейдеры, упрощая материалы, растительность и тени. После перезапуска игры.",
+  "Battery saver": "Экономичный",
+  "Lightweight": "Лёгкий",
+  "Custom settings": "Свои настройки",
+  "Baked trees and ground cover, simple materials, no dynamic shadows or effects.": "Деревья и трава из запечённых изображений, простые материалы, без динамических теней и эффектов.",
+  "Baked vegetation, small hard shadows and light materials.": "Запечённая растительность, небольшая карта чётких теней и лёгкие материалы.",
+  "Procedural vegetation, soft shadows and detailed materials.": "Процедурная растительность, мягкие тени и подробные материалы.",
+  "Dense vegetation, detailed materials and longer soft shadows.": "Густая растительность, подробные материалы и мягкие тени на большей дальности.",
+  "Could not open file: ": "Не удалось открыть файл: ",
+  "%.1f km/h  %dW  %drpm  %dbpm": "%.1f км/ч  %dВт  %dоб/м  %dуд/м",
+  "Steering": "Управление рулём",
+  "STEERING": "РУЛЬ",
+  "STERZO activation failed. Wake the steering plate and reconnect.": "Не удалось включить STERZO. Поверните площадку и подключите её снова.",
+  "Center steering": "Руль прямо"
 }

@@ -1,4 +1,5 @@
 unit GamePerformanceProbe;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
@@ -35,7 +36,7 @@ type
 
 implementation
 
-uses SysUtils, Math, CastleGL, GameViewPlay, RiderRuntimeAudit, CastleRendererInternalShader;
+uses SysUtils, Math, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, GameViewPlay, RiderRuntimeAudit, CastleRendererInternalShader;
 
 constructor TGamePerformanceProbe.Create(AOwner:TComponent);
 begin
@@ -75,8 +76,8 @@ begin
   if FMemory.TotalAvailableMemory>0 then begin
     FTotalKiB:=FMemory.DedicatedVideoMemory;
     FFreeKiB:=FMemory.CurrentAvailableVideoMemory;
-  end else if GL_ATI_meminfo then
-    FFreeKiB:=Min(FMemory.TextureFreeMemory,FMemory.VboFreeMemory);
+  end {$ifndef OpenGLES}else if GL_ATI_meminfo then
+    FFreeKiB:=Min(FMemory.TextureFreeMemory,FMemory.VboFreeMemory){$endif};
 end;
 
 procedure TGamePerformanceProbe.BeforeRender;

@@ -132,6 +132,8 @@ var
   GenDiagEnabled: Boolean;
 
 implementation
+uses AppRuntimePaths;
+
 
 function FormatLogLine(Level: TLogLevel; const Msg: string): string;
 begin
@@ -167,7 +169,7 @@ begin
     start time woven into the name so every run gets its own file
     instead of overwriting one osm3d.log. The log/ directory is created
     at resolve time (ResolveLogFilePath, before the first write). }
-  Result := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))
+  Result := IncludeTrailingPathDelimiter(AppDirectory)
             + 'log' + PathDelim
             + 'osm3d_' + SessionStamp + '.log';
 end;
@@ -177,7 +179,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1748);{$ENDIF}
   { Тот же штамп сессии, что и у DefaultLogFile — пара osm3d_<stamp>.log /
     osm3d_gen_<stamp>.log относится к одному запуску. }
-  Result := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))
+  Result := IncludeTrailingPathDelimiter(AppDirectory)
             + 'log' + PathDelim
             + 'osm3d_gen_' + SessionStamp + '.log';
 end;

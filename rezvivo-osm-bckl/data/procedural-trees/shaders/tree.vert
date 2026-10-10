@@ -6,15 +6,15 @@ layout(location=3) in vec4 d;
 layout(location=4) in uint aTreeCode;
 uniform mat4 uProjection, uView, uModel;
 uniform int uKind, uSlices, uSegments, uNeedlePairs, uNeedlesPerFascicle;
-uniform int uNeedleVertices=9;
+uniform int uNeedleVertices;
 uniform int uComplexity;
 uniform float uQuality, uTime, uWind, uViewportHeight;
 uniform float uSeasonLeaf;
-uniform float uFruitAmount=1.0;
-uniform int uFruitMembers=1;
+uniform float uFruitAmount;
+uniform int uFruitMembers;
 // Optional host thinning; old hosts keep physical foliage size.
-uniform float uLeafScale=1.0, uNeedleScale=1.0;
-uniform float uNeedleDetail=1.0;
+uniform float uLeafScale, uNeedleScale;
+uniform float uNeedleDetail;
 uniform vec4 uProfile; // height, trunk radius, crown spread, crown start
 uniform vec3 uEye;
 uniform vec3 uSunDirection;

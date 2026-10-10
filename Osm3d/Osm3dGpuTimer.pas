@@ -1,10 +1,11 @@
 unit Osm3dGpuTimer;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
 interface
 
-uses CastleGL;
+uses {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif};
 
 type
   TGpuTimestampPair = array[0..1] of GLuint;
@@ -36,21 +37,24 @@ uses CastleApplicationProperties;
 
 function GpuTimestampBegin(var Pair: TGpuTimestampPair): Boolean;
 begin
+  {$ifdef OpenGLES}Result := False;{$else}
   Result := Assigned(glQueryCounter) and Assigned(glGetQueryObjectui64v);
   if not Result then Exit;
   if Pair[0] = 0 then glGenQueries(2, @Pair[0]);
   glQueryCounter(Pair[0], GL_TIMESTAMP);
+  {$endif}
 end;
 
 procedure GpuTimestampEnd(const Pair: TGpuTimestampPair);
 begin
-  if Pair[0] <> 0 then glQueryCounter(Pair[1], GL_TIMESTAMP);
+  {$ifndef OpenGLES}if Pair[0] <> 0 then glQueryCounter(Pair[1], GL_TIMESTAMP);{$endif}
 end;
 
 function GpuTimestampRead(const Pair: TGpuTimestampPair; out Nanoseconds: QWord): Boolean;
-var Ready: GLuint; A, B: GLuint64;
+{$ifndef OpenGLES}var Ready: GLuint; A, B: GLuint64;{$endif}
 begin
   Nanoseconds := 0; Result := False;
+  {$ifndef OpenGLES}
   if Pair[0] = 0 then Exit;
   glGetQueryObjectuiv(Pair[1], GL_QUERY_RESULT_AVAILABLE, @Ready);
   if Ready = 0 then Exit;
@@ -60,6 +64,7 @@ begin
   glGetQueryObjectui64v(Pair[1], GL_QUERY_RESULT, @B);
   if B >= A then Nanoseconds := B - A;
   Result := True;
+  {$endif}
 end;
 
 procedure GpuTimestampFree(var Pair: TGpuTimestampPair);

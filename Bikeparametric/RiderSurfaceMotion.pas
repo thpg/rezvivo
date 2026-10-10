@@ -7,7 +7,7 @@ const
     '#define RIDER_SURFACE_MOTION'+#10+
     'attribute vec3 riderSurfaceDelta;uniform float riderSurfaceAmount;'+#10+
     '#ifdef RIDER_SURFACE_NATIVE_SKIN'+#10+
-    'mat4 skinMatrix;'+#10+
+    '' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + ''+#10+
     '#endif'+#10+
     'vec3 riderSurfaceOffset(){return riderSurfaceDelta*riderSurfaceAmount;}'+#10+
     { CGE calls the native skin plug first. Legacy avatars consume this offset

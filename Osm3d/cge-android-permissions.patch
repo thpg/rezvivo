@@ -1,0 +1,58 @@
+--- a/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
++++ b/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
+@@ -190,6 +190,8 @@
+     }
+ 
+     private static final int MY_PERMISSIONS_REQUEST = 1;
++    private final List<String> pendingPermissions = new ArrayList<>();
++    private String activePermission;
+ 
+     /* Requires Android permission name.
+ 
+@@ -211,12 +213,23 @@
+     {
+         if (ActivityCompat.checkSelfPermission(this, permission)
+           != PackageManager.PERMISSION_GRANTED) {
+-            ActivityCompat.requestPermissions(this,
+-                new String[]{permission},
+-                MY_PERMISSIONS_REQUEST);
++            // Android allows only one permission dialog at a time. BLE scan
++            // retries may request the same permission while it is visible.
++            if (!permission.equals(activePermission) && !pendingPermissions.contains(permission)) {
++                pendingPermissions.add(permission);
++                requestNextPermission();
++            }
+         } else {
+             messageSend(new String[]{"permission-granted", permission});
+         }
++    }
++
++    private void requestNextPermission()
++    {
++        if (activePermission != null || pendingPermissions.isEmpty()) return;
++        activePermission = pendingPermissions.remove(0);
++        ActivityCompat.requestPermissions(this,
++            new String[]{activePermission}, MY_PERMISSIONS_REQUEST);
+     }
+ 
+     @Override
+@@ -226,12 +239,17 @@
+         switch (requestCode) {
+             case MY_PERMISSIONS_REQUEST: {
+                 // If request is cancelled, the result arrays are empty.
++                String permission = activePermission;
++                activePermission = null;
++                if (permission == null && permissions.length > 0) permission = permissions[0];
++                if (permission == null) return;
+                 if (grantResults.length > 0
+                     && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+-                    messageSend(new String[]{"permission-granted", permissions[0]});
++                    messageSend(new String[]{"permission-granted", permission});
+                 } else {
+-                    messageSend(new String[]{"permission-cancelled", permissions[0]});
++                    messageSend(new String[]{"permission-cancelled", permission});
+                 }
++                requestNextPermission();
+                 return;
+             }
+         }

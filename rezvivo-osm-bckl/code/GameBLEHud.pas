@@ -273,7 +273,10 @@ end;
 
 function TBLEHudUpdater.HasAnyData: Boolean;
 begin
-  Result := Assigned(DeviceService) and DeviceService.HasAnySensor;
+  { A steering input alone is not exercise telemetry. }
+  Result := Assigned(DeviceService) and
+    (DeviceService.HasSensor(skHeartRate) or DeviceService.HasSensor(skPower) or
+     DeviceService.HasSensor(skCadence) or DeviceService.HasSensor(skSpeed));
 end;
 
 function TBLEHudUpdater.LastSentBLESlope: Single;
@@ -465,7 +468,7 @@ begin
     FLabels.LabelSlope.Caption :=
       FloatToStrF(SlopeDegToGradePct(S.CurrentSlopeAngle), ffFixed, 7, 1, FNumberFormat) + '%';
 
-  if Assigned(FLabels.LabelPitch) then
+  if Assigned(FLabels.LabelPitch) and FLabels.LabelPitch.ExistsInRoot then
     FLabels.LabelPitch.Caption :=
       'Pitch: ' + FloatToStrF(S.CurrentModelPitch, ffFixed, 7, 1) + '°, ' +
       'Roll: ' + FloatToStrF(S.CurrentTurnAngle, ffFixed, 7, 1) + '°, ' +
@@ -524,7 +527,7 @@ begin
       FLabels.LabelHeart.Caption := '--';
   end;
 
-  if Assigned(FLabels.LabelInfo) then
+  if Assigned(FLabels.LabelInfo) and FLabels.LabelInfo.ExistsInRoot then
   begin
     FLabels.LabelInfo.Caption :=
       'Authority: ' + IntToStr(Ord(AActiveAgent.NetworkAuthority)) + NL +

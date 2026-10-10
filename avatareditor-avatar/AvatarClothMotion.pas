@@ -69,7 +69,7 @@ implementation
 uses GltfCore, AvatarWardrobe, AvatarWardrobeGeometry, AvatarGarmentPattern, AvatarFabricMaterial, AvatarDenimMaterial, RiderShaderSharing, CastleRenderOptions;
 const
   ClothVS =
-    'attribute float avatarClothFree;attribute vec4 castle_Vertex;'+#10+
+    'attribute float avatarClothFree;' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;' + #10 + '#endif' + #10 + ''+#10+
     'uniform vec2 acMotion;uniform vec4 acCloth;'+#10+
     '#ifndef AVATAR_HEM_UNIFORMS'+#10+'#define AVATAR_HEM_UNIFORMS'+#10+
     'uniform vec4 uGarmentHem;'+#10+'#endif'+#10+
@@ -403,7 +403,7 @@ begin
     { CGE compiles each effect as a separate GLSL object. Declare the
       shared skin interface explicitly; its definitions live in the native
       corrective or procedural GPU skin effect. }
-    S.Add('mat4 bodyJoint(int j);mat4 skinMatrix;uniform vec4 uBodyProfile;');
+    S.Add('mat4 bodyJoint(int j);' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + 'uniform vec4 uBodyProfile;');
     S.Add('attribute vec4 riderTissue;attribute vec3 castle_Normal;');
     S.Add('mat4 garmentHip;mat3 garmentHipInverse;vec3 garmentA[4],garmentB[4],garmentX[4],garmentArmA[2],garmentArmB[2],garmentRadii,garmentOut;float garmentBuild,garmentFreedom,garmentArmContact;');
     S.Add('void acGarmentPrepare(){garmentHip=bodyJoint('+IntToStr(FRig.JointIndexByName('Pelvis'))+');');

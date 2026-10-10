@@ -24,7 +24,7 @@ uses Math;
 function GraphicsAutoCandidate(Tier:Integer;const Original:TGraphicsValues;
   MemoryTier:Integer):TGraphicsValues;
 const
-  ShadowSize:array[0..4]of Integer=(0,1024,2048,2048,4096);
+  ShadowSize:array[0..4]of Integer=(0,512,2048,2048,4096);
   ShadowFilter:array[0..4]of Integer=(1,4,4,16,16);
   ShadowDistance:array[0..4]of Integer=(60,60,100,160,160);
   Textures:array[0..4]of Integer=(0,1,2,3,3);
@@ -33,8 +33,9 @@ begin
   Result[goShadowSize]:=ShadowSize[Tier];
   Result[goShadowFilter]:=ShadowFilter[Tier];
   Result[goShadowDistance]:=ShadowDistance[Tier];
-  Result[goGrass]:=Ord(Tier>0);
-  Result[goTrees]:=Tier;
+  Result[goGrass]:=Ord(Tier>1);
+  if Tier<=1 then Result[goTrees]:=0 else Result[goTrees]:=Tier;
+  if Tier<=1 then begin Result[goWorldShadows]:=0;Result[goRtxReflections]:=0;Result[goSoftening]:=0 end;
   Result[goHair]:=EnsureRange(Tier-1,0,3);
   Result[goRiderComplexity]:=Min(Tier,3);
   Result[goWorldComplexity]:=Min(Tier,3);
@@ -45,6 +46,18 @@ begin
   Result[goTextures]:=Min(Original[goTextures],Textures[EnsureRange(MemoryTier,0,4)]);
   if Tier<=1 then Result[goVegetationCache]:=0 else Result[goVegetationCache]:=1;
   Result[goVegetationAdaptive]:=1;
+  { Apply the same capability limits as the settings UI. Do not probe tiers
+    that ask GLES to use a desktop-only pass. }
+  Result[goShadowSize]:=EffectiveGraphicsValue(goShadowSize,Result[goShadowSize]);
+  Result[goShadowFilter]:=EffectiveGraphicsValue(goShadowFilter,Result[goShadowFilter]);
+  Result[goShadowDistance]:=EffectiveGraphicsValue(goShadowDistance,Result[goShadowDistance]);
+  Result[goTrees]:=EffectiveGraphicsValue(goTrees,Result[goTrees]);
+  Result[goHair]:=EffectiveGraphicsValue(goHair,Result[goHair]);
+  Result[goRiderComplexity]:=EffectiveGraphicsValue(goRiderComplexity,Result[goRiderComplexity]);
+  Result[goWorldComplexity]:=EffectiveGraphicsValue(goWorldComplexity,Result[goWorldComplexity]);
+  Result[goVegetationComplexity]:=EffectiveGraphicsValue(goVegetationComplexity,Result[goVegetationComplexity]);
+  Result[goWorldShadows]:=EffectiveGraphicsValue(goWorldShadows,Result[goWorldShadows]);
+  Result[goRtxReflections]:=EffectiveGraphicsValue(goRtxReflections,Result[goRtxReflections]);
   { The probe cannot change the live framebuffer's MSAA sample count.
     Preserve AA and the user's frame limit; the runner may temporarily
     remove frame pacing, then restore these exact original choices. }

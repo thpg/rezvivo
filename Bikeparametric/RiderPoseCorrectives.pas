@@ -263,12 +263,12 @@ begin
     AddUniforms(FCpuEffect);
     Part := TEffectPartNode.Create;
     Part.FdType.Value := 'VERTEX';
-    Part.Contents := 'mat4 skinMatrix;' + LineEnding +
+    Part.Contents := '' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + '' + LineEnding +
       'uniform float uRiderPsdAngles[' + IntToStr(Rig.JointCount * 3) + '];' + LineEnding +
       'float riderPsdComponent(int j,int axis) { return uRiderPsdAngles[j*3+axis]; }' + LineEnding + ShaderSource;
     if FBody<>nil then
       Part.Contents:=Part.Contents+
-      'attribute vec4 castle_Vertex;attribute vec3 castle_Normal;'+LineEnding+
+      '' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;attribute vec3 castle_Normal;' + #10 + '#endif' + #10 + ''+LineEnding+
       'attribute vec4 castle_SkinWeights0;attribute vec4 castle_SkinJoints0;'+LineEnding+
       'mat4 getJointMatrix(int j);'+LineEnding+
       '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'vec3 riderSurfaceOffset();'+LineEnding+'#endif'+LineEnding+

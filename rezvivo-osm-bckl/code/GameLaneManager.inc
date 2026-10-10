@@ -263,6 +263,13 @@ begin
   end;
 end;
 
+procedure TLaneManager.SetSteering(AHandle: TLaneRiderHandle; Enabled: Boolean; Axis: Single);
+begin
+  if (AHandle<0) or (AHandle>=FCount) then Exit;
+  FRiders[AHandle].ManualSteering:=Enabled;
+  FRiders[AHandle].SteeringAxis:=EnsureRange(Axis,-1,1);
+end;
+
 procedure TLaneManager.Update(const DeltaTime: Single);
 var I,L,Best: Integer; Approach,Cost,BestCost,Alpha: Single;
 begin
@@ -270,6 +277,19 @@ begin
     if not FRiders[I].Active then Continue;
     if FRiders[I].PassageKey<>0 then FRiders[I].PassageAge:=FRiders[I].PassageAge+Max(0,DeltaTime);
     FRiders[I].Lane:=EnsureRange(FRiders[I].Lane,0,FLaneCount-1);
+    if FRiders[I].ManualSteering then
+    begin
+      { Center holds the selected line. Request the next slot only after the
+        previous smooth transition; traffic clearance and road edges still
+        apply. The normal traffic speed limiter handles a blocked line. }
+      if (FRiders[I].Speed>0.3) and (Abs(FRiders[I].SteeringAxis)>0.08) and
+        (Abs(FRiders[I].SmoothLane-FRiders[I].Lane)<0.2) then
+      begin
+        L:=EnsureRange(FRiders[I].Lane-Sign(FRiders[I].SteeringAxis),0,FLaneCount-1);
+        if (L<>FRiders[I].Lane) and LaneClear(I,L,4) then FRiders[I].Lane:=L;
+      end;
+      Continue;
+    end;
     Approach:=12+Min(18,FRiders[I].Speed*0.8);
     if not LaneClear(I,FRiders[I].Lane,Approach) then begin
       Best:=-1; BestCost:=1e30;

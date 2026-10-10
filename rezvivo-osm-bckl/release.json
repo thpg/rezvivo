@@ -1,7 +1,7 @@
 {
-  "version": "0.3.3-alpha.1",
-  "build": 10,
-  "file_version": "0.3.3.10",
+  "version": "0.3.4-alpha.1",
+  "build": 11,
+  "file_version": "0.3.4.11",
   "channel": "alpha",
-  "notes": "Turn a stopped bicycle in free exploration: stand ahead of the saddle, hold the frame and handlebar, lift the bicycle and step around before setting it down and riding away. Retry temporary OSM failures, prefer servers that have responded successfully, and show request destinations and responses while loading. Apply unlimited FPS only to the active 3D world; keep menus and the globe capped."
+  "notes": "Connect Elite STERZO Smart steering on Windows, including during FIT simulation. Calibrate the neutral handlebar position, steer in free exploration and change lanes on routes. Correctly finish and queue recorded rides when closing the game, including free rides with a real smart trainer. Improve adaptive controls and add a portable graphics path. Android APK distribution remains postponed."
 }

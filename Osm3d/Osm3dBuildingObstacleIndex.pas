@@ -48,6 +48,10 @@ const
 
 type
   TIntegerDynArray = array of Integer;
+  TObstacleCell = record
+    Indices: TIntegerDynArray;
+    Count: Integer;
+  end;
 
   { Compact obstacle used at runtime (and stored on TTileModel).
     Footprint XZ is tile-local on disk / on TTileModel; world-space after
@@ -66,8 +70,8 @@ type
   private
     FObs: array of TBuildingObstacle;
     FCount: Integer;
-    { Grid: sparse dictionary cellKey -> dynamic array of obstacle indices. }
-    FCells: specialize TDictionary<Int64, TIntegerDynArray>;
+    { Spare capacity avoids copying a shared dynamic array for every part. }
+    FCells: specialize TDictionary<Int64, TObstacleCell>;
     FOriginX, FOriginZ: Single;  { world origin for cell quantisation (0,0 ok) }
     procedure ClearCells;
     procedure InsertIntoGrid(AIdx: Integer);
@@ -91,6 +95,7 @@ type
 
     { Remove every obstacle registered under ATileKey. }
     procedure RemoveTile(ATileKey: Int64);
+    procedure RemoveTiles(const TileKeys: array of Int64);
 
     { True if (WX,WZ) is inside a solid building footprint.
       BaseY/MaxY = foundation top / roof apex. }
@@ -230,7 +235,7 @@ end;
 constructor TBuildingObstacleIndex.Create;
 begin
   inherited Create;
-  FCells := specialize TDictionary<Int64, TIntegerDynArray>.Create;
+  FCells := specialize TDictionary<Int64, TObstacleCell>.Create;
   FCount := 0;
   FOriginX := 0;
   FOriginZ := 0;
@@ -269,9 +274,9 @@ end;
 
 procedure TBuildingObstacleIndex.InsertIntoGrid(AIdx: Integer);
 var
-  CX0, CZ0, CX1, CZ1, CX, CZ, K: Integer;
+  CX0, CZ0, CX1, CZ1, CX, CZ: Integer;
   Key: Int64;
-  Arr: TIntegerDynArray;
+  Cell: TObstacleCell;
 begin
   with FObs[AIdx] do
   begin
@@ -282,19 +287,12 @@ begin
     for CX := CX0 to CX1 do
     begin
       Key := CellKey(CX, CZ);
-      if FCells.TryGetValue(Key, Arr) then
-      begin
-        K := Length(Arr);
-        SetLength(Arr, K + 1);
-        Arr[K] := AIdx;
-        FCells.AddOrSetValue(Key, Arr);
-      end
-      else
-      begin
-        SetLength(Arr, 1);
-        Arr[0] := AIdx;
-        FCells.Add(Key, Arr);
-      end;
+      if not FCells.TryGetValue(Key, Cell) then Cell := Default(TObstacleCell);
+      if Cell.Count = Length(Cell.Indices) then
+        SetLength(Cell.Indices, Max(4, Cell.Count * 2));
+      Cell.Indices[Cell.Count] := AIdx;
+      Inc(Cell.Count);
+      FCells.AddOrSetValue(Key, Cell);
     end;
 end;
 
@@ -324,24 +322,32 @@ begin
 end;
 
 procedure TBuildingObstacleIndex.RemoveTile(ATileKey: Int64);
-var
-  I, NewN: Integer;
-  NewObs: array of TBuildingObstacle;
 begin
-  { BUILDING_OBSTACLE: compact array and rebuild grid (rare: tile unload). }
-  if FCount = 0 then Exit;
-  SetLength(NewObs, FCount);
+  RemoveTiles([ATileKey]);
+end;
+
+procedure TBuildingObstacleIndex.RemoveTiles(const TileKeys: array of Int64);
+var
+  I, K, NewN: Integer;
+  Remove: Boolean;
+begin
+  { One compaction/rebuild for a whole retiring batch, not per tile. }
+  if (FCount = 0) or (Length(TileKeys) = 0) then Exit;
   NewN := 0;
   for I := 0 to FCount - 1 do
-    if FObs[I].TileKey <> ATileKey then
+  begin
+    Remove := False;
+    for K := 0 to High(TileKeys) do
+      if FObs[I].TileKey = TileKeys[K] then begin Remove := True; Break end;
+    if not Remove then
     begin
-      NewObs[NewN] := FObs[I];
+      if NewN <> I then FObs[NewN] := FObs[I];
       Inc(NewN);
     end;
+  end;
   if NewN = FCount then Exit;   { nothing removed }
-  SetLength(NewObs, NewN);
   ClearCells;
-  FObs := NewObs;
+  SetLength(FObs, NewN);
   FCount := NewN;
   for I := 0 to FCount - 1 do
     InsertIntoGrid(I);
@@ -360,7 +366,7 @@ function TBuildingObstacleIndex.FindObstacleAt(WX, WZ: Single;
   out ObsIdx: Integer; Clearance: Single): Boolean;
 var
   CX, CZ, X0, X1, Z0, Z1, I, J, Idx: Integer;
-  Arr: TIntegerDynArray;
+  Cell: TObstacleCell;
   P: TVector3;
   Blocked: Boolean;
 begin
@@ -372,10 +378,10 @@ begin
   WorldToCell(WX+Clearance, WZ+Clearance, X1, Z1);
   P := Vector3(WX, 0, WZ);
   for CZ:=Z0 to Z1 do for CX:=X0 to X1 do
-  if FCells.TryGetValue(CellKey(CX,CZ), Arr) then
-  for I := 0 to High(Arr) do
+  if FCells.TryGetValue(CellKey(CX,CZ), Cell) then
+  for I := 0 to Cell.Count - 1 do
   begin
-    Idx := Arr[I];
+    Idx := Cell.Indices[I];
     if (Idx < 0) or (Idx >= FCount) then Continue;
     with FObs[Idx] do
     begin
@@ -526,7 +532,7 @@ function TBuildingObstacleIndex.ConstrainBoxMove(const From,Forward,HalfSize:TVe
 var P,Move,Dir,Normal,Correction,Original:TVector3; Pass:Integer;
   HalfX,HalfZ,Width,Long,HitT,Along,T:Double;
   function Scan(Depenetrate:Boolean):Boolean;
-  var X0,X1,Z0,Z1,CX,CZ,OX,OZ,Idx,I,J:Integer; Arr:TIntegerDynArray;
+  var X0,X1,Z0,Z1,CX,CZ,OX,OZ,Idx,I,J:Integer; Cell:TObstacleCell;
     QueryMinX,QueryMaxX,QueryMinZ,QueryMaxZ,Fraction,Best:Double; Push,N:TVector3;
   begin
     Result:=False;HitT:=1;Best:=1e30;
@@ -537,9 +543,9 @@ var P,Move,Dir,Normal,Correction,Original:TVector3; Pass:Integer;
     end;
     WorldToCell(QueryMinX,QueryMinZ,X0,Z0);WorldToCell(QueryMaxX,QueryMaxZ,X1,Z1);
     for CZ:=Z0 to Z1 do for CX:=X0 to X1 do
-    if FCells.TryGetValue(CellKey(CX,CZ),Arr) then
-    for I:=0 to High(Arr) do begin
-      Idx:=Arr[I];
+    if FCells.TryGetValue(CellKey(CX,CZ),Cell) then
+    for I:=0 to Cell.Count-1 do begin
+      Idx:=Cell.Indices[I];
       with FObs[Idx] do begin
         if (Self.FObs[Idx].MaxX<QueryMinX) or (Self.FObs[Idx].MinX>QueryMaxX) or
           (Self.FObs[Idx].MaxZ<QueryMinZ) or (Self.FObs[Idx].MinZ>QueryMaxZ) then Continue;
@@ -603,8 +609,10 @@ begin
       if (MaxX>=WX-Radius) and (MinX<=WX+Radius) and
          (MaxZ>=WZ-Radius) and (MinZ<=WZ+Radius) then
       begin
-        SetLength(Result,N+1); Result[N]:=FObs[I]; Inc(N);
+        if N=Length(Result) then SetLength(Result,Max(16,N*2));
+        Result[N]:=FObs[I]; Inc(N);
       end;
+  SetLength(Result,N);
 end;
 
 function TBuildingObstacleIndex.FindDetour(const Start, Target: TVector3;
@@ -621,7 +629,7 @@ var
   Prev: array[0..MaxNodes-1] of Integer;
   Done: array[0..MaxNodes-1] of Boolean;
   NC, OC, X0, X1, Z0, Z1, X, Z, I, J, K, Idx, Best, P, PointCount: Integer;
-  Cell: TIntegerDynArray;
+  Cell: TObstacleCell;
   Seen: Boolean;
   A, B, C, N1, N2, Q: TVector3;
   Area: Double;
@@ -665,9 +673,9 @@ begin
   WorldToCell(Max(Start.X,Target.X)+12,Max(Start.Z,Target.Z)+12,X1,Z1);
   for Z:=Z0 to Z1 do for X:=X0 to X1 do
     if FCells.TryGetValue(CellKey(X,Z),Cell) then
-      for I:=0 to High(Cell) do
+      for I:=0 to Cell.Count-1 do
       begin
-        Idx:=Cell[I]; Seen:=False;
+        Idx:=Cell.Indices[I]; Seen:=False;
         for J:=0 to OC-1 do if Ids[J]=Idx then begin Seen:=True; Break end;
         if Seen then Continue;
         if OC=MaxObstacles then Exit;

@@ -78,7 +78,7 @@ begin
   RH:=Rig.JointIndexByName('R_Thigh');RK:=Rig.JointIndexByName('R_Calf');Hip:=Rig.JointIndexByName('Pelvis');
   if(LH<0)or(LK<0)or(RH<0)or(RK<0)or(Hip<0)then Exit;
   VS:=DenimFoldGLSL+#10+
-    'attribute vec3 avatarDenimRest;varying vec3 adRest;mat4 bodyJoint(int j);mat4 skinMatrix;uniform float adScale;'+#10+
+    'attribute vec3 avatarDenimRest;varying vec3 adRest;mat4 bodyJoint(int j);' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + 'uniform float adScale;'+#10+
     'void PLUG_vertex_object_space(inout vec4 p,inout vec3 n){'+#10+
     ' int th='+IntToStr(RH)+',ca='+IntToStr(RK)+';if(avatarDenimRest.x>0.0){th='+IntToStr(LH)+';ca='+IntToStr(LK)+';}'+#10+
     ' vec3 a=normalize(mat3(bodyJoint(th))*vec3(0,1,0)),b=normalize(mat3(bodyJoint(ca))*vec3(0,1,0));'+#10+

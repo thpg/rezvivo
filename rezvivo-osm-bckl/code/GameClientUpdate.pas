@@ -9,7 +9,7 @@ function ClientCanStartRide:Boolean;
 function ClientVersionInfo:TJSONObject;
 
 implementation
-uses SyncObjs,jsonparser,CastleControls,CastleVectors,CastleColors,CastleKeysMouse,
+uses AppRuntimePaths, SyncObjs,jsonparser,CastleControls,CastleVectors,CastleColors,CastleKeysMouse,
   CastleApplicationProperties,CastleWindow,CastleOpenDocument,GameMenuTheme,
   UiTranslations,GameBuildInfo,GameHttpClient,GameCrashReports,GameViewMenu,
   GameViewPlay,GameViewTrainingOnly,GameUpdateDownload{$IFDEF WINDOWS},Windows,ShellApi{$ENDIF};
@@ -77,7 +77,7 @@ begin
       GameHttpRequest('GET',ExcludeTrailingPathDelimiter(Base)+'/api/v1/client/version?build='+IntToStr(ClientBuild),
         Headers,nil,2000,4000,Reply,Status,Cancellation);
       if(Status=200)and(Reply.Size<65536)then Response:=Reply.DataString;
-      Manifest:=ExtractFilePath(ParamStr(0))+'installed-files.json';
+      Manifest:=AppDirectory+'installed-files.json';
       if FileExists(Manifest)then ManifestSHA256:=UpdateSHA256(Manifest,Cancellation);
     except { Optional updates must not prevent offline use. } end;
   finally Headers.Free;Reply.Free;Done.SetEvent;end;
@@ -203,6 +203,7 @@ begin
     end;
   end;
   BindUiText(FDownload,Caption);
+  {$ifndef MSWINDOWS}BindUiText(FDownload,'Open download page');{$endif}
   FClose.Exists:=True;FDownload.Exists:=FNewVersion or FBlocked or(FTransfer<>nil);FCheck.Enabled:=FTask=nil;
 end;
 procedure TClientUpdates.Tick(Sender:TObject);
@@ -239,6 +240,10 @@ begin FDialog.Exists:=False;end;
 procedure TClientUpdates.Download(Sender:TObject);
 var S:TUpdateDownloadStatus;
 begin
+  {$ifndef MSWINDOWS}
+  OpenUrl(ExcludeTrailingPathDelimiter(FBase)+'/download');
+  Exit;
+  {$endif}
   if not FPackageKnown then begin OpenUrl(ExcludeTrailingPathDelimiter(FBase)+'/download?build='+IntToStr(ClientBuild));Exit end;
   if FTransfer<>nil then begin
     S:=FTransfer.Status;
@@ -265,8 +270,8 @@ begin
   {$IFDEF WINDOWS}
   Filename:=UTF8Decode(FTransfer.Status.Filename);
   Args:='/WAITPID='+IntToStr(GetCurrentProcessId);
-  if SameText(ExtractFileName(ParamStr(0)),'REZVIVO.exe')then
-    Args:=Args+' /D='+UTF8Decode(ExcludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0))));
+  if SameText(ExtractFileName(AppParamStr(0)),'REZVIVO.exe')then
+    Args:=Args+' /D='+UTF8Decode(ExcludeTrailingPathDelimiter(AppDirectory));
   Started:=PtrInt(ShellExecuteW(0,'open',PWideChar(Filename),PWideChar(Args),nil,SW_SHOWNORMAL));
   if Started>32 then Application.Terminate
   else FStatus.Caption:=UiText('Could not start the update installer.');

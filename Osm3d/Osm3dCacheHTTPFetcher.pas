@@ -202,7 +202,7 @@ implementation
 
 uses
   {$ifdef REZVIVO_STARTUP_TIMING} CastleLog, {$endif}
-  MD5,
+  MD5, Osm3dPlatformHttp,
   Osm3dOsmAccess,
   Osm3dNetworkAudit,
   DateUtils;
@@ -300,7 +300,9 @@ begin
   try
     for I := 0 to FInFlight.Count - 1 do
     begin
-      TFPHTTPClient(FInFlight[I]).Terminate;
+      if TObject(FInFlight[I]) is TOsmPlatformHttpRequest then
+        TOsmPlatformHttpRequest(FInFlight[I]).Cancel
+      else TFPHTTPClient(FInFlight[I]).Terminate;
     end;
   finally
     LeaveCriticalSection(FClientsCS);
@@ -503,6 +505,8 @@ var
   UsedTransport:Boolean;
   TransportHeaders:TStringList;
   TransportOutput:TCheckedHttpOutput;
+  PlatformRequest: TOsmPlatformHttpRequest;
+  InFlightObject: TObject;
   {$ifdef REZVIVO_STARTUP_TIMING}
   TimingStart: QWord;
   {$endif}
@@ -519,9 +523,14 @@ begin
     Exit(DoAuthenticatedOSM(URL, Method, Body, ConnectTimeoutLimitMs));
 
   Client := TFPHTTPClient.Create(nil);
+  PlatformRequest := nil;
+  try
+    if Assigned(OsmPlatformHttpFactory) then PlatformRequest := OsmPlatformHttpFactory();
+  except Client.Free; raise end;
+  if PlatformRequest <> nil then InFlightObject := PlatformRequest else InFlightObject := Client;
   EnterCriticalSection(FClientsCS);
   try
-    FInFlight.Add(Client);
+    FInFlight.Add(InFlightObject);
   finally
     LeaveCriticalSection(FClientsCS);
   end;
@@ -569,7 +578,20 @@ begin
         TLS_CurLastReportBytes  := 0;
 
         try
-          if Method = 'GET' then
+          if PlatformRequest <> nil then
+          begin
+            UsedTransport := True;
+            TransportHeaders := TStringList.Create;
+            TransportHeaders.NameValueSeparator := ':';
+            TransportOutput := TCheckedHttpOutput.Create(Response,Self,TransportHeaders);
+            if Length(Body) > 0 then RequestBody := TBytesStream.Create(Body);
+            PlatformRequest.NoRedirects := not Client.AllowRedirect;
+            PlatformRequest.MaxResponseBytes := FMaxResponseBytes;
+            PlatformRequest.Execute(Method, URL, Client.RequestHeaders, RequestBody,
+              Client.ConnectTimeout, FTimeoutMs, TransportOutput, StatusCode, TransportHeaders);
+            InternalDataReceived(nil, Response.Size, Response.Size);
+          end
+          else if Method = 'GET' then
           begin
             if (Authorization='') and Assigned(FPublicGetTransport) then
             begin
@@ -704,10 +726,11 @@ begin
   finally
     EnterCriticalSection(FClientsCS);
     try
-      FInFlight.Remove(Client);
+      FInFlight.Remove(InFlightObject);
     finally
       LeaveCriticalSection(FClientsCS);
     end;
+    PlatformRequest.Free;
     Client.Free;
     {$ifdef REZVIVO_STARTUP_TIMING}
     WritelnLog('StartupTiming', 'osm-http end tick=%d thread=%d ms=%d success=%s',

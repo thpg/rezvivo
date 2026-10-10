@@ -46,7 +46,8 @@ type
   private
     FServerUrl: string;
     FLock: TCriticalSection;
-    FPushData: string;       { JSON to push, empty = nothing to push }
+    FPushData: TRiderBroadcast; { latest state; serialize only when sending }
+    FPushReady: Boolean;
     FPullResult: string;     { last pull JSON result }
     FPullReady: Boolean;
     FInterval: Integer;      { ms between cycles }
@@ -83,7 +84,7 @@ type
     destructor Destroy; override;
     procedure Cancel;
 
-    procedure SetPushData(const AJson: string);
+    procedure SetPushState(const State: TRiderBroadcast);
     procedure SetGuestSyncData(const AJson: string);
     function GetPullResult(out AJson: string): Boolean;
     function GetLastError: string;
@@ -206,7 +207,7 @@ begin
   FInterval := AInterval;
   FLock := TCriticalSection.Create;
   FPrivateRoom:=APrivateRoom;FAuthRiderId:=AAuthRiderId;FCancel:=TGameHttpCancellation.Create;
-  FPushData := '';
+  FPushData := Default(TRiderBroadcast);
   FPullResult := '';
   FPullReady := false;
   FErrorMsg := '';
@@ -248,11 +249,12 @@ begin
   finally Output.Free;Input.Free;H.Free end;
 end;
 
-procedure TRelayThread.SetPushData(const AJson: string);
+procedure TRelayThread.SetPushState(const State: TRiderBroadcast);
 begin
   FLock.Enter;
   try
-    FPushData := AJson;
+    FPushData := State;
+    FPushReady := True;
   finally
     FLock.Leave;
   end;
@@ -491,8 +493,10 @@ end;
 procedure TRelayThread.Execute;
 var
   PushJson, PullJson: string;
+  State: TRiderBroadcast;
+  Obj: TJSONObject;
   Delay,Waited:Integer;
-  Connected:Boolean;
+  Connected,HasPush:Boolean;
 begin
   Delay:=FInterval;
   while not Terminated do
@@ -501,12 +505,27 @@ begin
     try
       { 1. Push rider state }
       FLock.Enter;
-      PushJson := FPushData;
-      FPushData := '';
-      FLock.Leave;
+      try
+        HasPush := FPushReady;
+        if HasPush then State := FPushData;
+        FPushReady := False;
+      finally FLock.Leave end;
 
-      if PushJson <> '' then
+      if HasPush then
       begin
+        { Rendering can publish hundreds of states between two HTTP sends.
+          Only the latest one needs a JSON tree/string, on this worker. }
+        Obj := TJSONObject.Create;
+        try
+          Obj.Add('rider_id', State.RiderId);
+          Obj.Add('name', State.Name);
+          Obj.Add('distance', TJSONFloatNumber.Create(State.Distance));
+          Obj.Add('speed', TJSONFloatNumber.Create(State.Speed));
+          Obj.Add('power', State.Power);
+          Obj.Add('cadence', State.Cadence);
+          Obj.Add('hr', State.HeartRate);
+          PushJson := Obj.AsJSON;
+        finally Obj.Free end;
         try
           Request('POST','/push',PushJson);
           FLock.Enter;
@@ -616,23 +635,19 @@ end;
 procedure TRideRelayClient.PushLocalState(ADistance, ASpeed: Single;
   APower, ACadence, AHeartRate: Integer);
 var
-  Obj: TJSONObject;
+  State: TRiderBroadcast;
 begin
   if not FStarted then Exit;
 
-  Obj := TJSONObject.Create;
-  try
-    Obj.Add('rider_id', FLocalRiderId);
-    Obj.Add('name', FLocalRiderName);
-    Obj.Add('distance', TJSONFloatNumber.Create(ADistance));
-    Obj.Add('speed', TJSONFloatNumber.Create(ASpeed));
-    Obj.Add('power', APower);
-    Obj.Add('cadence', ACadence);
-    Obj.Add('hr', AHeartRate);
-    FThread.SetPushData(Obj.AsJSON);
-  finally
-    Obj.Free;
-  end;
+  State := Default(TRiderBroadcast);
+  State.RiderId := FLocalRiderId;
+  State.Name := FLocalRiderName;
+  State.Distance := ADistance;
+  State.Speed := ASpeed;
+  State.Power := APower;
+  State.Cadence := ACadence;
+  State.HeartRate := AHeartRate;
+  FThread.SetPushState(State);
 end;
 
 procedure TRideRelayClient.UpdateRemoteRiders;
@@ -650,8 +665,6 @@ begin
   FHasNewData := False;
   if not FStarted then Exit;
   if not FThread.GetPullResult(Json) then Exit;
-
-  FHasNewData := True;
 
   try
     JData := GetJSON(Json);
@@ -696,6 +709,8 @@ begin
     finally
       FRemoteLock.Leave;
     end;
+    { A malformed response must not refresh old peer positions/timestamps. }
+    FHasNewData := True;
     if CountChanged and Assigned(FOnRiderCountChanged) then FOnRiderCountChanged(Self);
   except
     { ignore parse errors }

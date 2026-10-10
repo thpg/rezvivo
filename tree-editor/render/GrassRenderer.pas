@@ -1,7 +1,8 @@
 unit GrassRenderer;
 {$mode objfpc}{$H+}
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
-uses SysUtils, Classes, Math, GL, GLExt, TreeMath, TreeLOD, GrassModel;
+uses SysUtils, Classes, Math, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}GL, GLExt{$endif}, TreeMath, TreeLOD, GrassModel;
 type
   TDrawArraysBaseInstance = procedure(Mode:GLenum;First:GLint;Count,Instances:GLsizei;Base:GLuint); {$ifdef Windows}stdcall{$else}cdecl{$endif};
   TDrawElementsBaseInstance = procedure(Mode:GLenum;Count:GLsizei;Kind:GLenum;Indices:Pointer;Instances:GLsizei;Base:GLuint); {$ifdef Windows}stdcall{$else}cdecl{$endif};
@@ -55,7 +56,7 @@ var GrassDrawBlades:Boolean=True;
     GrassBaseInstance:Boolean=True;
     GrassRenderComplexity:Integer=3;
 implementation
-uses fpjson, jsonparser;
+uses fpjson, jsonparser, TreeShaderSource;
 const GrassReferenceLight:array[0..2]of Single=((0.55+2.55*0.68)*0.55,(0.64+0.96*2.55*0.68)*0.55,(0.50+0.9*2.55*0.68)*0.55);
 function GrassHeadIndexCount(Grid,Detail:Integer):Integer;
 begin
@@ -72,12 +73,12 @@ begin
   Result:=Grid*Grid*7+Row*30+Part;
 end;
 function ReadText(const Path:string):string;
-var S:TStringList;
-begin S:=TStringList.Create;try S.LoadFromFile(Path);Result:=S.Text;finally S.Free;end;end;
+begin Result:=ReadRenderShader(Path);end;
 function Shader(Kind:GLenum;const Source:string):GLuint;
-var P:PChar;OK:GLint;Log:array[0..8191]of Char;
+var P:PChar;OK:GLint;Log:array[0..8191]of Char; ShaderText:string;
 begin
-  Result:=glCreateShader(Kind);P:=PChar(Source);glShaderSource(Result,1,@P,nil);glCompileShader(Result);
+  ShaderText:=RenderShaderSource(Source, {$ifdef OpenGLES}True{$else}False{$endif});
+  Result:=glCreateShader(Kind);P:=PChar(ShaderText);glShaderSource(Result,1,@P,nil);glCompileShader(Result);
   glGetShaderiv(Result,GL_COMPILE_STATUS,@OK);
   if OK=0 then begin glGetShaderInfoLog(Result,SizeOf(Log),nil,@Log[0]);glDeleteShader(Result);raise Exception.Create('Grass shader: '+string(PChar(@Log[0])));end;
 end;
@@ -108,12 +109,16 @@ var VS,FS:GLuint;MajorVersion,MinorVersion,OK:GLint;Log:array[0..8191]of Char;
     Indices:array of Word;L,Detail,Sparse,Grid,B,J,N,BladeIndices:Integer;FragmentSource:string;
 begin
   if FProgram<>0 then Exit;
+  {$ifndef OpenGLES}
   if not Load_GL_version_3_3_CORE then raise Exception.Create('OpenGL 3.3 is required for grass');
+  {$endif}
   glGetIntegerv(GL_MAJOR_VERSION,@MajorVersion);glGetIntegerv(GL_MINOR_VERSION,@MinorVersion);
+  {$ifdef MSWINDOWS}{$ifndef OpenGLES}
   if (MajorVersion>4) or ((MajorVersion=4)and(MinorVersion>=2)) then begin
     FDrawArraysBase:=TDrawArraysBaseInstance(wglGetProcAddress('glDrawArraysInstancedBaseInstance'));
     FDrawElementsBase:=TDrawElementsBaseInstance(wglGetProcAddress('glDrawElementsInstancedBaseInstance'));
   end;
+  {$endif}{$endif}
   VS:=Shader(GL_VERTEX_SHADER,ReadText(IncludeTrailingPathDelimiter(ShaderDir)+'grass.vert'));
   try
     FragmentSource:=StringReplace(ReadText(IncludeTrailingPathDelimiter(ShaderDir)+'grass.frag'),
@@ -237,10 +242,10 @@ begin
   glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,GRASS_BAKE_SIZE,GRASS_BAKE_SIZE,GRASS_ATLAS_LAYERS,0,GL_RGBA,GL_UNSIGNED_BYTE,@Raw[0]);
   glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
   glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-  if Load_GL_EXT_texture_filter_anisotropic then begin
+  {$ifndef OpenGLES}if Load_GL_EXT_texture_filter_anisotropic then begin
     glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT,@MaxAnisotropy);
     glTexParameterf(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAX_ANISOTROPY_EXT,Min(8,MaxAnisotropy));
-  end;
+  end;{$endif}
   glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
   glGenerateMipmap(GL_TEXTURE_2D_ARRAY);glBindTexture(GL_TEXTURE_2D_ARRAY,0);FAtlasReady:=True;
 end;

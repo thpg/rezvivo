@@ -2784,6 +2784,7 @@ begin
     FLabelStatus.FontSize:=12/S;FLabelStatus.Color:=MenuMuted;
     FLabelStatus.Anchor(vpBottom,12/S);
   end;
+  if FBottomRow.EffectiveWidth<720/S then W:=FBottomRow.EffectiveWidth;
   FColParams.WidthFraction:=0;FColParams.Width:=W;
   if FLblPose<>nil then begin
     FLblPose.FontScale:=1;FLblPose.FontSize:=13/S;FLblPose.Anchor(vpBottom,8/S);
@@ -2795,7 +2796,16 @@ begin
     FPosePrev.Anchor(hpLeft,12/S);FPoseNext.Anchor(hpLeft,52/S);FPoseToggle.Anchor(hpLeft,92/S);
     FPosePrev.Anchor(vpBottom,38/S);FPoseNext.Anchor(vpBottom,38/S);FPoseToggle.Anchor(vpBottom,38/S);
   end;
-  FColResult.WidthFraction:=0;FColResult.Width:=FBottomRow.EffectiveWidth-W;
+  FColResult.WidthFraction:=0;
+  if FBottomRow.EffectiveWidth<720/S then begin
+    FColParams.HeightFraction:=0;FColParams.Height:=620/S;FColParams.Anchor(vpTop);
+    FColResult.HeightFraction:=0;FColResult.Height:=360/S;
+    FColResult.Width:=W;FColResult.Anchor(hpLeft);FColResult.Anchor(vpTop,-630/S);
+  end else begin
+    FColParams.HeightFraction:=1;FColParams.Anchor(vpTop);
+    FColResult.HeightFraction:=1;FColResult.Width:=FBottomRow.EffectiveWidth-W;
+    FColResult.Anchor(hpRight);FColResult.Anchor(vpTop);
+  end;
   TabW:=(W-32)/3;
   for I:=0 to High(FSectionButtons)do begin
     FSectionButtons[I].Width:=TabW;FSectionButtons[I].Height:=34/S;

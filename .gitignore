@@ -37,6 +37,10 @@
 *.key
 *.p12
 *.pfx
+*.apk
+*.aab
+*.keystore
+*.jks
 *.blend
 *.blend1
 *.zip

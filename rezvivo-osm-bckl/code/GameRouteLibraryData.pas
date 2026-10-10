@@ -36,7 +36,7 @@ procedure WriteAccountJSON(const Name:String;Obj:TJSONObject);
 function ReadAccountJSON(const Name:String):TJSONObject;
 
 implementation
-uses UiTranslations, Math, DateUtils, jsonparser, CastleURIUtils, CastleApplicationProperties, VeloSiteAPI
+uses AppRuntimePaths, UiTranslations, Math, DateUtils, jsonparser, CastleURIUtils, CastleApplicationProperties, VeloSiteAPI
   {$ifdef MSWINDOWS}, Windows{$endif};
 
 type TRoutePump=class
@@ -74,7 +74,7 @@ function RouteAccountDir(AUserId:Int64):String;
 begin
   if(Copy(VeloSite.BaseUrl,1,17)='http://127.0.0.1:')and(SysUtils.GetEnvironmentVariable('REZVIVO_TEST_ACCOUNT_DIR')<>'')then
     Exit(IncludeTrailingPathDelimiter(SysUtils.GetEnvironmentVariable('REZVIVO_TEST_ACCOUNT_DIR'))+IntToStr(AUserId)+PathDelim);
-  Result:=IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))+
+  Result:=IncludeTrailingPathDelimiter(AppDirectory)+
     'users'+PathDelim+'accounts'+PathDelim+IntToStr(AUserId)+PathDelim;
 end;
 function RouteEncode(const S:String):String;

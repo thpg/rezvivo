@@ -1,8 +1,9 @@
 unit Osm3dRenderGrass;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}{$Q-}{$R-}
 interface
 uses {$IFDEF MSWINDOWS}Windows,{$ENDIF}Classes,SysUtils,Math,SyncObjs,CastleVectors,CastleBoxes,CastleFrustum,
-  CastleTransform,CastleRenderContext,CastleGL,Osm3dGeomMesh,GrassModel,GrassRenderer,Osm3dRiderShadow;
+  CastleTransform,CastleRenderContext,{$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},Osm3dGeomMesh,GrassModel,GrassRenderer,Osm3dRiderShadow;
 type
   { Keep compact surfaces. Generate metre patches only around the camera. }
   TGrassRenderer=class(TCastleTransform)
@@ -47,7 +48,8 @@ procedure SetGrassSunDir(const ADir:TVector3);
 function GrassMatDensity(MatId:Integer):Single;
 implementation
 uses Osm3dRtxMaterials,CastleUriUtils,CastleLog,CastleApplicationProperties,Osm3dGroundComposite,Osm3dGlslLib,Osm3dWind,
-  Osm3dGpuAccount,Osm3dRenderInstanced,Osm3dStudioSettings,Osm3dVegetationQuality,TreeMath,GL,GLExt
+  Osm3dGpuAccount,Osm3dRenderInstanced,Osm3dStudioSettings,Osm3dVegetationQuality,TreeMath
+  {$ifndef OpenGLES},GL,GLExt{$endif}
   {$IFDEF TILE_MEM_PROFILE},Osm3dMemCensus{$ENDIF};
 const CELL=GRASS_RENDER_CELL;RADIUS=160;
   GRASS_INDEX_CELL=64;
@@ -588,7 +590,7 @@ begin
   if Params.RenderingCamera.Target=rtShadowMap then Exit;
   View:=Params.RenderingCamera.Matrix;Camera:=WorldInverseTransform.MultPoint(CameraWorldPosFromView(View));
   Schedule(Camera);if FSources.Count=0 then Exit;
-  if (FRenderer=nil) and not Load_GL_version_3_3_CORE then Exit;
+  {$ifndef OpenGLES}if (FRenderer=nil) and not Load_GL_version_3_3_CORE then Exit;{$endif}
   if not FContextHooked then begin ApplicationProperties.OnGLContextCloseObject.Add(@ContextClose);FContextHooked:=True;end;
   glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
   glGetIntegerv(GL_ARRAY_BUFFER_BINDING,@OldBuffer);glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);

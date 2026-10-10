@@ -14,10 +14,17 @@ type
     FTitle, FHint: TCastleLabel;
     FRevision: Cardinal;
     FSuspended: Boolean;
+    FToggle: TMenuButton;
+    FMode: Integer;
+    FWindow: TCastleView;
+    FIsWindow: Boolean;
+    function GetExpanded: Boolean;
+    procedure TogglePreview(Sender:TObject);
   public
     constructor Create(AOwner:TComponent); override;
     procedure ReleaseScene;
     procedure Update(const SecondsPassed:Single;var HandleInput:Boolean); override;
+    property Expanded:Boolean read GetExpanded;
     property Suspended:Boolean read FSuspended write FSuspended;
   end;
 
@@ -25,6 +32,11 @@ type
   private
     FTitle, FIntro: TCastleLabel;
     FAutoButton: TMenuButton;
+    FPresetFlow: TMenuFlow;
+    FPresetButtons: array[TGraphicsPreset] of TMenuButton;
+    FPresetHint: TCastleLabel;
+    procedure ClickPreset(Sender:TObject);
+  private
     FAutoHint, FAutoResult: TCastleLabel;
     FAutoRun: TGraphicsAutoRun;
     FRows: array[TGraphicsOption] of TCastleUserInterface;
@@ -47,18 +59,72 @@ type
 
 implementation
 
-uses Math, SysUtils, AppSettings, UiTranslations, CastleColors, Osm3dVegetationQuality;
+uses CastleKeysMouse, Math, SysUtils, AppSettings, UiTranslations, CastleColors, Osm3dVegetationQuality;
+
+type
+  TGraphicsPreviewWindow=class(TCastleView)
+  private FPreview:TGraphicsPreview;
+  public
+    constructor Create(AOwner:TComponent);override;
+    procedure Stop;override;
+    function Press(const Event:TInputPressRelease):Boolean;override;
+  end;
+constructor TGraphicsPreviewWindow.Create(AOwner:TComponent);
+var Background:TMenuPanel;
+begin
+  inherited;
+  Background:=TMenuPanel.Create(Self);Background.FullSize:=True;
+  Background.Color:=MenuBackground;InsertFront(Background);
+  FPreview:=TGraphicsPreview.Create(Self);FPreview.FullSize:=True;
+  FPreview.FIsWindow:=True;FPreview.FMode:=1;
+  BindUiText(FPreview.FToggle,'Back');FPreview.FToggle.Anchor(hpLeft,12);
+  FPreview.FToggle.Anchor(vpTop,-4);InsertFront(FPreview);
+end;
+procedure TGraphicsPreviewWindow.Stop;
+begin FPreview.ReleaseScene;inherited end;
+function TGraphicsPreviewWindow.Press(const Event:TInputPressRelease):Boolean;
+begin
+  if Event.IsKey(keyEscape) then begin Container.PopView(Self);Exit(True) end;
+  Result:=inherited;
+end;
 
 constructor TGraphicsPreview.Create(AOwner:TComponent);
 begin
   inherited;
   Name:='GraphicsPreview';
   FTitle:=TMenuLabel.Create(Self);BindUiText(FTitle,'Live preview');
+  FToggle:=TMenuButton.Create(Self);FToggle.Name:='ToggleGraphicsPreview';
+  FToggle.AutoIcon:=False;FToggle.FontSize:=16;FToggle.MinHeight:=44;
+  FToggle.OnClick:=@TogglePreview;FToggle.Anchor(hpLeft);FToggle.Anchor(vpTop);
+  BindUiText(FToggle,'Live preview');InsertFront(FToggle);
+  FTitle.Exists:=False;
   FTitle.FontSize:=22;FTitle.Anchor(hpLeft);FTitle.Anchor(vpTop);InsertFront(FTitle);
   FHint:=TMenuLabel.Create(Self);
   BindUiText(FHint,'Preview FPS depends on its size. Auto tests the same scene at full window size.');
   FHint.FontSize:=14;FHint.Color:=MenuMuted;
   FHint.Anchor(hpLeft);FHint.Anchor(vpBottom);InsertFront(FHint);
+end;
+
+function TGraphicsPreview.GetExpanded:Boolean;
+begin
+  Result:=FMode=1;
+  {$ifndef ANDROID}
+  if (FMode=0) and (Container<>nil) then
+    Result:=(Container.UnscaledWidth>=1180) and (Container.UnscaledHeight>=690);
+  {$endif}
+end;
+procedure TGraphicsPreview.TogglePreview(Sender:TObject);
+begin
+  if FIsWindow then begin Container.PopView(FWindow);Exit end;
+  if (Container<>nil) and (Container.UnscaledHeight<600) then begin
+    if FWindow=nil then begin
+      FWindow:=TGraphicsPreviewWindow.Create(Self);
+      TGraphicsPreviewWindow(FWindow).FPreview.FWindow:=FWindow;
+    end;
+    Container.PushView(FWindow);Exit;
+  end;
+  if GetExpanded then FMode:=2 else FMode:=1;
+  if not GetExpanded then ReleaseScene;
 end;
 
 procedure TGraphicsPreview.ReleaseScene;
@@ -71,13 +137,16 @@ var Values:TGraphicsValues;O:TGraphicsOption;
 begin
   inherited;
   if FSuspended then Exit;
+  FHint.Exists:=GetExpanded;
+  SelectMenuButton(FToggle,GetExpanded);
+  if not GetExpanded then begin ReleaseScene;Exit end;
   FHint.MaxWidth:=Max(180,EffectiveWidth);
   if FScene=nil then begin
     FScene:=TGraphicsBenchmarkScene.Create(Self);
     FScene.Name:='GraphicsPreviewScene';
     InsertBack(FScene);FRevision:=Settings.GraphicsRevision-1;
   end;
-  FScene.Border.Top:=36;FScene.Border.Bottom:=FHint.EffectiveHeight+10;
+  FScene.Border.Top:=52;FScene.Border.Bottom:=FHint.EffectiveHeight+10;
   if FRevision<>Settings.GraphicsRevision then begin
     for O:=Low(O) to High(O) do Values[O]:=Settings.GetGraphicsOption(Ord(O));
     FScene.ApplyProfile(Values);FRevision:=Settings.GraphicsRevision;
@@ -85,7 +154,7 @@ begin
 end;
 
 constructor TGraphicsPanel.Create(AOwner: TComponent);
-var O: TGraphicsOption; I: Integer; B: TMenuButton;
+var O: TGraphicsOption; I: Integer; B: TMenuButton; P:TGraphicsPreset;
 begin
   inherited;
   Name := 'GraphicsSettings';
@@ -100,6 +169,16 @@ begin
   FIntro.FontSize := 15; FIntro.Color := MenuMuted;
   FIntro.Anchor(hpLeft); FIntro.Anchor(vpTop, -36);
   InsertFront(FIntro);
+  FPresetFlow:=TMenuFlow.Create(Self);FPresetFlow.WidthFraction:=0;
+  FPresetFlow.Spacing:=8;InsertFront(FPresetFlow);
+  for P:=Low(P) to High(P) do begin
+    B:=TMenuButton.Create(Self);B.Name:='GraphicsPreset_'+IntToStr(Ord(P));
+    B.Tag:=Ord(P);B.AutoIcon:=False;B.FontSize:=17;B.MinHeight:=44;
+    BindUiText(B,GraphicsPresetTitles[P]);B.OnClick:=@ClickPreset;
+    FPresetButtons[P]:=B;FPresetFlow.InsertFront(B);
+  end;
+  FPresetHint:=TMenuLabel.Create(Self);FPresetHint.FontSize:=14;FPresetHint.Color:=MenuMuted;
+  InsertFront(FPresetHint);
   FAutoButton := TMenuButton.Create(Self);
   FAutoButton.Name := 'GraphicsAuto'; FAutoButton.AutoIcon := False;
   BindUiText(FAutoButton, 'Auto'); FAutoButton.FontSize := 18;
@@ -155,6 +234,13 @@ begin
   inherited;
 end;
 
+procedure TGraphicsPanel.ClickPreset(Sender:TObject);
+begin
+  if (FAutoRun<>nil) and not FAutoRun.Completed then Exit;
+  Settings.ApplyGraphicsPreset(TGraphicsPreset(TComponent(Sender).Tag));
+  Refresh;
+end;
+
 procedure TGraphicsPanel.ClickAuto(Sender: TObject);
 begin
   if (FAutoRun <> nil) and not FAutoRun.Completed then Exit;
@@ -176,7 +262,7 @@ procedure TGraphicsPanel.LanguageChanged(Sender:TObject);
 begin Refresh end;
 
 procedure TGraphicsPanel.Refresh;
-var O: TGraphicsOption; I,V: Integer; Shadows: Boolean; Detail:TVegetationDetail;
+var O: TGraphicsOption; I,V: Integer; Shadows: Boolean; Detail:TVegetationDetail;Values:TGraphicsValues;P:TGraphicsPreset;Selected:Integer;PresetValues:TGraphicsValues;
 begin
   Shadows := Settings.GetGraphicsOption(Ord(goShadowSize)) <> 0;
   for O := Low(TGraphicsOption) to High(TGraphicsOption) do
@@ -188,8 +274,19 @@ begin
       FButtons[O][I].Enabled := Shadows or not (O in [goShadowFilter, goShadowDistance,goWorldShadows,goRtxReflections]);
       if O=goRtxReflections then FButtons[O][I].Enabled:=Shadows and
         (Settings.GetGraphicsOption(Ord(goWorldShadows))=2);
+      FButtons[O][I].Enabled := FButtons[O][I].Enabled and
+        (EffectiveGraphicsValue(O, GraphicsChoiceValue(O,I)) = GraphicsChoiceValue(O,I));
     end;
   end;
+  for O:=Low(O) to High(O) do Values[O]:=Settings.GetGraphicsOption(Ord(O));
+  Selected:=MatchingGraphicsPreset(Values);
+  for P:=Low(P) to High(P) do begin
+    SelectMenuButton(FPresetButtons[P],Ord(P)=Selected);
+    PresetValues:=GraphicsPresetValues(P,Values);
+    FPresetButtons[P].Enabled:=MatchingGraphicsPreset(PresetValues)=Ord(P);
+  end;
+  if Selected<0 then FPresetHint.Caption:=UiText('Custom settings')
+  else FPresetHint.Caption:=UiText(GraphicsPresetHints[TGraphicsPreset(Selected)]);
   Detail:=VegetationPreset(Settings.GetGraphicsOption(Ord(goTrees)));
   FHints[goTrees].Caption:=UiText(GraphicsHints[goTrees]);
   if Settings.GetGraphicsOption(Ord(goTrees))<>0 then
@@ -214,6 +311,10 @@ begin
   W := Max(200, EffectiveWidth);
   FIntro.MaxWidth := W;
   Y := 36 + FIntro.EffectiveHeight + 22;
+  FPresetFlow.Width:=W;FPresetFlow.Anchor(hpLeft);FPresetFlow.Anchor(vpTop,-Y);FPresetFlow.Arrange;
+  Y:=Y+FPresetFlow.Height+10;FPresetHint.MaxWidth:=W;
+  FPresetHint.Anchor(hpLeft);FPresetHint.Anchor(vpTop,-Y);
+  Y:=Y+FPresetHint.EffectiveHeight+18;
   FAutoButton.Anchor(hpLeft); FAutoButton.Anchor(vpTop, -Y);
   FAutoHint.MaxWidth := Max(100, W - FAutoButton.EffectiveWidth - 18);
   FAutoHint.Anchor(hpLeft, FAutoButton.EffectiveWidth + 18);

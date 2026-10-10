@@ -111,7 +111,7 @@ const
   ColumnGap = 16;
 
   SENSOR_HEADERS: array[TSensorKind] of string = (
-    'HR', 'POWER', 'CADENCE', 'SPEED'
+    'HR', 'POWER', 'CADENCE', 'SPEED', 'STEERING'
   );
 
 { ═══════════════════════════════════════════════════════════════════
@@ -229,7 +229,7 @@ begin
   IsConnected := (FEntry.ConnectionState = gdcsConnected);
   IsActive := Assigned(DeviceService) and DeviceService.IsSensorSelected(FKind, FEntry);
   Age := FSensor.DataAgeSec;
-  IsStale := IsConnected and FSensor.HasData and (Age > STALE_TIMEOUT);
+  IsStale := IsConnected and FSensor.HasData and (FKind<>skSteering) and (Age > STALE_TIMEOUT);
 
   { Имя }
   DevName := Trim(FEntry.DeviceInfo.Name);
@@ -563,7 +563,7 @@ begin
   TotalW := FParent.RenderRect.Width / Max(0.01, FParent.UIScale);
   if TotalW <= 0 then Exit;
   Gap := ColumnGap / Max(0.65, Min(1, FParent.UIScale));
-  FColumnWidth := Max(1, (TotalW - Gap * 3) / 4);
+  FColumnWidth := Max(1, (TotalW - Gap * Ord(High(TSensorKind))) / (Ord(High(TSensorKind))+1));
   FRoot.Width := TotalW;
   FControlLabel.MaxWidth := TotalW;
   FControlRow.Width := TotalW;

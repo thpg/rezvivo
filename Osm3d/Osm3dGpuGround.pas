@@ -1,11 +1,12 @@
 unit Osm3dGpuGround;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}{$Q-}{$R-}
 
 interface
 
 uses Classes, SysUtils, Math, CastleVectors, CastleScene, CastleShapes,
-  CastleGL, X3DNodes, Generics.Collections, Osm3dGpuTimer;
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, X3DNodes, Generics.Collections, Osm3dGpuTimer;
 
 type
   TGpuGroundMode = (ggCpu, ggCompare, ggGpu);
@@ -104,7 +105,7 @@ function GpuGroundModeName:string;
 
 implementation
 
-uses CastleApplicationProperties, CastleInternalRenderer, CastleLog, CastleTimeUtils,
+uses AppRuntimePaths, CastleApplicationProperties, CastleInternalRenderer, CastleLog, CastleTimeUtils,
   CastleRenderContext, CastleGLShaders;
 
 const
@@ -380,6 +381,16 @@ begin
   if D>0.02 then Inc(FOver2cm);
 end;
 
+{$ifdef OpenGLES}
+{ GLES 3.0 is the universal baseline. Contact queries retain the same CPU
+  surface index; animation and materials continue to run on the GPU. }
+procedure TOsmGpuGround.EnsureProgram;
+begin FError:='Compute ground queries require desktop OpenGL 4.3'; end;
+function TOsmGpuGround.PrepareTile(Tile:TGpuGroundTile;var PrepareBudget:Integer):Boolean;
+begin Result:=False end;
+procedure TOsmGpuGround.Render;
+begin FRenderMs:=0 end;
+{$else}
 procedure TOsmGpuGround.EnsureProgram;
 const Names:array[0..7]of PChar=('uPatch','uCurbs','uBounds','uStride',
     'uFirstCurb','uTriangleBase','uInit','uBinCount');
@@ -554,6 +565,8 @@ begin
     FRenderTotalMs:=FRenderTotalMs+FRenderMs;FRenderMaxMs:=Max(FRenderMaxMs,FRenderMs);
   end;
 end;
+{$endif}
+
 function TOsmGpuGround.Info:string;
 var T:TGpuGroundTile;P:TGpuGroundPart;C:TGpuGroundPatch;Cpu,Gpu:Int64;
 begin
@@ -575,14 +588,15 @@ procedure ReadMode;
 var I:Integer;S:string;
 begin
   S:=LowerCase(GetEnvironmentVariable('REZVIVO_GPU_GROUND'));
-  for I:=1 to ParamCount do begin
-    if ParamStr(I)='--gpu-ground' then S:='gpu';
-    if ParamStr(I)='--gpu-ground-compare' then S:='compare';
-    if ParamStr(I)='--cpu-ground' then S:='cpu';
+  for I:=1 to AppParamCount do begin
+    if AppParamStr(I)='--gpu-ground' then S:='gpu';
+    if AppParamStr(I)='--gpu-ground-compare' then S:='compare';
+    if AppParamStr(I)='--cpu-ground' then S:='cpu';
   end;
   if(S='gpu')or(S='1')then GpuGroundMode:=ggGpu
   else if S='compare' then GpuGroundMode:=ggCompare
   else if S='cpu' then GpuGroundMode:=ggCpu;
 end;
 initialization ReadMode;
+  {$ifdef OpenGLES}GpuGroundMode:=ggCpu;{$endif}
 end.

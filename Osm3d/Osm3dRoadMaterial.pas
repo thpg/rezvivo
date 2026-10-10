@@ -1,4 +1,5 @@
 unit Osm3dRoadMaterial;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}{$Q-}{$R-}
 
@@ -48,8 +49,8 @@ function RoadMaterialDebug: string;
 
 implementation
 
-uses RenderComplexity, Math, Generics.Collections, IniFiles, CastleGL, CastleApplicationProperties,
-  CastleTimeUtils, CastleLog,
+uses RenderComplexity, Math, Generics.Collections, IniFiles, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, CastleApplicationProperties,
+  CastleTimeUtils, CastleLog, CastleFilesUtils, CastleUriUtils,
   CastleRenderOptions, CastleInternalRenderer, CastleRendererInternalShader,
   CastleRendererInternalTextureEnv, Osm3dRenderInstanced;
 
@@ -98,6 +99,7 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure ContextClose(Sender: TObject);
+    procedure ReleasePages;
     procedure Ensure;
     procedure UploadLayouts;
     procedure WriteDirectory(Profile, Block, Page: Integer);
@@ -316,8 +318,12 @@ end;
 
 function PreferencePath: string;
 begin
+  {$ifdef ANDROID}
+  Result:=UriToFilenameSafe(ApplicationConfig('road-material.ini'));
+  {$else}
   Result:=IncludeTrailingPathDelimiter(GetEnvironmentVariable('LOCALAPPDATA'))+
     'third_person_navigation'+PathDelim+'road-material.ini';
+  {$endif}
 end;
 
 procedure SetRoadMaterialMode(Mode: TRoadMaterialMode; SavePreference: Boolean);
@@ -389,17 +395,22 @@ begin
 end;
 procedure TCache.ContextClose(Sender: TObject);
 begin
+  ReleasePages;
+  if LayoutTexture<>0 then glDeleteTextures(1,@LayoutTexture);
+  LayoutTexture:=0; UploadedLayouts:=0; LayoutColumns:=0; LayoutCapacity:=0;
+  Failed:=False;
+end;
+
+procedure TCache.ReleasePages;
+begin
   if ProgramId<>0 then glDeleteProgram(ProgramId);
   if FBO<>0 then glDeleteFramebuffers(1,@FBO);
   if VAO<>0 then glDeleteVertexArrays(1,@VAO);
   if Textures[0]<>0 then glDeleteTextures(4,@Textures[0]);
-  if LayoutTexture<>0 then glDeleteTextures(1,@LayoutTexture);
-  LayoutTexture:=0; UploadedLayouts:=0; LayoutColumns:=0; LayoutCapacity:=0;
   ProgramId:=0; FBO:=0; VAO:=0;
   FillChar(Textures,SizeOf(Textures),0);
   FillChar(Pages,SizeOf(Pages),0);
   if Length(Directory)>0 then FillChar(Directory[0],Length(Directory)*SizeOf(TVector4),0);
-  Failed:=False;
 end;
 
 procedure TCache.UploadLayouts;
@@ -449,6 +460,28 @@ var VS,FS: GLuint; I,L: Integer;
 begin
   if Textures[0]<>0 then Exit;
   glGenTextures(4,@Textures[0]);
+  glGenFramebuffers(1,@FBO);
+  {$ifdef OpenGLES}
+  { ES 3 guarantees sampling these formats, but float render targets depend
+    on the GPU. Probe tiny targets before allocating the full page cache.
+    The caller falls back to the same procedural shader without caching. }
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FBO);
+  for I:=2 to 3 do
+  begin
+    glBindTexture(GL_TEXTURE_2D,Textures[I]);
+    if I=2 then
+      glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA32F,1,1,0,GL_RGBA,GL_FLOAT,nil)
+    else
+      glTexImage2D(GL_TEXTURE_2D,0,GL_R16F,1,1,0,GL_RED,GL_FLOAT,nil);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,Textures[I],0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then
+      raise Exception.Create('Floating-point road cache is not supported by this GPU');
+  end;
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
+  {$endif}
   for I:=0 to 3 do
   begin
     if I=2 then Continue; // directory uses its own size and integer addressing
@@ -469,7 +502,7 @@ begin
   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,0);
-  glGenFramebuffers(1,@FBO); glGenVertexArrays(1,@VAO);
+  glGenVertexArrays(1,@VAO);
   VS:=CompileShader(GL_VERTEX_SHADER,
     '#version 330 core'+#10+
     'void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));'+
@@ -628,17 +661,18 @@ begin
     glGetBooleanv(GL_COLOR_WRITEMASK,@Mask[0]);
     Depth:=glIsEnabled(GL_DEPTH_TEST); Blend:=glIsEnabled(GL_BLEND);
     Cull:=glIsEnabled(GL_CULL_FACE); Scissor:=glIsEnabled(GL_SCISSOR_TEST);
-    SRGB:=glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    {$ifndef OpenGLES}SRGB:=glIsEnabled(GL_FRAMEBUFFER_SRGB);{$endif}
     try
       try
       glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
-      glDisable(GL_SCISSOR_TEST); glDisable(GL_FRAMEBUFFER_SRGB);
+      glDisable(GL_SCISSOR_TEST); {$ifndef OpenGLES}glDisable(GL_FRAMEBUFFER_SRGB);{$endif}
       glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
       Cache.Ensure;
       Cache.Bake(Slot,BestP,BestB);
       except
         on E:Exception do
         begin
+          Cache.ReleasePages;
           Cache.Failed:=True;
           SetRoadMaterialMode(rmmDirect,False);
           WritelnWarning('Road material','Page cache disabled: '+E.Message);
@@ -655,7 +689,7 @@ begin
     if Blend<>GL_FALSE then glEnable(GL_BLEND);
     if Cull<>GL_FALSE then glEnable(GL_CULL_FACE);
     if Scissor<>GL_FALSE then glEnable(GL_SCISSOR_TEST);
-    if SRGB<>GL_FALSE then glEnable(GL_FRAMEBUFFER_SRGB);
+    {$ifndef OpenGLES}if SRGB<>GL_FALSE then glEnable(GL_FRAMEBUFFER_SRGB);{$endif}
     end;
     Cache.LastSubmitMs:=TimerSeconds(Timer,Started)*1000;
   finally LeaveCriticalSection(Lock) end;
@@ -690,7 +724,7 @@ initialization
   InitCriticalSection(Lock);
   ProfileMap:=specialize TDictionary<string,Integer>.Create;
   SetLength(Profiles,1);
-  LoadPreference;
+  {$ifndef ANDROID}LoadPreference;{$endif}
   TTextureResource.RegisterClass(TRoadTextureResource);
 finalization
   TTextureResource.UnregisterClass(TRoadTextureResource);

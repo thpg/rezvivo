@@ -1010,9 +1010,15 @@ begin
   HandleAsyncCompletion;
   if (FActiveTab = ptSettings) and (FGraphics <> nil) then
   begin
+    if (Container<>nil) and (Container.UnscaledHeight<690) then FDesign.Border.Top:=52
+    else FDesign.Border.Top:=84;
     W:=FDesign.EffectiveWidthForChildren;H:=FDesign.EffectiveHeightForChildren;
     FGraphicsPreview.Exists:=True;
-    if (W>=1040) and (FDesign.RenderRect.Width>=950) then begin
+    if not FGraphicsPreview.Expanded then begin
+      FGraphicsPreview.Width:=W-40;FGraphicsPreview.Height:=48;
+      FGraphicsPreview.Anchor(hpRight,-20);FGraphicsPreview.Anchor(vpTop,-4);
+      FSettingsScroll.Border.Right:=20;FSettingsScroll.Border.Top:=60;
+    end else if (W>=1040) and (FDesign.RenderRect.Width>=950) then begin
       P:=Min(720,W*0.44);
       FGraphicsPreview.Width:=P;FGraphicsPreview.Height:=H-24;
       FGraphicsPreview.Anchor(hpRight,-20);FGraphicsPreview.Anchor(vpTop,-4);

@@ -933,6 +933,8 @@ var
 
 implementation
 
+uses AppRuntimePaths;
+
 procedure TRiderAppearanceAddon.ClothColorChanged(Slot:TClothSlot;
   const Color:TVector3;Enabled:Boolean);
 begin end;
@@ -985,7 +987,7 @@ begin
     still resolve their own castle-data directory first. }
   if not FileExists(Result) then
   begin
-    DataRoot := ExpandFileName(ExtractFilePath(ParamStr(0)) +
+    DataRoot := ExpandFileName(AppDirectory +
       '..' + PathDelim + 'rezvivo-osm-bckl' + PathDelim + 'data' + PathDelim + Rel);
     if FileExists(DataRoot) then Result := DataRoot;
   end;
@@ -6157,10 +6159,10 @@ const
 function RiderLightingFile: String;
 var EditorShared: String;
 begin
-  Result := ExpandFileName(ExtractFilePath(ParamStr(0)) + 'data' +
+  Result := ExpandFileName(AppDirectory + 'data' +
     PathDelim + 'rider_lighting.json');
   if FileExists(Result) then Exit;
-  EditorShared := ExpandFileName(ExtractFilePath(ParamStr(0)) + '..' +
+  EditorShared := ExpandFileName(AppDirectory + '..' +
     PathDelim + 'rezvivo-osm-bckl' + PathDelim + 'data' + PathDelim +
     'rider_lighting.json');
   if FileExists(EditorShared) then Result := EditorShared;

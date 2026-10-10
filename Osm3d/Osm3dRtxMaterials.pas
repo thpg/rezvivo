@@ -1,4 +1,5 @@
 unit Osm3dRtxMaterials;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 {$mode objfpc}{$H+}
 interface
 uses Classes, CastleVectors, CastleShapes, X3DNodes, X3DFields;
@@ -18,7 +19,7 @@ const RTX_MATERIAL_GLSL =
   'if(any(lessThan(uv,vec2(0)))||any(greaterThan(uv,vec2(1))))return fallback;'+
   'vec4 c=texture2D(rz_reflection,uv);return fallback*(1.-c.a)+c.rgb;}'#10;
 implementation
-uses SysUtils, CastleGL, CastleRenderOptions, CastleInternalRenderer,
+uses SysUtils, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleRenderOptions, CastleInternalRenderer,
   CastleRendererInternalShader, CastleRendererInternalTextureEnv, Osm3dCompositeShader;
 type
   TRtxTextureNode=class(TShaderTextureNode);

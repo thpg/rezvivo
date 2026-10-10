@@ -58,7 +58,7 @@ function SpeechInputStateName(State: TSpeechInputState): string;
 
 implementation
 
-uses fpjson, jsonparser
+uses AppRuntimePaths, fpjson, jsonparser
   {$ifdef MSWINDOWS}, Windows, MMSystem{$endif};
 
 type
@@ -154,7 +154,7 @@ begin
     SetLength(ExecutablePath, N);
     FAssetRoot := ExtractFilePath(string(UTF8Encode(ExecutablePath)));
     {$else}
-    FAssetRoot := ExtractFilePath(ParamStr(0));
+    FAssetRoot := AppDirectory;
     {$endif}
     FAssetRoot := IncludeTrailingPathDelimiter(FAssetRoot) + 'data' + PathDelim + 'speech';
   end

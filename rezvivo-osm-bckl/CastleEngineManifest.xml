@@ -10,9 +10,15 @@ See https://castle-engine.io/project_manifest for documentation of this file.
   game_units="GameInitialize"
   editor_units="GameMenuTheme,GameEnemy,Osm3dImpostorCache"
   caption="REZVIVO"
-  qualified_name="io.castleengine.third.person.navigation"
+  qualified_name="com.rezvivo.client"
+  screen_orientation="landscape"
 >
-  <version value="0.2.4-alpha.1" code="6" />
+  <version value="0.3.4-alpha.1" code="11" />
+  <android compile_sdk_version="35" target_sdk_version="35" min_sdk_version="23">
+    <services>
+      <service name="rezvivo" />
+    </services>
+  </android>
   <icons>
     <icon path="data/branding/rezvivo.ico" />
     <icon path="data/branding/rezvivo.png" />

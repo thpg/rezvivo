@@ -447,7 +447,8 @@ end;
 constructor TRideUploadQueue.Create;
 begin
   inherited Create;
-  FThread := TRideUploadThread.Create;
+  { Start the worker on Scan, after platform storage and VeloSite are ready.
+    Unit initialization must not launch a thread that reads the profile. }
 end;
 
 destructor TRideUploadQueue.Destroy;
@@ -487,6 +488,7 @@ var
   Item: TQueueItem;
   I: Integer;
 begin
+  if VeloSite=nil then Exit;
   Dir := IncludeTrailingPathDelimiter(TSensorLog.SessionDir);
   if (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
      (GetEnvironmentVariable('REZVIVO_TEST_NO_UPLOAD')='1') then Exit;
@@ -517,6 +519,11 @@ begin
     SysUtils.FindClose(SR);
   end;
 
+  if FThread=nil then
+  begin
+    if Length(Items)=0 then Exit;
+    FThread:=TRideUploadThread.Create;
+  end;
   FThread.ReplaceItems(Items);
   FThread.Wake;
   Logger.Info('[UploadQueue] ' + Format('Scan: %d sessions, %d pending',
@@ -529,6 +536,7 @@ var
   I: Integer;
 begin
   Result := 0;
+  if FThread=nil then Exit;
   Snap := FThread.Snapshot;
   for I := 0 to High(Snap) do
     if Snap[I].Status in [usPending, usUploading] then
@@ -541,6 +549,7 @@ var
   I: Integer;
 begin
   Result := False;
+  if FThread=nil then Exit;
   Snap := FThread.Snapshot;
   for I := 0 to High(Snap) do
     if Snap[I].Status in [usFailedClient, usFailedQuota] then
@@ -549,6 +558,7 @@ end;
 
 function TRideUploadQueue.Snapshot: TQueueItemArray;
 begin
+  if FThread=nil then Exit(nil);
   Result := FThread.Snapshot;
 end;
 

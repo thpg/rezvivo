@@ -40,7 +40,8 @@ type
     skHeartRate,
     skPower,
     skCadence,
-    skSpeed
+    skSpeed,
+    skSteering
   );
 
   { Forward }
@@ -191,13 +192,26 @@ type
     function FormatMinMax: string; override;
   end;
 
+  TSteeringSensor = class(TDeviceSensor)
+  protected
+    function DoExtract(const Data: TTrainerDataRecord;
+      out AInstant, ADeviceAverage: Double): Boolean; override;
+  public
+    constructor Create(const ADeviceAddress, ADeviceName: string); override;
+    class function SensorName: string; override;
+    class function UnitLabel: string; override;
+    class function Kind: TSensorKind; override;
+    class function SensorKey: string; override;
+    function FormatInstant: string; override;
+  end;
+
 const
   SENSOR_KIND_NAMES: array[TSensorKind] of string = (
-    'Heart Rate', 'Power', 'Cadence', 'Speed'
+    'Heart Rate', 'Power', 'Cadence', 'Speed', 'Steering'
   );
 
   SENSOR_KIND_KEYS: array[TSensorKind] of string = (
-    'hr', 'pwr', 'cad', 'spd'
+    'hr', 'pwr', 'cad', 'spd', 'steer'
   );
 
 { ── Утилиты ── }
@@ -292,6 +306,8 @@ begin
 
   if AInfo.SupportsSpeed then
     Result.Add(TSpeedSensor.Create(AInfo.Address, AInfo.Name));
+  if AInfo.SupportsSteering then
+    Result.Add(TSteeringSensor.Create(AInfo.Address, AInfo.Name));
 end;
 
 { ═══════════════════════════════════════════════════════════════════
@@ -330,7 +346,7 @@ end;
 
 function TDeviceSensor.Update(const Data: TTrainerDataRecord): Boolean;
 const Metrics: array[TSensorKind] of TTrainerMetric =
-  (tmHeartRate, tmPower, tmCadence, tmSpeed);
+  (tmHeartRate, tmPower, tmCadence, tmSpeed, tmSteering);
 var
   NewInstant, NewDevAvg: Double;
   M: TTrainerMetric;
@@ -614,6 +630,33 @@ begin
               FormatFloat('0.0', FSessionMax) + ' ' + UnitLabel
   else
     Result := '--/--';
+end;
+
+constructor TSteeringSensor.Create(const ADeviceAddress, ADeviceName: string);
+begin
+  inherited Create(ADeviceAddress, ADeviceName);
+  FKind := skSteering;
+  BuildIds;
+end;
+
+function TSteeringSensor.DoExtract(const Data: TTrainerDataRecord;
+  out AInstant, ADeviceAverage: Double): Boolean;
+begin
+  Result := Data.HasMetricMask and (tmSteering in Data.ValidMetrics);
+  AInstant := Data.SteeringAngle; ADeviceAverage := AInstant;
+end;
+class function TSteeringSensor.SensorName: string;
+begin Result := 'Steering' end;
+class function TSteeringSensor.UnitLabel: string;
+begin Result := 'deg' end;
+class function TSteeringSensor.Kind: TSensorKind;
+begin Result := skSteering end;
+class function TSteeringSensor.SensorKey: string;
+begin Result := 'steer' end;
+function TSteeringSensor.FormatInstant: string;
+begin
+  if HasData then Result := FormatFloat('0.0', Instant) + ' ' + UnitLabel
+  else Result := '--';
 end;
 
 end.

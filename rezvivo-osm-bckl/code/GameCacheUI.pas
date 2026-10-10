@@ -30,7 +30,8 @@ type
 
 implementation
 
-uses Math, SysUtils, UiTranslations, Osm3dStudioSettings, GameViewMenu, GameViewPlay;
+uses Math, SysUtils, UiTranslations, Osm3dStudioSettings, GameViewMenu, GameViewPlay
+  {$ifdef ANDROID}, CastleFilesUtils, CastleURIUtils{$endif};
 
 function CacheSizeText(Bytes: Int64): string;
 const Units: array[0..4] of string = ('B', 'KiB', 'MiB', 'GiB', 'TiB');
@@ -92,7 +93,10 @@ begin
   { Only a finished worker is freed here; no disk/network waits in the UI. }
   FreeAndNil(FJob);
   FJob := TDiskCacheJob.Create(DefaultCacheRoot, Clear,
+    {$ifdef ANDROID}URIToFilenameSafe(ApplicationConfig('shader-cache')));
+    {$else}
     IncludeTrailingPathDelimiter(GetAppConfigDir(False)) + 'shader-cache');
+    {$endif}
   FWasClear := Clear; FHaveSize := False;
   FSnapshot := Default(TDiskCacheState);
   FJob.Start;

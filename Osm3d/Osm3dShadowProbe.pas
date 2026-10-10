@@ -1,10 +1,11 @@
 unit Osm3dShadowProbe;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 {$mode objfpc}{$H+}
 
 interface
 
-uses CastleVectors, CastleGL, CastleGLShaders, CastleTimeUtils;
+uses CastleVectors, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleGLShaders, CastleTimeUtils;
 
 type
   { Nine depth tests in the existing shadow framebuffer. Two asynchronous
@@ -41,7 +42,8 @@ type
   end;
 
 const
-  SHADOW_PROBE_VS = '#version 330' + #10 +
+  SHADOW_PROBE_QUERY = {$ifdef OpenGLES}GL_ANY_SAMPLES_PASSED{$else}GL_SAMPLES_PASSED{$endif};
+  SHADOW_PROBE_VS = '// CGE selects desktop GLSL or GLSL ES' + #10 +
     'uniform vec3 probe;' + #10 +
     'uniform float stepSize;' + #10 +
     'void main() {' + #10 +
@@ -49,7 +51,7 @@ const
     '  gl_Position = vec4(probe.xy + offset * stepSize, probe.z, 1.0);' + #10 +
     '  gl_PointSize = 1.0;' + #10 +
     '}' + #10;
-  SHADOW_PROBE_FS = '#version 330' + #10 + 'void main() {}' + #10;
+  SHADOW_PROBE_FS = '// CGE selects desktop GLSL or GLSL ES' + #10 + 'void main() {}' + #10;
 
 implementation
 
@@ -111,7 +113,7 @@ begin
           (FQueries[I].Serial > FResultSerial) then
         begin
           FResultSerial := FQueries[I].Serial;
-          FCoverage := Min(Count / 9.0, 1.0);
+          FCoverage := Min(Count / {$ifdef OpenGLES}1.0{$else}9.0{$endif}, 1.0);
           FPoint := FQueries[I].Point;
           FTime := FQueries[I].Time;
           FValid := True;
@@ -138,7 +140,7 @@ var
   SavedProgram, SavedVAO, SavedFunc, ActiveQuery: GLint;
   SavedContextProgram: TGLSLProgram;
   SavedMask, HadDepth, HadCull, HadOffset, HadPointSize: GLboolean;
-  SavedRange: array[0..1] of GLdouble;
+  SavedRange: array[0..1] of {$ifdef OpenGLES}GLfloat{$else}GLdouble{$endif};
   P: TVector3;
   Spacing: Integer;
 begin
@@ -151,7 +153,7 @@ begin
   if (Abs(ClipPoint.X) >= 1 - 2.0 * (Spacing + 1) / TileSize) or
      (Abs(ClipPoint.Y) >= 1 - 2.0 * (Spacing + 1) / TileSize) or
      (Abs(ClipPoint.Z) >= 1) then begin Reset; Exit end;
-  glGetQueryiv(GL_SAMPLES_PASSED, GL_CURRENT_QUERY, @ActiveQuery);
+  glGetQueryiv(SHADOW_PROBE_QUERY, GL_CURRENT_QUERY, @ActiveQuery);
   if ActiveQuery <> 0 then Exit;
   if FProgram = nil then
   begin
@@ -169,19 +171,19 @@ begin
   glGetIntegerv(GL_VERTEX_ARRAY_BINDING, @SavedVAO);
   glGetIntegerv(GL_DEPTH_FUNC, @SavedFunc);
   glGetBooleanv(GL_DEPTH_WRITEMASK, @SavedMask);
-  glGetDoublev(GL_DEPTH_RANGE, @SavedRange[0]);
+  {$ifdef OpenGLES}glGetFloatv{$else}glGetDoublev{$endif}(GL_DEPTH_RANGE, @SavedRange[0]);
   HadDepth := glIsEnabled(GL_DEPTH_TEST);
   HadCull := glIsEnabled(GL_CULL_FACE);
   HadOffset := glIsEnabled(GL_POLYGON_OFFSET_FILL);
-  HadPointSize := glIsEnabled(GL_PROGRAM_POINT_SIZE);
+  {$ifndef OpenGLES}  HadPointSize := glIsEnabled(GL_PROGRAM_POINT_SIZE);{$endif}
   try
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GREATER); { count only ground samples hidden from sunlight }
     glDepthMask(GL_FALSE);
-    glDepthRange(0, 1);
+    {$ifdef OpenGLES}glDepthRangef{$else}glDepthRange{$endif}(0, 1);
     glDisable(GL_CULL_FACE);
     glDisable(GL_POLYGON_OFFSET_FILL);
-    glEnable(GL_PROGRAM_POINT_SIZE);
+  {$ifndef OpenGLES}    glEnable(GL_PROGRAM_POINT_SIZE);{$endif}
     FProgram.Enable;
     glBindVertexArray(FVAO);
     P := ClipPoint;
@@ -191,10 +193,10 @@ begin
     { Nine one-pixel tests over a stable 24 cm footprint, at every atlas LOD.
       Adjacent texels in the finest zone only sampled a few millimetres. }
     FStepLocation.SetValue(Single(2.0 * Spacing / TileSize));
-    glBeginQuery(GL_SAMPLES_PASSED, FQueries[Slot].Id);
+    glBeginQuery(SHADOW_PROBE_QUERY, FQueries[Slot].Id);
     try
-      glDrawArrays(GL_POINTS, 0, 9);
-    finally glEndQuery(GL_SAMPLES_PASSED) end;
+      glDrawArrays(GL_POINTS, {$ifdef OpenGLES}4, 1{$else}0, 9{$endif});
+    finally glEndQuery(SHADOW_PROBE_QUERY) end;
     Inc(FSerial);
     FQueries[Slot].Serial := FSerial;
     FQueries[Slot].Point := Point;
@@ -209,11 +211,11 @@ begin
     glBindVertexArray(SavedVAO);
     glDepthFunc(SavedFunc);
     glDepthMask(SavedMask);
-    glDepthRange(SavedRange[0], SavedRange[1]);
+    {$ifdef OpenGLES}glDepthRangef{$else}glDepthRange{$endif}(SavedRange[0], SavedRange[1]);
     if HadDepth <> GL_FALSE then glEnable(GL_DEPTH_TEST) else glDisable(GL_DEPTH_TEST);
     if HadCull <> GL_FALSE then glEnable(GL_CULL_FACE) else glDisable(GL_CULL_FACE);
     if HadOffset <> GL_FALSE then glEnable(GL_POLYGON_OFFSET_FILL) else glDisable(GL_POLYGON_OFFSET_FILL);
-    if HadPointSize <> GL_FALSE then glEnable(GL_PROGRAM_POINT_SIZE) else glDisable(GL_PROGRAM_POINT_SIZE);
+  {$ifndef OpenGLES}    if HadPointSize <> GL_FALSE then glEnable(GL_PROGRAM_POINT_SIZE) else glDisable(GL_PROGRAM_POINT_SIZE);{$endif}
   end;
 end;
 

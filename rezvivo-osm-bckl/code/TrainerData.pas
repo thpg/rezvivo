@@ -28,7 +28,7 @@ type
   );
 
   TTrainerMetric = (tmPower, tmCadence, tmSpeed, tmHeartRate, tmDistance,
-    tmEnergy, tmElapsed, tmResistance, tmIncline, tmTargetPower, tmState);
+    tmEnergy, tmElapsed, tmResistance, tmIncline, tmTargetPower, tmState, tmSteering);
   TTrainerMetrics = set of TTrainerMetric;
 
   // Данные с трейнера
@@ -50,6 +50,7 @@ type
     ResistanceLevel: Single;     // Native trainer level (not necessarily percent)
     TargetPower: Word;           // Целевая мощность (ERG режим)
     Incline: SmallInt;           // Уклон в 0.1%
+    SteeringAngle: Single;       // Degrees, clockwise positive; never a power source
     IsMoving: Boolean;
     IsPaused: Boolean;
   end;
@@ -71,6 +72,7 @@ type
     SupportsCadence: Boolean;
     SupportsSpeed: Boolean;
     SupportsHeartRate: Boolean;
+    SupportsSteering: Boolean;
   end;
 
   // Возможности трейнера (FTMS Features)
@@ -166,6 +168,7 @@ begin
       tmResistance: Dest.ResistanceLevel:=Source.ResistanceLevel;
       tmIncline: Dest.Incline:=Source.Incline;
       tmTargetPower: Dest.TargetPower:=Source.TargetPower;
+      tmSteering: Dest.SteeringAngle:=Source.SteeringAngle;
       tmState: begin Dest.IsMoving:=Source.IsMoving; Dest.IsPaused:=Source.IsPaused end;
     end;
     Include(Dest.PresentMetrics, M);
@@ -190,16 +193,19 @@ begin
   if Info.SupportsCadence then Include(Before,tmCadence);
   if Info.SupportsSpeed then Include(Before,tmSpeed);
   if Info.SupportsHeartRate then Include(Before,tmHeartRate);
+  if Info.SupportsSteering then Include(Before,tmSteering);
   { An invalid sentinel proves the field exists, but not a usable HR bridge. }
   Info.SupportsPower := Info.SupportsPower or (tmPower in Data.PresentMetrics);
   Info.SupportsCadence := Info.SupportsCadence or (tmCadence in Data.PresentMetrics);
   Info.SupportsSpeed := Info.SupportsSpeed or (tmSpeed in Data.PresentMetrics);
   Info.SupportsHeartRate := Info.SupportsHeartRate or
     ((tmHeartRate in Data.PresentMetrics) and (tmHeartRate in Data.ValidMetrics));
+  Info.SupportsSteering := Info.SupportsSteering or (tmSteering in Data.PresentMetrics);
   Result := (Info.SupportsPower and not (tmPower in Before)) or
     (Info.SupportsCadence and not (tmCadence in Before)) or
     (Info.SupportsSpeed and not (tmSpeed in Before)) or
-    (Info.SupportsHeartRate and not (tmHeartRate in Before));
+    (Info.SupportsHeartRate and not (tmHeartRate in Before)) or
+    (Info.SupportsSteering and not (tmSteering in Before));
 end;
 
 

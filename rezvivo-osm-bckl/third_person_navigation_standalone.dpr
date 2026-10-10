@@ -97,18 +97,18 @@ uses
   {$endif}
 
   { ── Bike & rider geometry (cross-platform, pure CGE/X3D) ── }
-  BikeParametric in '../BikeParametric/BikeParametric.pas',
-  BikeParametric_Frame in '../BikeParametric/BikeParametric_Frame.pas',
-  BikeParametric_Fork in '../BikeParametric/BikeParametric_Fork.pas',
-  BikeParametric_DropBar in '../BikeParametric/BikeParametric_DropBar.pas',
-  BikeParametric_FlatBar in '../BikeParametric/BikeParametric_FlatBar.pas',
-  BikeParametric_Seat in '../BikeParametric/BikeParametric_Seat.pas',
-  BikeParametric_Wheel in '../BikeParametric/BikeParametric_Wheel.pas',
-  BikeParametric_Crankset in '../BikeParametric/BikeParametric_Crankset.pas',
-  BikeParametric_Drivetrain in '../BikeParametric/BikeParametric_Drivetrain.pas',
-  BikeParametric_Animation in '../BikeParametric/BikeParametric_Animation.pas',
-  BikeJSON in '../BikeParametric/BikeJSON.pas',
-  RiderBuildThread in '../BikeParametric/RiderBuildThread.pas',
+  BikeParametric in '../Bikeparametric/BikeParametric.pas',
+  BikeParametric_Frame in '../Bikeparametric/BikeParametric_Frame.pas',
+  BikeParametric_Fork in '../Bikeparametric/BikeParametric_Fork.pas',
+  BikeParametric_DropBar in '../Bikeparametric/BikeParametric_DropBar.pas',
+  BikeParametric_FlatBar in '../Bikeparametric/BikeParametric_FlatBar.pas',
+  BikeParametric_Seat in '../Bikeparametric/BikeParametric_Seat.pas',
+  BikeParametric_Wheel in '../Bikeparametric/BikeParametric_Wheel.pas',
+  BikeParametric_Crankset in '../Bikeparametric/BikeParametric_Crankset.pas',
+  BikeParametric_Drivetrain in '../Bikeparametric/BikeParametric_Drivetrain.pas',
+  BikeParametric_Animation in '../Bikeparametric/BikeParametric_Animation.pas',
+  BikeJSON in '../Bikeparametric/BikeJSON.pas',
+  RiderBuildThread in '../Bikeparametric/RiderBuildThread.pas',
   GameBikeAvatar in 'code/GameBikeAvatar.pas';
 
 { Forces using a dedicated (faster) GPU on laptops with multiple GPUs.
@@ -150,6 +150,7 @@ begin
   StartCrashReports;
   try
     Application.MainWindow.OpenAndRun;
+    ShutdownGame;
     MarkClientCleanExit;
   except
     on E:SysUtils.Exception do begin CaptureCrash(E);raise;end;

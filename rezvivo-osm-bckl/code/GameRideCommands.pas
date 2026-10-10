@@ -13,7 +13,7 @@ procedure ResetRideCommandKeys;
 function UserInterfaceScale:Single;
 procedure ApplyUserInterfaceScale(Container:TCastleContainer);
 implementation
-uses SysUtils,Math,GameUserData,GameWorkoutPlayer;
+uses GameDisplayMetrics,GameMenuLayout,SysUtils,Math,GameUserData,GameWorkoutPlayer;
 const Keys:array[TRideCommand]of String=('ride_pause','ride_skip','ride_power_down','ride_power_up','ride_focus');
   Defaults:array[TRideCommand]of TKey=(keySpace,keyPageDown,keyLeftBracket,keyRightBracket,keyF4);
 
@@ -66,8 +66,8 @@ procedure ApplyUserInterfaceScale(Container:TCastleContainer);
 var Scale:Single;
 begin
   if Container=nil then Exit;
-  Scale:=UserInterfaceScale;
-  Container.UIScaling:=usEncloseReferenceSize;
-  Container.UIReferenceWidth:=1600/Scale;Container.UIReferenceHeight:=900/Scale;
+  Scale:=MenuInterfaceScale(Container.PixelsWidth,Container.PixelsHeight,
+    DisplayUiDpi(Container),UserInterfaceScale,{$ifdef ANDROID}True{$else}False{$endif});
+  Container.UIScaling:=usExplicitScale;Container.UIExplicitScale:=Scale;
 end;
 end.

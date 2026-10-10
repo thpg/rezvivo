@@ -31,7 +31,7 @@ implementation
 {$IFDEF BIKE_STARTUP_LOG}
 
 uses
-  SysUtils, SyncObjs;
+  AppRuntimePaths, SysUtils, SyncObjs;
 
 var
   FLogFile: TextFile;
@@ -48,7 +48,7 @@ const
 var
   Dir: string;
 begin
-  Dir := ExtractFilePath(ParamStr(0)) + 'logs' + PathDelim;
+  Dir := AppDirectory + 'logs' + PathDelim;
   Result := Dir + FNamePrefix +
     FormatDateTime('yyyymmdd_hhnnss', Now) + FNameSuffix;
 end;

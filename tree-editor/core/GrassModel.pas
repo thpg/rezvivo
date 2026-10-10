@@ -90,8 +90,8 @@ begin
     { The same broad soil/moisture variation on blades, cards and base terrain:
       a LOD switch cannot reveal a different green or shift the patch boundary. }
     ' float moisture=gcGrassNoise(p*0.0625,15u);'+#10+
-    ' vec3 patch=mix(vec3(1.13,0.98,0.80),vec3(0.91,0.96,1.04),smoothstep(0.23,0.77,moisture));'+#10+
-    ' return patch*(result+0.28*(moisture-0.5))*vec3(1.0,0.96,1.02); }'+#10+
+    ' vec3 patchTint=mix(vec3(1.13,0.98,0.80),vec3(0.91,0.96,1.04),smoothstep(0.23,0.77,moisture));'+#10+
+    ' return patchTint*(result+0.28*(moisture-0.5))*vec3(1.0,0.96,1.02); }'+#10+
     'float gcSlopeRockMask(vec2 p,float normalUp){'+#10+
     ' float up=clamp(abs(normalUp),0.0,1.0);'+#10+
     ' if(up>=0.88)return 0.0; if(up<=0.44)return 1.0;'+#10+

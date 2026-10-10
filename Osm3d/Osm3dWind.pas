@@ -1,4 +1,5 @@
 unit Osm3dWind;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 { Scene-wide wind — the SINGLE source of truth shared by grass and trees.
 
@@ -27,7 +28,7 @@ unit Osm3dWind;
 interface
 
 uses
-  CastleVectors, CastleGL;
+  CastleVectors, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif};
 
 type
   { Tunable wind settings. Assign GlobalWind from the settings/UI. }

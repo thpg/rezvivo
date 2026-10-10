@@ -17,18 +17,24 @@
   This unit is cross-platform.
   It will be used by the platform-specific program or library file. }
 unit GameInitialize;
+{$I castleconf.inc}
 
 interface
 
+{ Complete the normal window lifecycle before RTL ExitProc crash fallbacks.
+  Safe to call again from unit finalization. }
+procedure ShutdownGame;
+
 implementation
 
-uses SysUtils,
+uses AppRuntimePaths, AvatarGait, SysUtils,
   CastleWindow, CastleScene, CastleControls, CastleLog,
   CastleFilesUtils, CastleSceneCore, CastleKeysMouse, CastleColors,
   CastleUIControls, CastleApplicationProperties, CastleSoundEngine,
-  CastleTransform, CastleRenderOptions, CastleGLShaders,
+  CastleTransform, CastleRenderOptions, CastleGLShaders, CastleGLVersion,
   OpenSSL, OpenSSLSockets, SSLSockets,
   DebugLog,
+  {$ifdef ANDROID}GameAndroidPlatform,{$endif}
   {$ifdef MSWINDOWS}
   { DeviceService owns the ANT dispatch thread. Keep its USB backend loaded
     until this unit has stopped and destroyed that service at shutdown. }
@@ -48,6 +54,7 @@ uses SysUtils,
 
 var
   Window: TCastleWindow;
+  ShutdownStarted: Boolean = False;
 
 { Пытаемся инициализировать OpenSSL с fallback на разные имена DLL.
   FPC по умолчанию ищет libssl-1_1-x64.dll/libcrypto-1_1-x64.dll. Если
@@ -103,6 +110,17 @@ end;
 
 procedure ApplicationInitialize;
 begin
+  {$ifdef ANDROID}InitializeAndroidPlatform;{$endif}
+  Settings.InitializeStorage;
+  {$ifdef OpenGLES}
+  if (GLVersion = nil) or (GLVersion.Major < 3) then
+    raise Exception.Create('REZVIVO requires an OpenGL ES 3.0 graphics context');
+  {$endif}
+  {$ifdef ANDROID}
+  EnsureCgeLog;
+  StartCrashReports;
+  if VeloSite = nil then VeloSite := TVeloSiteAPI.Create;
+  {$endif}
   { Capture the active renderer before initializing services and scene shaders. }
   DumpEnvironmentGpu;
   RefreshCrashDiagnostics;
@@ -118,7 +136,7 @@ begin
     переименованные libssl/libcrypto, нужно явно подсказать. fphttpclient
     инициализирует SSL лениво при первом HTTPS-запросе; чтобы он не
     бросил "Could not initialize OpenSSL library", задаём fallback имена. }
-  TryInitOpenSSL;
+  {$ifndef ANDROID}TryInitOpenSSL;{$endif}
 
   { Adjust container settings for a scalable UI (adjusts to any window size in a smart way). }
   Window.Container.LoadSettings('castle-data:/CastleSettings.xml');
@@ -191,15 +209,36 @@ var
   S: String;
 begin
   Result := False;
-  for I := 1 to ParamCount do
+  for I := 1 to AppParamCount do
   begin
-    S := ParamStr(I);
+    S := AppParamStr(I);
     if (Length(S) > 0) and (S[1] in ['-', '/']) then
     begin
       while (Length(S) > 0) and (S[1] in ['-', '/']) do Delete(S, 1, 1);
       if SameText(S, AName) then Exit(True);
     end;
   end;
+end;
+
+procedure ShutdownGame;
+begin
+  if ShutdownStarted then Exit;
+  ShutdownStarted:=True;
+  ShutdownMcpServer;
+  ShutdownClientUpdates;
+  if VeloSite <> nil then VeloSite.ShutdownAsync;
+  ShutdownOfflineReadiness;
+  if Assigned(DeviceService) then FreeAndNil(DeviceService);
+  { Views must finish their history and close the sensor journal while the
+    journal singleton and upload queue are still alive. ExitProc otherwise
+    closes the journal as an interrupted ride before this unit finalizes. }
+  ShutdownStreamingRetirement;
+  if Window <> nil then Window.Close(False);
+  Application.MainWindow := nil;
+  Application.DestroyComponents;
+  FreeAndNil(GameSound);
+  Window := nil;
+  if Assigned(WorkoutLib) then FreeAndNil(WorkoutLib);
 end;
 
 initialization
@@ -240,31 +279,5 @@ initialization
   Window.ParseParameters;
 
 finalization
-  { MCP: останавливаем сервер и снимаем OnUpdate-подписку ДО освобождения
-    DeviceService, чтобы маршаллинг не ткнулся в уже мёртвые объекты. }
-  ShutdownMcpServer;
-  ShutdownClientUpdates;
-  VeloSite.ShutdownAsync;
-  ShutdownOfflineReadiness;
-  { При завершении деструктор сервиса автоматически снимет подписку
-    с OnUpdate и остановит скан, так что отдельных действий не нужно. }
-  if Assigned(DeviceService) then
-    FreeAndNil(DeviceService);
-  { Application owns windows and views, but CastleWindow finalizes after
-    the game/render units. Destroy these components while their shader
-    registries, locks and streaming services are still alive. Otherwise a
-    direct window close leaves ViewPlay.Stop running against finalized units.
-    DeviceService is already nil above; WorkoutLib is still valid for views. }
-  { DestroyComponents detaches owned components before freeing them, so the
-    application does not receive the usual owner notification for Window.
-    Clear its MainWindow reference while Window is still alive; otherwise
-    CastleWindow finalization removes a notification from freed memory. }
-  ShutdownStreamingRetirement;
-  if Window <> nil then Window.Close(False);
-  Application.MainWindow := nil;
-  Application.DestroyComponents;
-  FreeAndNil(GameSound);
-  Window := nil;
-  if Assigned(WorkoutLib) then
-    FreeAndNil(WorkoutLib);
+  ShutdownGame;
 end.
