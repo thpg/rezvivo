@@ -44,27 +44,43 @@ For the ready-to-use application, visit the [download page](https://rezvivo.com/
 
 ## Screenshots
 
-Click any preview to view the full-size screenshot.
+Click any preview to view the original, full-size screenshot.
 
 <table>
   <tr>
-    <td align="center">
-      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/forest-ride.png"><img src="docs/screenshots/forest-ride.png" alt="A forest road ride with live cycling metrics" height="220"></a><br>
-      Forest ride
-    </td>
-    <td align="center">
-      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/city-ride.png"><img src="docs/screenshots/city-ride.png" alt="Riding through a city with live cycling metrics" height="220"></a><br>
-      City ride
+    <td align="center" colspan="2">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/group-climb.png"><img src="docs/screenshots/2026-10-11/group-climb-preview.webp" alt="Climbing with bots" width="900"></a><br>
+      Climbing with bots
     </td>
   </tr>
   <tr>
-    <td align="center">
-      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/workout-library.png"><img src="docs/screenshots/workout-library.png" alt="The interval workout library with workout profiles" height="220"></a><br>
-      Workout library
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/city-pair.png"><img src="docs/screenshots/2026-10-11/city-pair-preview.webp" alt="Riding together in the city" width="440"></a><br>
+      Riding together in the city
     </td>
-    <td align="center">
-      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/workout-only.png"><img src="docs/screenshots/workout-only.png" alt="The compact workout-only window with interval controls" height="220"></a><br>
-      Compact workout mode
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/river-descent.png"><img src="docs/screenshots/2026-10-11/river-descent-preview.webp" alt="Descending toward the river" width="440"></a><br>
+      Descending toward the river
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/forest-walk.png"><img src="docs/screenshots/2026-10-11/forest-walk-preview.webp" alt="Explore the forest on foot" width="440"></a><br>
+      Explore the forest on foot
+    </td>
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/overtaking.png"><img src="docs/screenshots/2026-10-11/overtaking-preview.webp" alt="Riders overtaking" width="440"></a><br>
+      Riders overtaking
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/workout-library.png"><img src="docs/screenshots/2026-10-11/workout-library-preview.webp" alt="Interval workout library" width="440"></a><br>
+      Interval workout library
+    </td>
+    <td align="center" width="50%">
+      <a href="https://media.githubusercontent.com/media/thpg/rezvivo/main/docs/screenshots/2026-10-11/bike-fit.png"><img src="docs/screenshots/2026-10-11/bike-fit-preview.webp" alt="Rider and bicycle fitting" width="440"></a><br>
+      Rider and bicycle fitting
     </td>
   </tr>
 </table>
