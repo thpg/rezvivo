@@ -1,11 +1,12 @@
 unit GameRideRoomsUI;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses Classes,CastleUIControls,CastleControls,CastleKeysMouse,GameMenuTheme,GameUiNavigation;
+uses Classes,CastleUIControls,CastleControls,CastleKeysMouse,GameMenuTheme,GameUiNavigation,GameMenuDialog;
 type
   TViewRideRooms=class(TCastleView)
   private
     FKeyboard:TUiKeyboardNavigation;
+    FDialog:TMenuDialog;
     FCode:TCastleEdit;
     FStatus, FSource:TCastleLabel;
     FCreate,FJoin,FRide,FLeave,FSignIn,FCopy:TMenuButton;
@@ -28,35 +29,36 @@ type
 implementation
 uses SysUtils,CastleVectors,GameRideRooms,UiTranslations,VeloSiteAPI;
 procedure TViewRideRooms.Start;
-var Bg:TCastleRectangleControl;Panel:TMenuPanel;L:TCastleLabel;
-  function Button(const Name,Key:string;X,Y:Single;Handler:TNotifyEvent):TMenuButton;
+var L:TCastleLabel;Actions:TMenuFlow;
+  function Button(const Name,Key:string;Parent:TCastleUserInterface;Handler:TNotifyEvent):TMenuButton;
   begin
     Result:=TMenuButton.Create(FreeAtStop);Result.Name:=Name;Result.AutoIcon:=False;
-    Result.FontSize:=18;BindUiText(Result,Key);Result.Anchor(hpLeft,X);Result.Anchor(vpTop,-Y);
-    Result.OnClick:=Handler;Panel.InsertFront(Result);
+    Result.FontSize:=18;Result.MinHeight:=44;BindUiText(Result,Key);
+    Result.OnClick:=Handler;Parent.InsertFront(Result);
   end;
 begin
   inherited;
-  Bg:=TCastleRectangleControl.Create(FreeAtStop);Bg.FullSize:=True;Bg.Color:=Vector4(0.01,0.025,0.04,0.94);InsertBack(Bg);
-  Panel:=TMenuPanel.Create(FreeAtStop);Panel.Width:=650;Panel.Height:=520;Panel.Anchor(hpMiddle);Panel.Anchor(vpMiddle);InsertFront(Panel);
-  L:=TMenuLabel.Create(FreeAtStop);BindUiText(L,'Ride with a friend');L.FontSize:=28;L.Anchor(hpLeft,24);L.Anchor(vpTop,-24);Panel.InsertFront(L);
-  FSource:=TMenuLabel.Create(FreeAtStop);FSource.FontSize:=17;FSource.MaxWidth:=600;FSource.Anchor(hpLeft,24);FSource.Anchor(vpTop,-74);Panel.InsertFront(FSource);
+  FDialog:=TMenuDialog.Create(FreeAtStop);InsertFront(FDialog);
+  BindUiText(FDialog.Title,'Ride with a friend');
+  FDialog.CloseButton.Name:='RoomClose';FDialog.CloseButton.OnClick:=@ClickClose;
+  FSource:=TMenuLabel.Create(FreeAtStop);FSource.FontSize:=17;FDialog.Content.InsertFront(FSource);
   FSource.Caption:=UiText('Selected world')+': '+SourceTitle;
-  FCreate:=Button('RoomCreate','Create room',24,120,@ClickCreate);
-  FCode:=TCastleEdit.Create(FreeAtStop);FCode.Name:='RoomCode';FCode.Width:=310;FCode.Height:=44;FCode.FontSize:=20;
-  FCode.Anchor(hpLeft,24);FCode.Anchor(vpTop,-181);Panel.InsertFront(FCode);
-  L:=TMenuLabel.Create(FreeAtStop);BindUiText(L,'Room code');L.FontSize:=15;L.Anchor(hpLeft,24);L.Anchor(vpTop,-161);Panel.InsertFront(L);
-  FJoin:=Button('RoomJoin','Join room',360,182,@ClickJoin);
-  FCopy:=Button('RoomCopy','Copy code',360,182,@ClickCopy);
-  FStatus:=TMenuLabel.Create(FreeAtStop);FStatus.Name:='RoomStatus';FStatus.FontSize:=18;FStatus.MaxWidth:=600;FStatus.Anchor(hpLeft,24);FStatus.Anchor(vpTop,-255);Panel.InsertFront(FStatus);
-  FRide:=Button('RoomRide','Ride together',24,377,@ClickRide);FRide.Style:=mbPrimary;
-  FLeave:=Button('RoomLeave','Leave room',360,377,@ClickLeave);
-  FSignIn:=Button('RoomSignIn','Sign in',24,377,@ClickSignIn);
-  Button('RoomClose','Close',24,454,@ClickClose);
+  FCreate:=Button('RoomCreate','Create room',FDialog.Content,@ClickCreate);
+  L:=TMenuLabel.Create(FreeAtStop);BindUiText(L,'Room code');L.FontSize:=15;FDialog.Content.InsertFront(L);
+  FCode:=TMenuEdit.Create(FreeAtStop);FCode.Name:='RoomCode';FCode.Text:='';FCode.Width:=310;FCode.Height:=44;FCode.FontSize:=20;
+  FDialog.Content.InsertFront(FCode);
+  Actions:=TMenuFlow.Create(FreeAtStop);FDialog.Content.InsertFront(Actions);
+  FJoin:=Button('RoomJoin','Join room',Actions,@ClickJoin);
+  FCopy:=Button('RoomCopy','Copy code',Actions,@ClickCopy);
+  FStatus:=TMenuLabel.Create(FreeAtStop);FStatus.Name:='RoomStatus';FStatus.FontSize:=18;FDialog.Content.InsertFront(FStatus);
+  Actions:=TMenuFlow.Create(FreeAtStop);FDialog.Content.InsertFront(Actions);
+  FRide:=Button('RoomRide','Ride together',Actions,@ClickRide);FRide.Style:=mbPrimary;
+  FLeave:=Button('RoomLeave','Leave room',Actions,@ClickLeave);
+  FSignIn:=Button('RoomSignIn','Sign in',Actions,@ClickSignIn);
   FKeyboard:=TUiKeyboardNavigation.Create(FreeAtStop);InsertFront(FKeyboard);
 end;
 procedure TViewRideRooms.Stop;
-begin if FKeyboard<>nil then FKeyboard.Clear;inherited;FKeyboard:=nil;end;
+begin if FKeyboard<>nil then FKeyboard.Clear;inherited;FKeyboard:=nil;FDialog:=nil;end;
 procedure TViewRideRooms.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 var RoomActive,Busy,Authorized:Boolean;S:string;I:TRideRoomInfo;
 begin

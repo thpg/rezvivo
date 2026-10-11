@@ -360,5 +360,12 @@
   "Wheel circumference (mm)": "车轮周长 (毫米)",
   "Preparing riders": "正在准备骑手",
   "Companion": "骑行伙伴",
-  "Passing cyclist": "路过的骑手"
+  "Passing cyclist": "路过的骑手",
+  "Camera": "镜头",
+  "Up": "上升",
+  "Down": "下降",
+  "Run": "跑步",
+  "Brake": "刹车",
+  "+ W": "+ W",
+  "Trees: textured": "树木：贴图"
 }

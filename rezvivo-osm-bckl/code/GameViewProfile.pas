@@ -15,7 +15,7 @@ unit GameViewProfile;
 
 interface
 
-uses GameMenuTheme,
+uses GameMenuTheme,GameMenuDialog,
   Classes, SysUtils, SyncObjs,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors,
@@ -93,7 +93,7 @@ type
     FLangHint:TCastleLabel;
     FLangSectionLabel:    TCastleLabel;       { 'Interface language:' }
     FLangCurrentButton:   TCastleButton;      { показывает текущий выбор, клик = открыть popup }
-    FLangPopupOverlay:    TCastleButton;      { на всю страницу, click = закрыть popup }
+    FLangPopupOverlay:    TMenuDialog;
     FLangAutoButton:      TCastleButton;      { 'Auto' — внутри popup }
     FLangButtons:         array of TCastleButton; { по языку — внутри popup }
 
@@ -130,7 +130,7 @@ type
 
     procedure ClickLangCurrent(Sender: TObject);   { открыть popup }
     procedure ClickLangBg(Sender: TObject);        { закрыть popup (клик по затемнению) }
-    procedure ClickLangCardEater(Sender: TObject); { поглощает клик в области карты вне кнопок }
+ { поглощает клик в области карты вне кнопок }
     procedure ClickLanguage(Sender: TObject);      { выбор языка — закрывает popup }
 
     procedure ClickGender(Sender: TObject);
@@ -480,6 +480,8 @@ end;
 
 procedure TProfilePage.PageHidden;
 begin
+  if FInput<>nil then FInput.CancelBinding(nil);
+  if FLangPopupOverlay<>nil then FLangPopupOverlay.Exists:=False;
   if FDiskCache <> nil then FDiskCache.SetActive(False);
   if FGraphicsPreview<>nil then begin FGraphicsPreview.Exists:=False;FGraphicsPreview.ReleaseScene end;
   if FProfileDirty then ClickSave(nil);
@@ -1185,6 +1187,7 @@ begin
   Section.InsertFront(Group);
 
   FLangCurrentButton := TMenuButton.Create(FContentOwner);
+  FLangCurrentButton.Name:='ChooseLanguage';
   BindUiText(FLangCurrentButton, 'English  v');      { v вместо ▼ — без UTF-8 warnings }
   FLangCurrentButton.MinWidth := 240;
   FLangCurrentButton.PaddingHorizontal := 16;
@@ -1217,105 +1220,23 @@ begin
 end;
 
 procedure TProfilePage.BuildLangPopup;
-const
-  CardWidth  = 320;
-  CardHeight = 540;
-var
-  Card: TCastleButton;
-  CardTitle: TCastleLabel;
-  ListGroup: TCastleVerticalGroup;
-  ListScroll: TCastleScrollView;
-  Btn: TCastleButton;
-  I: Integer;
+var Btn:TCastleButton;I:Integer;
 begin
-  { Overlay = TCastleButton на всю страницу с тёмным полупрозрачным
-    фоном. Клик по нему = клик «вне карты» = закрыть. AutoSize=False
-    обязателен, иначе FullSize игнорируется. Owner=FContentOwner —
-    popup освобождается вместе с остальным динамическим UI при
-    перестроении (BuildAll) и в PageHidden; перед освобождением он
-    отцепляется от страницы RemoveControl'ом. }
-  FLangPopupOverlay := TCastleButton.Create(FContentOwner);
-  FLangPopupOverlay.CustomBackground := True;
-  FLangPopupOverlay.FullSize := True;
-  FLangPopupOverlay.AutoSize := False;
-  FLangPopupOverlay.Caption := '';
-  FLangPopupOverlay.PaddingHorizontal := 0;
-  FLangPopupOverlay.PaddingVertical := 0;
-  with FLangPopupOverlay.CustomColorNormalPersistent do
-  begin
-    Red := 0; Green := 0; Blue := 0; Alpha := 0.6;
-  end;
-  FLangPopupOverlay.CustomColorFocused := FLangPopupOverlay.CustomColorNormal;
-  FLangPopupOverlay.CustomColorPressed := FLangPopupOverlay.CustomColorNormal;
-  FLangPopupOverlay.OnClick := @ClickLangBg;
-  FLangPopupOverlay.Exists := False;     { показывается только при клике }
-  Self.InsertFront(FLangPopupOverlay);
-
-  { Card — TCastleButton с пустым OnClick, поглощает клик в области карты
-    вне списка кнопок (иначе клик прошёл бы в overlay и закрыл попап). }
-  Card := TCastleButton.Create(FContentOwner);
-  Card.CustomBackground := True;
-  Card.AutoSize := False;
-  Card.Width := CardWidth;
-  Card.Height := CardHeight;
-  Card.Caption := '';
-  Card.PaddingHorizontal := 0;
-  Card.PaddingVertical := 0;
-  with Card.CustomColorNormalPersistent do
-  begin
-    Red := 0.12; Green := 0.12; Blue := 0.18; Alpha := 1.0;
-  end;
-  Card.CustomColorFocused := Card.CustomColorNormal;
-  Card.CustomColorPressed := Card.CustomColorNormal;
-  Card.OnClick := @ClickLangCardEater;
-  Card.Anchor(hpMiddle);
-  Card.Anchor(vpMiddle);
-  FLangPopupOverlay.InsertFront(Card);
-
-  CardTitle := TMenuLabel.Create(FContentOwner);
-  BindUiText(CardTitle, 'Choose language');
-  CardTitle.FontScale := 1.2;
-  CardTitle.Color := Vector4(1, 1, 1, 1);
-  CardTitle.Anchor(hpMiddle);
-  CardTitle.Anchor(vpTop, -16);
-  Card.InsertFront(CardTitle);
-
-  ListScroll := TMenuScrollView.Create(FContentOwner);
-  ListScroll.FullSize := True;
-  ListScroll.Border.Left := 12;
-  ListScroll.Border.Right := 12;
-  ListScroll.Border.Top := 54;
-  ListScroll.Border.Bottom := 12;
-  Card.InsertFront(ListScroll);
-  ListScroll.ScrollArea.AutoSizeToChildren := True;
-  ListGroup := TCastleVerticalGroup.Create(FContentOwner);
-  ListGroup.Spacing := 4;
-  ListGroup.Anchor(hpLeft);
-  ListGroup.Anchor(vpTop);
-  ListScroll.ScrollArea.InsertFront(ListGroup);
-
-  { Auto-кнопка первая в списке. Tag=-1 → SetUserLanguage(''). }
-  FLangAutoButton := TMenuButton.Create(FContentOwner);
-  BindUiText(FLangAutoButton, 'Auto');
-  FLangAutoButton.MinWidth := CardWidth - 48;
-  FLangAutoButton.PaddingHorizontal := 12;
-  FLangAutoButton.PaddingVertical := 8;
-  FLangAutoButton.Tag := -1;
-  FLangAutoButton.OnClick := @ClickLanguage;
-  ListGroup.InsertFront(FLangAutoButton);
-
-  SetLength(FLangButtons, Length(SupportedLanguages));
-  for I := Low(SupportedLanguages) to High(SupportedLanguages) do
-  begin
-    Btn := TMenuButton.Create(FContentOwner);
-    Btn.Caption := LanguageMenuName(I);
-    Btn.MinWidth := CardWidth - 48;
-    Btn.PaddingHorizontal := 12;
-    Btn.PaddingVertical := 8;
-    Btn.Tag := I;
-    Btn.OnClick := @ClickLanguage;
-    ListGroup.InsertFront(Btn);
-    FLangButtons[I] := Btn;
+  FLangPopupOverlay:=TMenuDialog.Create(FContentOwner);
+  FLangPopupOverlay.PreferredWidth:=380;FLangPopupOverlay.PreferredHeight:=540;
+  FLangPopupOverlay.Exists:=False;
+  BindUiText(FLangPopupOverlay.Title,'Choose language');
+  FLangPopupOverlay.CloseButton.Name:='LanguageClose';
+  FLangPopupOverlay.CloseButton.OnClick:=@ClickLangBg;
+  FLangAutoButton:=TMenuButton.Create(FContentOwner);
+  BindUiText(FLangAutoButton,'Auto');FLangAutoButton.MinHeight:=44;
+  FLangAutoButton.Tag:=-1;FLangAutoButton.OnClick:=@ClickLanguage;
+  FLangPopupOverlay.Content.InsertFront(FLangAutoButton);
+  SetLength(FLangButtons,Length(SupportedLanguages));
+  for I:=Low(SupportedLanguages)to High(SupportedLanguages)do begin
+    Btn:=TMenuButton.Create(FContentOwner);Btn.Caption:=LanguageMenuName(I);
+    Btn.MinHeight:=44;Btn.Tag:=I;Btn.OnClick:=@ClickLanguage;
+    FLangPopupOverlay.Content.InsertFront(Btn);FLangButtons[I]:=Btn;
   end;
 end;
 
@@ -1323,19 +1244,13 @@ procedure TProfilePage.ClickLangCurrent(Sender: TObject);
 begin
   if not Assigned(FLangPopupOverlay) then Exit;
   UpdateLanguageButtons;     { обновить подсветку перед показом }
-  FLangPopupOverlay.Exists := True;
+  FLangPopupOverlay.Show(Container);
 end;
 
 procedure TProfilePage.ClickLangBg(Sender: TObject);
 begin
   if Assigned(FLangPopupOverlay) then
     FLangPopupOverlay.Exists := False;
-end;
-
-procedure TProfilePage.ClickLangCardEater(Sender: TObject);
-begin
-  { Намеренно пусто — поглощаем клик в области карты вне кнопок,
-    чтобы он не дошёл до Overlay и не закрыл попап. }
 end;
 
 procedure TProfilePage.ClickLanguage(Sender: TObject);

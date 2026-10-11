@@ -10,7 +10,7 @@ type
     FButtons:array[TRideCommand]of TMenuButton;
     FScaleRow:TMenuFlow;
     FScaleButtons:array[0..2]of TMenuButton;
-    FReset:TMenuButton;
+    FReset,FCancel:TMenuButton;
     FWaiting:Boolean;FCommand:TRideCommand;
     procedure Choose(Sender:TObject);
     procedure ChooseScale(Sender:TObject);
@@ -18,6 +18,7 @@ type
     procedure Refresh;
   public
     constructor Create(AOwner:TComponent);override;
+    procedure CancelBinding(Sender:TObject);
     function Press(const Event:TInputPressRelease):Boolean;override;
     procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
   end;
@@ -31,6 +32,9 @@ begin
   FTitle.Anchor(vpTop);InsertFront(FTitle);
   FHint:=TMenuLabel.Create(Self);FHint.FontSize:=15;FHint.Color:=MenuMuted;
   FHint.Anchor(vpTop,-38);InsertFront(FHint);
+  FCancel:=TMenuButton.Create(Self);FCancel.Name:='CancelKeyBinding';
+  FCancel.AutoIcon:=False;BindUiText(FCancel,'Cancel');FCancel.MinHeight:=44;
+  FCancel.Exists:=False;FCancel.OnClick:=@CancelBinding;InsertFront(FCancel);
   for C:=Low(C)to High(C)do begin
     FRows[C]:=TMenuFlow.Create(Self);InsertFront(FRows[C]);
     L:=TMenuLabel.Create(Self);L.FontSize:=18;BindUiText(L,RideCommandTitles[C]);FRows[C].InsertFront(L);
@@ -58,8 +62,15 @@ end;
 procedure TInputPanel.Choose(Sender:TObject);
 begin
   FCommand:=TRideCommand(TComponent(Sender).Tag);FWaiting:=True;
+  FCancel.Exists:=True;
   if Container<>nil then Container.ForceCaptureInput:=Self;
   BindUiText(FHint,'Press a key · Esc cancels');
+end;
+procedure TInputPanel.CancelBinding(Sender:TObject);
+begin
+  FWaiting:=False;FCancel.Exists:=False;
+  if(Container<>nil)and(Container.ForceCaptureInput=Self)then Container.ForceCaptureInput:=nil;
+  Refresh;
 end;
 procedure TInputPanel.ChooseScale(Sender:TObject);
 begin
@@ -70,9 +81,12 @@ procedure TInputPanel.Reset(Sender:TObject);
 begin ResetRideCommandKeys;Refresh;end;
 function TInputPanel.Press(const Event:TInputPressRelease):Boolean;
 begin
+  { A touch screen may have no keyboard at all. Captured pointer presses
+    cancel the pending assignment instead of trapping all navigation. }
+  if FWaiting and(Event.EventType=itMouseButton)then begin CancelBinding(nil);Exit(True) end;
   if FWaiting and(Event.EventType=itKey)then begin
-    if Event.IsKey(keyEscape)then begin FWaiting:=False;Refresh;end
-    else if SetRideCommandKey(FCommand,Event.Key)then begin FWaiting:=False;Refresh;end
+    if Event.IsKey(keyEscape)then CancelBinding(nil)
+    else if SetRideCommandKey(FCommand,Event.Key)then CancelBinding(nil)
     else BindUiText(FHint,'Key is reserved or already used. Choose another.');
     if not FWaiting and(Container<>nil)and(Container.ForceCaptureInput=Self)then Container.ForceCaptureInput:=nil;
     Exit(True);
@@ -83,6 +97,7 @@ procedure TInputPanel.Update(const SecondsPassed:Single;var HandleInput:Boolean)
 var C:TRideCommand;W,Y:Single;
 begin
   inherited;W:=Max(200,EffectiveWidth);FHint.MaxWidth:=W;Y:=38+FHint.EffectiveHeight+18;
+  if FCancel.Exists then begin FCancel.Anchor(vpTop,-Y);Y:=Y+FCancel.EffectiveHeight+12 end;
   for C:=Low(C)to High(C)do begin
     FRows[C].Width:=W;FRows[C].Anchor(vpTop,-Y);FRows[C].Arrange;Y:=Y+FRows[C].Height+10;
   end;

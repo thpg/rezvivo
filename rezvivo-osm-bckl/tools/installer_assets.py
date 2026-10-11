@@ -34,10 +34,9 @@ def redundant_assets(root):
     for name in ('common_mask.png', 'common_normal.png', 'forest_floor_mask.png',
                  'rail_diffuse.png', 'sandy_soil_height.png', 'water_normal.png'):
         omit(surfaces/name, 'Unused surface map')
-    omit(root/'data/Osm3d/resources/models/shrubbery/normal_source.png',
-         'Shrub normal-map source; runtime uses normal.png')
-    omit(root/'data/Osm3d/resources/models/shrubbery/volume.png',
-         'Unused shrub volume baking image')
+    for kind in ('tree', 'shrubbery'):
+        for path in (root/'data/Osm3d/resources/models'/kind).rglob('*'):
+            omit(path, 'Retired vegetation atlas; all modes use generated species LOD atlases')
     for name in ('bake-report.json', 'route-plan.json'):
         for path in (root/'data/dream-worlds').glob('*/'+name):
             omit(path, 'Dream World generator report/source plan')
@@ -69,6 +68,32 @@ def redundant_assets(root):
     for path in folder.glob('*.png'):
         omit(path, 'Grass PNG source; validated binary atlas is used')
     return excluded
+
+
+def runtime_assets(root, excluded=None):
+    """One resource selection shared by desktop and Android installers."""
+    import xml.etree.ElementTree as ET
+    root = Path(root)
+    if excluded is None:
+        excluded = redundant_assets(root)
+    for path in sorted((root/'data').rglob('*')):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if relative.as_posix() in excluded:
+            continue
+        if any(part.lower() in ('backup', '__pycache__', '.git') for part in relative.parts):
+            continue
+        if path.suffix.lower() in ('.py', '.pyc', '.md', '.log', '.bak', '.dbg', '.blend'):
+            continue
+        if relative.parts[1] == 'workouts':
+            if len(relative.parts) < 5 or relative.parts[2] != 'rezvivo' or path.suffix != '.zwo':
+                continue
+            if ET.parse(path).findtext('author') != 'REZVIVO':
+                raise ValueError(f'Non-original workout: {path}')
+        if path.is_symlink():
+            raise ValueError(f'Unexpected asset symlink: {path}')
+        yield path, relative
 
 
 def validate_asset_links(stage, paths):

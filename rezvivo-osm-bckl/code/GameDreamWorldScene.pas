@@ -2,7 +2,7 @@ unit GameDreamWorldScene;
 {$mode objfpc}{$H+}
 interface
 uses Classes,CastleScene,CastleViewport,CastleTransform,fpjson,X3DNodes,Osm3dDreamWorld,Osm3dWaterShader,
-  Osm3dRenderGrass,Osm3dRenderInstanced,Osm3dProceduralVegetation;
+  Osm3dRenderGrass,Osm3dProceduralVegetation;
 type
   { Same material and vegetation renderers as Real World; local baked data. }
   TDreamWorldVisual = class
@@ -19,8 +19,6 @@ type
     FWater:TWaterCompositeShader;
     FSky:TCastleBackground;
     FCoastal:Boolean;
-    FTrees:TCastleAbstractTreeRenderer;
-    FShrubs:TCastleAbstractShrubRenderer;
     FProcedural:TOsmProceduralVegetation;
     FGrass:TGrassRenderer;
     FModelFiles,FModelInstances,FSerial:Integer;
@@ -186,26 +184,6 @@ begin
   AttachShadow(App,M);
 end;
 
-procedure AddVegetationCells(Renderer:TInstancedBillboardRenderer;const Instances:TTreeInstanceArray;Cull:Single);
-type TCells=specialize TDictionary<Int64,TTreeInstanceArray>;
-var Cells:TCells;Pair:specialize TPair<Int64,TTreeInstanceArray>;A:TTreeInstanceArray;
-    I,X,Z,N:Integer;Key:Int64;
-begin
-  Cells:=TCells.Create;
-  try
-    for I:=0 to High(Instances)do begin
-      X:=Floor(Instances[I].X/128);Z:=Floor(Instances[I].Z/128);
-      Key:=(Int64(X) shl 32)or Int64(LongWord(Z));
-      if not Cells.TryGetValue(Key,A)then A:=nil;
-      N:=Length(A);SetLength(A,N+1);A[N]:=Instances[I];Cells.AddOrSetValue(Key,A);
-    end;
-    for Pair in Cells do begin
-      A:=Pair.Value;X:=Floor(A[0].X/128);Z:=Floor(A[0].Z/128);
-      Renderer.AddTile(A,(X+0.5)*128,(Z+0.5)*128,Cull);
-    end;
-  finally Cells.Free;end;
-end;
-
 procedure TDreamWorldVisual.QueueChunks(Root:TX3DRootNode;Parent:TCastleScene);
 var I:Integer;Group,Wrapper:TTransformNode;Node:TAbstractChildNode;ChunkRoot:TX3DRootNode;
   procedure MountNode(Source:TAbstractGroupingNode;Child:TAbstractChildNode;const Offset:TVector3);
@@ -237,9 +215,6 @@ begin
   FGrass:=TGrassRenderer.Create(nil);FScene.Add(FGrass);FGrass.Exists:=False;
   FCasterScene:=TCastleScene.Create(nil);FCasterScene.Exists:=False;FCasterScene.ProcessEvents:=True;
   FCasterScene.Collides:=False;FScene.Add(FCasterScene);
-  FTrees:=TCastleAbstractTreeRenderer.Create(nil);FScene.Add(FTrees);FTrees.Exists:=False;
-  FShrubs:=TCastleAbstractShrubRenderer.Create(nil);FScene.Add(FShrubs);FShrubs.Exists:=False;
-  FTrees.ProceduralAlternative:=True;FShrubs.ProceduralAlternative:=True;
   FProcedural:=TOsmProceduralVegetation.Create(nil);FScene.Add(FProcedural);FProcedural.Exists:=False;
   FScene.Collides:=False;FScene.Pickable:=True;FScene.CastGlobalLights:=True;FScene.ProcessEvents:=True;
   { Same settings as Real World tiles: only the shared atlas casts shadows. }
@@ -249,14 +224,14 @@ end;
 
 procedure TDreamWorldVisual.Build(World:TDreamWorld;Cancel:TThread);
 var Root,CasterRoot:TX3DRootNode;Group,CastGroup:TTransformNode;Shape:TShapeNode;App:TAppearanceNode;
-  Mat:TPhysicalMaterialNode;R:TTileMeshRec;M:TDreamMaterial;I,J,K,NT,NS:Integer;
+  Mat:TPhysicalMaterialNode;R:TTileMeshRec;M:TDreamMaterial;I,J,K:Integer;
   E:TEffectNode;P:TEffectPartNode;A:TFloatVertexAttributeNode;Values:array of Single;
   Builder,CastBuilder,BuildingBuilder,FenceBuilder:TGroundCompositeBuilder;Grass:TMesh;
   SampleComposite:TGroundCompositeMesh;
-  GrassMats:array of Integer;TreeArr,ShrubArr:TTreeInstanceArray;Tr:TTileTreeRec;
+  GrassMats:array of Integer;Tr:TTileTreeRec;
   ModelRoots:specialize TDictionary<string,TX3DRootNode>;ModelRoot:TX3DRootNode;
   ModelGroups:specialize TDictionary<string,TTransformNode>;ModelGroup:TTransformNode;
-  Instance:TTileModelInstance;Placement:TTransformNode;FileName:string;TreeCull,ShrubCull:Single;
+  Instance:TTileModelInstance;Placement:TTransformNode;FileName:string;
   Tick:QWord;ProceduralTrees:TTileTreeRecArray;
   procedure Mark(const Name:string);
   begin FTimings.Add(Name,GetTickCount64-Tick);Tick:=GetTickCount64;end;
@@ -289,7 +264,7 @@ begin
   ModelGroups:=specialize TDictionary<string,TTransformNode>.Create;
   try
     CheckCancelled;
-    FGrass.SunRayDirection:=-World.Sun;FTrees.SunRayDirection:=-World.Sun;FShrubs.SunRayDirection:=-World.Sun;
+    FGrass.SunRayDirection:=-World.Sun;
     FProcedural.SunRayDirection:=-World.Sun;
     Mark('vegetation_setup_ms');
     for I:=0 to High(World.Tiles)do begin
@@ -374,25 +349,12 @@ begin
         finally SampleComposite.Free;end;
       finally FenceBuilder.Free;BuildingBuilder.Free;CastBuilder.Free;Builder.Free;end;
       Mark('geometry_'+IntToStr(I)+'_ms');
-      SetLength(TreeArr,World.Tiles[I].Model.TreeCount);SetLength(ShrubArr,Length(TreeArr));NT:=0;NS:=0;
       SetLength(ProceduralTrees,World.Tiles[I].Model.TreeCount);
       for J:=0 to World.Tiles[I].Model.TreeCount-1 do begin
         Tr:=World.Tiles[I].Model.Trees[J];
         Tr.X:=Tr.X+World.Tiles[I].Offset.X;Tr.Y:=Tr.Y+World.Tiles[I].Offset.Y;Tr.Z:=Tr.Z+World.Tiles[I].Offset.Z;
         ProceduralTrees[J]:=Tr;
-        if Tr.IsShrub then begin
-          ShrubArr[NS].X:=Tr.X;ShrubArr[NS].Y:=Tr.Y;ShrubArr[NS].Z:=Tr.Z;
-          ShrubArr[NS].Scale:=Tr.Scale;ShrubArr[NS].Rotation:=Tr.Rotation;ShrubArr[NS].SeedAsTexId:=Tr.Seed;Inc(NS);
-        end else begin
-          TreeArr[NT].X:=Tr.X;TreeArr[NT].Y:=Tr.Y;TreeArr[NT].Z:=Tr.Z;
-          TreeArr[NT].Scale:=Tr.Scale;TreeArr[NT].Rotation:=Tr.Rotation;TreeArr[NT].SeedAsTexId:=Tr.Seed;Inc(NT);
-        end;
       end;
-      SetLength(TreeArr,NT);SetLength(ShrubArr,NS);
-      TreeCull:=GlobalLODConfig.TreesFarMeters;ShrubCull:=GlobalLODConfig.ShrubsFarMeters;
-
-      if NT>0 then AddVegetationCells(FTrees,TreeArr,TreeCull);
-      if NS>0 then AddVegetationCells(FShrubs,ShrubArr,ShrubCull);
       FProcedural.AddTile(ProceduralTrees,World.Tiles[I].Offset.X,World.Tiles[I].Offset.Z,nil);
     end;
     Mark('vegetation_ms');
@@ -415,8 +377,6 @@ begin
   Detach;
   if FScene<>nil then begin
     if FGrass<>nil then FScene.Remove(FGrass);
-    if FTrees<>nil then FScene.Remove(FTrees);
-    if FShrubs<>nil then FScene.Remove(FShrubs);
     if FProcedural<>nil then FScene.Remove(FProcedural);
     if FCasterScene<>nil then FScene.Remove(FCasterScene);
   end;
@@ -424,7 +384,7 @@ begin
   if FChunkRoots<>nil then for I:=0 to FChunkRoots.Count-1 do TObject(FChunkRoots[I]).Free;
   if FTextureBindings<>nil then for I:=0 to FTextureBindings.Count-1 do TObject(FTextureBindings[I]).Free;
   FChunkTextures.Free;FTextureBindings.Free;FSurfaceRoot.Free;FStaticCasterRoot.Free;FChunkRoots.Free;
-  FChunkParents.Free;FCasterChunks.Free;FChunks.Free;FGrass.Free;FTrees.Free;FShrubs.Free;FProcedural.Free;FCasterScene.Free;
+  FChunkParents.Free;FCasterChunks.Free;FChunks.Free;FGrass.Free;FProcedural.Free;FCasterScene.Free;
   FreeAndNil(FScene);FreeAndNil(FSky);
   if FWater<>nil then begin FWater.Clear;FWater.Free;end;
   FTimings.Free;inherited;
@@ -436,11 +396,6 @@ end;
 procedure TDreamWorldVisual.AttachTo(Parent:TCastleTransform;Preview:Boolean);
 begin
   Detach;FParent:=Parent;FParent.Add(FScene);FScene.Exists:=True;FCasterScene.Exists:=True;
-  if Preview then begin FTrees.CullDistance:=0;FShrubs.CullDistance:=0;end
-  else begin
-    FTrees.CullDistance:=GlobalLODConfig.TreesFarMeters;
-    FShrubs.CullDistance:=GlobalLODConfig.ShrubsFarMeters;
-  end;
 end;
 function TDreamWorldVisual.CoastalSky:TCastleBackground;
 begin if FCoastal and(FGLStage>1)then Result:=FSky else Result:=nil;end;
@@ -460,13 +415,9 @@ begin
         Binding:=TTextureBinding(FTextureBindings[I]);Binding.Node.LoadFromImage(Binding.Image,True,Binding.Url);Binding.Image:=nil;Binding.Free;
       end;
       FTextureBindings.Clear;
-      if not ProceduralVegetationActive and not TCastleAbstractTreeRenderer.AreSharedTexturesLoaded then
-        TCastleAbstractTreeRenderer.LoadSharedTextures(URIToFilenameSafe('castle-data:/Osm3d/resources/models/tree/'));
     end;
     1:begin
       if FCoastal and not FSky.InternalBackgroundRenderer.PrepareTexturesStep(FSkyStep)then Exit;
-      if not ProceduralVegetationActive and not TCastleAbstractShrubRenderer.AreSharedTexturesLoaded then
-        TCastleAbstractShrubRenderer.LoadSharedTextures(URIToFilenameSafe('castle-data:/Osm3d/resources/models/shrubbery/'));
     end;
     2:begin
       if FUploaded<FChunks.Count then begin
@@ -495,10 +446,8 @@ begin
         if FChunkParents[FUploaded]=Pointer(FCasterScene) then FCasterChunks.Add(Chunk);
         Chunk.Exists:=True;Inc(FUploaded);Exit;
       end;
-      FTrees.Exists:=True;
       FProcedural.Exists:=True;
     end;
-    3:FShrubs.Exists:=True;
     4:FGrass.Exists:=True;
     5:FGLReady:=True;
   end;
@@ -518,7 +467,6 @@ var I:Integer;
 begin
   for I:=0 to FCasterChunks.Count-1 do
     if TCastleScene(FCasterChunks[I]).Exists then List.Add(TCastleScene(FCasterChunks[I]));
-  if FTrees.Exists then List.Add(FTrees);if FShrubs.Exists then List.Add(FShrubs);
   if FProcedural.Exists then List.Add(FProcedural);
 end;
 procedure TDreamWorldVisual.AppendReflectionSurfaces(List:TCastleTransformList);
@@ -530,6 +478,6 @@ begin
   end;
 end;
 function TDreamWorldVisual.Diagnostics:TJSONObject;
-begin Result:=TJSONObject.Create(['visual_id',FSerial,'grass',FGrass.DiagString,'tree_tiles',FTrees.TileCount,'shrub_tiles',FShrubs.TileCount,
+begin Result:=TJSONObject.Create(['visual_id',FSerial,'grass',FGrass.DiagString,'trees',FProcedural.Diagnostics,
   'model_files',FModelFiles,'model_instances',FModelInstances,'chunks',FChunks.Count,'uploaded',FUploaded,'ready',Ready,'max_draw_ms',Int64(FMaxDrawMs),'max_draw_chunk',FMaxDrawChunk]);Result.Add('load_timings',FTimings.Clone);end;
 end.

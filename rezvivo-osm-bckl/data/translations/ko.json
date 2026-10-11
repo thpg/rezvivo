@@ -349,5 +349,12 @@
   "Wheel circumference (mm)": "바퀴 둘레 (mm)",
   "Preparing riders": "라이더 준비 중",
   "Companion": "동행자",
-  "Passing cyclist": "지나가는 자전거 이용자"
+  "Passing cyclist": "지나가는 자전거 이용자",
+  "Camera": "카메라",
+  "Up": "상승",
+  "Down": "하강",
+  "Run": "달리기",
+  "Brake": "브레이크",
+  "+ W": "+ W",
+  "Trees: textured": "나무: 텍스처"
 }

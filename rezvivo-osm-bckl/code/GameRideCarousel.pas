@@ -77,6 +77,7 @@ type
     procedure SelectCentered;
     procedure CancelGesture;
     procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
+    procedure BeforeRender;override;
     procedure Render;override;
     procedure GLContextOpen;override;
     procedure GLContextClose;override;
@@ -577,6 +578,18 @@ begin
   end;
   FImageDirty:=False;Inc(FImageRenderCount);
 end;
+procedure TRideCarousel.BeforeRender;
+begin
+  inherited;
+  if (Container=nil)or(Length(FOrder)=0)or
+     (RenderRect.Width<1)or(RenderRect.Height<1)then Exit;
+  { Build the offscreen image before parent UI clipping is enabled. During
+    Render, the page's screen-space scissor clips our texture coordinates:
+    its left/top offset cuts away cards and makes the wheel look smaller. }
+  UpdateProjection;RefreshSlots;
+  RenderImage;
+end;
+
 procedure TRideCarousel.Render;
 var R:TFloatRectangle;
 begin
@@ -585,10 +598,7 @@ begin
     Font.Print(R.Left+12,R.Bottom+R.Height*0.5,White,UiText('No matching routes'));Exit;
   end;
   if (Container=nil)or(R.Width<1)or(R.Height<1)then Exit;
-  { Parent layout and UI scale may finish changing after our Resize callback. }
-  UpdateProjection;RefreshSlots;
-  RenderImage;
-  FImage.Draw(R);
+  if FImage<>nil then FImage.Draw(R);
 end;
 function TRideCarousel.Diagnostics:TJSONObject;
 var A,Corners:TJSONArray;I,J:Integer;R:TFloatRectangle;S:TRideCarouselSlot;P:TVector2;L,B,RR,T,Angle:Single;

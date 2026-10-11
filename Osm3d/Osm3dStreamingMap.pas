@@ -38,7 +38,6 @@ uses UiTranslations,
   Osm3dOsmOverpass,
   Osm3dMemBudget,
   {$IFDEF TILE_MEM_PROFILE}Osm3dMemCensus,{$ENDIF}
-  Osm3dTreeShadow,       { SetTreeShadowDir — общий набор альфа-масок деревьев }
   Osm3dGeomMesh,
   Osm3dSceneMaterials,
   Osm3dGroundComposite,  { GROUND_MAT_* — id-ы grass-материалов в композите земли }
@@ -555,8 +554,6 @@ type
     FShowFitPoints:        Boolean;
     FShowFitPointsSnapped: Boolean;
 
-    FTreeRenderer:  TCastleAbstractTreeRenderer;
-    FShrubRenderer: TCastleAbstractShrubRenderer;
     FProceduralRenderer: TOsmProceduralVegetation;
     FGrassRenderer: TGrassRenderer;
     FGenerateTrees: Boolean;
@@ -621,7 +618,7 @@ type
     { Общий пролог MountBatch / EnqueueAssembleBatch: красные сферы высот
       (CaptureRawGroundY), превью земли для LOD B/C (BuildHeightPreview),
       сшивка границ с соседями (SyncTileBorders — ошибка сварки не срывает
-      монтаж) и прогрев альфа-масок деревьев (SetTreeShadowDir). }
+      монтаж). }
     procedure PrepareBatchForAssemble(const AIds: array of TGeoTileId;
       const AModels: array of TTileModel;
       out APreviews: TTilePreviewDataArray; out ABorder: TBorderWorldMap);
@@ -1147,8 +1144,6 @@ var
   TREE_DIAG: Boolean = False;
 
 const
-  TREE_TEXTURES_PATH  = 'data/Osm3d/resources/models/tree/';
-  SHRUB_TEXTURES_PATH = 'data/Osm3d/resources/models/shrubbery/';
 
   { Радиус слот-сетки и cull стримящихся тайлов теперь в TLODConfig
     (GlobalLODConfig.StreamGridRadius / .GroundVisibilityM) — единая
@@ -1610,12 +1605,6 @@ begin
     Downstream draw paths short-circuit on the nil renderers. }
   if FGenerateTrees and ASettings.RenderTrees then
   begin
-    FTreeRenderer := TCastleAbstractTreeRenderer.Create(Self);
-    FTreeRenderer.ProceduralAlternative := True;
-    FVegOwner.Add(FTreeRenderer);
-    FShrubRenderer := TCastleAbstractShrubRenderer.Create(Self);
-    FShrubRenderer.ProceduralAlternative := True;
-    FVegOwner.Add(FShrubRenderer);
     FProceduralRenderer := TOsmProceduralVegetation.Create(Self);
     FVegOwner.Add(FProceduralRenderer);
   end;
@@ -1796,16 +1785,6 @@ begin
     FreeAndNil(FProceduralRenderer);
   end;
 
-  if FTreeRenderer <> nil then
-  begin
-    if FVegOwner <> nil then FVegOwner.Remove(FTreeRenderer);
-    FreeAndNil(FTreeRenderer);
-  end;
-  if FShrubRenderer <> nil then
-  begin
-    if FVegOwner <> nil then FVegOwner.Remove(FShrubRenderer);
-    FreeAndNil(FShrubRenderer);
-  end;
   if FGrassRenderer <> nil then
   begin
     if FVegOwner <> nil then FVegOwner.Remove(FGrassRenderer);
@@ -1940,10 +1919,6 @@ begin
        (InterlockedCompareExchange(Tile.Scene.MountFinished, 0, 0) <> 0) and
        Tile.Scene.MountLoaded and Tile.Scene.ExistsInRoot then
       AList.Add(Tile.Scene);
-  if (FTreeRenderer <> nil) and FTreeRenderer.ExistsInRoot then
-    AList.Add(FTreeRenderer);
-  if (FShrubRenderer <> nil) and FShrubRenderer.ExistsInRoot then
-    AList.Add(FShrubRenderer);
   if (FProceduralRenderer <> nil) and FProceduralRenderer.ExistsInRoot then
     AList.Add(FProceduralRenderer);
 end;
@@ -3078,11 +3053,7 @@ begin
       LogMain('border weld skipped: ' + E.Message);
   end;
 
-  { Let the shadow pass project tree billboard textures (same path the
-    tree renderer uses). Один общий набор альфа-масок (Osm3dTreeShadow)
-    на ассемблер и теневой воркер; SetTreeShadowDir грузит их жадно на
-    этом (главном) потоке до постановки первой mask-джобы. }
-  SetTreeShadowDir(TREE_TEXTURES_PATH);
+  { Tree silhouettes come from the generated species atlases in the shared shadow pass. }
 end;
 
 procedure TOsm3dStreamingMap.MountBatch(const AIds: array of TGeoTileId;
@@ -3152,110 +3123,16 @@ end;
 
 procedure TOsm3dStreamingMap.MountTileTrees(const ACenter: TVector3;
   const ATrees: TTileTreeRecArray);
-var
-  TreeArr, ShrubArr: TTreeInstanceArray;
-  NT, NS, I:         Integer;
-  TTex0:             QWord;
-  MountProfile: Boolean;
-  ProfileStarted, ProfileProceduralMs, ProfileSplitMs, ProfileLegacyMs: QWord;
+var MountProfile: Boolean; ProfileStarted: QWord;
 begin
-  {$IFDEF IAM_LIVE}IamLiveTrack(835);{$ENDIF}
-  { RenderTrees off: never touch the GPU for vegetation — no shared-texture
-    upload (below), no per-tile instance VBO, and therefore no EnsureSharedGL
-    shader-program build. Authoritative hard gate on the live global. }
   if not Osm3dStudioSettings.RenderTreesActive then Exit;
-  if (not FGenerateTrees) or (Length(ATrees) = 0) then Exit;
-  if (FTreeRenderer = nil) or (FShrubRenderer = nil) then Exit;
-  MountProfile := GetEnvironmentVariable('REZVIVO_TILE_MOUNT_PROFILE') = '1';
-  if MountProfile then ProfileStarted := GetTickCount64;
-  if FProceduralRenderer <> nil then
-    FProceduralRenderer.AddTile(ATrees, ACenter.X, ACenter.Z, FProj);
+  if not FGenerateTrees or (Length(ATrees)=0) or (FProceduralRenderer=nil) then Exit;
+  MountProfile := GetEnvironmentVariable('REZVIVO_TILE_MOUNT_PROFILE')='1';
+  if MountProfile then ProfileStarted:=GetTickCount64;
+  FProceduralRenderer.AddTile(ATrees,ACenter.X,ACenter.Z,FProj);
   if MountProfile then
-  begin
-    ProfileProceduralMs := GetTickCount64 - ProfileStarted;
-    ProfileStarted := GetTickCount64;
-  end;
-
-  if not ProceduralVegetationActive and not TCastleAbstractTreeRenderer.AreSharedTexturesLoaded then
-  begin
-    TTex0 := GetTickCount64;
-    try
-      TCastleAbstractTreeRenderer.LoadSharedTextures(TREE_TEXTURES_PATH);
-      LogMain(Format('tree textures loaded in %d ms',
-                     [GetTickCount64 - TTex0]));
-    except
-      on E: Exception do
-        LogMain('tree textures load FAILED: ' + E.Message);
-    end;
-  end;
-  if not ProceduralVegetationActive and not TCastleAbstractShrubRenderer.AreSharedTexturesLoaded then
-  begin
-    TTex0 := GetTickCount64;
-    try
-      TCastleAbstractShrubRenderer.LoadSharedTextures(SHRUB_TEXTURES_PATH);
-      LogMain(Format('shrub textures loaded in %d ms',
-                     [GetTickCount64 - TTex0]));
-    except
-      on E: Exception do
-        LogMain('shrub textures load FAILED: ' + E.Message);
-    end;
-  end;
-
-  NT := 0;  NS := 0;
-  for I := 0 to High(ATrees) do
-    if ATrees[I].IsShrub then Inc(NS) else Inc(NT);
-  SetLength(TreeArr,  NT);
-  SetLength(ShrubArr, NS);
-  NT := 0;  NS := 0;
-  for I := 0 to High(ATrees) do
-    if ATrees[I].IsShrub then
-    begin
-      ShrubArr[NS].X           := ATrees[I].X;
-      ShrubArr[NS].Y           := ATrees[I].Y;
-      ShrubArr[NS].Z           := ATrees[I].Z;
-      ShrubArr[NS].Scale       := ATrees[I].Scale;
-      ShrubArr[NS].Rotation    := ATrees[I].Rotation;
-      ShrubArr[NS].SeedAsTexId := ATrees[I].Seed;
-      Inc(NS);
-    end
-    else
-    begin
-      TreeArr[NT].X           := ATrees[I].X;
-      TreeArr[NT].Y           := ATrees[I].Y;
-      TreeArr[NT].Z           := ATrees[I].Z;
-      TreeArr[NT].Scale       := ATrees[I].Scale;
-      TreeArr[NT].Rotation    := ATrees[I].Rotation;
-      TreeArr[NT].SeedAsTexId := ATrees[I].Seed;
-      Inc(NT);
-    end;
-
-  { Vegetation cull radius is its OWN LOD knob — TreesFarMeters /
-    ShrubsFarMeters — NOT TileCullDistance. TileCullDistance is the
-    ground-tile streaming cull (GlobalLODConfig.GroundVisibilityM, ~3 km);
-    feeding it here made every billboard draw out to the streaming horizon.
-    LocalRender's per-tile FCullDistance test is the hard cull for
-    trees/shrubs, and these two fields are exactly what set it. }
-  if MountProfile then
-  begin
-    ProfileSplitMs := GetTickCount64 - ProfileStarted;
-    ProfileStarted := GetTickCount64;
-  end;
-  if TREE_DIAG then
-    LogMain(Format('TREEDIAG add c=(%.0f,%.0f) trees=%d shrubs=%d',
-      [ACenter.X, ACenter.Z, NT, NS]));
-  if NT > 0 then
-    FTreeRenderer.AddTile(TreeArr, ACenter.X, ACenter.Z,
-      GlobalLODConfig.TreesFarMeters);
-  if NS > 0 then
-    FShrubRenderer.AddTile(ShrubArr, ACenter.X, ACenter.Z,
-      GlobalLODConfig.ShrubsFarMeters);
-  if MountProfile then
-  begin
-    ProfileLegacyMs := GetTickCount64 - ProfileStarted;
-    LogMain(Format('TILE_MOUNT_PROFILE trees c=(%.1f,%.1f) count=%d procedural=%d split_and_textures=%d legacy=%d ms',
-      [ACenter.X, ACenter.Z, Length(ATrees), ProfileProceduralMs,
-       ProfileSplitMs, ProfileLegacyMs]));
-  end;
+    LogMain(Format('TILE_MOUNT_PROFILE trees c=(%.1f,%.1f) count=%d mount=%d ms',
+      [ACenter.X,ACenter.Z,Length(ATrees),GetTickCount64-ProfileStarted]));
 end;
 
 { true, если materialId — травяной (в id-пространстве композита земли).
@@ -7061,16 +6938,12 @@ begin
     по центру и удаляет ВСЕ записи с этим центром; у избыточного (пустого) батча
     центры Assembled.Tiles совпадают с резидентной копией, и снятие снесло бы её
     деревья. Батч, смонтировавший 0 тайлов, снимает 0. }
-  if FTreeRenderer <> nil then
+  if FProceduralRenderer <> nil then
     for CT in ABatch.Tiles do
     begin
       if TREE_DIAG then
         LogMain(Format('TREEDIAG remove c=(%.0f,%.0f)', [CT.CenterX, CT.CenterZ]));
-      FTreeRenderer.RemoveTile(CT.CenterX, CT.CenterZ);
-      if FProceduralRenderer <> nil then
-        FProceduralRenderer.RemoveTile(CT.CenterX, CT.CenterZ);
-      if FShrubRenderer <> nil then
-        FShrubRenderer.RemoveTile(CT.CenterX, CT.CenterZ);
+      FProceduralRenderer.RemoveTile(CT.CenterX, CT.CenterZ);
     end;
 
   if FGrassRenderer <> nil then

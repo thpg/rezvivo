@@ -360,5 +360,12 @@
   "Wheel circumference (mm)": "ホイール周長 (mm)",
   "Preparing riders": "ライダーを準備中",
   "Companion": "同行者",
-  "Passing cyclist": "通りがかりのサイクリスト"
+  "Passing cyclist": "通りがかりのサイクリスト",
+  "Camera": "カメラ",
+  "Up": "上昇",
+  "Down": "下降",
+  "Run": "走る",
+  "Brake": "ブレーキ",
+  "+ W": "+ W",
+  "Trees: textured": "樹木：テクスチャ"
 }

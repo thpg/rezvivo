@@ -2486,32 +2486,6 @@
     "evidence": "project-created assets / procedural output"
   },
   {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/diffuse.png",
-    "bytes": 498465,
-    "sha256": "dd78de0c6e69e7b67e02b08e911a332287f5a1696dbfe6470dbe3b6677e84759",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/shrubbery/diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/layers/shrubbery_ownership.png",
-    "bytes": 6337,
-    "sha256": "221852cdffd3e8735c2e74c5454b6c4028a7c89c3b172acc1f78126fbcf8c402",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/shrubbery/normal.png",
-    "bytes": 474318,
-    "sha256": "d20f214018267d37ec41b05daf8c890bc45f76334e59f5964e588ee6dda89a0d",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/shrubbery/normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/traffic_light/green.png",
     "bytes": 1259617,
     "sha256": "ec0aeca71d6cc9aea7c34ac17eb8e24695c09a25bff1538bad068a2acc6e3774",
@@ -2545,145 +2519,6 @@
     "sha256": "620b3031633b2f0e9a5c74e2836548b6309ad7e0b612a7e6e990bebf22fb816c",
     "license": "REVIEW",
     "source": "not established by files alone"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/beech_diffuse.png",
-    "bytes": 364959,
-    "sha256": "7f9ec044129cd914a8334b9a9a2b1a88e191830b057579c995bcdc3ad650d824",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/beech_diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/beech_normal.png",
-    "bytes": 305387,
-    "sha256": "775a8cc8c123b63a4a14ec6eb450676e4126ab89ad4ba7e50a8dbc4c97fb2526",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/beech_normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/fir_diffuse.png",
-    "bytes": 243960,
-    "sha256": "7196025255ea9ef1d488b30621771af90c84d73aac61c7090cd6bc4c56479899",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/fir_diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/fir_normal.png",
-    "bytes": 202018,
-    "sha256": "335fa4f84b85a873b737b089728ce5c9bc5366bbdb0fffae5ab9c2da3836de15",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/fir_normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/beech_ownership.png",
-    "bytes": 5795,
-    "sha256": "29ffa4b641df9544ff629988b5aeaaf5fd02d257571241aeb6d38160821a32cf",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/fir_ownership.png",
-    "bytes": 5771,
-    "sha256": "0dcb706b612a703909d977ce950fa33efdf9166ef7a90aca9b504b7553d0f646",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/linden0_ownership.png",
-    "bytes": 6721,
-    "sha256": "cb3ac4c254dbe7c10f8c83b547bc478e4516fe6b7ed372c3f88c65057b2854a9",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/linden1_ownership.png",
-    "bytes": 6015,
-    "sha256": "bab2b5891ef979485abe1f3aa85092abd1963e52d2200d195e1932ca96c3542c",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/layers/oak_ownership.png",
-    "bytes": 6750,
-    "sha256": "0f0f9196abe6d24dc4f43f43dc33bea44ff45a3ad5c5f12e63f9e2a1aa2791d4",
-    "license": "MIT",
-    "source": "Streets GL textures; REZVIVO-derived segmentation map",
-    "evidence": "generated ownership maps; preserve upstream MIT notice"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden0_diffuse.png",
-    "bytes": 419131,
-    "sha256": "db51f74eac7840d17b44c5a0481409b6ea316b143c77d9fdc1d6cba80d11dcf9",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/linden0_diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden0_normal.png",
-    "bytes": 379387,
-    "sha256": "35234d5491f455d452f492bf755f7a7e4a5c384daef7103181382c57b0cd01ba",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/linden0_normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden1_diffuse.png",
-    "bytes": 329890,
-    "sha256": "d55f9af17fea1e6666f5c11580099820de56816a190fc1cb154e334638eed5a3",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/linden1_diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/linden1_normal.png",
-    "bytes": 298849,
-    "sha256": "49c79c9a755571e369d1bf379a5f6004df0ec92144e8618d2887502d20fcc869",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/linden1_normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/oak_diffuse.png",
-    "bytes": 347995,
-    "sha256": "8bbd5d2b058f252c359a8ecc13830a6d537b0fa4f8a428bab67ee7a95fa78c24",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/oak_diffuse.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/oak_normal.png",
-    "bytes": 331633,
-    "sha256": "d79aa873a2cf4b79aa352c2ef1b35d436044dd2029969467b4d5d4d4920faba3",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/oak_normal.png",
-    "evidence": "byte-identical upstream file"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/Osm3d/resources/models/tree/tree_volume_normal.png",
-    "bytes": 96226,
-    "sha256": "15270a5d81b9c917c8b2f07e4d53abb1a2ee35337e8da8dada1365e17cbe1659",
-    "license": "MIT",
-    "source": "https://github.com/StrandedKitty/streets-gl",
-    "upstream_path": "src/resources/models/tree/tree_volume_normal.png",
-    "evidence": "byte-identical upstream file"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/buildings/facades/block_window_diffuse.png",
@@ -4513,96 +4348,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 27287,
-    "sha256": "d6b156c8a69b12f3fe33c6603a50a80d5a58e415223bff03685a32e1036a0e64",
+    "bytes": 27478,
+    "sha256": "7f949c8b583659df085b349ee0f3dc05ec1f98bb65d7319675f7e3bd759bfbbe",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 22693,
-    "sha256": "13870d725b37d3b1e275df6637a05ec9c11c0b8ae7a59ba147c922dd3db2a84e",
+    "bytes": 22858,
+    "sha256": "41ccc714dfaf44eee1c036c9adf3894143f2364a5c300a159293111d66ba2e3a",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 91298,
-    "sha256": "80d7c7a5343a2b9b7bf2135c53f75248790cd92b6ba3b580f11ded328580d463",
+    "bytes": 93219,
+    "sha256": "5a07351b122f8bf304762d786554f1e35d939f46da0a78ac57458a939eb500d7",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 22714,
-    "sha256": "4c1a96204edd3363f4e0b89a5a685cf97ffe883bfdcafce42d9acae5ac17e5c4",
+    "bytes": 22881,
+    "sha256": "5d598ae797ac33d7de56348abf4eb4155127743589b10bddbcd1f1ece1f59dbb",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 23417,
-    "sha256": "952e71f9e4f547481b8d6186c5a7494abf0aa0c55a33b1e976b91a9b2e5c8d77",
+    "bytes": 23588,
+    "sha256": "e4391a6621fdceb920aa4e126327c9652de1427cd19dfe0ae12e4ec6c8f0dcd9",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 22464,
-    "sha256": "b7ccc075c0bb2be7fe80dcd95d061f76d5b99db024a0c2af5273fe4a2912b01b",
+    "bytes": 22622,
+    "sha256": "6c290c4b6c04d4a1decdc7020fc8ab37427d78389242cb3838955579dd77f24e",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 25809,
-    "sha256": "306c518803847a23b70061760a012771faa56582393da7518534a773cc586801",
+    "bytes": 25993,
+    "sha256": "3967123013226ccb5352928de2d56b011d2180b50f49aeba0c1fba9a9711fc8a",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 23703,
-    "sha256": "6bdb4f73a512cf01c6c2a3c0df01b0bc180dffdd072d47941f1efe2ac5ae2fb7",
+    "bytes": 23883,
+    "sha256": "ad04965db4731408cc16d0ecb290605c2d5fa684642b2fac30e0eb8d58b1e103",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 22326,
-    "sha256": "956770e7f81ed4b58dd8b76c09c008c5b6af61073eee3e1d329b143eb27fd17d",
+    "bytes": 22494,
+    "sha256": "5f2f9924e2632e5d9d895678aff9d72e21de13126384e3f91c0a9e417d6de330",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 142406,
-    "sha256": "ecaf4f6d37ec048986cd1ab43c077a00b17c104d43076d2f2f4408ff35a64160",
+    "bytes": 144611,
+    "sha256": "78b1269813ce51d24803398d1641764c6aae37244d36dedce441fa2c1c5ef7f0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 21035,
-    "sha256": "71297319083a4d946b6f74c9e62e7bc9b0d4fcc8fde465dcd2312a91ba244d20",
+    "bytes": 21201,
+    "sha256": "b210bbc84fe3d43f66492ae3dab281262178080ea7f29dbea027963b12ece097",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 20831,
-    "sha256": "be32d69caaf13d5d965b78fa94816a29ec420d075b50d24e8b146311af043242",
+    "bytes": 20997,
+    "sha256": "d138a3b5d5e3594a030f9b8c5ca4dd34057e0cfa1fbd8f0db29fcfa9c9c1e466",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

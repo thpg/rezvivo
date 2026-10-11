@@ -75,6 +75,9 @@ type
     LabelStatus: TCastleLabel;
   private
     FMode: TLoginMode;
+    FScroll:TMenuScrollView;
+    FTabs:TMenuFlow;
+    FIntro,FEmailLabel,FPasswordLabel:TCastleLabel;
 
     { Tab-кнопки }
     FTabDevice:   TCastleButton;
@@ -119,6 +122,7 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     procedure Start; override;
+    procedure Resize;override;
     function Press(const Event:TInputPressRelease):Boolean; override;
     procedure Stop; override;
     procedure Update(const SecondsPassed: Single;
@@ -130,7 +134,7 @@ var
 
 implementation
 
-uses UiTranslations,
+uses UiTranslations,Math,
   CastleLog, CastleApplicationProperties, CastleOpenDocument,
   GameViewMenu, GameLocalization,GameAccountChange;
 
@@ -260,6 +264,12 @@ begin
   if Assigned(ButtonBack) then BindUiText(ButtonBack, 'Back');
 
   if Assigned(ButtonBack) then ButtonBack.OnClick := @ClickBack;
+  FScroll:=TMenuScrollView.Create(FreeAtStop);FScroll.FullSize:=True;
+  FScroll.Border.Top:=76;FScroll.Border.Bottom:=12;
+  FScroll.Border.Left:=16;FScroll.Border.Right:=16;InsertFront(FScroll);
+  FormHost.Parent.RemoveControl(FormHost);FScroll.ScrollArea.InsertFront(FormHost);
+  FormHost.Anchor(vpTop);FormHost.Anchor(hpMiddle);
+  LabelStatus.Parent.RemoveControl(LabelStatus);FormHost.InsertFront(LabelStatus);
 
   { Сбрасываем фоновый поток если вдруг остался от предыдущего входа. }
   FreeAndNil(FBackground);
@@ -268,6 +278,38 @@ begin
   SetStatus('', False);
 
   RebuildForm;
+  Resize;
+end;
+
+procedure TViewLogin.Resize;
+var W,Y:Single;
+begin
+  inherited;if(FScroll=nil)or(FTabs=nil)or(FFormContent=nil)then Exit;
+  ButtonBack.FontScale:=1;ButtonBack.FontSize:=17;ButtonBack.MinWidth:=100;ButtonBack.MinHeight:=44;
+  ButtonBack.Anchor(hpLeft,12);ButtonBack.Anchor(vpTop,-12);
+  LabelTitle.FontSize:=24;LabelTitle.MaxWidth:=Max(1,EffectiveWidth-ButtonBack.EffectiveWidth-48);
+  LabelTitle.Anchor(hpRight,-16);LabelTitle.Anchor(vpTop,-20);
+  FormHost.Width:=Max(1,Min(700,FScroll.EffectiveWidthForChildren));W:=FormHost.Width;
+  FTabs.Width:=W;FTabs.Arrange;
+  FFormContent.Width:=W;FFormContent.Anchor(vpTop,-FTabs.Height-20);
+  if FMode=lmDevice then begin
+    FIntro.MaxWidth:=W;Y:=FIntro.EffectiveHeight+20;
+    FButtonGetCode.Anchor(vpTop,-Y);Y:=Y+FButtonGetCode.EffectiveHeight+20;
+    FLabelUserCode.MaxWidth:=W;FLabelUserCode.Anchor(vpTop,-Y);Y:=Y+FLabelUserCode.EffectiveHeight+16;
+    FLabelHint.MaxWidth:=W;FLabelHint.Anchor(vpTop,-Y);Y:=Y+FLabelHint.EffectiveHeight+16;
+  end else begin
+    FEmailLabel.Anchor(hpLeft);FEmailLabel.Anchor(vpTop);
+    FEditEmail.Anchor(hpLeft);FEditEmail.Anchor(vpTop,-32);FEditEmail.Width:=W;
+    Y:=32+FEditEmail.EffectiveHeight+16;
+    FPasswordLabel.Anchor(hpLeft);FPasswordLabel.Anchor(vpTop,-Y);
+    FEditPassword.Anchor(hpLeft);FEditPassword.Anchor(vpTop,-Y-32);FEditPassword.Width:=W;
+    Y:=Y+32+FEditPassword.EffectiveHeight+20;
+    FButtonLogin.Anchor(vpTop,-Y);Y:=Y+FButtonLogin.EffectiveHeight+16;
+  end;
+  FFormContent.Height:=Y;Y:=Y+FTabs.Height+20;
+  LabelStatus.MaxWidth:=W;LabelStatus.Anchor(vpTop,-Y);
+  FormHost.Height:=Y+LabelStatus.EffectiveHeight+16;
+  FScroll.ScrollArea.Height:=FormHost.Height;
 end;
 
 procedure TViewLogin.Stop;
@@ -278,6 +320,7 @@ begin
     FreeAndNil(FBackground);
   end;
   inherited;
+  FScroll:=nil;FTabs:=nil;FFormContent:=nil;
 end;
 
 function TViewLogin.Press(const Event:TInputPressRelease):Boolean;
@@ -311,7 +354,7 @@ end;
 
 procedure TViewLogin.RebuildForm;
 var
-  TabsRow: TCastleHorizontalGroup;
+  TabsRow: TMenuFlow;
 begin
   if not Assigned(FormHost) then Exit;
 
@@ -319,7 +362,7 @@ begin
   FFormContent := nil;
 
   { Tabs row at top of form }
-  TabsRow := TCastleHorizontalGroup.Create(FreeAtStop);
+  TabsRow := TMenuFlow.Create(FreeAtStop);FTabs:=TabsRow;
   TabsRow.Spacing := 4;
   TabsRow.Anchor(hpMiddle);
   TabsRow.Anchor(vpTop, 0);
@@ -349,6 +392,8 @@ begin
     lmDevice:   BuildDeviceForm;
     lmPassword: BuildPasswordForm;
   end;
+  FormHost.InsertFront(LabelStatus);
+  Resize;
 end;
 
 procedure TViewLogin.BuildDeviceForm;
@@ -363,6 +408,7 @@ begin
   FormHost.InsertFront(FFormContent);
 
   Hint := TMenuLabel.Create(FreeAtStop);
+  FIntro:=Hint;
   Hint.Caption :=
     T('Secure sign-in without sharing your password with the game.') + LineEnding +
     T('Log in on the website in your default browser first. Then click the button — the game will open a confirmation page and sign you in.');
@@ -414,6 +460,7 @@ begin
   FormHost.InsertFront(FFormContent);
 
   LabelEmail := TMenuLabel.Create(FreeAtStop);
+  FEmailLabel:=LabelEmail;
   BindUiText(LabelEmail, 'Email:');
   LabelEmail.FontScale := 1.1;
   LabelEmail.Color := Vector4(0.85, 0.85, 0.9, 1);
@@ -428,6 +475,7 @@ begin
   FFormContent.InsertFront(FEditEmail);
 
   LabelPass := TMenuLabel.Create(FreeAtStop);
+  FPasswordLabel:=LabelPass;
   BindUiText(LabelPass, 'Password:');
   LabelPass.FontScale := 1.1;
   LabelPass.Color := Vector4(0.85, 0.85, 0.9, 1);
@@ -463,6 +511,7 @@ begin
     LabelStatus.Color := Vector4(1.0, 0.5, 0.45, 1)
   else
     LabelStatus.Color := Vector4(0.6, 0.95, 0.7, 1);
+  Resize;
 end;
 
 function TViewLogin.DeviceVerificationUrl: String;

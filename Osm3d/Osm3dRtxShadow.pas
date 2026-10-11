@@ -476,7 +476,7 @@ begin
           end else Shape.LocalTriangulate(@AddTriangle,False);
         end;
         if FShape<Shapes.Count then Break;
-      end else if (Casters[FSource] is TOsmProceduralVegetation) and RenderTreesActive and ProceduralVegetationActive then begin
+      end else if (Casters[FSource] is TOsmProceduralVegetation) and RenderTreesActive then begin
         NativeReady:=TOsmProceduralVegetation(Casters[FSource]).CollectRtxTrees(Self,FCell,FEntry);
         if not NativeReady then Break;
       end;

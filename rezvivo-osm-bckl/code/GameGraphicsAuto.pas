@@ -314,7 +314,7 @@ begin
   if FMemoryKnown then FMemoryLabel.Caption := Format(UiText('Free GPU memory: %s'), [IntToStr(FFreeMiB) + ' MiB'])
   else FMemoryLabel.Caption := UiText('GPU memory unavailable; using conservative limits.');
   FMemoryLabel.Anchor(vpTop, -Y);
-  FCard.Height := Y + FMemoryLabel.EffectiveHeight + FCancel.EffectiveHeight + 28;
+  FCard.Height := Min(Max(1,EffectiveHeight-36),Y + FMemoryLabel.EffectiveHeight + FCancel.EffectiveHeight + 28);
 end;
 
 procedure TGraphicsAutoRun.CancelClick(Sender: TObject);

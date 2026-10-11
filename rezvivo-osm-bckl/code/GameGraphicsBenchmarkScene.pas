@@ -6,7 +6,7 @@ interface
 
 uses Classes, SysUtils, CastleViewport, CastleScene, CastleVectors,
   Osm3dGroundComposite, Osm3dGeomMesh, Osm3dTileX3D, Osm3dRenderGrass,
-  Osm3dRenderInstanced, Osm3dProceduralVegetation, Osm3dRiderShadow,
+  Osm3dProceduralVegetation, Osm3dStudioSettings, Osm3dRiderShadow,
   Osm3dGpuTimer, GameGraphicsOptions, GameScreenFX, Osm3dImpostorCache,
   Osm3dBuildingComposite, Osm3dWaterShader, GameGraphicsBenchmarkRiders, CastleControls, CastleUIControls, fpjson;
 
@@ -25,7 +25,6 @@ type
     FData: TGraphicsBenchmarkData;
     FGround, FCasters: TCastleScene;
     FGrass: TGrassRenderer;
-    FTrees: TCastleAbstractTreeRenderer;
     FProcedural: TOsmProceduralVegetation;
     FShadow: TRiderShadowAtlas;
     FRiders: TGraphicsBenchmarkRiders;
@@ -330,16 +329,12 @@ begin
   Items.Add(FCasters);
   FGrass := TGrassRenderer.Create(Self); FGrass.Exists := False;
   FGrass.SunRayDirection := -FSun; Items.Add(FGrass);
-  FTrees := TCastleAbstractTreeRenderer.Create(Self); FTrees.Exists := False;
-  FTrees.ProceduralAlternative := True;
-  FTrees.SunRayDirection := -FSun; Items.Add(FTrees);
   FProcedural := TOsmProceduralVegetation.Create(Self); FProcedural.Exists := False;
   FProcedural.SunRayDirection := -FSun; Items.Add(FProcedural);
   FShadow := TRiderShadowAtlas.Create;
   FShadow.WorldShadows := True;
   FShadow.WorldCasters.Add(FCasters);
   FShadow.WorldCasters.Add(FGround);
-  FShadow.WorldCasters.Add(FTrees);
   FShadow.WorldCasters.Add(FProcedural);
   FTimer := TAsyncGpuTimer.Create;
   FScreenFX := TScreenFX.Create(Self);
@@ -374,7 +369,6 @@ begin
   FreeAndNil(FGround);
   FreeAndNil(FCasters);
   FreeAndNil(FGrass);
-  FreeAndNil(FTrees);
   FreeAndNil(FProcedural);
   FreeAndNil(FData);
   inherited;
@@ -383,7 +377,7 @@ end;
 procedure TGraphicsBenchmarkScene.BuildScene;
 var Root: TX3DRootNode; Shape: TShapeNode; I: Integer;
     Mat: TPhysicalMaterialNode; App: TAppearanceNode; Rec:TTileMeshRec;
-    TriMat: array of Integer; Trees: TTreeInstanceArray; Values:array of Single;
+    TriMat: array of Integer; Values:array of Single;
     Attr:TFloatVertexAttributeNode; E:TEffectNode; Part:TEffectPartNode;
 begin
   Root:=TX3DRootNode.Create;
@@ -418,13 +412,7 @@ begin
   SetLength(TriMat,FData.Ground.TriangleCount);
   for I:=0 to High(TriMat) do TriMat[I]:=GROUND_MAT_TERRAIN;
   FGrass.AddTile(FData.Ground,TriMat,0,64);
-  SetLength(Trees,Length(FData.Trees));
-  for I:=0 to High(Trees) do begin
-    Trees[I].X:=FData.Trees[I].X;Trees[I].Y:=FData.Trees[I].Y;
-    Trees[I].Z:=FData.Trees[I].Z;Trees[I].Scale:=FData.Trees[I].Scale;
-    Trees[I].Rotation:=FData.Trees[I].Rotation;Trees[I].SeedAsTexId:=FData.Trees[I].Seed;
-  end;
-  FTrees.AddTile(Trees,0,64,500);FProcedural.AddTile(FData.Trees,0,64,nil);
+  FProcedural.AddTile(FData.Trees,0,64,nil);
 end;
 
 procedure TGraphicsBenchmarkScene.PrepareStep;
@@ -460,8 +448,7 @@ begin
   FScreenFX.SofteningLevel := Values[goSoftening];
   FShadow.Configure(Values[goShadowSize], Values[goShadowFilter], Values[goShadowDistance]);
   FGrass.Exists := (FStage >= 3) and (Values[goGrass] <> 0);
-  FTrees.Exists := FStage >= 3;
-  FProcedural.Exists := (FStage >= 3) and (Values[goTrees] <> 0);
+  FProcedural.Exists := FStage >= 3;
   FReady := False; FReadySince := 0; FLastReadinessCheck := 0;
   RestartSamples;
 end;
@@ -531,7 +518,8 @@ begin
     if FError = '' then FError := DiagnosticError(D);
     Warm := Warm and (DiagnosticInteger(D, 'pending') = 0)
       and (DiagnosticInteger(D, 'waiting') = 0)
-      and (DiagnosticInteger(D, 'ready') > 0);
+      and ((not ProceduralVegetationActive and (DiagnosticInteger(D, 'atlases') > 0))
+        or (ProceduralVegetationActive and (DiagnosticInteger(D, 'ready') > 0)));
   end;
   if Warm and (FError = '') then
   begin

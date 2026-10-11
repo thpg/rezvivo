@@ -25,7 +25,7 @@ uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,
   GameRemoteRiders, GameBLEHud, GameCameraControl, PBRTextureUnit,
   GameCinematicCamera, GameFreeCamera, GameWalkingCamera, GameScreenFX, GameSimClock, GameSimReplay, GameSimCameraTrack,
   GameOsmStreaming, FitFile, GpxFile, GamePath,
-  Osm3dRoadMaterial, Osm3dStudioSettings,   { LoadFogSettings: общий со студией файл настроек тумана }
+  Osm3dRoadMaterial, Osm3dStudioSettings, GameTouchControls,   { LoadFogSettings: общий со студией файл настроек тумана }
   GameRiderPoseControl, VeloSiteAPI,
   FreezeDiagLog, Osm3dRiderShadow, GameRideMetricsHud, Osm3dDreamWorld, GameDreamWorldScene;
 
@@ -91,11 +91,13 @@ type
     FKeyboardPower:Single;
     FKeyboardPowerSelected,FKeyboardPowerActive:Boolean;
     FExploreHint:TCastleLabel;
+    FTouchControls:TTravelTouchControls;
     FExploreInputOverride:Boolean;
     FExploreSteer,FExplorePowerAxis,FExploreWalkAxis:Single;
     FHardwareSteer: Single;
     FHardwareSteering: Boolean;
     FWalkHold:THeldMovement;
+    procedure ClickTouchCamera(Sender:TObject);
     procedure ConfigureTravel;
     procedure UpdateTravelInput(Dt:Single;AllowInput:Boolean);
   private
@@ -1139,6 +1141,8 @@ begin
   FExplorePowerAxis:=EnsureRange(PowerAxis,-1,1);FExploreSteer:=EnsureRange(Steer,-1,1);
   FExploreWalkAxis:=EnsureRange(WalkAxis,-1,1);
 end;
+procedure TViewPlay.ClickTouchCamera(Sender:TObject);
+begin CycleCameraMode end;
 function TViewPlay.TravelDiagnostics:TJSONObject;
 var Stage,LoadError:string; LoadInfo:TJSONObject;
 begin
@@ -1149,6 +1153,13 @@ begin
   Result.Add('simulation_active',Assigned(DeviceService)and DeviceService.IsSimulationActive);
   Result.Add('input_override',FExploreInputOverride);
   Result.Add('camera_mode',Ord(FCameraMode));
+  if FTouchControls<>nil then begin
+    Result.Add('touch_controls',FTouchControls.Exists);
+    Result.Add('touch_x',FTouchControls.Movement.X);
+    Result.Add('touch_y',FTouchControls.Movement.Y);
+    Result.Add('touch_power_axis',FTouchControls.PowerAxis);
+    Result.Add('touch_vertical_axis',FTouchControls.VerticalAxis);
+  end;
   if FOsmStreaming<>nil then begin
     LoadInfo:=TJSONObject.Create;Result.Add('loading',LoadInfo);
     Stage:=FOsmStreaming.RouteStartGroundStatus(LoadError,LoadInfo);
@@ -1185,6 +1196,7 @@ begin
 end;
 procedure TViewPlay.ConfigureTravel;
 begin
+  if FTouchControls<>nil then FTouchControls.Reset;
   FKeyboardPower:=0;FExploreInputOverride:=False;
   FExploreLoadHintTick:=0;FExploreLoadHint:='';
   FKeyboardPowerSelected:=False;FKeyboardPowerActive:=False;
@@ -1245,9 +1257,27 @@ procedure TViewPlay.UpdateTravelInput(Dt:Single;AllowInput:Boolean);
 var PowerAxis,Steer,WalkAxis,WalkStart,SteeringDegrees:Single;KeyState:TKeysPressed;
   Sensor,Simulated,Fast,SimPaused:Boolean;SimCurrent,SimTotal:Integer;
   LoadStage,LoadError:string;
+  Touch,Look:TVector2;CanInput,TouchSteering:Boolean;
 begin
   if not HasActiveState then begin FWalkHold:=Default(THeldMovement);Exit end;
-  PowerAxis:=0;Steer:=0;WalkAxis:=0;Fast:=False;
+  Sensor:=(FBLEHud<>nil)and FBLEHud.ReadSensorPower.Valid and(FTravelMode=travelBicycle);
+  Simulated:=Assigned(DeviceService)and DeviceService.IsSimulationActive;
+  CanInput:=AllowInput and (Container<>nil) and (Container.FrontView=Self) and
+    Container.Focused and (Container.ForceCaptureInput=nil) and not RidePreparationHeld and not FFocusMode;
+  if FTouchControls<>nil then begin
+    FTouchControls.Configure(FTravelMode,CanInput,
+      (FCameraMode=pcmFree) or not (Sensor and not Simulated),FCameraMode=pcmFree);
+    Look:=FTouchControls.TakeLook;
+    if CanInput and (Look.LengthSqr>0) then begin
+      if (FCameraMode=pcmFree) and (FFreeCam<>nil) then
+        FFreeCam.MouseDragRotate(Look.X,Look.Y)
+      else if WalkingCameraActive then FWalkingCam.DragOrbit(Look)
+      else if FCameraMode=pcmThirdPerson then begin
+        FChaseCamActive:=False;FCamera.DragRotate(Look,FActiveAvatarAgent);
+      end;
+    end;
+  end;
+  PowerAxis:=0;Steer:=0;WalkAxis:=0;Fast:=False;TouchSteering:=False;
   if FExploreInputOverride then begin
     PowerAxis:=FExplorePowerAxis;Steer:=FExploreSteer;WalkAxis:=FExploreWalkAxis;
   end else if AllowInput and(Container<>nil)and(Container.FrontView=Self)and
@@ -1260,6 +1290,15 @@ begin
     if KeyState[keyW]or KeyState[keyArrowUp]then WalkAxis:=1;
     if KeyState[keyS]or KeyState[keyArrowDown]then WalkAxis:=-1;
     Fast:=KeyState[keyShift];
+    if (FTouchControls<>nil) and FTouchControls.Exists then begin
+      Touch:=FTouchControls.Movement;
+      TouchSteering:=Abs(Touch.X)>0.01;
+      Steer:=EnsureRange(Steer-Touch.X,-1,1);
+      WalkAxis:=EnsureRange(WalkAxis+Touch.Y,-1,1);
+      PowerAxis:=EnsureRange(PowerAxis+FTouchControls.PowerAxis,-1,1);
+      Fast:=Fast or FTouchControls.Fast;
+      if FTouchControls.Braking then FKeyboardPower:=0;
+    end;
   end;
   FHardwareSteering:=(FTravelMode=travelBicycle) and not FExploreInputOverride and
     not RidePreparationHeld and Assigned(DeviceService) and
@@ -1270,7 +1309,7 @@ begin
     Steer:=FHardwareSteer;
   end else FHardwareSteer:=0;
   if FLaneManager<>nil then
-    FLaneManager.SetSteering(FLocalLaneHandle,FHardwareSteering and not FFreeExplore,Steer);
+    FLaneManager.SetSteering(FLocalLaneHandle,(FHardwareSteering or TouchSteering) and not FFreeExplore,Steer);
   if not FFreeExplore then begin Steer:=0;WalkAxis:=0 end;
   FActiveAvatarAgent.State.TravelSteering:=Steer;
   if (FTravelMode<>travelWalk)or RidePreparationHeld then WalkAxis:=0;
@@ -1282,8 +1321,6 @@ begin
     WalkStart:=1.4;if Fast then WalkStart:=2.0;
     FActiveAvatarAgent.State.TravelTargetSpeed:=WalkAxis*WalkStart;
   end;
-  Sensor:=(FBLEHud<>nil)and FBLEHud.ReadSensorPower.Valid and(FTravelMode=travelBicycle);
-  Simulated:=Assigned(DeviceService)and DeviceService.IsSimulationActive;
   if Simulated and FKeyboardPowerSelected then begin
     DeviceService.SimPlayerInfo(SimPaused,SimCurrent,SimTotal);
     if not SimPaused then FKeyboardPowerSelected:=False; { explicit FIT resume }
@@ -1321,6 +1358,7 @@ begin
   if FFreeExplore or FKeyboardPowerActive then
     FActivePlayerController.SetAutoMove(not RidePreparationHeld and(FTravelMode<>travelFlight));
   FExploreHint.Exists:=FFreeExplore or FKeyboardPowerActive;
+  if (FTouchControls<>nil) and FTouchControls.Supported then FExploreHint.Exists:=FOsmPrepHold;
   if FOsmPrepHold then begin
     if GetTickCount64>=FExploreLoadHintTick then begin
       FExploreLoadHintTick:=GetTickCount64+500;
@@ -3162,6 +3200,9 @@ begin
   FCamera.InitDefaults;
 
   FMenuButton := TMenuButton.Create(FreeAtStop);
+  FTouchControls:=TTravelTouchControls.Create(FreeAtStop);
+  FTouchControls.CameraButton.OnClick:=@ClickTouchCamera;
+  InsertFront(FTouchControls);
   TMenuButton(FMenuButton).AutoIcon:=False;
   FMenuButton.Name:='RideMenu';
   {$ifdef ANDROID}BindUiText(FMenuButton,'Menu');{$else}BindUiText(FMenuButton, 'Menu  Esc');{$endif}
@@ -3672,6 +3713,8 @@ var
 begin
   if FFocusMode then SetTrainingFocus(False);
   FExploreHint:=nil;
+  if FTouchControls<>nil then FTouchControls.Reset;
+  FTouchControls:=nil;
   FFocusPanel:=nil;FFocusButton:=nil;FKeyboard:=nil;
   MotionTrace.Stop;
   if Assigned(DeviceService) then DeviceService.OnSimSeek:=nil;
@@ -4014,7 +4057,7 @@ begin
   Paint(FFxBtnTrees, ProceduralVegetationActive);
   if FFxBtnTrees <> nil then
     if ProceduralVegetationActive then BindUiText(FFxBtnTrees, 'Trees: 3D')
-    else BindUiText(FFxBtnTrees, 'Trees: legacy');
+    else BindUiText(FFxBtnTrees, 'Trees: textured');
   Paint(FFxBtnTreeSeason, ProceduralVegetationActive);
   if FFxBtnTreeSeason <> nil then
     case Round(ProceduralVegetationSeason * 4) mod 4 of
@@ -4198,6 +4241,7 @@ begin
   if Container.PendingFrontView <> Self then Exit;
   if FFocusPanel<>nil then FFocusPanel.SyncWindow(False);
   FCameraDragging := False;
+  if FTouchControls<>nil then FTouchControls.Reset;
   Container.ReleaseCapture(Self);
   Container.ReleaseCapture(ThirdPersonNavigation);
   Container.PushView(ViewMenu);
@@ -5173,7 +5217,8 @@ begin
       begin
         FFreeCam.Camera := MainViewport.Camera;
         if not FOsmPrepHold and (Container.FrontView=Self)and Container.Focused and(Container.ForceCaptureInput=nil) then
-          FFreeCam.Update(Container.Pressed, SecondsPassed)
+          FFreeCam.Update(Container.Pressed, SecondsPassed,FTouchControls.Movement.X,
+            FTouchControls.VerticalAxis,FTouchControls.Movement.Y)
         else FFreeCam.ResetMovement;
       end;
     end
@@ -5538,6 +5583,7 @@ procedure TViewPlay.ApplyCameraMode;
 var P,D,U:TVector3;
 begin
   FCameraDragging:=False;
+  if FTouchControls<>nil then FTouchControls.Reset;
   if FFreeCam<>nil then FFreeCam.ResetMovement;
   ThirdPersonNavigation.MouseLook:=False;
   if FTravelMode=travelFlight then FCameraMode:=pcmFree;
@@ -5892,12 +5938,6 @@ begin
   begin
     if Assigned(FFreeCam) then
       FFreeCam.WheelDolly(Event.MouseWheelScroll);
-    Exit(true);
-  end;
-
-  if Event.IsKey(keyF5) then
-  begin
-    Container.SaveScreenToDefaultFile;
     Exit(true);
   end;
 

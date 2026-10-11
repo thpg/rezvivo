@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/thpg/castle-engine.git",
   "branch": "rezvivo",
-  "commit": "8cd14747a5602672b369b6a24cbfc395115f5ef2",
+  "commit": "a2788a6825e312c1723c5a6e5650bdc4d3b3bf23",
   "upstream_repository": "https://github.com/castle-engine/castle-engine.git",
   "upstream_commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "modified_files": [
@@ -19,7 +19,7 @@
     },
     {
       "path": "src/base_rendering/castlerendercontext.pas",
-      "sha256_lf": "e0c89e1e11d13011442e142fb8e34b407cf1be15b65bad7d4d5cb3a5903b9577"
+      "sha256_lf": "2368f359d70b58e258b47cfb7af8e0aa23fe1a5148fd96980fa4b43f60838a25"
     },
     {
       "path": "src/files/castledownload.pas",

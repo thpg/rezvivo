@@ -15,7 +15,7 @@ def run(args,cwd):
     subprocess.run([str(x) for x in args],cwd=cwd,check=True)
 
 def ensure_mobile_patches(engine):
-    for name in ('cge-opengles3.patch','cge-android-permissions.patch'):
+    for name in ('cge-opengles3.patch','cge-android-permissions.patch','cge-scissor-context-close.patch'):
         patch=ROOT.parent/'Osm3d'/name
         command=['git','apply','--ignore-space-change']
         applied=subprocess.run(command+['--reverse','--check',str(patch)],cwd=engine,capture_output=True)

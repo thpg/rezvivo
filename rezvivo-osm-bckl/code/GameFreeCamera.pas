@@ -48,7 +48,8 @@ type
 
     { Покадровое движение с клавиатуры. APressed — это Container.Pressed
       владельца (набор зажатых клавиш). SecondsPassed — дельта кадра. }
-    procedure Update(const APressed: TKeysPressed; const SecondsPassed: Single);
+    procedure Update(const APressed: TKeysPressed; const SecondsPassed: Single;
+      Side:Single=0; Vertical:Single=0; Forward:Single=0);
 
     { Поворот мышью: пиксельная дельта перетаскивания (Position-OldPosition). }
     procedure MouseDragRotate(const ADeltaX, ADeltaY: Single);
@@ -90,16 +91,16 @@ begin
 end;
 
 procedure TFreeCameraController.Update(const APressed: TKeysPressed;
-  const SecondsPassed: Single);
+  const SecondsPassed: Single; Side,Vertical,Forward:Single);
 var
   Pos, Dir, Right, FlatDir, Movement: TVector3;
   SpeedX,SpeedY,SpeedZ,Yaw,Pitch,FlatLen,MaxAxis,Dt: Single;
 begin
   if (FCamera = nil) or (APressed = nil) then begin ResetMovement;Exit end;
   Dt:=EnsureRange(SecondsPassed,0,0.25);
-  SpeedX:=HeldMovementSpeed(FMoveHold[0],Ord(APressed[keyD])-Ord(APressed[keyA]),Dt,3,FMoveSpeed,10);
-  SpeedY:=HeldMovementSpeed(FMoveHold[1],Ord(APressed[keyE])-Ord(APressed[keyQ]),Dt,3,FMoveSpeed,10);
-  SpeedZ:=HeldMovementSpeed(FMoveHold[2],Ord(APressed[keyW])-Ord(APressed[keyS]),Dt,3,FMoveSpeed,10);
+  SpeedX:=HeldMovementSpeed(FMoveHold[0],Side+Ord(APressed[keyD])-Ord(APressed[keyA]),Dt,3,FMoveSpeed,10);
+  SpeedY:=HeldMovementSpeed(FMoveHold[1],Vertical+Ord(APressed[keyE])-Ord(APressed[keyQ]),Dt,3,FMoveSpeed,10);
+  SpeedZ:=HeldMovementSpeed(FMoveHold[2],Forward+Ord(APressed[keyW])-Ord(APressed[keyS]),Dt,3,FMoveSpeed,10);
   Yaw:=HeldMovementSpeed(FRotateHold[0],Ord(APressed[keyArrowLeft])-Ord(APressed[keyArrowRight]),Dt,0.35,FRotateSpeed,2);
   Pitch:=HeldMovementSpeed(FRotateHold[1],Ord(APressed[keyArrowUp])-Ord(APressed[keyArrowDown]),Dt,0.35,FRotateSpeed,2);
 

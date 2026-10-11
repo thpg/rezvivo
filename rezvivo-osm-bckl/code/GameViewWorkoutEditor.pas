@@ -1340,8 +1340,9 @@ begin
   inherited;if FLayoutBusy or(FMoreMetadata=nil)or(FEditorScroll=nil)then Exit;
   FLayoutBusy:=True;
   try
-    S:=Max(0.5,Min(1,UIScale));W:=Max(400,EffectiveWidth-20/S);
-    FBackground.Width:=W;Y:=18/S;Flow(FToolbar);
+    S:=Max(0.5,Min(1,UIScale));W:=Max(1,EffectiveWidth-20/S);
+    FBackground.Width:=W;Y:=12/S;Flow(FToolbar);
+    FEditorScroll.Border.Top:=Y;Y:=18/S;
     Font(FLabelTitle,22);FLabelTitle.MaxWidth:=W-40/S;Position(FLabelTitle,20/S,Y);
     Y:=Y+Max(34/S,FLabelTitle.EffectiveHeight+10/S);
     Font(FLabelName,16);Position(FLabelName,20/S,Y+6/S);
@@ -1510,6 +1511,7 @@ begin
 
   { Верхний бар: ButtonBack | LabelTitle (центр) | SaveAs / Save (справа) }
   FButtonBack := MkButton(T('Back'), @DoBack);
+  FButtonBack.Name:='WorkoutEditorBack';
   FButtonBack.Anchor(hpLeft, LeftPad);
   FButtonBack.Anchor(vpTop, TopY);
   FBackground.InsertFront(FButtonBack);
@@ -1758,7 +1760,7 @@ begin
   FBackground.RemoveControl(FButtonAddFreeRide); Palette.InsertFront(FButtonAddFreeRide);
   FBackground.RemoveControl(FButtonAddCooldown); Palette.InsertFront(FButtonAddCooldown);
 
-  FToolbar:=TMenuFlow.Create(FreeAtStop);FBackground.InsertFront(FToolbar);
+  FToolbar:=TMenuFlow.Create(FreeAtStop);InsertFront(FToolbar);
   FBackground.RemoveControl(FButtonBack);FToolbar.InsertFront(FButtonBack);
   FBackground.RemoveControl(FButtonUndo);FToolbar.InsertFront(FButtonUndo);
   FBackground.RemoveControl(FButtonSave);FToolbar.InsertFront(FButtonSave);

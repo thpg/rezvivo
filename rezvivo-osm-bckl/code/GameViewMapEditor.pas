@@ -33,6 +33,7 @@ type
     FGlobe: TGlobeMap; { borrowed from the menu }
     FDetails: TCastleRectangleControl;
     FDetailsPanel: TCastleRectangleControl;
+    FDetailsToolbar:TMenuFlow;
     FDetailsScroll: TCastleScrollView;
     FDetailsColumn: TCastleVerticalGroup;
     FStatus: TCastleLabel;
@@ -651,7 +652,7 @@ end;
 procedure TRoutesPage.BuildForm;
 var
   Col: TCastleVerticalGroup;
-  Row: TCastleHorizontalGroup;
+  Row: TMenuFlow;
   Btn: TMenuTile;
   I: Integer;
 begin
@@ -714,7 +715,7 @@ begin
   FDetailsPanel.Color := Vector4(0.07, 0.10, 0.15, 0.97);
   FDetails.InsertFront(FDetailsPanel);
 
-  Row := TCastleHorizontalGroup.Create(Self);
+  Row := TMenuFlow.Create(Self);FDetailsToolbar:=Row;
   Row.Spacing := 8;
   Row.Anchor(hpLeft, 12);
   Row.Anchor(vpTop, -12);
@@ -727,7 +728,7 @@ begin
   Row.InsertFront(Btn);
   Btn := MakeAction('CloseRouteDetails', UiText('Close'), 'close',
     Vector4(0.37, 0.43, 0.52, 0.85), @ClickCloseDetails, 184, 64);
-  Row.InsertFront(Btn);
+  Row.InsertBack(Btn);
 
   FDetailsScroll := TMenuScrollView.Create(Self);
   FDetailsScroll.FullSize := True;
@@ -980,6 +981,9 @@ procedure TRoutesPage.LayoutDetails;
 var H: Single;
 begin
   if FDetailsColumn = nil then Exit;
+  FDetailsPanel.Width:=Max(1,Min(PANEL_W+32,EffectiveWidth-16));
+  FDetailsToolbar.WidthFraction:=0;FDetailsToolbar.Width:=Max(1,FDetailsPanel.Width-24);
+  FDetailsToolbar.Arrange;FDetailsScroll.Border.Top:=FDetailsToolbar.Height+24;
   FitPanel(FPnlRoute, FInnerRoute);
   FitPanel(FPnlParams, FInnerParams);
   FitPanel(FPnlAnalysis, FInnerAnalysis);

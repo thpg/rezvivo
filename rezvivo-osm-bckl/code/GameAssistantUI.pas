@@ -227,8 +227,8 @@ var S, W, H, HeaderExtra: Single;
 begin
   if (FPanel = nil) or (EffectiveWidth <= 0) or (EffectiveHeight <= 0) then Exit;
   S := Max(0.65, Min(1, UIScale));
-  W := Min(620 / S, Max(240, EffectiveWidth - 24 / S));
-  H := Min(880 / S, Max(300, EffectiveHeight - 24 / S));
+  W := Max(1, Min(620 / S, EffectiveWidth - 24 / S));
+  H := Max(1, Min(880 / S, EffectiveHeight - 24 / S));
   FPanel.Width := W; FPanel.Height := H;
   FPanel.Anchor(hpRight, -12 / S); FPanel.Anchor(vpMiddle);
   FTitle.FontSize := 24 / S; FTitle.Anchor(hpLeft, 20 / S); FTitle.Anchor(vpTop, -18 / S);

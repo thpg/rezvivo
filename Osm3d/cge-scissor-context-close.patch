@@ -1,0 +1,12 @@
+--- a/src/base_rendering/castlerendercontext.pas
++++ b/src/base_rendering/castlerendercontext.pas
+@@ -975,7 +975,8 @@
+   if FEnabled <> Value then
+   begin
+     FEnabled := Value;
+-    if RenderContext.FEnabledScissors <> nil then
++    { The container clears RenderContext before destroying its global scissor. }
++    if (RenderContext <> nil) and (RenderContext.FEnabledScissors <> nil) then
+     begin
+       if Value then
+         RenderContext.FEnabledScissors.Add(Self) else

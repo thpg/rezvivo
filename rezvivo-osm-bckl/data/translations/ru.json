@@ -1833,5 +1833,14 @@
   "Steering": "Управление рулём",
   "STEERING": "РУЛЬ",
   "STERZO activation failed. Wake the steering plate and reconnect.": "Не удалось включить STERZO. Поверните площадку и подключите её снова.",
-  "Center steering": "Руль прямо"
+  "Center steering": "Руль прямо",
+  "Screenshot saved: %s": "Скриншот сохранен: %s",
+  "Could not save screenshot: %s": "Не удалось сохранить скриншот: %s",
+  "Camera": "Камера",
+  "Up": "Вверх",
+  "Down": "Вниз",
+  "Run": "Бег",
+  "Brake": "Тормоз",
+  "+ W": "+ Вт",
+  "Trees: textured": "Деревья: текстуры"
 }

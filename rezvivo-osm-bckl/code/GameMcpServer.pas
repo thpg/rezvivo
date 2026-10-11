@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses AppRuntimePaths, GameTravel,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -346,6 +346,7 @@ var Items: TJSONArray;RootIndex:Integer;
       Treat it like an edit value when exposing UI metadata to an agent. }
     if C.Name = 'AssistantVoiceInputStatus' then Caption := '';
     if (C is TCastleButton)or(C is TCastleCheckbox)or(C is TCastleEdit)or
+       (C is TTravelTouchPad)or
        (C is TCastleIntegerSlider)or(C is TCastleFloatSlider)or
        ((C is TCastleLabel) and AParams.Get('labels', False)) then
     begin

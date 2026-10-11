@@ -10,7 +10,7 @@ function ClientVersionInfo:TJSONObject;
 
 implementation
 uses AppRuntimePaths, SyncObjs,jsonparser,CastleControls,CastleVectors,CastleColors,CastleKeysMouse,
-  CastleApplicationProperties,CastleWindow,CastleOpenDocument,GameMenuTheme,
+  CastleApplicationProperties,CastleWindow,CastleOpenDocument,GameMenuTheme,GameMenuDialog,
   UiTranslations,GameBuildInfo,GameHttpClient,GameCrashReports,GameViewMenu,
   GameViewPlay,GameViewTrainingOnly,GameUpdateDownload{$IFDEF WINDOWS},Windows,ShellApi{$ENDIF};
 type
@@ -22,11 +22,6 @@ type
     constructor Create(const ApiBase:String);
     destructor Destroy;override;
     procedure Execute;override;
-  end;
-  TUpdateDialog=class(TCastleRectangleControl)
-    function Press(const Event:TInputPressRelease):Boolean;override;
-    function Release(const Event:TInputPressRelease):Boolean;override;
-    function Motion(const Event:TInputMotion):Boolean;override;
   end;
   TClientUpdates=class
   private
@@ -42,7 +37,7 @@ type
     FContainer:TCastleContainer;
     FBase,FLatest:String;
     FBlocked,FNewVersion,FKnown,FOffered,FCheckFailed:Boolean;
-    FDialog:TUpdateDialog;
+    FDialog:TMenuDialog;
     FStatus:TCastleLabel;
     FClose,FDownload,FCheck,FFeedback:TMenuButton;
     FLastCheck:QWord;
@@ -82,32 +77,25 @@ begin
     except { Optional updates must not prevent offline use. } end;
   finally Headers.Free;Reply.Free;Done.SetEvent;end;
 end;
-function TUpdateDialog.Press(const Event:TInputPressRelease):Boolean;
-begin inherited;Result:=True;end;
-function TUpdateDialog.Release(const Event:TInputPressRelease):Boolean;
-begin inherited;Result:=True;end;
-function TUpdateDialog.Motion(const Event:TInputMotion):Boolean;
-begin inherited;Result:=True;end;
-
 constructor TClientUpdates.Create(Container:TCastleContainer;const ApiBase:String);
-var Panel:TMenuPanel;Title,VersionLabel:TCastleLabel;B:TMenuButton;F:TStringList;
-  function Button(const Name,Caption:String;X,Y:Single;Handler:TNotifyEvent):TMenuButton;
+var Actions:TMenuFlow;VersionLabel:TCastleLabel;B:TMenuButton;F:TStringList;
+  function Button(const Name,Caption:String;Parent:TCastleUserInterface;Handler:TNotifyEvent):TMenuButton;
   begin
     Result:=TMenuButton.Create(FDialog);Result.Name:=Name;Result.AutoIcon:=False;BindUiText(Result,Caption);
-    Result.FontSize:=17;Result.Anchor(hpLeft,X);Result.Anchor(vpBottom,Y);Result.OnClick:=Handler;Panel.InsertFront(Result);
+    Result.FontSize:=17;Result.MinHeight:=44;Result.OnClick:=Handler;Parent.InsertFront(Result);
   end;
 begin
   inherited Create;FContainer:=Container;FBase:=ApiBase;
-  FDialog:=TUpdateDialog.Create(nil);FDialog.FullSize:=True;FDialog.Color:=Vector4(0.01,0.025,0.04,0.92);FDialog.Exists:=False;
-  Panel:=TMenuPanel.Create(FDialog);Panel.Width:=650;Panel.Height:=440;Panel.Anchor(hpMiddle);Panel.Anchor(vpMiddle);FDialog.InsertFront(Panel);
-  Title:=TMenuLabel.Create(FDialog);Title.Caption:='REZVIVO';Title.FontSize:=30;Title.Color:=MenuText;Title.Anchor(hpLeft,24);Title.Anchor(vpTop,-24);Panel.InsertFront(Title);
-  VersionLabel:=TMenuLabel.Create(FDialog);VersionLabel.Caption:=ClientVersion;VersionLabel.FontSize:=18;VersionLabel.Color:=MenuMuted;VersionLabel.Anchor(hpLeft,24);VersionLabel.Anchor(vpTop,-70);Panel.InsertFront(VersionLabel);
-  FStatus:=TMenuLabel.Create(FDialog);FStatus.Name:='ClientVersionStatus';FStatus.FontSize:=18;FStatus.MaxWidth:=600;FStatus.Color:=MenuText;FStatus.Anchor(hpLeft,24);FStatus.Anchor(vpTop,-105);Panel.InsertFront(FStatus);
-  FDownload:=Button('ClientDownload','Download update',24,165,@Download);FDownload.Style:=mbPrimary;
-  FCheck:=Button('ClientCheck','Check for updates',24,77,@Check);
-  FFeedback:=Button('ClientFeedback','Send feedback',320,77,@Feedback);
-  FClose:=Button('ClientUpdateClose','Close',24,24,@Close);
-  B:=Button('ClientUpdateQuit','Close game',320,24,@Quit);B.Style:=mbGhost;
+  FDialog:=TMenuDialog.Create(nil);FDialog.PreferredHeight:=440;FDialog.Exists:=False;
+  FDialog.Title.Caption:='REZVIVO';
+  FClose:=FDialog.CloseButton;FClose.Name:='ClientUpdateClose';FClose.OnClick:=@Close;
+  VersionLabel:=TMenuLabel.Create(FDialog);VersionLabel.Caption:=ClientVersion;VersionLabel.FontSize:=18;VersionLabel.Color:=MenuMuted;FDialog.Content.InsertFront(VersionLabel);
+  FStatus:=TMenuLabel.Create(FDialog);FStatus.Name:='ClientVersionStatus';FStatus.FontSize:=18;FDialog.Content.InsertFront(FStatus);
+  FDownload:=Button('ClientDownload','Download update',FDialog.Content,@Download);FDownload.Style:=mbPrimary;
+  Actions:=TMenuFlow.Create(FDialog);FDialog.Content.InsertFront(Actions);
+  FCheck:=Button('ClientCheck','Check for updates',Actions,@Check);
+  FFeedback:=Button('ClientFeedback','Send feedback',Actions,@Feedback);
+  B:=Button('ClientUpdateQuit','Close game',FDialog.Content,@Quit);B.Style:=mbGhost;
   FContainer.Controls.InsertFront(FDialog);
   F:=TStringList.Create;
   try

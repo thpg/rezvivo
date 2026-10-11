@@ -758,19 +758,11 @@ begin
       FWorldSelected.Clear;
       for I:=0 to FSelected.Count-1 do
         if FWorldSet.ContainsKey(FSelected[I]) and
-          ((FSelected[I] is TCastleSceneCore) or not ProceduralVegetationActive) then FWorldSelected.Add(FSelected[I]);
+          (FSelected[I] is TCastleSceneCore) then FWorldSelected.Add(FSelected[I]);
       FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
       FRtx.DrawCachedRaster(FRenderingZone);
     end else begin
       FRtx.CopyDepth;
-      if not ProceduralVegetationActive then begin
-        FWorldSelected.Clear;
-        for I:=0 to FSelected.Count-1 do
-          if FWorldSet.ContainsKey(FSelected[I]) and not (FSelected[I] is TCastleSceneCore) then
-            FWorldSelected.Add(FSelected[I]);
-        if FWorldSelected.Count>0 then
-          FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape,False);
-      end;
     end;
     if FProbeEnabled and (FRenderingZone=FProbeZone) and FProbe.SampleDue(FProbePoint) then
       FProbe.Submit(FProbePoint,FProbeClip,FTileSize,2*FZoneHalfExtent[FRenderingZone]/FTileSize);

@@ -1644,5 +1644,14 @@
   "Cycling shoes": "Cycling shoes",
   "Use head editor": "Use head editor",
   "Click a card to select a world": "Click a card to select a world",
-  "Footwear": "Footwear"
+  "Footwear": "Footwear",
+  "Screenshot saved: %s": "Screenshot saved: %s",
+  "Could not save screenshot: %s": "Could not save screenshot: %s",
+  "Camera": "Camera",
+  "Up": "Up",
+  "Down": "Down",
+  "Run": "Run",
+  "Brake": "Brake",
+  "+ W": "+ W",
+  "Trees: textured": "Trees: textured"
 }

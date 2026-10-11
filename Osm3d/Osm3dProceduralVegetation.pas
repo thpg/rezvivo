@@ -441,7 +441,7 @@ procedure TOsmProceduralVegetation.QueueDetail;
 var D,Best:TProceduralDetail;Score,BestScore:Single;E:TProceduralEntry;
     NeedsBuild,Reclaim,MemoryPressure:Boolean;
 begin
-  if (FJob<>nil) or (FSeconds<FUploadTime) then Exit;
+  if not ProceduralVegetationActive or (FJob<>nil) or (FSeconds<FUploadTime) then Exit;
   Best:=nil;BestScore:=MaxSingle;MemoryPressure:=FDetailBytes>FCacheBudget*0.90;
   for D in FDetails do if D.InRange and (D.RetryAt<=FSeconds) then begin
     { The camera constantly redistributes target shares. Do not regenerate
@@ -475,7 +475,7 @@ begin
   if (FJob=nil) or not FJob.ReadyToCollect or
      (FSeconds<FUploadTime) then Exit;
   try
-    if FJob.Cancelled then begin Inc(FDiscardedJobs);Exit;end;
+    if FJob.Cancelled or (not FJob.AtlasJob and not ProceduralVegetationActive) then begin Inc(FDiscardedJobs);Exit;end;
     if FJob.Error<>'' then begin FError:=FJob.Error;Exit;end;
     if FJob.AtlasJob then begin
       FShared.UploadLODAtlas(FJob.Atlas);Inc(FAtlasCount);Inc(FUploadCount);
@@ -626,24 +626,14 @@ begin
   if not ProceduralVegetationActive then begin
     if not FInactive then begin
       FInactive:=True;
-      { Switching to the legacy atlas renderer must release the procedural
-        VRAM cache. Do this once, not on every colour/shadow draw. An active
-        CPU job owns only a snapshot; discard it without waiting in the UI. }
-      if FJob<>nil then FJob.Cancelled:=True;
-      ContextClose(nil);
-      for C in FCells do begin
-        for S:=Low(S) to High(S) do begin
-          C.FarItems[S]:=nil;C.FarCount[S]:=0;Inc(C.FarVersion[S]);
-        end;
-        C.Uploaded:=False;
-      end;
+      { Both modes use the same generated billboard atlases. Release only
+        detailed geometry; keep atlas jobs, textures and far instances alive.
+        Restore billboard membership before even the first shadow pass. }
+      if (FJob<>nil) and not FJob.AtlasJob then FJob.Cancelled:=True;
+      for I:=FDetails.Count-1 downto 0 do ReleaseDetail(I);
       FPlanTime:=0;FUploadTime:=0;FLoad:=Default(TTreeLoadControl);
     end;
-    if (FJob<>nil) and FJob.ReadyToCollect then
-      FreeAndNil(FJob);
-    Exit;
-  end;
-  FInactive:=False;
+  end else if FInactive then begin FInactive:=False;FPlanTime:=0;end;
   if not RenderTreesActive or (FCells.Count=0) then Exit;
   Depth:=Params.RenderingCamera.Target=rtShadowMap;
   FreshColor:=not Depth and ((FLastColorFrame<>TFramesPerSecond.RenderFrameId)or
@@ -671,6 +661,8 @@ begin
       if Depth then Exit;
       FShared:=TTreeRenderer.Create;FShared.Initialize(FShaderDir);
     end;
+    if FInactive then
+      for C in FCells do if C.Dirty and C.Uploaded then UploadCell(C);
     if not Depth then begin
       LastRenderer:=Self;FDrawCalls:=0;FTriangles:=0;FFarTrees:=0;FCrownProxies:=0;FFoliageShoots:=0;
     end;
@@ -703,7 +695,7 @@ begin
       PollJob;
       FSeason:=AdvanceTreeSeason(FSeason,ProceduralVegetationSeason,FDelta*0.12);
       FShared.Season:=FSeason;
-      if FSeconds>=FPlanTime then Plan(LocalCamera);
+      if ProceduralVegetationActive and (FSeconds>=FPlanTime) then Plan(LocalCamera);
       UploadBudget:=2;
       for I:=FDetails.Count-1 downto 0 do begin
         D:=FDetails[I];OldQ:=D.Quality;
@@ -854,13 +846,13 @@ begin
     'generated=%d uploads=%d pending=%d discarded=%d gpu_bytes~=%d season=%.4f shadow_draws=%d '+
     'near_radius_m=%.0f fade_start_m=%.0f preload_m=%.0f near_set=%.8x ready=%d active_near=%d waiting=%d compact=%d '+
     'cache_bytes=%d cache_budget=%d free_vram=%d adapt_level=%d target_fps=%.1f measured_fps=%.1f '+
-    'plan_ms=%.0f upload_ms=%.0f foliage_shoots=%d tag_errors=%d error=%s',
+    'plan_ms=%.0f upload_ms=%.0f foliage_shoots=%d tag_errors=%d texture_only=%d error=%s',
     [FCells.Count,N,FDetails.Count,FFarTrees,FDrawCalls,FTriangles,FAtlasCount,FCrownProxies,
      FGenerationCount,FUploadCount,Ord(FJob<>nil),FDiscardedJobs,GPU,FSeason,FShadowDraws,
      ProceduralTreeDistance,VegetationDetail.TreeFadeStart*TreeDistanceScale,TreePreloadDistance,
      FSelectionHash,Ready,Active,Waiting,CompactCount,
      FDetailBytes,FCacheBudget,FFreeVram,FLoad.Level,FTargetFPS,FLoad.MeasuredFPS,
-     FLoad.PlanInterval*1000,FLoad.UploadInterval*1000,FFoliageShoots,TreeClassificationErrors,FError]);
+     FLoad.PlanInterval*1000,FLoad.UploadInterval*1000,FFoliageShoots,TreeClassificationErrors,Ord(not ProceduralVegetationActive),FError]);
 end;
 function ProceduralVegetationDiagnostics:string;
 begin if LastRenderer=nil then Result:='inactive' else Result:=LastRenderer.Diagnostics;end;

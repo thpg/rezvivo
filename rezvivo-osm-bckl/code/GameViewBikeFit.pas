@@ -12,7 +12,7 @@ unit GameViewBikeFit;
 
 interface
 
-uses GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
+uses GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, GameMenuDialog, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
   Classes, SysUtils, Math, fpjson,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
@@ -82,7 +82,7 @@ type
     FValueButtons:array[0..12]of TCastleButton;
     FValueLabels:array[0..12]of TCastleLabel;
     FValueRow,FValueIndex:Integer;
-    FValuePopup:TCastleRectangleControl;
+    FValuePopup:TMenuDialog;
     FValueEdit:TCastleEdit;
     procedure ClickValue(Sender:TObject);
     procedure ApplyValue(Sender:TObject);
@@ -121,8 +121,7 @@ type
     FLblSeatH, FLblSeatO, FLblSpacers, FLblStem: TCastleLabel;
     FLblHeight, FLblInseam, FLblBulk, FLblBelly: TCastleLabel;
     FLblKnee, FLblAnkle: TCastleLabel;
-    FPopupOverlay: TCastleButton;
-    FPopupCard: TCastleButton;
+    FPopupOverlay: TMenuDialog;
     FPopupTitle: TCastleLabel;
     FBikeFilter: TCastleEdit;
     FPopupScroll: TCastleScrollView;
@@ -621,7 +620,6 @@ begin
       FPopupOverlay.Parent.RemoveControl(FPopupOverlay);
     FPopupOverlay := nil;
   end;
-  FPopupCard := nil;
   FPopupTitle := nil;
   FBikeFilter := nil;
   FPopupScroll := nil;
@@ -721,40 +719,10 @@ begin
   TMenuButton(FBtnAutoFit).Style:=mbPrimary;
   FColParams.InsertFront(FBtnAutoFit);
 
-  FPopupOverlay := TMenuButton.Create(FUiOwner);
-  FPopupOverlay.FullSize := True;
-  FPopupOverlay.AutoSize := False;
-  FPopupOverlay.Caption := '';
-  FPopupOverlay.PaddingHorizontal := 0;
-  FPopupOverlay.PaddingVertical := 0;
-  FPopupOverlay.CustomBackground := True;
-  FPopupOverlay.CustomColorNormal := Vector4(0, 0, 0, 0.55);
-  FPopupOverlay.CustomColorFocused := Vector4(0, 0, 0, 0.55);
-  FPopupOverlay.CustomColorPressed := Vector4(0, 0, 0, 0.55);
-  FPopupOverlay.OnClick := @ClickPopupBg;
-  FPopupOverlay.Exists := False;
-  InsertFront(FPopupOverlay);
-
-  FPopupCard := TMenuButton.Create(FUiOwner);
-  FPopupCard.AutoSize := False;
-  FPopupCard.Caption := '';
-  FPopupCard.PaddingHorizontal := 0;
-  FPopupCard.PaddingVertical := 0;
-  FPopupCard.CustomBackground := True;
-  FPopupCard.CustomColorNormal := MenuSurface;
-  FPopupCard.CustomColorFocused := MenuSurface;
-  FPopupCard.CustomColorPressed := MenuSurface;
-  FPopupCard.OnClick := @ClickPopupCard;
-  FPopupCard.Anchor(hpMiddle, 0);
-  FPopupCard.Anchor(vpMiddle, 0);
-  FPopupOverlay.InsertFront(FPopupCard);
-
-  FPopupTitle := TMenuLabel.Create(FUiOwner);
-  FPopupTitle.Color := MenuText;
-  FPopupTitle.FontScale := 1.05;
-  FPopupTitle.Anchor(hpLeft, 12);
-  FPopupTitle.Anchor(vpTop, -10);
-  FPopupCard.InsertFront(FPopupTitle);
+  FPopupOverlay:=TMenuDialog.Create(FUiOwner);FPopupOverlay.Exists:=False;
+  FPopupOverlay.CloseButton.Name:='BikePickerClose';
+  FPopupOverlay.CloseButton.OnClick:=@ClickPopupBg;
+  FPopupTitle:=FPopupOverlay.Title;
 
   FBikeFilter := TMenuEdit.Create(FUiOwner);
   FBikeFilter.WidthFraction := 1.0;
@@ -764,23 +732,17 @@ begin
   FBikeFilter.Anchor(hpMiddle, 0);
   FBikeFilter.Anchor(vpTop, -38);
   FBikeFilter.OnChange := @BikeFilterChange;
-  FPopupCard.InsertFront(FBikeFilter);
+  FPopupOverlay.Content.InsertFront(FBikeFilter);
 
-  FPopupScroll := TMenuScrollView.Create(FUiOwner);
-  FPopupScroll.FullSize := True;
-  FPopupScroll.Border.Left := 8;
-  FPopupScroll.Border.Right := 8;
-  FPopupScroll.Border.Top := 78;
-  FPopupScroll.Border.Bottom := 8;
-  FPopupCard.InsertFront(FPopupScroll);
-
+  FPopupScroll:=FPopupOverlay.Scroll;
   FPopupList := TCastleVerticalGroup.Create(FUiOwner);
   FPopupList.Spacing := 2;
   FPopupList.Anchor(hpLeft, 0);
   FPopupList.Anchor(vpTop, 0);
   FPopupList.AutoSizeToChildren := True;
-  FPopupScroll.ScrollArea.InsertFront(FPopupList);
-  FPopupScroll.ScrollArea.AutoSizeToChildren := True;
+  FPopupOverlay.Content.InsertFront(FPopupList);
+  FPopupList.WidthFraction:=1;
+
 
   MakeFitRow(FColParams, UiText('Saddle height'), -134,
     FBtnSeatHDown, FBtnSeatHUp, FLblSeatH);
@@ -1298,8 +1260,8 @@ begin
     Btn := TMenuButton.Create(FUiOwner);
     Btn.Caption := BikeName;
     Btn.AutoSize := False;
-    Btn.Width := 400;
-    Btn.Height := 28;
+    Btn.WidthFraction:=1;
+    Btn.Height:=44;
     Btn.FontScale := 0.85;
     Btn.CustomBackground := True;
     if I = FSelBike then
@@ -1344,7 +1306,7 @@ begin
     Btn.Caption := FSizeNames[I];
     Btn.AutoSize := False;
     Btn.Width := 88;
-    Btn.Height := 28;
+    Btn.Height:=44;
     Btn.FontScale := 0.9;
     Btn.CustomBackground := True;
     if I = FSelSize then
@@ -1363,14 +1325,14 @@ procedure TBikeFitPage.OpenBikePopup;
 begin
   if FPopupOverlay = nil then Exit;
   FPopupKind := PopupBike;
-  FPopupCard.Width := 440;
-  FPopupCard.Height := 480;
+  FPopupOverlay.PreferredWidth:=480;
+  FPopupOverlay.PreferredHeight:=540;
   FPopupTitle.Caption := Format(UiText('Bike  (%d)'), [FBikeNames.Count]);
   FBikeFilter.Exists := True;
   FBikeFilter.Text := '';
-  FPopupScroll.Border.Top := 78;
+
   FillBikePopupList;
-  FPopupOverlay.Exists := True;
+  FPopupOverlay.Show(Container);
 end;
 
 procedure TBikeFitPage.OpenSizePopup;
@@ -1383,11 +1345,11 @@ begin
     LoadSelectedInsights;
   FPopupKind := PopupSize;
   Rows := Max(1, FSizeNames.Count);
-  FPopupCard.Width := 140;
-  FPopupCard.Height := Min(360, 52 + Rows * 32);
+  FPopupOverlay.PreferredWidth:=300;
+  FPopupOverlay.PreferredHeight:=Min(480,108+Rows*48);
   BindUiText(FPopupTitle, 'Size');
   FBikeFilter.Exists := False;
-  FPopupScroll.Border.Top := 38;
+
   FillSizePopupList;
   if (FPopupList <> nil) and (FSizeNames.Count = 0) then
   begin
@@ -1397,7 +1359,7 @@ begin
     Hint.FontScale := 0.85;
     FPopupList.InsertBack(Hint);
   end;
-  FPopupOverlay.Exists := True;
+  FPopupOverlay.Show(Container);
 end;
 
 procedure TBikeFitPage.BikeFilterChange(Sender: TObject);
@@ -3601,14 +3563,14 @@ begin
     10:V:=FFitSex*100;11:V:=FFitArmCm;12:V:=FFitHead*100;
     8:V:=FFitKneeFlare;else V:=FFitAnkleFlex;
   end;
-  FValuePopup:=TCastleRectangleControl.Create(FUiOwner);FValuePopup.Width:=320;FValuePopup.Height:=140;
-  FValuePopup.Color:=Vector4(0.05,0.1,0.12,1);FValuePopup.Anchor(hpMiddle);FValuePopup.Anchor(vpMiddle);InsertFront(FValuePopup);
+  FValuePopup:=TMenuDialog.Create(FUiOwner);FValuePopup.PreferredWidth:=360;FValuePopup.PreferredHeight:=240;
+  FValuePopup.CloseButton.Name:='CancelFitValue';FValuePopup.CloseButton.OnClick:=@CancelValue;
+  BindUiText(FValuePopup.CloseButton,'Cancel');
   FValueEdit:=TMenuEdit.Create(FValuePopup);FValueEdit.Name:='BikeFitValueInput';FValueEdit.Width:=280;FValueEdit.FontSize:=22;
   FS:=DefaultFormatSettings;FS.DecimalSeparator:='.';FValueEdit.Text:=FormatFloat('0.##',V,FS);
-  FValueEdit.Anchor(hpLeft,20);FValueEdit.Anchor(vpTop,-20);FValuePopup.InsertFront(FValueEdit);
-  B:=MakeNavBtn(UiText('Apply'),@ApplyValue,130,34);FUiOwner.RemoveComponent(B);FValuePopup.InsertComponent(B);B.Name:='ApplyFitValue';B.Anchor(hpLeft,20);B.Anchor(vpBottom,16);FValuePopup.InsertFront(B);
-  B:=MakeNavBtn(UiText('Cancel'),@CancelValue,130,34);FUiOwner.RemoveComponent(B);FValuePopup.InsertComponent(B);B.Anchor(hpRight,-20);B.Anchor(vpBottom,16);FValuePopup.InsertFront(B);
-  FValueEdit.Focused:=True;
+  FValueEdit.Anchor(hpLeft,20);FValueEdit.Anchor(vpTop,-20);FValuePopup.Content.InsertFront(FValueEdit);
+  B:=MakeNavBtn(UiText('Apply'),@ApplyValue,130,34);FUiOwner.RemoveComponent(B);FValuePopup.InsertComponent(B);B.Name:='ApplyFitValue';B.Anchor(hpLeft,20);B.Anchor(vpBottom,16);FValuePopup.Content.InsertFront(B);
+  FValuePopup.Show(Container);FValueEdit.Focused:=True;
 end;
 procedure TBikeFitPage.ApplyValue(Sender:TObject);
 var V:Single;FS:TFormatSettings;

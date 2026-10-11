@@ -1,7 +1,7 @@
 {
-  "version": "0.3.4-alpha.1",
-  "build": 11,
-  "file_version": "0.3.4.11",
+  "version": "0.3.5-alpha.1",
+  "build": 12,
+  "file_version": "0.3.5.12",
   "channel": "alpha",
-  "notes": "Connect Elite STERZO Smart steering on Windows, including during FIT simulation. Calibrate the neutral handlebar position, steer in free exploration and change lanes on routes. Correctly finish and queue recorded rides when closing the game, including free rides with a real smart trainer. Improve adaptive controls and add a portable graphics path. Android APK distribution remains postponed."
+  "notes": "Improve compact menus and route selection wheels, add F5 screenshots, and use the same generated tree atlases in all graphics modes. Add touch navigation for mobile layouts and fix a graphics-context shutdown crash. Updated screenshots are available on the website and GitHub. Windows installer release; no Android APK is published to the website."
 }

@@ -1,7 +1,7 @@
 unit GameViewRouteLibrary;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses GameMenuTheme, Classes,SysUtils,fpjson,CastleUIControls,CastleControls,GameMenuTile,
+uses GameMenuTheme,GameMenuDialog, Classes,SysUtils,fpjson,CastleUIControls,CastleControls,GameMenuTile,
   GameRouteLibraryData,GameRouteMap;
 type
   TRouteLibraryPage=class(TMenuEmbeddedPage)
@@ -22,7 +22,7 @@ type
     FOnlyFavorites:TCastleCheckbox;
     FMap:TRouteMap;
     FAttribution:TCastleButton;
-    FEditPanel:TCastleRectangleControl;
+    FEditPanel:TMenuDialog;
     FTitleEdit,FDescriptionEdit:TCastleEdit;
     FPoll:Single;
     FPendingRefresh:Boolean;
@@ -79,7 +79,7 @@ procedure TRouteLibraryPage.ClickCreate(Sender:TObject);
 begin ViewMenu.OpenTab('route-create');end;
 
 constructor TRouteLibraryPage.Create(AOwner:TComponent);
-var Row:TCastleUserInterface;L:TCastleLabel;B:TCastleButton;Col:TCastleVerticalGroup;Background:TCastleRectangleControl;
+var Row:TCastleUserInterface;B:TCastleButton;Background:TCastleRectangleControl;
   function ButtonText(const S:String;Click:TNotifyEvent):TCastleButton;
   begin Result:=TMenuButton.Create(Self);BindUiText(Result, S);Result.FontSize:=14;Result.OnClick:=Click;Row.InsertFront(Result);end;
   function EditText(const Caption:String;W:Single):TCastleEdit;
@@ -117,12 +117,13 @@ begin
   FDownload:=ButtonText(UiText('Start ride'),@ClickDownload);FDownload.Name:='StartOnlineRoute';
   FFavorite:=ButtonText(UiText('♡ Favorite'),@ClickFavorite);FShare:=ButtonText(UiText('Share'),@ClickShare);FAdd:=ButtonText(UiText('Add to my routes'),@ClickAdd);
   FEdit:=ButtonText(UiText('Edit'),@ClickEdit);FDelete:=ButtonText(UiText('Delete'),@ClickDelete);
-  FEditPanel:=TCastleRectangleControl.Create(Self);FEditPanel.Width:=620;FEditPanel.Height:=260;FEditPanel.Color:=MenuSurface;FEditPanel.Anchor(hpMiddle);FEditPanel.Anchor(vpMiddle);FEditPanel.Exists:=False;InsertFront(FEditPanel);
-  Col:=TCastleVerticalGroup.Create(Self);Col.Spacing:=15;Col.Anchor(hpLeft,16);Col.Anchor(vpTop,-16);FEditPanel.InsertFront(Col);
-  L:=TMenuLabel.Create(Self);BindUiText(L, 'Route title and description');L.FontSize:=18;Col.InsertFront(L);
-  FTitleEdit:=TMenuEdit.Create(Self);FTitleEdit.Width:=580;Col.InsertFront(FTitleEdit);
-  FDescriptionEdit:=TMenuEdit.Create(Self);FDescriptionEdit.Width:=580;Col.InsertFront(FDescriptionEdit);
-  Row:=TCastleHorizontalGroup.Create(Self);TCastleHorizontalGroup(Row).Spacing:=12;Col.InsertFront(Row);B:=ButtonText(UiText('Save'),@ClickSave);B:=ButtonText(UiText('Cancel'),@ClickCancel);
+  FEditPanel:=TMenuDialog.Create(Self);FEditPanel.PreferredHeight:=320;FEditPanel.Exists:=False;
+  BindUiText(FEditPanel.Title,'Route title and description');
+  FEditPanel.CloseButton.Name:='CancelRouteEdit';FEditPanel.CloseButton.OnClick:=@ClickCancel;
+  BindUiText(FEditPanel.CloseButton,'Cancel');
+  FTitleEdit:=TMenuEdit.Create(Self);FEditPanel.Content.InsertFront(FTitleEdit);
+  FDescriptionEdit:=TMenuEdit.Create(Self);FEditPanel.Content.InsertFront(FDescriptionEdit);
+  Row:=FEditPanel.Content;B:=ButtonText(UiText('Save'),@ClickSave);
   UpdateSelection;Layout;
 end;
 destructor TRouteLibraryPage.Destroy;
@@ -253,7 +254,7 @@ begin
   BindUiText(FStatus, 'Downloading route…');SetBusy(True);
 end;
 procedure TRouteLibraryPage.ClickEdit(Sender:TObject);
-begin if Current=nil then Exit;FTitleEdit.Text:=Current.Get('title','');FDescriptionEdit.Text:=Current.Get('description','');FEditPanel.Exists:=True;end;
+begin if Current=nil then Exit;FTitleEdit.Text:=Current.Get('title','');FDescriptionEdit.Text:=Current.Get('description','');FEditPanel.Show(Container);end;
 procedure TRouteLibraryPage.ClickSave(Sender:TObject);
 var P:TJSONObject;
 begin if Current=nil then Exit;P:=TJSONObject.Create(['version',Current.Get('version',Int64(0)),'title',FTitleEdit.Text,'description',FDescriptionEdit.Text]);

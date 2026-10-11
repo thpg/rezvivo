@@ -11,11 +11,13 @@ type
     FReady, FOverview: Boolean;
     FPosition, FPositionVelocity, FLookAt, FLookVelocity, FLastTarget: TVector3;
     FYaw, FOrbitYaw, FOverviewBlend, FStillTime, FLastHeading: Single;
+    FManualYaw,FManualHeight,FManualHold:Single;
   public
     procedure Reset;
     procedure Resume(const Target, Forward, Position, Direction: TVector3);
     procedure Update(const Target, Forward: TVector3; Speed, Dt: Single);
     procedure LiftAboveGround(Height: Single);
+    procedure DragOrbit(const Delta:TVector2);
     function Direction: TVector3;
     property Position: TVector3 read FPosition;
     property Ready: Boolean read FReady;
@@ -48,7 +50,15 @@ end;
 procedure TWalkingCamera.Reset;
 begin
   FReady:=False;FOverview:=False;FStillTime:=0;FOverviewBlend:=0;
+  FManualYaw:=0;FManualHeight:=0;FManualHold:=0;
   FPositionVelocity:=TVector3.Zero;FLookVelocity:=TVector3.Zero;
+end;
+
+procedure TWalkingCamera.DragOrbit(const Delta:TVector2);
+begin
+  FManualYaw:=AngleDelta(FManualYaw-Delta.X*0.006);
+  FManualHeight:=EnsureRange(FManualHeight-Delta.Y*0.014,-0.9,3.0);
+  FManualHold:=3;FStillTime:=0;FOverview:=False;
 end;
 
 procedure TWalkingCamera.Resume(const Target,Forward,Position,Direction:TVector3);
@@ -80,11 +90,12 @@ begin
   end;
   if Dt<=0 then Exit;
   H:=Dt;
+  FManualHold:=Max(0,FManualHold-H);
   Delta.Y:=0;
   Moving:=(Abs(Speed)>0.08)or(Delta.Length>Max(0.01,Dt*0.12))or
     (Abs(AngleDelta(Heading-FLastHeading))>Max(0.00001,DegToRad(0.5)*Dt));
   FLastTarget:=Target;FLastHeading:=Heading;
-  if Moving then begin FStillTime:=0;FOverview:=False end
+  if Moving or (FManualHold>0) then begin FStillTime:=0;FOverview:=False end
   else begin
     FStillTime:=Min(OverviewDelay+1,FStillTime+H);
     if not FOverview and(FStillTime>=OverviewDelay)then begin
@@ -96,10 +107,10 @@ begin
   if FOverview then begin
     FOrbitYaw:=AngleDelta(FOrbitYaw+DegToRad(8)*H*FOverviewBlend);
     DesiredYaw:=FOrbitYaw;
-  end else DesiredYaw:=Heading;
+  end else DesiredYaw:=Heading+FManualYaw;
   FYaw:=AngleDelta(FYaw+AngleDelta(DesiredYaw-FYaw)*(1-Exp(-H/0.45)));
   Distance:=FollowDistance+3.0*FOverviewBlend;
-  Height:=FollowHeight+1.2*FOverviewBlend;
+  Height:=FollowHeight+1.2*FOverviewBlend+FManualHeight;
   Back:=Vector3(Sin(FYaw),0,Cos(FYaw));
   Goal:=Target-Back*Distance+Vector3(0,Height,0);
   Spring(FPosition.X,FPositionVelocity.X,Goal.X,0.32,H);

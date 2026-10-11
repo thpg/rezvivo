@@ -7,7 +7,7 @@ python tools/build-installer.py --nsis C:/tools/nsis/makensis.exe
 import argparse,hashlib,json,os,shutil,subprocess,tempfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
-from installer_assets import redundant_assets, validate_asset_links
+from installer_assets import redundant_assets, validate_asset_links, runtime_assets
 from installer_update import select_delta, components, validate_manifest, installer_guards
 ROOT=Path(__file__).resolve().parents[1]
 DLLS=('fmt.dll','freetype.dll','libcrypto-1_1-x64.dll','libogg.dll','libvorbis.dll','libpng14-14.dll',
@@ -27,18 +27,7 @@ def payload(out):
     print('Excluded unused assets:',len(audit),'MiB:',round(sum(x['bytes'] for x in audit)/2**20,1),flush=True)
     files=[(ROOT/'third_person_navigation.exe',Path('REZVIVO.exe'))]
     files += [(ROOT/x,Path(x)) for x in DLLS]
-    for p in sorted((ROOT/'data').rglob('*')):
-        if not p.is_file():continue
-        rel=p.relative_to(ROOT)
-        if rel.as_posix() in excluded:continue
-        if any(part.lower() in ('backup','__pycache__','.git') for part in rel.parts):continue
-        if p.suffix.lower() in ('.py','.pyc','.md','.log','.bak','.dbg','.blend'):continue
-        if rel.parts[1]=='workouts':
-            if len(rel.parts)<5 or rel.parts[2]!='rezvivo' or p.suffix!='.zwo':continue
-            tree=ET.parse(p)
-            if tree.findtext('author')!='REZVIVO':raise ValueError(f'Non-original workout: {p}')
-        if p.is_symlink():raise ValueError(f'Unexpected asset symlink: {p}')
-        files.append((p,rel))
+    files.extend(runtime_assets(ROOT, excluded))
     for src,rel in files:
         dest=stage/rel;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dest)
     shutil.copy2(ROOT/'release.json',stage/'release.json')
