@@ -1304,7 +1304,10 @@ begin
     SL.Add('  int slot = kind == 1 ? 1 : (kind == 2 ? 4 : (kind == 3 ? (part<5 ? 7 : 15) : (kind == 4 ? 12 : 16)));');
     SL.Add('  if (kind >= 4 && part >= 4) return gskTwistD(kind,part) * gskRest(j);');
     SL.Add('  mat4 hand = mat4(1.0);');
-    SL.Add('  if (kind >= 4 && part == 3 && uScalars[33 + kind - 4] > 0.5) hand = uGskHandRest[handSlot];');
+    { Blend the complete bind-relative transforms: independently interpolating
+      rotation and its origin-relative translation moves fingers away from the
+      wrist. The release is deliberately small (at most 18 percent). }
+    SL.Add('  if (kind >= 4 && part == 3) { float grip=uScalars[33 + kind - 4]; hand=mat4(1.0)*(1.0-grip)+uGskHandRest[handSlot]*grip; }');
     SL.Add('  return gskDelta[slot + part] * hand * gskRest(j) * riderFaceDelta(j);');
     SL.Add('}');
 
@@ -1855,8 +1858,8 @@ begin
   end;
   FootYaw := RiderFootYawRotation(InvP, FRider.FootYawDeg);
   FScalarsList.Add(FootYaw.W);
-  FScalarsList.Add(Ord(Pose.HandPosR > 0));
-  FScalarsList.Add(Ord(Pose.HandPosL > 0));
+  FScalarsList.Add(Ord(Pose.HandPosR > 0)*(1-EnsureRange(Pose.HandRelax[0],0.0,0.2)));
+  FScalarsList.Add(Ord(Pose.HandPosL > 0)*(1-EnsureRange(Pose.HandRelax[1],0.0,0.2)));
   for I:=0 to 1 do begin
     FShClavicleDelta[I]:=RiderScapulaDelta(FRider.LeanAxis,
       Pose.ShoulderRoundDeg+Pose.ScapulaProtraction[I],

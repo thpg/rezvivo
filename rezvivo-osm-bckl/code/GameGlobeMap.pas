@@ -3,7 +3,7 @@ unit GameGlobeMap;
 interface
 uses Classes, SysUtils, fpjson, CastleUIControls, CastleViewport, CastleVectors, CastleScene,
   CastleKeysMouse, CastleImages, X3DNodes, Osm3dGeoMath, Osm3dFlatMap,
-  GameGlobeMath, GameGlobePatch;
+  GameGlobeMath, GameGlobePatch, GameVectorMap;
 type
   TGlobeLine=record Id:Int64;Color:TVector4;Width:Single;Segments:array of array of TLatLon;end;
   TGlobeStroke=record Id:Int64;Color:TVector4;Width:Single;Count:Integer;Points,Triangles:array of TVector2;end;
@@ -12,6 +12,7 @@ type
     Texture:TPixelTextureNode;Task:TFlatMapTask;Patch:TGlobePatch;Used:QWord;
     RenderSource:TGlobeTile;RetryAt:QWord;Failures:Integer;
     OverviewZoom:Integer;
+    BackgroundOnly:Boolean;
     destructor Destroy;override;
     procedure SetImage(Img:TCastleImage);
   end;
@@ -26,6 +27,7 @@ type
     FSelectedId:Int64;FLines:array of TGlobeLine;FStrokes:array of TGlobeStroke;
     FTiles:TList;FNorth,FSouth:TGlobePatch;
     FScene:TCastleScene;FSceneRoot:TX3DRootNode;
+    FVectorMap:TVectorMap;
     FOnChanged,FOnSelect:TNotifyEvent;
     FFitArea:TCastleUserInterface;
     procedure SyncProjection;
@@ -39,6 +41,7 @@ type
     procedure AnchorAt(const Geo:TLatLon;const Screen:TVector2);
     procedure RenderMapLines;
     procedure PaintOverlay;
+    procedure ZoomStep(Delta:Single);
   protected
     procedure RenderOverlay;virtual;
   public
@@ -109,6 +112,7 @@ begin
   FSouth:=TGlobePatch.CreatePatch(TTileXY.Make(0,0,2),-1);FSceneRoot.AddChildren(FSouth.Node);
   FScene:=TCastleScene.Create(Self);FScene.Load(FSceneRoot,True);
   FScene.ProcessEvents:=False;FScene.Pickable:=False;FScene.Collides:=False;Items.Add(FScene);
+  FVectorMap:=TVectorMap.Create(Self);InsertFront(FVectorMap);
   { A viewport child gets CGE's ordinary 2D render state. Drawing directly
     after inherited viewport Render still uses its perspective/depth state. }
   Overlay:=TGlobeOverlay.Create(Self);Overlay.Map:=Self;Overlay.FullSize:=True;InsertFront(Overlay);
@@ -120,6 +124,7 @@ end;
 destructor TGlobeMap.Destroy;
 var I:Integer;T:TGlobeTile;
 begin
+  if FVectorMap<>nil then begin RemoveControl(FVectorMap);FreeAndNil(FVectorMap);end;
   for I:=0 to FTiles.Count-1 do begin T:=TGlobeTile(FTiles[I]);if T.Task<>nil then T.Task.Cancel;end;
   { Pinned nodes must be released while their CGE scene is still alive:
     FreeRootNode intentionally leaves Scene on nodes surviving root disposal. }
@@ -147,6 +152,7 @@ procedure TGlobeMap.SetActive(Value:Boolean);
 var I:Integer;T:TGlobeTile;
 begin
   FActive:=Value;FDrag:=False;FZoomAnchor:=False;
+  if not Value then FVectorMap.StopLoading;
   if Value then Changed else for I:=0 to FTiles.Count-1 do begin
     T:=TGlobeTile(FTiles[I]);if T.Task<>nil then begin T.Task.Cancel;T.Attempted:=T.Texture<>nil;T.Detailed:=T.DetailReady;end;
   end;
@@ -160,6 +166,7 @@ procedure TGlobeMap.PauseTileLoading(Value:Boolean);
 var I:Integer;T:TGlobeTile;
 begin
   FLoadingPaused:=Value;
+  if Value then FVectorMap.StopLoading;
   if Value then for I:=0 to FTiles.Count-1 do begin
     T:=TGlobeTile(FTiles[I]);if T.Task<>nil then T.Task.Cancel;
   end;
@@ -168,6 +175,7 @@ function TGlobeMap.TileLoadingIdle:Boolean;
 var I:Integer;T:TGlobeTile;
 begin
   Result:=False;
+  if not FVectorMap.Idle then Exit;
   for I:=0 to FTiles.Count-1 do begin
     T:=TGlobeTile(FTiles[I]);
     if(T.Task<>nil)and not T.Task.Done then Exit;
@@ -182,6 +190,8 @@ end;
 procedure TGlobeMap.ShowPlanet;
 begin FRequestedZoom:=-1;FZoomAnchor:=False;FTargetAltitude:=2.8;end;
 procedure TGlobeMap.ZoomBy(Delta:Integer);
+begin ZoomStep(Delta);end;
+procedure TGlobeMap.ZoomStep(Delta:Single);
 begin
   FRequestedZoom:=-1;FZoomAnchor:=False;
   FTargetAltitude:=EnsureRange(FTargetAltitude*Power(2,-Delta),FView.AltitudeForZoom(18),GLOBE_MAX_ALTITUDE);
@@ -254,9 +264,9 @@ begin
   SetLength(Available,FTiles.Count);SetLength(Sources,FTiles.Count);N:=0;
   for I:=0 to FTiles.Count-1 do begin
     T:=TGlobeTile(FTiles[I]);T.RenderSource:=nil;T.Pinned:=False;
-    if T.Texture<>nil then begin
+    if(T.Texture<>nil)and(not T.BackgroundOnly or(FView.NominalZoom>=VECTOR_MAP_MIN_ZOOM-0.05))then begin
       Sources[N]:=T;Available[N].Tile:=T.Tile;
-      if T.DetailReady or T.DetailPartial then Available[N].Quality:=T.Tile.Zoom else Available[N].Quality:=T.OverviewZoom;
+      if T.DetailReady or T.DetailPartial or T.BackgroundOnly then Available[N].Quality:=T.Tile.Zoom else Available[N].Quality:=T.OverviewZoom;
       Inc(N);
     end;
   end;
@@ -311,6 +321,7 @@ begin
     FAltitude:=NewAlt;Changed;if FZoomAnchor then AnchorAt(FAnchor,FZoomPoint);
   end;
   if FDirty then begin PrepareTiles;FDirty:=False;end;
+  FVectorMap.Prepare(FView,RenderRect,UIScale,SecondsPassed,True,FLoadingPaused);
   FLoadDelay:=Max(0,FLoadDelay-SecondsPassed);NowTick:=GetTickCount64;Active:=0;Uploads:=0;
   for I:=FTiles.Count-1 downto 0 do begin T:=TGlobeTile(FTiles[I]);
     if T.Task<>nil then begin
@@ -321,6 +332,7 @@ begin
         if Img<>nil then begin
           T.DetailPartial:=Partial;T.DetailReady:=not Partial and T.Task.Detailed;
           T.OverviewZoom:=T.Task.OverviewZoom;
+          T.BackgroundOnly:=T.Task.BackgroundOnly;
           { A cached plain OSM tile is a valid detailed fallback, but the
             normal detail pass must still get a chance to add available DEM. }
           if not Partial then T.Detailed:=T.DetailReady and not T.Task.CachedOnly;T.SetImage(Img);
@@ -349,6 +361,7 @@ begin
       if(Pass=0)and(T.Tile.Zoom>FLAT_MAP_WORLD_ZOOM)and(T.Tile.Zoom<FLAT_MAP_DETAIL_ZOOM)then Continue;
       if(Pass=1)and(not T.Visible or not T.Attempted or T.Detailed or(T.Tile.Zoom<FLAT_MAP_DETAIL_ZOOM))then Continue;
       if(Pass=1)and(FLoadDelay>0)then Continue;
+      if(Pass=1)and(T.Tile.Zoom>=VECTOR_MAP_MIN_ZOOM)then Continue;
       if(Best=nil)or(T.Tile.Zoom<Best.Tile.Zoom)or
         ((Pass=1)and(T.Tile.Zoom=Best.Tile.Zoom)and(Distance(T)<Distance(Best)))then Best:=T;
     end;
@@ -357,7 +370,8 @@ begin
     { Read cached detail first, otherwise finish raster previews for all
       visible tiles before scheduling the heavier OSM/DEM pass. }
     T.Task:=TFlatMapTask.Create(T.Tile.Zoom,T.Tile.X,T.Tile.Y,DefaultCacheRoot,Pass=1,
-      (Pass=0)and(T.Tile.Zoom>=FLAT_MAP_DETAIL_ZOOM),Pass=0);T.Task.Start;Inc(Active);
+      (Pass=0)and(T.Tile.Zoom>=FLAT_MAP_DETAIL_ZOOM)and(T.Tile.Zoom<VECTOR_MAP_MIN_ZOOM),
+      Pass=0,T.Tile.Zoom>=VECTOR_MAP_MIN_ZOOM);T.Task.Start;Inc(Active);
   end;
   if FMeshDirty then begin PositionPatches;FMeshDirty:=False;end;
   { Active coverage pins its sources, including ancestors and descendants. }
@@ -388,6 +402,8 @@ begin
     'altitude_m',FAltitude*6371000,'visible',V,'ready',R,'detailed',D,'pending',P,'min_lod',MinZ,'max_lod',MaxZ,'cached',FTiles.Count,
     'rendered',Rendered,'fallback',Fallback,'rendered_detail',FromDetail,'uncovered',FUncovered,'loading_paused',FLoadingPaused]);
   Workers:=FlatMapWorkerStats;
+  Result.Add('vector',FVectorMap.Stats);
+  Result.Add('fractional_zoom',FView.NominalZoom);
   Result.Add('exists',Exists);Result.Add('active',FActive);
   Result.Add('rect',TJSONArray.Create([RenderRect.Left,RenderRect.Bottom,RenderRect.Width,RenderRect.Height]));
   Result.Add('partial',Partial);Result.Add('osm_min_zoom',FLAT_MAP_DETAIL_ZOOM);Result.Add('street_min_zoom',FLAT_MAP_STREET_ZOOM);
@@ -518,7 +534,7 @@ begin
   Result:=inherited;R:=RenderRect;
   if(Event.Position.X<R.Left)or(Event.Position.X>R.Right)or(Event.Position.Y<R.Bottom)or(Event.Position.Y>R.Top)then Exit;
   if Event.IsMouseWheel(mwUp)or Event.IsMouseWheel(mwDown)then begin
-    if Event.IsMouseWheel(mwUp)then ZoomBy(1)else ZoomBy(-1);
+    if Event.IsMouseWheel(mwUp)then ZoomStep(0.25)else ZoomStep(-0.25);
     FZoomAnchor:=TryScreenToGeo(Event.Position,FAnchor);FZoomPoint:=Event.Position;Exit(True);
   end;
   if Event.IsMouseButton(buttonLeft)and TryScreenToGeo(Event.Position,P)then begin

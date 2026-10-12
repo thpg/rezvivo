@@ -503,6 +503,7 @@ type
     procedure RenderOverChildren;override;
     function PreviewPress(const Event:TInputPressRelease):Boolean;override;
     procedure SetShadowTestRiders(const Count: Integer; const Zones: Boolean);
+    function ShadowTestRiderDiagnostics:TJSONArray;
     procedure Update(const SecondsPassed: Single; var HandleInput: Boolean); override;
     function Press(const Event: TInputPressRelease): Boolean; override;
     function Release(const Event: TInputPressRelease): Boolean; override;
@@ -2390,8 +2391,9 @@ begin
       Ag.State.CurrentTurnAngle,Ag.State.CurrentModelPitch);
     Sit.FtpW := 0;
     if Assigned(FActiveAvatarAgent) and
-       (TVector3.DotProduct(FActiveAvatarAgent.State.WorldPosition-Ag.State.WorldPosition,
-         Ag.State.ForwardDir)<-2) and
+       ((TVector3.DotProduct(FActiveAvatarAgent.State.WorldPosition-Ag.State.WorldPosition,
+         Ag.State.ForwardDir)<-2)or
+         ((FActiveAvatarAgent.State.WorldPosition-Ag.State.WorldPosition).LengthSqr<144)) and
        ((FActiveAvatarAgent.State.WorldPosition-Ag.State.WorldPosition).LengthSqr<10000)then
       SetRiderLookTarget(Sit,Ag.State.WorldPosition,Ag.State.ForwardDir,
         FActiveAvatarAgent.State.WorldPosition+Vector3(0,1.45,0));
@@ -2522,7 +2524,10 @@ begin
     Root := TCastleTransform.Create(FreeAtStop);
     B := nil;
     try
-      B := LoadBikeInstanceFromJSON(BikeJsonFileName2, FreeAtStop);
+      { Benchmark the actual current rider. The legacy bike_road2 JSON may
+        reference a removed authoring file and silently yield just a bicycle. }
+      B := LoadActiveBikeInstance(FreeAtStop);
+      if not B.HasTripoRider then raise Exception.Create('Diagnostic rider model unavailable');
       Root.Add(B.Group);
       MainViewport.Items.Add(Root);
       ApplyWorldSunToBikeShadow(B);
@@ -2536,6 +2541,16 @@ begin
     end;
   end;
   UpdateShadowTestRiders(0);
+end;
+
+function TViewPlay.ShadowTestRiderDiagnostics:TJSONArray;
+var I:Integer;B:TBikeInstance;O:TJSONObject;
+begin
+  Result:=TJSONArray.Create;
+  if FShadowTestBikes<>nil then for I:=0 to FShadowTestBikes.Count-1 do begin
+    B:=TBikeInstance(FShadowTestBikes[I]);O:=B.AnimDebugJson;
+    O.Add('motion',B.RiderMotionDebugJson);Result.Add(O);
+  end;
 end;
 
 procedure TViewPlay.UpdateShadowTestRiders(const SecondsPassed: Single);
@@ -4865,6 +4880,7 @@ var
   WuPlaceErr: string;             { '' либо текст ошибки постановки на старт }
   FocusRemove:TRemoveType;
   LeanAgent:TPhysicalAgent;
+  LookDistance,NearestLookDistance:Single;
 begin
   T0 := Timer;
   if FCancelWarmup then begin
@@ -5403,7 +5419,21 @@ begin
       RiderSit.FtpW := EffectiveRiderProfile.FtpW;
       if Abs(RiderSit.SpeedKmh)<0.5 then
         SetRiderLookTarget(RiderSit,FActiveAvatarAgent.State.WorldPosition,
-          FActiveAvatarAgent.State.ForwardDir,MainViewport.Camera.WorldTranslation);
+          FActiveAvatarAgent.State.ForwardDir,MainViewport.Camera.WorldTranslation)
+      else if FBotAgents<>nil then begin
+        { Reuse the tiny visible company roster; no scene/raycast query. }
+        NearestLookDistance:=144;
+        for I:=0 to FBotAgents.Count-1 do begin
+          LeanAgent:=TPhysicalAgent(FBotAgents[I]);
+          if (LeanAgent=nil)or not TLocalBotAgent(LeanAgent).Visible then Continue;
+          LookDistance:=(LeanAgent.State.WorldPosition-FActiveAvatarAgent.State.WorldPosition).LengthSqr;
+          if LookDistance<NearestLookDistance then begin
+            NearestLookDistance:=LookDistance;
+            SetRiderLookTarget(RiderSit,FActiveAvatarAgent.State.WorldPosition,
+              FActiveAvatarAgent.State.ForwardDir,LeanAgent.State.WorldPosition+Vector3(0,1.45,0));
+          end;
+        end;
+      end;
       if FActiveAvatarAgent.Actor.RiderOwnsLean then
         FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,0,
           FActiveAvatarAgent.State.CurrentModelPitch)

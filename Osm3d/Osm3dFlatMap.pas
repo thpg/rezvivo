@@ -6,7 +6,8 @@ unit Osm3dFlatMap;
   cache and are rasterised locally. DEM shading is optional, never a flat-map
   prerequisite. All coordinates remain tile-local doubles. }
 interface
-uses Classes, SysUtils, SyncObjs, CastleImages, Osm3dCacheHTTPFetcher;
+uses Classes, SysUtils, SyncObjs, CastleImages, Osm3dCacheHTTPFetcher,
+  Osm3dGeoMath, Osm3dVectorMap;
 type
   TFlatMapWorkerStats=record
     Limit,Active,Peak,Sources,LoadingSources,PinnedSources,OsmRequests,OsmRequestsPeak:Integer;
@@ -16,13 +17,13 @@ type
   private
     FHttp:THTTPFetcherWithCache;FLock:TCriticalSection;
     FImage:TCastleImage;FDone,FDetail,FRequestedDetail,FCachedOnly,FCancelled,FImagePartial,FFinalTaken:Boolean;FZ,FX,FY:Integer;
-    FOverviewFallback:Boolean;
+    FOverviewFallback,FBackgroundOnly:Boolean;
     FOverviewZoom:Integer;
     procedure Publish(Img:TCastleImage;Partial:Boolean=False);
   protected
     procedure Execute;override;
   public
-    constructor Create(Z,X,Y:Integer;const CacheRoot:string;Detail:Boolean=False;CachedOnly:Boolean=False;OverviewFallback:Boolean=False);
+    constructor Create(Z,X,Y:Integer;const CacheRoot:string;Detail:Boolean=False;CachedOnly:Boolean=False;OverviewFallback:Boolean=False;BackgroundOnly:Boolean=False);
     destructor Destroy;override;
     procedure Cancel;
     function Done:Boolean;
@@ -34,6 +35,20 @@ type
     property Cancelled:Boolean read FCancelled;
     property FinalTaken:Boolean read FFinalTaken;
     property OverviewZoom:Integer read FOverviewZoom;
+    property BackgroundOnly:Boolean read FBackgroundOnly;
+  end;
+  TFlatMapVectorTask=class(TThread)
+  private
+    FHttp:THTTPFetcherWithCache; FLock:TCriticalSection;
+    FData:TMapVectorData; FTile:TTileXY; FDone:Boolean; FMaxZoom:Integer;
+  protected
+    procedure Execute;override;
+  public
+    constructor Create(const Tile:TTileXY;const CacheRoot:string;MaxZoom:Integer=18);
+    destructor Destroy;override;
+    procedure Cancel;
+    function Done:Boolean;
+    function TakeData:TMapVectorData;
   end;
 const
   FLAT_MAP_URL = 'rezvivo-map://{z}/{x}/{y}';
@@ -55,7 +70,7 @@ function FlatMapWorkerStats:TFlatMapWorkerStats;
 
 implementation
 uses Math, Types, Generics.Collections, FPImage, FPReadPNG, FPWritePNG,
-  Osm3dCache, Osm3dGeoMath, Osm3dOsmData, Osm3dOsmOverpass,
+  Osm3dCache, Osm3dOsmData, Osm3dOsmOverpass,
   Osm3dOsmDirectory, Osm3dGeomUtils, Osm3dHeightmap, Osm3dCoastline,
   Osm3dOsmTagUtils, CastleVectors, fpjson, jsonparser
   {$ifdef MSWINDOWS}, Windows{$endif};
@@ -134,10 +149,11 @@ begin SourceLock.Enter;try Dec(ActiveBuilds);finally SourceLock.Leave;end;end;
 
 function World(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread;LandOnly:Boolean=False;Quality:PInteger=nil):TCastleImage;forward;
 
-constructor TFlatMapTask.Create(Z,X,Y:Integer;const CacheRoot:string;Detail,CachedOnly,OverviewFallback:Boolean);
+constructor TFlatMapTask.Create(Z,X,Y:Integer;const CacheRoot:string;Detail,CachedOnly,OverviewFallback,BackgroundOnly:Boolean);
 begin
   inherited Create(True);FreeOnTerminate:=False;FZ:=Z;FX:=X;FY:=Y;FRequestedDetail:=Detail;FCachedOnly:=CachedOnly;
   FOverviewFallback:=OverviewFallback;
+  FBackgroundOnly:=BackgroundOnly;
   FOverviewZoom:=Math.Min(Z,FLAT_MAP_WORLD_ZOOM);
   FLock:=SyncObjs.TCriticalSection.Create;FHttp:=THTTPFetcherWithCache.Create(TFileSystemCache.Create(CacheRoot),True);
   FHttp.TimeoutMs:=5000;FHttp.MaxRetries:=1;
@@ -164,14 +180,25 @@ begin
   FLock.Enter;try FImage.Free;FImage:=Img;FImagePartial:=Partial;finally FLock.Leave;end;
 end;
 procedure TFlatMapTask.Execute;
-var Img:TCastleImage;
+var Img:TCastleImage;X,Y:Integer;P:PVector3Byte;
 begin
   try
     try
-      Img:=FlatMapTileInfo(FHttp,FZ,FX,FY,FRequestedDetail,FCachedOnly,FDetail,Self);
+      if FBackgroundOnly then begin
+        { Cartographic geometry/text are drawn on the GPU. The bitmap below
+          supplies only ocean/land coverage, never enlarged baked labels. }
+        Img:=World(FHttp,FZ,FX,FY,Self,True,@FOverviewZoom);
+        FDetail:=False;
+        if Img<>nil then for Y:=0 to Img.Height-1 do for X:=0 to Img.Width-1 do begin
+          P:=PVector3Byte(Img.PixelPtr(X,Y));
+          if P^.X<128 then P^:=Vector3Byte(180,210,221)
+          else P^:=Vector3Byte(241,239,229);
+        end;
+      end else
+        Img:=FlatMapTileInfo(FHttp,FZ,FX,FY,FRequestedDetail,FCachedOnly,FDetail,Self);
       { Finish the fast preview pass for every visible tile before any worker
         waits on Overpass. Cached detail remains preferable to raster fallback. }
-      if (Img=nil) and FCachedOnly and FOverviewFallback and not Terminated then
+      if (Img=nil) and not FBackgroundOnly and FCachedOnly and FOverviewFallback and not Terminated then
         Img:=World(FHttp,FZ,FX,FY,Self,False,@FOverviewZoom);
       Publish(Img,FRequestedDetail and not FDetail);
     except { Keep the last valid overview if an optional detail source fails. } end;
@@ -433,6 +460,41 @@ begin
     { Large datasets can take time to destroy. Never hold the shared lock. }
     for I:=0 to Retired.Count-1 do TObject(Retired[I]).Free;
   finally Retired.Free;Pins.Free;end;
+end;
+
+constructor TFlatMapVectorTask.Create(const Tile:TTileXY;const CacheRoot:string;MaxZoom:Integer);
+begin
+  inherited Create(True);FreeOnTerminate:=False;FTile:=Tile;
+  FMaxZoom:=MaxZoom;
+  FLock:=SyncObjs.TCriticalSection.Create;
+  FHttp:=THTTPFetcherWithCache.Create(TFileSystemCache.Create(CacheRoot),True);
+  FHttp.TimeoutMs:=5000;FHttp.MaxRetries:=1;
+end;
+destructor TFlatMapVectorTask.Destroy;
+begin Cancel;WaitFor;FData.Free;FHttp.Free;FLock.Free;inherited;end;
+procedure TFlatMapVectorTask.Cancel;
+begin if Terminated then Exit;Terminate;FHttp.AbortAllRequests;end;
+function TFlatMapVectorTask.Done:Boolean;
+begin FLock.Enter;try Result:=FDone;finally FLock.Leave;end;end;
+function TFlatMapVectorTask.TakeData:TMapVectorData;
+begin FLock.Enter;try Result:=FData;FData:=nil;finally FLock.Leave;end;end;
+procedure TFlatMapVectorTask.Execute;
+var Pins:Classes.TList;D:TOSMDataset;Built:TMapVectorData;
+begin
+  Built:=nil;
+  try
+    if not BeginBuild(FHttp,Self)then Exit;
+    Pins:=Classes.TList.Create;
+    try
+      try
+        D:=Source(FHttp,FTile,Self,Pins);
+        if (D<>nil)and not Terminated then Built:=BuildMapVectors(D,FTile,Self,FMaxZoom);
+        if Terminated then FreeAndNil(Built);
+      except FreeAndNil(Built);end;
+    finally ReleaseSources(Pins);EndBuild;end;
+  finally
+    FLock.Enter;try FData:=Built;FDone:=True;finally FLock.Leave;end;
+  end;
 end;
 
 constructor TRaster.Create(AZ,AX,AY:Integer);

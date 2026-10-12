@@ -1,5 +1,6 @@
 """Runtime asset selection. Keep editor/source assets in the working tree only."""
 import json
+import hashlib
 import re
 import struct
 import shlex
@@ -7,6 +8,32 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SURFACES = 'data/Osm3d/resources/textures/surfaces/'
+
+
+def ready_route_assets(root):
+    """Public seed only; never include a user's imported FIT/GPX library."""
+    root = Path(root)
+    catalog = root/'data/ready-routes/catalog.json'
+    if not catalog.is_file():
+        raise ValueError('Missing required ready-route seed: '+str(catalog))
+    doc = json.loads(catalog.read_text(encoding='utf-8-sig'))
+    if doc.get('schema') != 1 or not isinstance(doc.get('items'), list):
+        raise ValueError('Invalid ready-route seed schema')
+    result = [catalog]
+    seen = set()
+    for item in doc['items']:
+        route_id = item.get('id', '')
+        if not re.fullmatch(r'[a-z0-9-]{1,80}', route_id) or route_id in seen:
+            raise ValueError('Invalid/duplicate ready-route seed identity')
+        seen.add(route_id)
+        path = catalog.with_name(route_id+'.gpx')
+        if not path.is_file():
+            raise ValueError('Missing ready-route seed GPX: '+str(path))
+        raw = path.read_bytes()
+        if len(raw) != item.get('size_bytes') or hashlib.sha256(raw).hexdigest() != item.get('sha256'):
+            raise ValueError('Ready-route seed size/checksum mismatch: '+str(path))
+        result.append(path)
+    return result
 
 
 def redundant_assets(root):
@@ -74,6 +101,7 @@ def runtime_assets(root, excluded=None):
     """One resource selection shared by desktop and Android installers."""
     import xml.etree.ElementTree as ET
     root = Path(root)
+    seed_files = {p.resolve() for p in ready_route_assets(root)}
     if excluded is None:
         excluded = redundant_assets(root)
     for path in sorted((root/'data').rglob('*')):
@@ -91,6 +119,8 @@ def runtime_assets(root, excluded=None):
                 continue
             if ET.parse(path).findtext('author') != 'REZVIVO':
                 raise ValueError(f'Non-original workout: {path}')
+        if relative.parts[1] == 'ready-routes' and path.resolve() not in seed_files:
+            continue
         if path.is_symlink():
             raise ValueError(f'Unexpected asset symlink: {path}')
         yield path, relative
@@ -100,6 +130,10 @@ def validate_asset_links(stage, paths):
     """Check explicit UI/world/model dependencies against the packaged files."""
     available = {Path(p).as_posix().lower() for p in paths}
     checked = 0
+    for path in ready_route_assets(stage):
+        if path.relative_to(stage).as_posix().lower() not in available:
+            raise ValueError('Ready-route seed missing from installer manifest: '+str(path))
+        checked += 1
 
     def reference(source, value):
         nonlocal checked

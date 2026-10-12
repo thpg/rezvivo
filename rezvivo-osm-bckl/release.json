@@ -1,7 +1,7 @@
 {
-  "version": "0.3.6-alpha.1",
-  "build": 13,
-  "file_version": "0.3.6.13",
+  "version": "0.3.7-alpha.1",
+  "build": 14,
+  "file_version": "0.3.7.14",
   "channel": "alpha",
-  "notes": "Improve ready routes and photo-guided scenery, fix Android map loading, and correct rendering after returning from menus. Keep nearby tree shadows animated while caching distant forest shadows as a group. Preserve bib leg bands when changing tops and prevent facial hair on female bots."
+  "notes": "Fix Real World startup on clean installations and restore bundled ready routes. Recover missing or damaged route catalogs safely. Add detailed vector maps with outlined roads and labels, rider model LODs, and measured level terrain areas."
 }

@@ -90,7 +90,9 @@ with GPULock():
    menu(app)
    for _ in range(60):
     r=app.call('menu.inspect')['routes']
-    if not r['ready_routes']['busy']:break
+    # The catalog completes in the global update; the carousel consumes its
+    # generation on the next UI frame. Wait for both rather than racing it.
+    if not r['ready_routes']['busy'] and not r['ready_routes']['items'] and r['carousel']['count']==0:break
     time.sleep(.1)
    assert not r['ready_routes']['items'] and r['carousel']['count']==0,r
  (OUT/'client-verification.json').write_text(json.dumps({'passed':True,'requests':REQUESTS,'checks':['fresh offline carousel','889-point closed route','conditional 304 restart','no redundant GPX download','no private profile import','updated GPX fetched once','old selection resolves to updated route','withdrawal preserved offline']},indent=2))

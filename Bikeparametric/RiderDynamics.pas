@@ -29,6 +29,7 @@ type
     SeatX, SeatY, SeatZ: Double; { saddle surface in the support frame }
     BarReach, BarWidth, TorsoLength: Double;
     HandR, HandL, FootR, FootL: Double; { contact fraction }
+    ShoulderIntent: array[0..1] of Double; { preferred protraction in degrees }
     LateralAccel, ForwardAccel, UpAccel, ExternalLeanDeg: Double;
     RoadPitchRad, RoadNormalAccel: Double;
     Grounded: Boolean;
@@ -128,6 +129,8 @@ begin
   Result.GoalX:=Safe(Value.GoalX,-0.45,0.45,0);
   Result.GoalY:=Safe(Value.GoalY,-0.35,0.50,0);
   Result.GoalZ:=Safe(Value.GoalZ,-0.15,0.15,0);
+  Result.ShoulderIntent[0]:=Safe(Value.ShoulderIntent[0],-4,4,0);
+  Result.ShoulderIntent[1]:=Safe(Value.ShoulderIntent[1],-4,4,0);
   Result.SeatX:=Safe(Value.SeatX,-0.5,0.5,0);
   Result.SeatY:=Safe(Value.SeatY,-0.5,0.5,0);
   Result.SeatZ:=Safe(Value.SeatZ,-0.2,0.2,0);
@@ -339,8 +342,8 @@ begin
     U.GoalZ+(U.SeatHeight+U.GoalY)*Stand*LeanTarget,12000*Stand+1);
   { Scapulae react to the very same bar forces and thorax articulation. }
   Target:=DegToRad((S.HandLoad[0]-S.HandLoad[1])*0.018);
-  Add([SR,TA],[1.0,0.35],Target,95);
-  Add([SL,TA],[1.0,-0.35],-Target,95);
+  Add([SR,TA],[1.0,0.35],Target+DegToRad(U.ShoulderIntent[0]),95);
+  Add([SL,TA],[1.0,-0.35],-Target+DegToRad(U.ShoulderIntent[1]),95);
   Add([ER,TR],[1.0,0.35],Target*0.28+DegToRad(0.15*Chest),75);
   Add([EL,TR],[1.0,-0.35],-Target*0.28+DegToRad(0.15*Chest),75);
   PadK:=(22000+22000*U.Composition)/Size;

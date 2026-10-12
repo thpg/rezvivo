@@ -13,15 +13,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def write_sim_fit(path, seconds=7200, watts=190):
+def write_sim_fit(path, seconds=7200, watts=190, cadence=85):
     fields = [(253, 4, 0x86), (5, 4, 0x86), (6, 2, 0x84), (7, 2, 0x84),
               (3, 1, 2), (4, 1, 2), (0, 4, 0x85), (1, 4, 0x85), (2, 2, 0x84)]
     body = bytearray([0x40, 0, 0, 20, 0, len(fields)])
     for field in fields:
         body.extend(field)
     for i in range(seconds):
+        record_watts = watts(i) if callable(watts) else watts
+        record_cadence = cadence(i) if callable(cadence) else cadence
         body.extend(bytes([0]) + struct.pack('<IIHHBBiiH', 1100000000+i,
-                    i*800, 8000, watts, 125, 85, round(55.75*2**31/180),
+                    i*800, 8000, record_watts, 125, record_cadence, round(55.75*2**31/180),
                     round((37.62+i*.00001)*2**31/180), 3200))
     data = struct.pack('<BBHI4s', 12, 0x20, 2100, len(body), b'.FIT') + body
     crc = 0

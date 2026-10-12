@@ -3,7 +3,7 @@ unit Osm3dMeasuredRoadHeight;
 { Authored, datum-aligned road elevations. Build-time only: no ride/session
   state, network or per-frame work. The recipe hash owns cache invalidation. }
 interface
-uses SysUtils, fpjson, Generics.Collections, Osm3dGeoMath, Osm3dOsmData;
+uses SysUtils, fpjson, Generics.Collections, Osm3dGeoMath, Osm3dOsmData, Osm3dMeasuredAreaHeight;
 const MEASURED_ROAD_HEIGHT_TAG='rezvivo:elevation_profile';
 type
   TMeasuredStation=record AtM,Height:Double end;
@@ -26,6 +26,8 @@ type
       TCells=specialize TObjectDictionary<Int64,TIndices>;
     var FSegments:TSegments; FCount:Integer; FCells:TCells;
       FProfiles:array of TMeasuredProfile;
+      FAreas:array of TMeasuredArea;
+    procedure AddArea(const A:TMeasuredArea);
     procedure AddSegment(const A,B:TLatLon; H0,H1,At0,At1:Double;
       ProfileIndex:Integer; const P:TMeasuredProfile);
   public
@@ -177,6 +179,16 @@ begin
     List.Add(I);
   end;
 end;
+procedure TMeasuredRoadHeight.AddArea(const A:TMeasuredArea);
+var I,X,Y:Integer;B:TLatLonBox;K:Int64;List:TIndices;
+begin
+  I:=Length(FAreas);SetLength(FAreas,I+1);FAreas[I]:=A;B:=A.Box.ExpandMeters(A.Feather+1);
+  for X:=Floor(B.MinLon*CELL_DEG) to Floor(B.MaxLon*CELL_DEG) do
+    for Y:=Floor(B.MinLat*CELL_DEG) to Floor(B.MaxLat*CELL_DEG) do begin
+      K:=CellKey(X,Y);if not FCells.TryGetValue(K,List) then begin List:=TIndices.Create;FCells.Add(K,List) end;
+      List.Add(-I-1);
+    end;
+end;
 constructor TMeasuredRoadHeight.Create(Dataset:TOSMDataset);
 var W:TOSMWay;N:TOSMNode;P:TMeasuredProfile;J:TJSONData;I,K,ProfileIndex:Integer;
   Prev,LL,A,B:TLatLon;Along,L,Lo,Hi,T0,T1,H0,H1:Double;
@@ -184,6 +196,8 @@ begin
   inherited Create;FCells:=TCells.Create([doOwnsValues]);
   if Dataset=nil then Exit;
   for W in Dataset.Ways.Values do begin
+    if W.Tags.Get(MEASURED_AREA_HEIGHT_TAG)<>'' then
+      AddArea(ReadMeasuredAreaText(W.Tags.Get(MEASURED_AREA_HEIGHT_TAG)));
     if W.Tags.Get(MEASURED_ROAD_HEIGHT_TAG)='' then Continue;
     J:=GetJSON(W.Tags.Get(MEASURED_ROAD_HEIGHT_TAG));try P:=Decode(J) finally J.Free end;
     ProfileIndex:=Length(FProfiles);SetLength(FProfiles,ProfileIndex+1);FProfiles[ProfileIndex]:=P;
@@ -215,7 +229,7 @@ end;
 destructor TMeasuredRoadHeight.Destroy;
 begin FCells.Free;inherited end;
 function TMeasuredRoadHeight.Empty:Boolean;
-begin Result:=FCount=0 end;
+begin Result:=(FCount=0) and (Length(FAreas)=0) end;
 function BankHeight(const P:TMeasuredProfile;AtM,Offset:Double;out Extent:Double):Double;
 var Lo,Hi,M:Integer;T,E0,E1,H0,H1:Double;
   function CrossHeight(const S:TBankStation;out Edge:Double):Double;
@@ -242,11 +256,19 @@ end;
 function TMeasuredRoadHeight.TargetGeo(const P:TLatLon;out Height,Weight:Single):Boolean;
 var List:TIndices;I:Integer;S:TSegment;AX,AZ,BX,BZ,T,D,Best,H:Double;
   Core:Boolean;U,W,SumW,SumH,SegmentHeight,Extent,Offset,Len,Envelope:Double;
+  AreaW,AreaSumW,AreaSumH:Double;
 begin
   Result:=False;Height:=0;Weight:=0;
   if not FCells.TryGetValue(CellKey(Floor(P.Lon*CELL_DEG),Floor(P.Lat*CELL_DEG)),List) then Exit;
+  AreaW:=0;AreaSumW:=0;AreaSumH:=0;
+  if Length(FAreas)>0 then for I in List do if I<0 then begin
+    W:=MeasuredAreaWeight(FAreas[-I-1],P);
+    AreaW:=Max(AreaW,W);AreaSumW+=W;AreaSumH+=W*FAreas[-I-1].Height;
+  end;
+  if AreaW>=1 then begin Height:=AreaSumH/AreaSumW;Weight:=1;Exit(True) end;
   Best:=1e100;H:=0;Core:=False;SumW:=0;SumH:=0;
   for I in List do begin
+    if I<0 then Continue;
     S:=FSegments[I];AX:=(P.Lon-S.A.Lon)*DEG_M*S.CosLat;AZ:=(P.Lat-S.A.Lat)*DEG_M;
     BX:=(S.B.Lon-S.A.Lon)*DEG_M*S.CosLat;BZ:=(S.B.Lat-S.A.Lat)*DEG_M;
     T:=EnsureRange((AX*BX+AZ*BZ)/(BX*BX+BZ*BZ),0,1);D:=Hypot(AX-BX*T,AZ-BZ*T);
@@ -272,6 +294,10 @@ begin
     Best:=D;H:=SegmentHeight;Core:=D<=S.HalfWidth;
   end;
   if (not Core) and (SumW>0) then H:=SumH/SumW;
+  if AreaW>0 then begin
+    W:=AreaW+Weight*(1-AreaW);
+    H:=(AreaSumH/AreaSumW*AreaW+H*Weight*(1-AreaW))/W;Weight:=W;
+  end;
   Height:=H;Result:=Weight>0;
 end;
 function TMeasuredRoadHeight.ApplyGeo(const P:TLatLon;BaseHeight:Single):Single;

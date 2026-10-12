@@ -379,8 +379,16 @@ begin
       end;
   Look:=Default(TRiderAttentionInput);
   Look.Waiting:=Grounded and WantsStop;
-  Look.Safe:=not FSpecialActive and (Abs(S.LateralAccel)<1.4)and
-    (Look.Waiting or ((Abs(S.SpeedKmh)>7)and(IntensityOf(S)<1.7)));
+  Look.Safe:=not FSpecialActive and not FBike.RiderContactsChanging and
+    not(Grounded and WantsStart);
+  Look.Effort:=Intensity;Look.SpeedKmh:=Abs(S.SpeedKmh);
+  Look.LateralAccel:=S.LateralAccel;
+  { Physics atan2(Z,X) grows toward the bike's right; attention yaw grows
+    toward Left=(Z,0,-X), as in SetRiderLookTarget. }
+  Look.RoadYaw:=-RadToDeg(ArcTan2(S.LateralAccel,Max(2.0,Abs(S.SpeedKmh)/3.6)));
+  Look.CanRegrip:=(FCurIdx>=0)and(FCurIdx<FPoses.Count)and
+    (FPoses[FCurIdx].HandPosR>0)and(FPoses[FCurIdx].HandPosL>0)and
+    (FPoses[FCurIdx].Motion.Standing<0.1);
   Look.TargetValid:=S.LookTargetValid;Look.TargetYaw:=S.LookYaw;Look.TargetPitch:=S.LookPitch;
   StepRiderAttention(FAttention,Look,Dt);
   FBike.SetRiderAttention(FAttention.Frame);
@@ -476,7 +484,7 @@ var
 begin
   Result := False;
   if SameText(AName,'look_back')or SameText(AName,'Look back')then begin
-    FAttention.NextLook:=0;Exit(True);
+    FAttention.ForceLook:=True;Exit(True);
   end;
   i := FPoses.IndexByName(AName);
   if i < 0 then Exit;

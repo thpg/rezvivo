@@ -56,7 +56,7 @@ uses AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,Ga
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameDeviceTypes, GameDeviceSensor, TrainerData,
   GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
-  BikeParametric, RiderPoseCatalog, RiderAttention, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
+  BikeParametric, RiderPoseCatalog, RiderAttention, RiderLod, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, TreeSeason, TreeRenderer, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
@@ -1154,9 +1154,10 @@ var
   Parents: TJSONArray;
   Item: TJSONObject;
 begin
-  if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
-    raise Exception.Create('bike not available (play view not started?)');
-  Anim := ViewPlay.Bike.AnimDebugJson;
+    if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
+      raise Exception.Create('bike not available (play view not started?)');
+    if AParams.Find('lod')<>nil then RiderLodOverride:=EnsureRange(AParams.Get('lod',-1),-1,2);
+    Anim := ViewPlay.Bike.AnimDebugJson;
   if ViewPlay.RiderPoseManager<>nil then begin
     if AParams.Get('look_back',False)then
       ViewPlay.RiderPoseManager.TriggerSpecial('look_back');
@@ -1164,6 +1165,11 @@ begin
     Anim.Add('look_yaw',ViewPlay.RiderPoseManager.Attention.Frame.Yaw);
     Anim.Add('look_torso_yaw',ViewPlay.RiderPoseManager.Attention.Frame.TorsoYaw);
     Anim.Add('look_events',Integer(ViewPlay.RiderPoseManager.Attention.Events));
+    Anim.Add('look_pitch',ViewPlay.RiderPoseManager.Attention.Frame.Pitch);
+    Anim.Add('look_roll',ViewPlay.RiderPoseManager.Attention.Frame.Roll);
+    Anim.Add('behavior_action',Ord(ViewPlay.RiderPoseManager.Attention.Action));
+    Anim.Add('small_actions',Integer(ViewPlay.RiderPoseManager.Attention.SmallEvents));
+    Anim.Add('regrips',Integer(ViewPlay.RiderPoseManager.Attention.Regrips));
   end;
   Anim.Add('motion', ViewPlay.Bike.RiderMotionDebugJson);
   Parents := TJSONArray.Create;
@@ -1235,10 +1241,21 @@ begin
     path; a paused simulation already prevents the normal clock advancing. }
   State := Bike.CaptureReplay;
   if AParams.Find('look_yaw')<>nil then begin
+    State.Attention:=Default(TRiderAttentionFrame);
     State.Attention.Yaw:=EnsureRange(AParams.Get('look_yaw',0.0),-100.0,100.0);
     State.Attention.Pitch:=0;
     State.Attention.TorsoYaw:=RiderAttentionTorsoYaw(State.Attention.Yaw,
       State.Pose.Grounded);
+  end;
+  State.Attention.Pitch:=EnsureRange(AParams.Get('look_pitch',Double(State.Attention.Pitch)),-12.0,14.0);
+  State.Attention.Roll:=EnsureRange(AParams.Get('look_roll',Double(State.Attention.Roll)),-8.0,8.0);
+  if AParams.Find('regrip_side')<>nil then begin
+    State.Attention.HandRelease[0]:=0;State.Attention.HandRelease[1]:=0;
+    State.Attention.HandSlide[0]:=0;State.Attention.HandSlide[1]:=0;
+    PoseIndex:=EnsureRange(AParams.Get('regrip_side',0),0,1);
+    State.Attention.HandRelease[PoseIndex]:=EnsureRange(AParams.Get('regrip',0.0),0.0,1.0);
+    State.Attention.HandSlide[PoseIndex]:=0.011*State.Attention.HandRelease[PoseIndex];
+    State.Attention.Shoulder[PoseIndex]:=-2.5*State.Attention.HandRelease[PoseIndex];
   end;
   State.Phase := Frac(AParams.Get('phase', Double(State.Phase)));
   State.BreathPhase := Frac(AParams.Get('breath', Double(State.BreathPhase)));
@@ -2184,8 +2201,10 @@ procedure CmdShadowTestRiders(const AParams: TJSONObject; AResult: TJSONObject);
 begin
   if not Assigned(ViewPlay) or not ViewPlay.SessionAlive then
     raise Exception.Create('Start a ride before the shadow test');
-  ViewPlay.SetShadowTestRiders(AParams.Get('count', 0), AParams.Get('zones', False));
-  AResult.Add('count', AParams.Get('count', 0));
+  if AParams.Find('count')<>nil then
+    ViewPlay.SetShadowTestRiders(AParams.Get('count', 0), AParams.Get('zones', False));
+  AResult.Add('riders',ViewPlay.ShadowTestRiderDiagnostics);
+  AResult.Add('count',AResult.Arrays['riders'].Count);
 end;
 
 procedure CmdScreenFX(const AParams:TJSONObject;AResult:TJSONObject);
@@ -2799,11 +2818,11 @@ begin
     'Crank/wheel animation diagnostics of the avatar bike: every ' +
     'CrankTimer/WheelTimer instance (per LOD), Enabled/Active/' +
     'CycleInterval/ElapsedTimeInCycle, scene playback state.',
-    '{"type":"object","properties":{"look_back":{"type":"boolean"}}}',
+    '{"type":"object","properties":{"look_back":{"type":"boolean"},"lod":{"type":"integer","minimum":-1,"maximum":2}}}',
     @CmdBikeAnimDebug);
   RegisterMcpCommand('bike.motion_sample',
     'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation.',
-    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"look_yaw":{"type":"number","minimum":-100,"maximum":100},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
+    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"look_yaw":{"type":"number","minimum":-100,"maximum":100},"look_pitch":{"type":"number"},"look_roll":{"type":"number"},"regrip_side":{"type":"integer","minimum":0,"maximum":1},"regrip":{"type":"number","minimum":0,"maximum":1},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
     @CmdBikeMotionSample);
   RegisterMcpCommand('bike.set_gpu_anim',
     'Switch avatar bike/rider animation between the GPU path (true) and ' +

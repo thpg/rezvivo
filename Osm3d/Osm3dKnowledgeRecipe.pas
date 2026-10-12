@@ -42,7 +42,7 @@ function ReviewKnowledgePhoto(const CacheRoot:string;Request:TJSONObject;
 implementation
 uses Math, MD5, Osm3dTileKnowledge, Osm3dKnowledgeContext, Osm3dKnowledgeOsm,
   Osm3dPhotoSources, Osm3dFacadeLayout, Osm3dSceneMaterials, Osm3dBuildingMassing, Osm3dArchitecture, Osm3dCompoundRoof,
-  Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,
+  Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,Osm3dMeasuredAreaHeight,
   Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dMeasuredRoadHeight,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts,CastleLog;
 const RecipeVersion = 1;
   CatalogMaxBytes = 16*1024*1024;
@@ -100,6 +100,7 @@ begin
     24,25: Result:=CanonicalPhotoRoadProfile(Value,Index=25);
     26..30: Result:=CanonicalEnvironmentLayout(Value,KnowledgeProperties[Index].Category);
     32,36: Result:=CanonicalMeasuredRoadHeight(Value);
+    37: Result:=CanonicalMeasuredArea(Value);
     else raise ETileKnowledge.Create('Unsupported structured property');
   end;
 end;
@@ -136,6 +137,7 @@ begin
     if I in [26..30] then P.Add('library',EnvironmentLayoutCapabilities);
     if I in [32,36] then P.Add('note','version=1 or 2, datum=dem_aligned, width_m 1..30, feather_m 10..80, stations [{at_m,elevation_m}] 2..2048. Version 2 optionally adds terrain_sections [{at_m,points:[[signed_offset_m,relative_height_m],...]}], 2..256 sections spanning the height profile, 2..32 points per section, +/-60m lateral and +/-30m vertical, slope <=200%. Positive offset is LEFT of original OSM way. Both road edges must be explicit zero-height knots; paved core stays flat. Between sections interpolate side profiles; beyond outer knots blend to DEM. Distances along original complete open OSM way, spaced >=1m; ground roads only. Align datum and remove barometer drift; photo bank dimensions must carry estimated uncertainty, never claim survey precision. Cannot combine with road.profile until reprojected. Bakes both road and surrounding terrain; unchanged outside corridor.');
     if I=33 then P.Add('note','edge: continuous white edge lines only, no centre line; lane-manager widths/directions unchanged. none disables paint, lanes uses the existing lane layout.');
+    if I=37 then P.Add('note','Level stadium/yard pad, local: object anchored to existing OSM. version=1, datum=dem_aligned, elevation_m, feather_m 10..80, boundary 3..96 [lon,lat] points (simple convex polygon, no repeated closure, max 2 km). Correct the actual common terrain/road sampler; no extra overlay mesh. Inside overrides DEM and corridor blending; outside smoothly returns to the prior terrain. Align FIT barometer to the existing datum, retain uncertainty and record IDs. Do not infer survey precision from consumer GPS.');
     if I=8 then P.Add('note','version=1, type=colonnade, front_start/end [lon,lat], columns 1..24 per row, rows 1..2, pier_width_m 1..20, column_radius_m .2..2.5, opening_height_m 3..40, tower_height_m 0..3; fits a rectangular OSM footprint and height, otherwise retains OSM envelope. Baked geometry; separate pier/column obstacles, open passage ground preserved.');
     if I=7 then P.Add('note','version=1; facades: directed start/end [lon,lat], bays [{width_m, floor_shift, balcony_floors}], cornice_floors, balcony_depth_m, balcony_width; outward normal = edge cross up; floor 0 is ground; whole straight exterior edges only; repeated unseen bays must be labelled inferred');
   end;
@@ -206,15 +208,16 @@ begin
   if IsLocalTarget(T) then begin
     S:=T.Get('id','');
     if (Length(S)>200) or (Length(S)<=6) or (Tags.Count<>1) or
-      ((Tags.Find(VEGETATION_LAYOUT_TAG)=nil) and (Tags.Find(ENVIRONMENT_LAYOUT_TAG)=nil)) then
-      raise ETileKnowledge.Create('Local recipes require a single bounded vegetation/environment layout');
+      ((Tags.Find(VEGETATION_LAYOUT_TAG)=nil) and (Tags.Find(ENVIRONMENT_LAYOUT_TAG)=nil) and (Tags.Find(MEASURED_AREA_HEIGHT_TAG)=nil)) then
+      raise ETileKnowledge.Create('Local recipes require one bounded vegetation/environment/elevation layout');
     for I:=7 to Length(S) do if not (S[I] in ['a'..'z','A'..'Z','0'..'9',':','-','_','.']) then
       raise ETileKnowledge.Create('Invalid stable local object id');
     if Tags.Find(ENVIRONMENT_LAYOUT_TAG)<>nil then LocalBox:=EnvironmentLayoutBox(Tags.Get(ENVIRONMENT_LAYOUT_TAG,''))
+    else if Tags.Find(MEASURED_AREA_HEIGHT_TAG)<>nil then LocalBox:=MeasuredAreaBox(Tags.Get(MEASURED_AREA_HEIGHT_TAG,''))
     else LocalBox:=PlantBoundaryBox(Tags.Get(VEGETATION_LAYOUT_TAG,''));
     if (Abs(LocalBox.MinLat-B.MinLat)>1e-10) or (Abs(LocalBox.MaxLat-B.MaxLat)>1e-10) or
       (Abs(LocalBox.MinLon-B.MinLon)>1e-10) or (Abs(LocalBox.MaxLon-B.MaxLon)>1e-10) then
-      raise ETileKnowledge.Create('Local recipe bbox must match its planting boundary');
+      raise ETileKnowledge.Create('Local recipe bbox must match its effective boundary');
   end;
   if (Tags.Count=0) or (Tags.Count>Length(KnowledgeProperties)) then raise ETileKnowledge.Create('Invalid recipe tag count');
   for I:=0 to Tags.Count-1 do begin
@@ -326,6 +329,8 @@ begin
     Result.Add('road_profile_generator',PHOTO_ROAD_PROFILE_GENERATOR);
   if TJSONObject(T.Find('set_tags')).Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then
     Result.Add('measured_height_generator',2);
+  if TJSONObject(T.Find('set_tags')).Find(MEASURED_AREA_HEIGHT_TAG)<>nil then
+    Result.Add('measured_area_generator',1);
   if TJSONObject(T.Find('set_tags')).Find(ENVIRONMENT_LAYOUT_TAG)<>nil then
     Result.Add('environment_layout_generator',ENVIRONMENT_LAYOUT_GENERATOR);
 end;
@@ -610,6 +615,7 @@ var R: TKnowledgeOsmReader; I,J: Integer; T,Current,SetTags,Effective: TJSONObje
   PendingWays:specialize TObjectList<TOSMWay>;
   PendingNodes:specialize TObjectList<TOSMNode>;
   W:TOSMWay; N:TOSMNode;
+  Area:TMeasuredArea;
   RoadPlans:specialize TObjectList<TPhotoRoadPlan>; RoadPlan:TPhotoRoadPlan;
   Boundary:TPhotoPlantBoundary; UsedIds:TStringList; Key:string;GeneratedCount,NodeStart,WayStart:Integer;
   function LocalId(const Name:string):Int64;
@@ -678,7 +684,11 @@ begin
           for J:=WayStart to PendingWays.Count-1 do Reserve('way',PendingWays[J].Id);
           Continue;
         end;
-        Boundary:=VegetationLayoutBoundary(SetTags.Get(VEGETATION_LAYOUT_TAG,''));
+        if SetTags.Find(MEASURED_AREA_HEIGHT_TAG)<>nil then begin
+          Area:=ReadMeasuredAreaText(SetTags.Get(MEASURED_AREA_HEIGHT_TAG,''));
+          SetLength(Boundary,Length(Area.Boundary));
+          for J:=0 to High(Boundary) do Boundary[J]:=Area.Boundary[J];
+        end else Boundary:=VegetationLayoutBoundary(SetTags.Get(VEGETATION_LAYOUT_TAG,''));
         GeneratedId:=LocalId(FTargets[I]);Reserve('way',GeneratedId);
         W:=TOSMWay.Create(GeneratedId);PendingWays.Add(W);SetLength(W.NodeRefs,Length(Boundary)+1);
         for J:=0 to High(Boundary) do begin
@@ -687,7 +697,9 @@ begin
         end;
         W.NodeRefs[High(W.NodeRefs)]:=W.NodeRefs[0];
         W.Tags.Add('rezvivo:local_photo_object',FTargets[I]);
-        W.Tags.Add(VEGETATION_LAYOUT_TAG,SetTags.Get(VEGETATION_LAYOUT_TAG,''));
+        if SetTags.Find(MEASURED_AREA_HEIGHT_TAG)<>nil then
+          W.Tags.Add(MEASURED_AREA_HEIGHT_TAG,SetTags.Get(MEASURED_AREA_HEIGHT_TAG,''))
+        else W.Tags.Add(VEGETATION_LAYOUT_TAG,SetTags.Get(VEGETATION_LAYOUT_TAG,''));
         if PendingNodes.Count>65536 then raise ETileKnowledge.Create('Local photo node budget exceeded');
       end;
     end;
@@ -847,7 +859,7 @@ var Store: TTileKnowledgeStore; ReadBack,Doc,Context,Tile,Recipe,Catalog,Context
   O,Obs,Ref,Source,Tags,SetTags,Target,Before,After,Again: TJSONObject;
   Objects,Observations,Refs,Targets,Warnings,Changes,RequestedIds,Evidence: TJSONArray;
   Ordered: TStringList; Snapshot: TKnowledgeRecipeSnapshot; Grid: TGeoTileGrid;
-  I,J,K,N,Skipped: Integer; Height,MinHeight,RoofHeight: Double; Seen: TJSONObject; Id,SourceId,Prop,Val,Key,Hash,Path,OldValue,UnitName: string; LocalTarget:Boolean; LocalBox,AnchorBox:TLatLonBox;
+  I,J,K,N,Skipped: Integer; Height,MinHeight,RoofHeight: Double; Seen: TJSONObject; Id,SourceId,Prop,Val,Key,Hash,Path,OldValue,UnitName: string; LocalTarget:Boolean; LocalBox,AnchorBox:TLatLonBox; Area:TMeasuredArea;
   Activate,AnyAccepted,Deactivate: Boolean; H,DocLock: THandle; S: RawByteString;
   SourceIndex:TKnowledgeSourceIndex;EvidenceRow:TJSONObject;RejectedId:string;
   EvidenceClient:TPhotoApiClient;EvidenceCatalog:TJSONObject;EvidenceTile:TGeoTileId;
@@ -985,13 +997,19 @@ begin
           if (Prop='vegetation.height_m') and (Ref.Get('type','')<>'node') then
             raise ETileKnowledge.Create('Explicit plant height currently requires an individual tree/shrub node');
           Val:=CanonicalValue(K,Obs.Find('value'),UnitName); Key:=KnowledgeProperties[K].TagName; OldValue:=Tags.Get(Key,'');
-          if (Key=ENVIRONMENT_LAYOUT_TAG) and not LocalTarget then
+          if ((Key=ENVIRONMENT_LAYOUT_TAG) or (Key=MEASURED_AREA_HEIGHT_TAG)) and not LocalTarget then
             raise ETileKnowledge.Create('Environment additions need a stable local: object anchored to existing OSM');
           if LocalTarget then begin
             if Key=ENVIRONMENT_LAYOUT_TAG then LocalBox:=EnvironmentLayoutBox(Val)
+            else if Key=MEASURED_AREA_HEIGHT_TAG then LocalBox:=MeasuredAreaBox(Val)
             else if Prop='vegetation.layout' then LocalBox:=PlantBoundaryBox(Val)
             else raise ETileKnowledge.Create('Local additions require a bounded layout');
             AnchorBox:=KnowledgeBox(Source.Find('bbox')).ExpandMeters(80);
+            { The observed pad stays within the anchor margin. Its validated
+              transition is allowed to extend beyond the observed boundary. }
+            if Key=MEASURED_AREA_HEIGHT_TAG then begin
+              Area:=ReadMeasuredAreaText(Val);AnchorBox:=AnchorBox.ExpandMeters(Area.Feather+1);
+            end;
             if (LocalBox.MinLat<AnchorBox.MinLat) or (LocalBox.MaxLat>AnchorBox.MaxLat) or
               (LocalBox.MinLon<AnchorBox.MinLon) or (LocalBox.MaxLon>AnchorBox.MaxLon) then
               raise ETileKnowledge.Create('Local planting boundary is too far from the OSM anchor');

@@ -148,15 +148,31 @@ begin
  if FileExists(FDirectory+'catalog.json')then try FCatalog:=ReadObject(ReadText(FDirectory+'catalog.json'));except FCatalog:=nil end;
  // Seed is installer content, not a private profile. Empty remote catalogues
  // remain empty; a deliberately unpublished route is not resurrected.
- Seed:=ReadObject(Asset('catalog.json'));
+ { Bundled routes are a seed, not a prerequisite for opening Real World.
+   An incomplete install must still allow personal routes, free exploration
+   and asynchronous recovery from the server. Keep a valid cached catalogue. }
+ Seed:=nil;
+ try Seed:=ReadObject(Asset('catalog.json'));
+ except on E:Exception do begin
+  FError:='Bundled ready routes unavailable: '+E.Message;
+  Logger.Warning('[ReadyRoutes] '+FError);
+ end end;
  try
-  A:=Seed.Arrays['items'];for I:=0 to A.Count-1 do begin
-   O:=A.Objects[I];P:=FileFor(O);
-   if not FileExists(P)then AtomicSave(P,Asset(O.Get('id','')+'.gpx'));
-   if not FileExists(P+'.json')then AtomicSave(P+'.json',O.AsJSON);
+  if Seed<>nil then begin
+   A:=Seed.Arrays['items'];for I:=0 to A.Count-1 do begin
+    O:=A.Objects[I];P:=FileFor(O);
+    try
+     if not FileExists(P)then AtomicSave(P,Asset(O.Get('id','')+'.gpx'));
+     if not FileExists(P+'.json')then AtomicSave(P+'.json',O.AsJSON);
+    except on E:Exception do begin
+     FError:='Bundled ready route '+O.Get('id','')+' unavailable: '+E.Message;
+     Logger.Warning('[ReadyRoutes] '+FError);
+    end end;
+   end;
+   if FCatalog=nil then begin FCatalog:=Seed;Seed:=nil end;
   end;
-  if FCatalog=nil then begin FCatalog:=Seed;Seed:=nil end;
  finally Seed.Free end;
+ if FCatalog=nil then FCatalog:=TJSONObject.Create(['schema',1,'revision','','items',TJSONArray.Create]);
  A:=FCatalog.Arrays['items'];for I:=0 to A.Count-1 do begin
   P:=FileFor(A.Objects[I]);
   if not FileExists(P)then FCatalog.Strings['revision']:=''

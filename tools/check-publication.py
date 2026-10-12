@@ -20,7 +20,7 @@ BLOCKED_PARTS = {'users', 'profiles', 'cache', 'logs', 'crash-reports', '.ssh',
                  'node_modules', 'castle-engine-output', '__pycache__'}
 TEXT_SUFFIXES = {'.pas', '.inc', '.dpr', '.py', '.ps1', '.json', '.xml', '.x3d', '.ini', '.cfg', '.toml', '.sh', '.bat',
                  '.txt', '.md', '.patch', '.yml', '.glsl', '.vert', '.frag', '.zwo',
-                 '.castle-user-interface', '.cpp', '.c', '.h', '.hpp', '.comp', '.java', '.gradle'}
+                 '.castle-user-interface', '.cpp', '.c', '.h', '.hpp', '.comp', '.java', '.gradle', '.gpx'}
 # Matches identify locations only. Never print matched values.
 RULES = {
     'private-key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),
@@ -46,6 +46,33 @@ def tracked_files():
         raise SystemExit('Run git init first; checks inspect tracked and nonignored untracked files')
     raw = subprocess.check_output([git, '-C', str(ROOT), 'ls-files', '-z', '--cached', '--others', '--exclude-standard'])
     return sorted(set(p.decode('utf-8') for p in raw.split(b'\0') if p))
+
+
+def public_route_files(assets):
+    """Only explicitly reviewed route geometry may bypass the private-GPX ban."""
+    prefix = 'rezvivo-osm-bckl/data/ready-routes/'
+    catalog_path = ROOT/(prefix+'catalog.json')
+    if not catalog_path.is_file(): return set()
+    catalog = json.loads(catalog_path.read_text(encoding='utf-8'))
+    reviewed = {row['path']: row for row in assets}
+    result = set()
+    for item in catalog['items']:
+        if not re.fullmatch('[a-z0-9-]{1,80}', item['id']):
+            raise ValueError('Invalid public route ID')
+        rel = prefix+item['id']+'.gpx'
+        p = ROOT/rel
+        if rel not in reviewed or sha(p) != item['sha256'] or sha(p) != reviewed[rel]['sha256']:
+            raise ValueError('Unreviewed public route geometry')
+        tree = ET.parse(p)
+        # No recording time, sensor telemetry, personal metadata or extensions.
+        allowed = {'gpx': {'version','creator'}, 'trk': set(), 'name': set(),
+                   'trkseg': set(), 'trkpt': {'lat','lon'}, 'ele': set()}
+        for node in tree.iter():
+            tag = node.tag.removeprefix('{http://www.topografix.com/GPX/1/1}')
+            if tag not in allowed or not set(node.attrib) <= allowed[tag]:
+                raise ValueError('Recording metadata in public route geometry')
+        result.add(rel)
+    return result
 
 
 def metadata_parts(path):
@@ -117,6 +144,7 @@ def main():
     files = tracked_files(); errors = []; metadata = []; text_bytes = 0
     assets = json.loads((ROOT/'dependencies/assets.json').read_text())
     asset_paths = {row['path'] for row in assets}
+    public_routes = public_route_files(assets)
 
     def check_text(rel, label, raw):
         nonlocal text_bytes
@@ -130,7 +158,7 @@ def main():
         p = ROOT/rel; lower = {s.lower() for s in p.relative_to(ROOT).parts}
         if rel not in allowed: errors.append(rel+': not in reviewed file allowlist')
         if p.is_symlink() or ROOT not in p.resolve().parents: errors.append(rel+': symlink/outside repository'); continue
-        if p.suffix.lower() in BLOCKED_SUFFIXES or lower & BLOCKED_PARTS or p.name.startswith('.env'):
+        if (p.suffix.lower() in BLOCKED_SUFFIXES and rel not in public_routes) or lower & BLOCKED_PARTS or p.name.startswith('.env'):
             errors.append(rel+': private/build file type')
         if rel.startswith('rezvivo-osm-bckl/data/') and rel not in asset_paths:
             errors.append(rel+': not in installer runtime manifest')

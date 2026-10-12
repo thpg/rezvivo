@@ -37,7 +37,7 @@ unit RiderTripo;
 
 interface
 
-uses RiderShaderSharing, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
+uses RiderShaderSharing, RiderLod, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
@@ -64,6 +64,7 @@ type
     AnkleFlex: Single;
     ArmPronationR, ArmPronationL: Single; { positive = pronation for either hand }
     HandFrameR, HandFrameL: TRiderGripFrame; { transient contact orientation }
+    HandRelax: array[0..1] of Single; { transient partial finger release }
     ShoulderRoundDeg: Single;
     ScapulaProtraction, ScapulaElevation: TShoulderAngles; { transient motion }
     HandLevel: Single;                   { wrist leveling 0..1: 1 = align with the grip direction, within 25 degrees }
@@ -304,6 +305,7 @@ type
     FStandingHipFromSeat: TVector3;
     FHandForward, FHandPalm: array[0..1] of TTripoVec3;
     FFrameGrip: array[0..1] of TRiderGripFrame;
+    FFrameHandRelax: array[0..1] of Single;
     { ── blended GPU skinning of the marker so the debug point sticks to the
       RENDERED boot/glove surface. That surface is skinned by a BLEND of bones
       (e.g. R_Foot + R_Calf near the ankle), so a single-bone reconstruction
@@ -347,6 +349,7 @@ type
     FClothingSkinQuery:TRiderSkinQuery;
     FSurfaceSkin: TRiderSkin;
     FFace:TRiderFace;
+    FLod:TRiderLod;
     FAppearancePhase,FAppearanceEffort,FAppearanceBreathLoad:Single;
     FAppearanceBreathPhase:Double;
     FHairRestInv: TTripoMat4;
@@ -540,6 +543,7 @@ type
     property Rig: TTripoRig read FRig;
     property Correctives: TRiderPoseCorrectives read FCorrectives;
     property Face:TRiderFace read FFace;
+    property Lod:TRiderLod read FLod;
     property Loaded: Boolean read FLoaded;
     { TEMP-DIAG: posed-позиции спины/плеч в кадре байка (Transform сцены × WorldPose) }
     function DbgSpineShoulders: string;
@@ -1318,10 +1322,10 @@ function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
   const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
 const TurnShare:array[0..3]of Single=(0.08,0.08,0.53,1.0);
 var Original,Desired,BaseParent,TurnedParent,Local:TTripoVec4;
-  I:Integer;Yaw,Torso:Single;Up:TVector3;
+  I:Integer;Yaw,Torso:Single;Up,ForwardAxis:TVector3;
 begin
   Result:=Base;
-  if Abs(Attention.Yaw)+Abs(Attention.Pitch)+Abs(Attention.TorsoYaw)<0.00001 then Exit;
+  if Abs(Attention.Yaw)+Abs(Attention.Pitch)+Abs(Attention.Roll)+Abs(Attention.TorsoYaw)<0.00001 then Exit;
   Up:=UpAxis.Normalize;
   Torso:=EnsureRange(Attention.TorsoYaw,-28.0,28.0);
   Yaw:=EnsureRange(Attention.Yaw,Torso-RiderAttentionNeckYawLimit,
@@ -1344,6 +1348,9 @@ begin
     Solve only the remaining cervical turn, before contact IK and skinning. }
   Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(Yaw)),Original);
   Desired:=QuatMul(Desired,QuatFromAxisAngle(LeanAxis.X,LeanAxis.Y,LeanAxis.Z,DegToRad(Attention.Pitch)));
+  ForwardAxis:=TVector3.CrossProduct(Vector3(0,1,0),LeanAxis).Normalize;
+  Desired:=QuatMul(Desired,QuatFromAxisAngle(ForwardAxis.X,ForwardAxis.Y,ForwardAxis.Z,
+    DegToRad(-EnsureRange(Attention.Roll,-8.0,8.0))));
   SetRiderHeadRotation(Result,LeanAxis,Desired);
 end;
 
@@ -1363,6 +1370,7 @@ var FaceDetail,FaceStrain: Single;FaceTime:Double;TorsoA,TorsoB:TVector3;
   Query:TRiderJointQuery;
 begin
   CountRiderWork(rwAppearance);
+  if FLod<>nil then FLod.Update;
   if FAppearanceAddon<>nil then FAppearanceAddon.Update(Dt,Speed);
   FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
   if (FSelfOcclusion<>nil) and (FEnvLight<>nil) and FEnvLight.FdOn.Value and
@@ -1474,6 +1482,7 @@ end;
 destructor TTripoRiderScene.Destroy;
 var i: Integer;
 begin
+  FreeAndNil(FLod);
   FreeAndNil(FAppearanceAddon);
   { Filters are chained hair -> face. Remove them in reverse order. }
   FreeAndNil(FFace);
@@ -1938,6 +1947,7 @@ begin
   if (FBodyMorph.Revision>0) and SameRiderBody(P,FBodyParameters) then Exit;
   CacheBones;
   FBodyMorph.Apply(P,FRig);
+  if FLod<>nil then FLod.Invalidate;
   if FHeadAppearance<>nil then FHeadAppearance.FitToRig(FRig);
   FBodyParameters:=P;
   if FCorrectives<>nil then FCorrectives.SetBodyParameters(P);
@@ -1971,6 +1981,7 @@ begin
   FBodyMorphed:=False;
   FRig.ComputePose;
   if (FCorrectives<>nil)and(FCorrectives.Body<>nil)then FCorrectives.Body.RefreshBind;
+  if FLod<>nil then FLod.Update;
   ApplyHelmetFollow;
 end;
 
@@ -2032,6 +2043,7 @@ begin
       FShapeCoords[ci].FdPoint.Changed;
     end;
     FBodyMorphed := NeedMorph;
+    if FLod<>nil then begin FLod.Invalidate;FLod.Update end;
   end;
   FBodyHeightF := HeightF;
   if (FHelmetNode <> nil) or (FHair <> nil) then
@@ -3349,6 +3361,7 @@ end;
 
 procedure TTripoRiderScene.GrabDyeShape(Node: TX3DNode);
 begin
+  if Pos('RiderLOD',Node.X3DName)=1 then Exit;
   if Node is TShapeNode then
   begin
     SetLength(FDyeShapeBuf, Length(FDyeShapeBuf) + 1);
@@ -6010,6 +6023,7 @@ var
   RigTh: TRigParseThread;
   Path: string;
 begin
+  FreeAndNil(FLod);
   FreeAndNil(FAppearanceAddon);
   FreeAndNil(FFace);
   FreeAndNil(FHeadAppearance);
@@ -6113,6 +6127,7 @@ begin
   end;
   try
     TD0 := GetTickCount64;
+    FreeAndNil(FLod);
     FreeAndNil(FFace);
     FreeAndNil(FHeadAppearance);
     FreeAndNil(FHair);
@@ -6746,6 +6761,7 @@ begin
     + surface-skin weights must be measured against the FINAL geometry. The caller
     applies the limb-length / body-shape params next (ApplyLimbLengths bakes at its
     end), so the one and only bake happens after the rig is at its final proportions. }
+  FLod:=TRiderLod.Create(FScene,FSkin,AFileName);
   Result := True;
 
   if Log <> nil then
@@ -7815,7 +7831,8 @@ begin
   FRig.DistributeForearmTwist('L_');
   if FRig.JointIndexByName('L_IndexMetacarpal') >= 0 then
   begin
-    FRig.ApplyHandGrip(Ord(FPose.HandPosR > 0), Ord(FPose.HandPosL > 0));
+    FRig.ApplyHandGrip(Ord(FPose.HandPosR > 0)*(1-FFrameHandRelax[0]),
+      Ord(FPose.HandPosL > 0)*(1-FFrameHandRelax[1]));
     for i := 0 to FRig.JointCount - 1 do PushDelta(FRig.JointName[i]);
   end;
 
@@ -8243,6 +8260,7 @@ begin
   FScapulaElevation := P.ScapulaElevation;
   FHandLevel        := P.HandLevel;
   FFrameGrip[0] := P.HandFrameR; FFrameGrip[1] := P.HandFrameL;
+  for i:=0 to 1 do FFrameHandRelax[i]:=EnsureRange(P.HandRelax[i],0.0,0.2);
   { OffsetX/Y/Z and AnkleFlex are consumed by the bike via CurrentPose. StanceHalf is a
     main calibration param now (TripoStanceHalf), not part of the pose. }
 end;

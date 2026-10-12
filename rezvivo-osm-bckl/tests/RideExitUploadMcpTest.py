@@ -42,9 +42,12 @@ def run(out, executable='third_person_navigation.exe', game=None):
                          lambda x: x.get('page', {}).get('ready'), 150)
                 app.call('dream.start')
                 wait_for(lambda: app.call('explore.state')['travel'],
-                         lambda x: not x['preparing'], 180)
+                         lambda x: not x['preparing'] and x.get('front_view') and
+                             x.get('avatar_visible') and x.get('free'), 180)
                 app.call('travel.select', mode='bicycle')
                 app.call('app.switch_view', view='play')
+                wait_for(lambda: app.call('explore.state')['travel'],
+                         lambda x: x['mode']=='bicycle' and not x['preparing'], 30)
                 app.call('sim.play')
                 state = wait_for(lambda: app.call('explore.state')['travel'],
                                  lambda x: x['speed'] > 1, 45)

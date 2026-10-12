@@ -29,6 +29,7 @@
 *.log
 *.fit
 *.gpx
+!rezvivo-osm-bckl/data/ready-routes/krylatskoye-small-circuit.gpx
 *.tcx
 *.sqlite
 *.sqlite3

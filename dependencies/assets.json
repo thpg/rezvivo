@@ -182,8 +182,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/RIDER.glb",
-    "bytes": 15717532,
-    "sha256": "5588198c066f1d6317aa16208a9ff3cc44186672b9a1d6b6a58415350f0eed33",
+    "bytes": 16044260,
+    "sha256": "b2651affa5f578e4034d8e53eb2e80c31e19eb4741dfdbafbba4833c938b9b21",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO; MakeHuman CC0 head asset data",
     "evidence": "Project-created rider with adapted CC0 head; data/licenses/makehuman/NOTICE.txt"
@@ -4497,5 +4497,21 @@
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/ready-routes/catalog.json",
+    "bytes": 10117,
+    "sha256": "36ba5072623eeb3160bfe010dd8b311eb8b6332657413a0bcf4b5721ab73c278",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Bundled public Krylatskoye route seed; source attribution retained in catalog. No personal FIT recordings."
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/ready-routes/krylatskoye-small-circuit.gpx",
+    "bytes": 60664,
+    "sha256": "5719cfb9f2abbc8bba4950cf5bcebde9af653de6df0dd1ec3a67684089a0c946",
+    "license": "REVIEW",
+    "source": "rezvivo-osm-bckl/data/ready-routes/catalog.json",
+    "evidence": "Bundled public Krylatskoye route seed; source attribution retained in catalog. No personal FIT recordings."
   }
 ]
