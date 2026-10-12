@@ -6,6 +6,7 @@ procedure InitializeClientUpdates(Container:TCastleContainer;const ApiBase:Strin
 procedure ShutdownClientUpdates;
 procedure ShowClientUpdates(Sender:TObject);
 function ClientCanStartRide:Boolean;
+function ClientCanUseOnlineServices(Notify:Boolean=True):Boolean;
 function ClientVersionInfo:TJSONObject;
 
 implementation
@@ -111,7 +112,14 @@ begin
   FTransfer.Free;FTask.Free;FContainer.Controls.Remove(FDialog);FDialog.Free;inherited;
 end;
 procedure TClientUpdates.Check(Sender:TObject);
-begin if FTask<>nil then Exit;FLastCheck:=GetTickCount64;FTask:=TVersionTask.Create(FBase);Refresh;end;
+begin
+  if FTask<>nil then Exit;
+  FLastCheck:=GetTickCount64;
+  if SysUtils.GetEnvironmentVariable('REZVIVO_OFFLINE')='1'then begin
+    FCheckFailed:=True;Refresh;Exit;
+  end;
+  FTask:=TVersionTask.Create(FBase);Refresh;
+end;
 function TClientUpdates.ApplyResponse(const Value:String):Boolean;
 var J:TJSONData;O,L:TJSONObject;D:TJSONData;Package:TUpdatePackage;
   Blocked,NewVersion,OfflineAllowed,PackageKnown:Boolean;Latest,Reason:String;
@@ -120,8 +128,8 @@ begin
   try
    try
     J:=GetJSON(Value);if not(J is TJSONObject)then Exit;O:=TJSONObject(J);
-    { A policy belongs to a specific build. Never inherit an old build's block
-      after installing an update, or treat an invalid response as permission. }
+    { A policy belongs to a specific build. It describes online support;
+      local rides never depend on an update check or a cached server policy. }
     if O.Get('current_build',-1)<>ClientBuild then Exit;
     D:=O.Find('allowed');if(D=nil)or(D.JSONType<>jtBoolean)then Exit;
     Blocked:=not D.AsBoolean;NewVersion:=O.Get('update_available',False);Latest:='';
@@ -132,8 +140,7 @@ begin
       L:=TJSONObject(D);Latest:=L.Get('version','');
       PackageKnown:=ParseUpdatePackage(L,FBase,Package,FInstalledManifestSHA256);
     end;
-    { Commit only a fully parsed policy, preserving the last known restriction
-      when a response is malformed halfway through its fields. }
+    { Commit only a fully parsed policy. }
     FBlocked:=Blocked;FNewVersion:=NewVersion;FLatest:=Latest;
     FOfflineAllowed:=OfflineAllowed;FBlockReason:=Reason;
     FPackageKnown:=PackageKnown;FHasPendingPackage:=False;
@@ -165,13 +172,13 @@ var S:TUpdateDownloadStatus;Caption:String;Riding:Boolean;
 begin
   Riding:=((ViewPlay<>nil)and ViewPlay.SessionAlive)or
     ((ViewTrainingOnly<>nil)and ViewTrainingOnly.SessionAlive);
-  if FBlocked then FStatus.Caption:=UiText('This version requires an update to continue.')
+  if FBlocked then FStatus.Caption:=UiText('This version requires an update to use online services.')
   else if FTask<>nil then FStatus.Caption:=UiText('Checking for updates...')
   else if FNewVersion then FStatus.Caption:=UiText('New version available: ')+FLatest
   else if FKnown and not FCheckFailed then FStatus.Caption:=UiText('The installed version is up to date.')
   else FStatus.Caption:=UiText('Could not check for updates. You can continue offline.');
   if FBlocked and(FBlockReason<>'')then FStatus.Caption:=FStatus.Caption+#10+UiText(FBlockReason);
-  if FBlocked and FOfflineAllowed then FStatus.Caption:=FStatus.Caption+#10+UiText('Offline rides remain available.');
+  if FBlocked then FStatus.Caption:=FStatus.Caption+#10+UiText('Offline rides remain available.');
   if FPackageKnown and(FNewVersion or FBlocked)then
     FStatus.Caption:=FStatus.Caption+#10+UiText('Download size: ')+Format('%.1f MiB',[FPackage.SizeBytes/1048576.0]);
   Caption:='Download update';FDownload.Enabled:=True;
@@ -209,8 +216,8 @@ begin
   { A menu over the live ride is still a ride; do not cover it or install there. }
   if not(((ViewPlay<>nil)and ViewPlay.SessionAlive)or
     ((ViewTrainingOnly<>nil)and ViewTrainingOnly.SessionAlive))then begin
-    if FBlocked and not FOffered then begin FOffered:=True;Show;end
-    else if FNewVersion and not FOffered and(ViewMenu<>nil)and ViewMenu.Active then begin FOffered:=True;Show;end;
+    if (FBlocked or FNewVersion) and not FOffered and
+      not FCheckFailed and(FTask=nil)and(ViewMenu<>nil)and ViewMenu.Active then begin FOffered:=True;Show;end;
   end;
   if(FTransfer<>nil)and(GetTickCount64-FLastRefresh>=250)then begin
     FLastRefresh:=GetTickCount64;Refresh;
@@ -277,21 +284,29 @@ procedure ShowClientUpdates(Sender:TObject);
 begin if Updates<>nil then Updates.Show;end;
 function ClientCanStartRide:Boolean;
 begin
-  Result:=(Updates=nil)or not Updates.FBlocked or Updates.FOfflineAllowed;
-  if not Result then Updates.Show;
+  { Required map data is checked by the ride loader. An unavailable version
+    service, stale cached policy, or update recommendation cannot forbid it. }
+  Result:=True;
+end;
+function ClientCanUseOnlineServices(Notify:Boolean):Boolean;
+begin
+  Result:=(Updates=nil)or not Updates.FBlocked;
+  if not Result and Notify then Updates.Show;
 end;
 function ClientVersionInfo:TJSONObject;
 begin
   Result:=TJSONObject.Create(['version',ClientVersion,'build',ClientBuild]);
   if Updates<>nil then begin
     Result.Add('checking',Updates.FTask<>nil);Result.Add('known',Updates.FKnown);
-    Result.Add('allowed',not Updates.FBlocked);Result.Add('update_available',Updates.FNewVersion);Result.Add('latest',Updates.FLatest);
+    Result.Add('allowed',True);Result.Add('server_allowed',not Updates.FBlocked);
+    Result.Add('update_available',Updates.FNewVersion);Result.Add('latest',Updates.FLatest);
     Result.Add('dialog_visible',Updates.FDialog.Exists);Result.Add('status',Updates.FStatus.Caption);
     Result.Add('download_available',Updates.FPackageKnown);
     Result.Add('package_kind',Updates.FPackage.Kind);
     Result.Add('changed_program_bytes',Updates.FPackage.ProgramBytes);
     Result.Add('changed_resource_bytes',Updates.FPackage.ResourceBytes);
-    Result.Add('offline_allowed',Updates.FOfflineAllowed);
+    Result.Add('offline_allowed',True);
+    Result.Add('server_offline_allowed',Updates.FOfflineAllowed);
     if Updates.FTransfer<>nil then begin
       Result.Add('download_state',Ord(Updates.FTransfer.Status.State));
       Result.Add('downloaded_bytes',Updates.FTransfer.Status.Received);

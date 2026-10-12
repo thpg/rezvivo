@@ -9,10 +9,27 @@ procedure UpdateRiderTraffic(Manager: TLaneManager; Dt: Single);
 implementation
 uses Math, CastleVectors, GamePath;
 
+procedure BindTrafficConstraints(Manager:TLaneManager;Agent:TPhysicalAgent);
+begin
+  Agent.State.LaneOffsetExternal:=True;
+  Agent.State.TrafficTag:=Agent;
+  Agent.State.TrafficMoveConstraint:=@Manager.ConstrainMovement;
+  Agent.State.TrafficHeadingConstraint:=@Manager.ConstrainHeading;
+end;
+
+procedure ClearTrafficConstraints(Agent:TPhysicalAgent);
+begin
+  Agent.State.LaneOffsetExternal:=False;
+  Agent.State.TrafficMoveConstraint:=nil;
+  Agent.State.TrafficHeadingConstraint:=nil;
+  Agent.State.TrafficSpeedLimit:=MaxSpeed;
+end;
+
 procedure PlaceTrafficStartSlot(Manager:TLaneManager;Agent:TPhysicalAgent;Slot:Integer);
 var P:TPathPosition;
 begin
   if(Manager=nil)or(Agent=nil)or(Agent.Path.PointCount<2)then Exit;
+  if Agent.State.FreeTravel then begin RegisterTrafficAgent(Manager,Agent);Exit end;
   if(Slot>0)and(Slot<8)and(Agent.State.CumulativeDistance<0.1)then begin
     P:=Agent.Path.Position;Agent.Path.AdvanceFollow(P,Slot*3.0);Agent.TeleportToPath(P);
     Agent.State.CumulativeDistance:=Slot*3.0;
@@ -26,10 +43,9 @@ begin
   if (Manager=nil) or (Agent=nil) then Exit;
   Result := Manager.FindRider(Agent);
   if Result<0 then Result:=Manager.RegisterRider(Agent);
-  Agent.State.LaneOffsetExternal:=True;
-  Agent.State.TrafficTag:=Agent;
-  Agent.State.TrafficMoveConstraint:=@Manager.ConstrainMovement;
-  Agent.State.TrafficHeadingConstraint:=@Manager.ConstrainHeading;
+  if Agent.State.FreeTravel then begin
+    Manager.InvalidateRiderPose(Result);ClearTrafficConstraints(Agent);
+  end else BindTrafficConstraints(Manager,Agent);
   Agent.State.TrafficSpeedLimit:=MaxSpeed;
 end;
 
@@ -38,6 +54,7 @@ var H, Row: Integer; P, Start: TPathPosition; Center, Dir, Right: TVector3;
     Offset, Advance, Width: Single; Found: Boolean;
 begin
   if (Manager=nil) or (Agent=nil) or (Agent.Path.PointCount<2) then Exit;
+  if Agent.State.FreeTravel then begin RegisterTrafficAgent(Manager,Agent);Exit end;
   H:=RegisterTrafficAgent(Manager,Agent);
   Manager.InvalidateRiderPose(H);
   Start:=Agent.Path.Position; Advance:=0; Found:=False;
@@ -69,6 +86,9 @@ begin
   for I:=0 to Manager.RiderCount-1 do begin
     A:=TPhysicalAgent(Manager.RiderTag(I));
     if (A=nil) or (A.Path.PointCount<2) then Continue;
+    if A.State.FreeTravel then begin
+      Manager.InvalidateRiderPose(I);ClearTrafficConstraints(A);Continue;
+    end;
     Center:=A.Path.RoadCenterAt(A.Path.Position); Dir:=A.Path.FollowDirectionXZ(A.Path.Position);
     Right:=Vector3(-Dir.Z,0,Dir.X); Width:=A.Path.RoadWidthAt(A.Path.Position);
     Manager.SetRiderPose(I,A.State.WorldPosition,Dir,Width,
@@ -82,7 +102,8 @@ begin
   for I:=0 to Manager.RiderCount-1 do begin
     A:=TPhysicalAgent(Manager.RiderTag(I));
     if (A=nil) or (A.Path.PointCount<2) then Continue;
-    A.State.LaneOffsetExternal:=True;
+    if A.State.FreeTravel then Continue;
+    BindTrafficConstraints(Manager,A);
     A.State.LaneOffset:=Manager.GetSmoothOffset(I,A.Path.RoadWidthAt(A.Path.Position));
     A.State.TrafficSpeedLimit:=Manager.TrafficLimit(I);
   end;

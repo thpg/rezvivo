@@ -33,7 +33,7 @@ uses
   Classes, SysUtils, fgl,
   TrainerData, GameTransportBase, GameDeviceManager, GameTrainerControl,
   GameDeviceTypes, GameDeviceSensor, GameDeviceAssignments, GameActivitySource,
-  GameDeviceSim,
+  GameDeviceSim, GameSteeringInput, GameAndroidControllerInput,
   AppSettings, DebugLog;
 
 type
@@ -53,6 +53,15 @@ type
   { TGameDeviceService }
 
   TGameDeviceService = class
+  private
+    FSteeringInput, FCompanionInput, FGamepadInput: TSteeringInput;
+    FAndroidGamepad: TAndroidControllerInput;
+    FGamepadPendingTurn: Integer;
+    FSteeringInputSensor: TDeviceSensor;
+    FSteeringCompanion: TGameDeviceEntry;
+    FSkipGamepadInput: Boolean;
+    function ReadGamepadSteering(out Axis: Single): Boolean;
+    procedure RefreshSteeringCompanion;
   private
     FLastHealthCheck: QWord;
     FManager: TDeviceManager;
@@ -206,6 +215,11 @@ type
     procedure AssignSensor(AKind: TSensorKind; ASensor: TDeviceSensor);
     { Select first, then connect. The request survives leaving the page. }
     procedure SelectDeviceForRoles(AEntry: TGameDeviceEntry);
+    { The second BLE address is explicitly selected and saved per profile.
+      No discovery-order pairing: nearby controllers never join a pair. }
+    procedure SelectSteeringCompanion(AEntry: TGameDeviceEntry);
+    function CanPairSteering(AEntry: TGameDeviceEntry): Boolean;
+    function IsSteeringCompanion(AEntry: TGameDeviceEntry): Boolean;
     function IsSensorSelected(AKind: TSensorKind; AEntry: TGameDeviceEntry): Boolean;
     function SelectedSensorName(AKind: TSensorKind): String;
     function SensorDisabled(AKind: TSensorKind): Boolean;
@@ -241,6 +255,10 @@ type
     function Speed: TSpeedSensor; inline;
 
     function ReadSteering(out Degrees: Single): Boolean;
+    { Main thread, once per ride frame. Axis and Turn use +left / -right.
+      Turn is an edge, never repeated while held. The ride owns its expiry. }
+    function ReadSteeringInput(out Axis: Single; out Turn: Integer): Boolean;
+    procedure ResetSteeringInput;
     function CenterSteering: Boolean;
     function HasSensor(AKind: TSensorKind): Boolean; inline;
     function HasAnySensor: Boolean;
@@ -300,7 +318,7 @@ var
 
 implementation
 
-uses Math,
+uses Math, CastleGameControllers, CastleKeysMouse, EliteSterzoProtocol, ZwiftControllerProtocol,
   {$ifdef MSWINDOWS}WinRTBLEProvider, ANTPlus,{$endif}
   {$ifdef ANDROID}AndroidBLEProvider,{$endif}
   {$if (defined(LINUX) or defined(DARWIN)) and not defined(ANDROID)}SimpleBLEProvider,{$endif}
@@ -318,6 +336,10 @@ begin
   inherited Create;
 
   FAssignments := TDeviceRoleAssignments.Create;
+  FSteeringInput := TSteeringInput.Create;
+  FCompanionInput := TSteeringInput.Create;
+  FGamepadInput := TSteeringInput.Create;
+  {$ifdef ANDROID}FAndroidGamepad:=TAndroidControllerInput.Create;{$endif}
   FAssignmentProfileId := Low(Int64);
   FDevices := TGameDeviceList.Create(True);
   FControlDevice := nil;
@@ -333,6 +355,7 @@ begin
 
   IsolatedHardware:=(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
     (GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1');
+  FSkipGamepadInput:=IsolatedHardware;
   if not IsolatedHardware then begin
   {$ifdef MSWINDOWS}
   if WinRTBLEAvailable then
@@ -402,6 +425,10 @@ begin
   FreeAndNil(FManager);
   FreeAndNil(FDevices);
   FreeAndNil(FAssignments);
+  FreeAndNil(FSteeringInput);
+  FreeAndNil(FCompanionInput);
+  FreeAndNil(FGamepadInput);
+  FreeAndNil(FAndroidGamepad);
   inherited;
 end;
 
@@ -579,6 +606,7 @@ begin
     if Entry.DiscoverMetrics(Data) then
     begin
       if FAutoAssign then DoAutoAssign;
+      RefreshSteeringCompanion;
       if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
     end;
     Entry.FeedData(Data);
@@ -691,6 +719,7 @@ begin
     end;
   end;
 
+  RefreshSteeringCompanion;
   Log(Format('  Firing callbacks: OnConnChanged=%s OnDevicesChanged=%s',
     [BoolToStr(Assigned(FOnConnectionChanged), True),
      BoolToStr(Assigned(FOnDevicesChanged), True)]));
@@ -780,6 +809,10 @@ begin
   if FSimulationEnabled and not D.SupportsSteering then Exit(D.TransportType = ttSim);
   if D.TransportType = ttSim then Exit;
   if AEntry = FPendingDevice then Exit(True);
+  { New controller pairing is explicit. Never claim nearby riders' remotes
+    merely because a scan advertises a recognizable controller name. }
+  if IsZwiftControllerName(D.Name) then
+    Exit(FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[D.TransportType],D.Address));
   if not FAssignments.HasRemembered then Exit(True);
   if FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[D.TransportType], D.Address) then Exit(True);
   { After the first pairing, unknown fitness devices are only useful for an
@@ -824,6 +857,67 @@ begin
   if AEntry.IsControllable then SetControlDevice(AEntry);
 end;
 
+function TGameDeviceService.CanPairSteering(AEntry: TGameDeviceEntry): Boolean;
+var Primary: TDeviceSelection;
+begin
+  Primary:=FAssignments.Selection[drSteering];
+  Result:=(AEntry<>nil) and (Primary.Mode=dsmDevice) and
+    IsZwiftControllerName(Primary.Name) and
+    IsZwiftControllerName(AEntry.DeviceInfo.Name) and
+    (AEntry.DeviceInfo.TransportType=ttBLE) and
+    not FAssignments.Matches(drSteering,
+      TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType],AEntry.DeviceInfo.Address);
+end;
+
+function TGameDeviceService.IsSteeringCompanion(AEntry: TGameDeviceEntry): Boolean;
+begin
+  Result:=(AEntry<>nil) and FAssignments.Matches(drSteeringCompanion,
+    TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType],AEntry.DeviceInfo.Address);
+end;
+
+procedure TGameDeviceService.SelectSteeringCompanion(AEntry: TGameDeviceEntry);
+begin
+  RefreshAssignmentsProfile;
+  if not FAssignmentsReady then Exit;
+  if AEntry=nil then FAssignments.Disable(drSteeringCompanion)
+  else begin
+    if (FDevices.IndexOf(AEntry)<0) or not CanPairSteering(AEntry) then Exit;
+    FAssignments.Select(drSteeringCompanion,
+      TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType],
+      AEntry.DeviceInfo.Address,AEntry.DeviceInfo.Name);
+  end;
+  SaveAssignments;
+  RefreshSteeringCompanion;
+  if (AEntry<>nil) and (AEntry.ConnectionState in [gdcsDisconnected,gdcsError]) then
+    ConnectDevice(AEntry);
+  if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
+end;
+
+procedure TGameDeviceService.RefreshSteeringCompanion;
+var I: Integer; E, Selected: TGameDeviceEntry; S: TDeviceSensor;
+begin
+  Selected:=nil;
+  if FAssignmentsReady and
+    (FAssignments.Selection[drSteeringCompanion].Mode=dsmDevice) then
+    for I:=0 to FDevices.Count-1 do begin
+      E:=FDevices[I];
+      if IsSteeringCompanion(E) and CanPairSteering(E) and
+        (E.ConnectionState=gdcsConnected) and (E.FindSensor(skSteering)<>nil) then
+      begin Selected:=E; Break end;
+    end;
+  if FSteeringCompanion<>Selected then begin
+    FSteeringCompanion:=Selected;
+    FCompanionInput.ForgetBLE;
+    { Selecting an already-connected half must not replay a button pressed
+      before the user added it to this pair. Reconnect has no data yet. }
+    if Selected<>nil then begin
+      S:=Selected.FindSensor(skSteering);
+      if S.HasData then FCompanionInput.Reset(SteeringAxis(S.Instant),0,
+        Selected.LastData.SteeringTurnSerial);
+    end;
+  end;
+end;
+
 function TGameDeviceService.IsSensorSelected(AKind: TSensorKind;
   AEntry: TGameDeviceEntry): Boolean;
 begin
@@ -843,6 +937,13 @@ begin
   if S.Mode <> dsmDevice then Exit;
   Result := S.Name;
   if Result = '' then Result := S.Address;
+  if AKind=skSteering then begin
+    S:=FAssignments.Selection[drSteeringCompanion];
+    if S.Mode=dsmDevice then begin
+      if S.Name='' then S.Name:=S.Address;
+      Result:=Result+' + '+S.Name;
+    end;
+  end;
 end;
 
 function TGameDeviceService.SensorDisabled(AKind: TSensorKind): Boolean;
@@ -880,10 +981,16 @@ var
   K: TSensorKind;
 begin
   if not Assigned(AEntry) or not Assigned(AEntry.Sensors) then Exit;
+  if FSteeringCompanion=AEntry then begin
+    FSteeringCompanion:=nil; FCompanionInput.ForgetBLE;
+  end;
   for K := Low(TSensorKind) to High(TSensorKind) do
     if Assigned(FActiveSensors[K]) and
        (AEntry.Sensors.IndexOf(FActiveSensors[K]) >= 0) then
+    begin
       FActiveSensors[K] := nil;
+      if K=skSteering then begin FSteeringInputSensor:=nil; FSteeringInput.ForgetBLE end;
+    end;
 end;
 
 procedure TGameDeviceService.DoAutoAssign;
@@ -953,6 +1060,7 @@ begin
       end;
     end;
   if Changed then SaveAssignments;
+  RefreshSteeringCompanion;
 end;
 
 { ── Публичный API: сканирование и подключение ── }
@@ -1277,13 +1385,18 @@ begin
     if (E = nil) or (E.FindSensor(AKind) <> ASensor) then Exit;
   end;
   Changed := False;
+  { A replacement primary, or None, ends the old logical pair. Re-selecting
+    the same primary leaves its companion intact. }
+  if (AKind=skSteering) and ((E=nil) or not IsSensorSelected(skSteering,E)) then
+    Changed:=FAssignments.Disable(drSteeringCompanion);
   if not FSimulationEnabled or (AKind=skSteering) then
-    if E = nil then Changed := FAssignments.Disable(TDeviceRole(Ord(AKind)))
+    if E = nil then Changed := FAssignments.Disable(TDeviceRole(Ord(AKind))) or Changed
     else Changed := FAssignments.Select(TDeviceRole(Ord(AKind)),
-      TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType], E.DeviceInfo.Address, E.DeviceInfo.Name);
+      TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType], E.DeviceInfo.Address, E.DeviceInfo.Name) or Changed;
   if (E <> nil) and (E.ConnectionState = gdcsConnected) then
     FActiveSensors[AKind] := ASensor
   else FActiveSensors[AKind] := nil;
+  if AKind=skSteering then RefreshSteeringCompanion;
   if Changed then SaveAssignments;
   if Assigned(ASensor) then
     Log('Assigned ' + SENSOR_KIND_NAMES[AKind] + ' <- ' +
@@ -1300,6 +1413,8 @@ end;
 procedure TGameDeviceService.ClearAllSensors;
 var K: TSensorKind;
 begin
+  FSteeringInputSensor:=nil; FSteeringInput.ForgetBLE;
+  FSteeringCompanion:=nil; FCompanionInput.ForgetBLE;
   for K := Low(TSensorKind) to High(TSensorKind) do
     FActiveSensors[K] := nil;
   if (FControlDevice <> nil) and (FManager <> nil) then
@@ -1325,12 +1440,106 @@ begin
 end;
 
 function TGameDeviceService.CenterSteering: Boolean;
-var S:TDeviceSensor;
+var S:TDeviceSensor; E:TGameDeviceEntry;
 begin
   S:=FActiveSensors[skSteering];
   Result:=(S<>nil) and S.HasData;
+  if Result then
+  begin
+    E:=FindDeviceByAddress(S.DeviceAddress);
+    if (E<>nil) and IsZwiftControllerName(E.DeviceInfo.Name) then Exit(False);
+  end;
   if Result then Result:=FAssignments.CenterSteering(S.Instant);
-  if Result then SaveAssignments;
+  if Result then begin SaveAssignments; ResetSteeringInput end;
+end;
+
+function TGameDeviceService.ReadGamepadSteering(out Axis: Single): Boolean;
+var I: Integer; C: TGameController; V: Single;
+begin
+  Axis:=0;
+  FGamepadPendingTurn:=0;
+  if FSkipGamepadInput then Exit(False);
+  if FAndroidGamepad<>nil then Exit(FAndroidGamepad.Read(Axis,FGamepadPendingTurn));
+  { CGE owns polling and hotplug; never scan devices on every rendered frame. }
+  if not Controllers.Initialized then Controllers.Initialize;
+  Result:=Controllers.Count>0;
+  for I:=0 to Controllers.Count-1 do
+  begin
+    C:=Controllers[I];
+    V:=GamepadSteeringAxis(C.AxisLeft.X,C.Pressed[gbDPadLeft],C.Pressed[gbDPadRight]);
+    if Abs(V)>Abs(Axis) then Axis:=V;
+  end;
+end;
+
+function TGameDeviceService.ReadSteeringInput(out Axis: Single; out Turn: Integer): Boolean;
+var Angle,PadAxis,PrimaryAxis,CompanionAxis,DummyAxis: Single;
+  BLE,Pad,Companion: Boolean; E: TGameDeviceEntry; S: TDeviceSensor;
+  Serial: Cardinal; Direction,CompanionTurn,PadTurn: Integer;
+begin
+  BLE:=ReadSteering(Angle);
+  Pad:=ReadGamepadSteering(PadAxis);
+  Serial:=0; Direction:=0;
+  if FSteeringInputSensor<>FActiveSensors[skSteering] then
+  begin
+    FSteeringInput.ForgetBLE;
+    FSteeringInputSensor:=FActiveSensors[skSteering];
+  end;
+  if BLE then
+  begin
+    E:=FindDeviceByAddress(FActiveSensors[skSteering].DeviceAddress);
+    if E<>nil then
+    begin Serial:=E.LastData.SteeringTurnSerial; Direction:=E.LastData.SteeringTurnDirection end;
+  end;
+  Result:=FSteeringInput.Read(BLE,SteeringAxis(Angle),Serial,Direction,
+    False,0,PrimaryAxis,Turn);
+
+  { Old Play controllers advertise separate addresses, and each parser starts
+    its own serial at one. Consume them independently before combining axes. }
+  Companion:=False; Angle:=0; Serial:=0; Direction:=0;
+  if FSteeringCompanion<>nil then begin
+    S:=FSteeringCompanion.FindSensor(skSteering);
+    Companion:=(S<>nil) and S.HasData;
+    if Companion then begin
+      Angle:=S.Instant;
+      Serial:=FSteeringCompanion.LastData.SteeringTurnSerial;
+      Direction:=FSteeringCompanion.LastData.SteeringTurnDirection;
+    end;
+  end;
+  FCompanionInput.Read(Companion,SteeringAxis(Angle),Serial,Direction,
+    False,0,CompanionAxis,CompanionTurn);
+  FGamepadInput.Read(False,0,0,0,Pad,PadAxis,DummyAxis,PadTurn);
+  Axis:=EnsureRange(PrimaryAxis+CompanionAxis,-1,1);
+  if Abs(PadAxis)>Abs(Axis) then Axis:=PadAxis;
+  if CompanionTurn<>0 then begin
+    if (Turn<>0) and (Turn<>CompanionTurn) then Turn:=0
+    else Turn:=CompanionTurn;
+  end;
+  if PadTurn<>0 then Turn:=PadTurn;
+  if FGamepadPendingTurn<>0 then Turn:=FGamepadPendingTurn;
+  Result:=Result or Companion or Pad;
+end;
+
+procedure TGameDeviceService.ResetSteeringInput;
+var Angle,PadAxis: Single; E: TGameDeviceEntry; S:TDeviceSensor; Serial: Cardinal;
+begin
+  ReadSteering(Angle); ReadGamepadSteering(PadAxis); Serial:=0;
+  FSteeringInputSensor:=FActiveSensors[skSteering];
+  if FSteeringInputSensor<>nil then
+  begin
+    E:=FindDeviceByAddress(FSteeringInputSensor.DeviceAddress);
+    if E<>nil then Serial:=E.LastData.SteeringTurnSerial;
+  end;
+  FSteeringInput.Reset(SteeringAxis(Angle),0,Serial);
+  Angle:=0; Serial:=0;
+  if FSteeringCompanion<>nil then begin
+    S:=FSteeringCompanion.FindSensor(skSteering);
+    if (S<>nil) and S.HasData then begin
+      Angle:=S.Instant;
+      Serial:=FSteeringCompanion.LastData.SteeringTurnSerial;
+    end;
+  end;
+  FCompanionInput.Reset(SteeringAxis(Angle),0,Serial);
+  FGamepadInput.Reset(0,PadAxis,0);
 end;
 
 function TGameDeviceService.Sensor(AKind: TSensorKind): TDeviceSensor;

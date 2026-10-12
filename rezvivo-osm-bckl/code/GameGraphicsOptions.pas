@@ -35,7 +35,7 @@ const
      'Reduce background work and distant detail when below the frame limit. Ultra keeps the procedural tree range.',
      'Controls hair detail, lighting and motion update rate. Applies immediately.',
      'Soft lens edges and distant scenery. Keeps the central rider area and interface clear. Applies immediately.',
-     'Cached tree silhouettes are faster. RTX requires a ray-tracing GPU; unsupported hardware uses raster shadows.',
+     'Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.',
      'Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.',
      'Full keeps all cloth relief and lighting. Lower modes simplify cloth shading without changing body animation.',
      'Full keeps detailed road relief. Lower modes use cached normals and remove parallax. Road layout and markings stay unchanged.',

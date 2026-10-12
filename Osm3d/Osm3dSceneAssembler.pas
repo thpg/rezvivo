@@ -1189,6 +1189,19 @@ end;
   compact static fields retain their precision far from the session origin.
   The signal states share a switch, but their emissive material stays separate
   from the ordinary lit material. No vertex data changes during riding. }
+function BuildStreetLampNode(Kind: TPOIKindExt): TAbstractChildNode;
+var G:TGroupNode; M:TMesh; S:TShapeNode;
+begin
+  G:=TGroupNode.Create;
+  try
+    M:=TPOIBuilderExt.BuildKindMesh(Kind);
+    try S:=TMeshToX3D.CreateShape(M,smkStreetLamp,True);if S<>nil then G.AddChildren(S) finally M.Free end;
+    M:=TPOIBuilderExt.BuildLampLens(Kind);
+    try S:=TMeshToX3D.CreateShape(M,smkLampLens,True);if S<>nil then G.AddChildren(S) finally M.Free end;
+    Result:=G;
+  except G.Free;raise end;
+end;
+
 function BuildPoiBatchNode(Mdl: TTileModel; AKx: Double;
   Atlas: TAccessoryAtlas; out ASwitch: TSwitchNode;
   out InstanceCount: Integer): TAbstractChildNode;
@@ -1198,9 +1211,9 @@ const
   PerpCells: array[0..2] of TAccessorySprite =
     (asTrafficRed, asTrafficRed, asTrafficGreen);
 var
-  Templates: array[TPOIKindExt] of TMesh;
+  Templates,Lenses: array[TPOIKindExt] of TMesh;
   SignalTemplates, SignalBatches: array[0..2] of TMesh;
-  Plain, Caps: TMesh;
+  Plain, Caps, Lamps, LampLenses: TMesh;
   Grp: TGroupNode;
   Shape: TShapeNode;
   Sw: TSwitchNode;
@@ -1213,11 +1226,12 @@ begin
   ASwitch := nil;
   InstanceCount := 0;
   if Mdl.POICount = 0 then Exit;
-  for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do Templates[Kind] := nil;
+  for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do begin Templates[Kind] := nil;Lenses[Kind]:=nil end;
   for State := 0 to 2 do
   begin SignalTemplates[State] := nil; SignalBatches[State] := nil end;
   Grp := nil;
   Plain := TMesh.Create('poi_material_batch');
+  Lamps:=TMesh.Create('street_lamps');LampLenses:=TMesh.Create('lamp_lenses');
   try
     for I := 0 to Mdl.POICount - 1 do
     begin
@@ -1242,12 +1256,15 @@ begin
             end;
         end
         else
-          Templates[Kind] := TPOIBuilderExt.BuildKindMesh(Kind);
+          begin Templates[Kind] := TPOIBuilderExt.BuildKindMesh(Kind);Lenses[Kind]:=TPOIBuilderExt.BuildLampLens(Kind) end;
       end;
       { Match the old instance transform: scale the position's east coordinate
         between latitude bands, preserving the model's dimensions and yaw. }
       Position := Vector3(Poi.Position.X * AKx, Poi.Position.Y, Poi.Position.Z);
-      TPOIBuilderExt.AppendInstance(Plain, Templates[Kind], Position, Poi.Rotation);
+      if TPOIBuilderExt.IsLamp(Kind) then begin
+        TPOIBuilderExt.AppendInstance(Lamps,Templates[Kind],Position,Poi.Rotation,TPOIBuilderExt.LampScale(Kind,Poi.Height));
+        TPOIBuilderExt.AppendInstance(LampLenses,Lenses[Kind],Position,Poi.Rotation,TPOIBuilderExt.LampScale(Kind,Poi.Height));
+      end else TPOIBuilderExt.AppendInstance(Plain, Templates[Kind], Position, Poi.Rotation);
       Inc(InstanceCount);
       if (Kind = pkxTrafficSignal) and (Atlas <> nil) then
         for State := 0 to 2 do
@@ -1262,6 +1279,10 @@ begin
       Shape.X3DName := 'OsmPoiBatch';
       Grp.AddChildren(Shape);
     end;
+    Shape:=TMeshToX3D.CreateShape(Lamps,smkStreetLamp,True);
+    if Shape<>nil then begin Shape.X3DName:='OsmStreetLampBatch';Grp.AddChildren(Shape) end;
+    Shape:=TMeshToX3D.CreateShape(LampLenses,smkLampLens,True);
+    if Shape<>nil then begin Shape.X3DName:='OsmLampLensBatch';Grp.AddChildren(Shape) end;
     if SignalBatches[0] <> nil then
     begin
       Sw := TSwitchNode.Create;
@@ -1280,7 +1301,8 @@ begin
   finally
     Grp.Free;
     Plain.Free;
-    for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do Templates[Kind].Free;
+    Lamps.Free;LampLenses.Free;
+    for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do begin Templates[Kind].Free;Lenses[Kind].Free end;
     for State := 0 to 2 do
     begin SignalTemplates[State].Free; SignalBatches[State].Free end;
   end;
@@ -3882,7 +3904,7 @@ var
       if not KeepGeoCell(T.TX, T.TY) then Continue;
       ModelFor(T).AddPOI(Input.POIInstances[I].Kind,
                          Input.POIInstances[I].Position,
-                         Input.POIInstances[I].Rotation);
+                         Input.POIInstances[I].Rotation, Input.POIInstances[I].Height);
     end;
   end;
 
@@ -6382,6 +6404,8 @@ var
             AccSwList[High(AccSwList)] := TmpSw;
           end;
         end
+        else if TPOIBuilderExt.IsLamp(PoiKind) then
+          POIKindShape[PoiKind]:=BuildStreetLampNode(PoiKind)
         else
         begin
           PoiMesh := TPOIBuilderExt.BuildKindMesh(PoiKind);
@@ -6407,6 +6431,7 @@ var
       { face-the-road yaw for bus stops (0 for everything else). }
       if Mdl.POIs[Mi].Rotation <> 0 then
         PoiXform.Rotation := Vector4(0, 1, 0, Mdl.POIs[Mi].Rotation);
+      PoiXform.Scale:=Vector3(1,TPOIBuilderExt.LampScale(PoiKind,Mdl.POIs[Mi].Height),1);
       PoiXform.AddChildren(POIKindShape[PoiKind]);
       Result.AddChildren(PoiXform);
       Inc(TotPOI);

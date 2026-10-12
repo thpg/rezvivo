@@ -5,7 +5,7 @@ unit Osm3dEnvironmentLayout;
 interface
 uses Classes, SysUtils, fpjson, Generics.Collections, Osm3dGeoMath, Osm3dOsmData;
 const ENVIRONMENT_LAYOUT_TAG='rezvivo:environment_layout';
-  ENVIRONMENT_LAYOUT_GENERATOR=1;
+  ENVIRONMENT_LAYOUT_GENERATOR=4;
 type
   TEnvironmentNodes=specialize TObjectList<TOSMNode>;
   TEnvironmentWays=specialize TObjectList<TOSMWay>;
@@ -165,7 +165,7 @@ begin
     Features:=TJSONArray.Create;R.Add('features',Features);
     for I:=0 to A.Count-1 do begin
       Need(A[I] is TJSONObject,'feature object required');F:=TJSONObject(A[I]);
-      Keys(F,'|id|kind|points|height_m|width_m|material|surface|genus|leaf_type|spacing_m|heading_deg|gates|levels|roof_shape|roof_height_m|architecture|sign_type|');
+      Keys(F,'|id|kind|points|height_m|width_m|material|surface|genus|leaf_type|spacing_m|heading_deg|gates|levels|roof_shape|roof_height_m|architecture|sign_type|lamp_style|step_count|markings|');
       Id:=F.Get('id','');Need((Length(Id)>0) and (Length(Id)<=64),'bounded stable id required');
       for J:=1 to Length(Id) do Need(Id[J] in ['a'..'z','A'..'Z','0'..'9',':','-','_'],'invalid feature id');
       Need(Seen.IndexOf(Id)<0,'duplicate id');Seen.Add(Id);
@@ -189,11 +189,26 @@ begin
         try S:=CanonicalVegetationLayout(Check) finally Check.Free end;
       end;
       if F.Find('height_m')<>nil then begin
-        Need((Category='fence') or Has(Kind,'|forest|scrub|building|'),'height only supported for boundaries/plants/buildings');
+        Need((Category='fence') or Has(Kind,'|forest|scrub|building|street_lamp|'),'height only supported for boundaries/plants/buildings/lamps');
         C.Add('height_m',Number(F,'height_m',0.2,30));
       end;
+      if F.Find('lamp_style')<>nil then begin
+        Need(Kind='street_lamp','lamp_style only for street_lamp');S:=F.Get('lamp_style','');
+        Need(Has(S,'|road|curved|double|park|bollard|'),'unsupported lamp_style');C.Add('lamp_style',S);
+      end;
+      if Kind='street_lamp' then if F.Find('height_m')<>nil then
+        Need(Number(F,'height_m',0.3,20)>0,'lamp height');
       if F.Find('width_m')<>nil then begin
         Need(Has(Kind,'|path|steps|'),'width only supported for paths/steps');C.Add('width_m',Number(F,'width_m',0.5,15));
+      end;
+      if F.Find('step_count')<>nil then begin
+        Need(Kind='steps','step_count only supported for steps');
+        Need(Frac(Number(F,'step_count',1,2048))=0,'integer step_count required');
+        C.Add('step_count',Round(Number(F,'step_count',1,2048)));
+      end;
+      if F.Find('markings')<>nil then begin
+        Need(Kind='path','markings only supported for paths');S:=F.Get('markings','');
+        Need(Has(S,'|none|edge|lanes|'),'unsupported markings');C.Add('markings',S);
       end;
       if F.Find('material')<>nil then begin
         Need(Category='fence','material only supported for boundaries');S:=F.Get('material','');
@@ -295,8 +310,11 @@ begin
   else if Kind='paving' then begin T.Add('highway','pedestrian');T.Add('area','yes');T.Add('surface',F.Get('surface','paving_stones')) end
   else if Has(Kind,'|path|steps|') then begin
     if Kind='steps' then T.Add('highway','steps') else T.Add('highway','footway');
+    if F.Find('step_count')<>nil then T.Add('step_count',IntToStr(F.Get('step_count',0)));
     T.Add('surface',F.Get('surface','paving_stones'));
   end;
+  if F.Find('lamp_style')<>nil then T.Add('rezvivo:lamp_style',F.Get('lamp_style',''));
+  if F.Find('markings')<>nil then T.Add('rezvivo:road_markings',F.Get('markings',''));
   if F.Find('height_m')<>nil then T.Add('height',FloatToStr(F.Floats['height_m'],FS));
   if F.Find('width_m')<>nil then T.Add('width',FloatToStr(F.Floats['width_m'],FS));
   if F.Find('spacing_m')<>nil then T.Add('rezvivo:plant_spacing',FloatToStr(F.Floats['spacing_m'],FS));
@@ -422,9 +440,10 @@ begin
   Result:=TJSONObject.Create(['version',1,'boundary','simple ring <=250m, within 80m of a fingerprinted OSM anchor',
     'features','stable id, kind, points [lon,lat]; native generators, terrain grounding and shared batching',
     'street_furniture','bench, bin, street_lamp, utility_pole, traffic_signal, crossing, traffic_sign (sign_type and heading_deg), information sign, bus_stop, hydrant',
+    'street_lamps','lamp_style: road, curved, double, park, bollard; height_m 0.3..20; heading_deg points toward the illuminated side',
     'fence','fence, wall, retaining_wall, hedge, parapet; gates are indices into points',
     'vegetation','lawn, meadow, flowerbed, forest, scrub; wooded areas allow spacing_m, genus, leaf_type',
-    'terrain','paving, parking, path, steps; surface and path width_m',
+    'terrain','paving, parking, path, steps; surface and path width_m; path markings: none/edge/lanes; steps: optional integer step_count (1..2048), baked treads/risers following terrain height',
     'building','bounded footprint, height_m <=30, levels <=10, roof_shape/roof_height_m, optional architecture; requires a measured footprint, never a camera point',
     'limits','256 features, 64 vertices/feature; preserve nearby existing point objects']);
 end;

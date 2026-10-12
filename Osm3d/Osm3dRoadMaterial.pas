@@ -182,7 +182,7 @@ begin
     '  // at screen resolution nearby, smoothly returning to cached relief.' + #10 +
     '  if(refine>0.0) {' + #10 +
     '    vec3 relief; vec4 detailedColor; vec2 heightGradient;' + #10 +
-    '    rp_roadGradient(detailP,style.w,max(footprint.x,footprint.y),vec3(width,max(coord.w,0.0),area ? 0.0 : rp_motorLanes(style)),condition,step(128.0,style.z),detailedColor,relief,heightGradient);' + #10 +
+    '    rp_roadGradient(detailP,style.w,max(footprint.x,footprint.y),vec3(width,max(coord.w,0.0),area ? 0.0 : rp_motorLanes(style)),condition,step(128.0,mod(style.z,256.0)),detailedColor,relief,heightGradient);' + #10 +
     '    color=mix(color,detailedColor,refine);' + #10 +
     '    normalData.xy=mix(normalData.xy,rp_gradientNormal(heightGradient)*0.5+0.5,refine);' + #10 +
     '    normalData.zw=mix(normalData.zw,vec2(1.0-relief.y,relief.z),refine);' + #10 +

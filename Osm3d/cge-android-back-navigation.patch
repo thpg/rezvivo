@@ -1,0 +1,29 @@
+--- a/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
++++ b/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
+@@ -38,6 +38,16 @@
+         }
+ 
+        jniLanguage(Locale.getDefault().toString());
++    }
++
++    /** Legacy Back dispatch for services that supply native in-app navigation.
++     * Android 13+ services also register OnBackInvokedCallback. */
++    @SuppressWarnings("deprecation") @Override
++    public void onBackPressed() {
++        for (ServiceAbstract service : services) {
++            if (service.onBackPressed()) return;
++        }
++        super.onBackPressed();
+     }
+ 
+     @Override
+--- a/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/ServiceAbstract.java
++++ b/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/ServiceAbstract.java
+@@ -168,6 +168,7 @@
+         return param == null || param.length() == 0;
+     }
+ 
++    public boolean onBackPressed() { return false; }
+     public void onCreate() { }
+     public void onDestroy() { }
+     public void onWindowFocusChanged(boolean hasFocus) { }

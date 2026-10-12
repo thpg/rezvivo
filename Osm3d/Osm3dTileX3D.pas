@@ -110,6 +110,7 @@ type
     Kind:     TPOIKindExt;
     Position: TVector3;
     Rotation: Single;
+    Height: Single; { optional lamp height; zero uses template default }
   end;
   TTilePOIRecArray = array of TTilePOIRec;
 
@@ -235,7 +236,7 @@ type
                       const AMatIds: TTileMatIdArray;
                       ASolid: Boolean = True);
     procedure AddPOI(AKind: TPOIKindExt; const APos: TVector3;
-      ARotation: Single = 0);
+      ARotation: Single = 0; AHeight: Single = 0);
     procedure AddTree(const ATree: TTileTreeRec);
     procedure AddRoadSeg(const ASeg: TTileRoadSeg);
     { Bulk cache input. Arrays are adopted by reference; do not mutate them later. }
@@ -542,7 +543,7 @@ begin
 end;
 
 procedure TTileModel.AddPOI(AKind: TPOIKindExt; const APos: TVector3;
-  ARotation: Single);
+  ARotation: Single; AHeight: Single);
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(996);{$ENDIF}
   if FPOICount >= Length(FPOIs) then
@@ -553,6 +554,7 @@ begin
   FPOIs[FPOICount].Kind     := AKind;
   FPOIs[FPOICount].Position := APos;
   FPOIs[FPOICount].Rotation := ARotation;
+  FPOIs[FPOICount].Height := AHeight;
   Inc(FPOICount);
 end;
 
@@ -1163,6 +1165,9 @@ begin
       AppendNum(SB, Model.POIs[I].Position.Z, DEC_POS);
       SB.Append('" rotation="');
       AppendNum(SB, Model.POIs[I].Rotation, DEC_UV);
+      if Model.POIs[I].Height>0 then begin
+        SB.Append('" height="');AppendNum(SB, Model.POIs[I].Height, DEC_POS);
+      end;
       SB.Append('"/>'); SB.Append(LineEnding);
     end;
     { Vegetation instances — kind flag + 6 floats (pos, scale, rot, seed). }
@@ -1627,7 +1632,7 @@ var
     P:   TDblArray;
     Pos: TVector3;
     Rot: TDblArray;
-    Yaw: Single;
+    Yaw,Height: Single;
   begin
     {$IFDEF IAM_LIVE}IamLiveTrack(1012);{$ENDIF}
     P := ParseDoubleArray(GetAttr(Line, 'translation'));
@@ -1638,7 +1643,9 @@ var
     { rotation attribute is optional — older tiles have none ⇒ yaw 0. }
     Rot := ParseDoubleArray(GetAttr(Line, 'rotation'));
     if Length(Rot) >= 1 then Yaw := Rot[0] else Yaw := 0;
-    Model.AddPOI(POIKindFromName(GetAttr(Line, 'kind')), Pos, Yaw);
+    Rot:=ParseDoubleArray(GetAttr(Line,'height'));
+    if Length(Rot)>0 then Height:=Rot[0] else Height:=0;
+    Model.AddPOI(POIKindFromName(GetAttr(Line, 'kind')), Pos, Yaw, Height);
   end;
 
   procedure HandleTree(const Line: string);
@@ -1754,7 +1761,7 @@ var
       R.Surface.ForwardLanes := EnsureRange(Round(W[0]), 0, 32);
       R.Surface.BackwardLanes := EnsureRange(Round(W[1]), 0, 32);
       R.Surface.UVMin := W[2]; R.Surface.UVMax := W[3];
-      R.Surface.UVScale := W[4]; R.Surface.Marked := Ord(W[5] > 0.5);
+      R.Surface.UVScale := W[4]; R.Surface.Marked := Round(W[5]);
       if Length(W)>=7 then R.Surface.Asphalt:=EnsureRange(Round(W[6]),ROAD_SURFACE_UNKNOWN,ROAD_SURFACE_CONCRETE);
       if Length(W)>=8 then R.Surface.Condition:=EnsureRange(Round(W[7]),0,5);
       if (R.Surface.UVMax <= R.Surface.UVMin) or (W[4] <= 0) or (W[4] > 1000) then

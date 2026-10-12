@@ -10,6 +10,7 @@ type
     LocalBytes: Int64;
     ErrorText, FirstMissing: string;
     function Ready: Boolean;
+    function FullyPrepared: Boolean;
     function Missing: Integer;
     function Caption: string;
   end;
@@ -83,6 +84,14 @@ end;
 function TOfflineReadiness.Missing: Integer;
 begin Result:=(Tiles-ReadyTiles)+(Osm-ReadyOsm)+(Heights-ReadyHeights) end;
 function TOfflineReadiness.Ready: Boolean;
+begin
+  { Baked geometry already contains terrain and road layers. Raw source
+    holes matter only when geometry has to be generated. }
+  Result:=Done and(ErrorText='')and(Tiles>0)and
+    ((ReadyTiles=Tiles) or (not Dream and (Osm>0) and (Heights>0) and
+      (ReadyOsm=Osm) and (ReadyHeights=Heights)));
+end;
+function TOfflineReadiness.FullyPrepared:Boolean;
 begin Result:=Done and(ErrorText='')and(Tiles>0)and(Missing=0) end;
 function TOfflineReadiness.Caption: string;
 var S:string;
@@ -167,8 +176,8 @@ procedure TOfflineReadinessTask.CheckRoute;
 var C:TGeoTileCache;D:TFileSystemCache;H:THTTPFetcherWithCache;Dem:TTerrariumFetcher;
     OsmHttp:THTTPFetcherWithCache;Overpass:TOverpassClient;Dataset:TOSMDataset;
     Tiles:TGeoTileIdArray;OsmTiles,HeightTiles:TStringList;A:TTileXYArray;
-    T:TTileXY;B:TLatLonBox;P:TLatLon;I,J:Integer;Path,Other,Key,Hash,Query:string;
-    Model:TTileModel;Data:TBytes;Meta:TCacheMetadata;Json:TJSONData;
+    T:TTileXY;B:TLatLonBox;P:TLatLon;I:Integer;Key,Hash,Query:string;
+    TileBytes:Int64;Data:TBytes;Meta:TCacheMetadata;Json:TJSONData;
     Height:Single;HeightMap:THeightmap;S:TOfflineReadiness;Good:Boolean;Candidates:TStringArray;
   procedure AddSlippy(List:TStringList;Zoom:Integer;const Box:TLatLonBox);
   var K:Integer;Id:string;
@@ -182,13 +191,14 @@ var C:TGeoTileCache;D:TFileSystemCache;H:THTTPFetcherWithCache;Dem:TTerrariumFet
   var Slash:Integer;
   begin Slash:=Pos('/',Id);Result:=TTileXY.Make(StrToInt(Copy(Id,1,Slash-1)),StrToInt(Copy(Id,Slash+1,MaxInt)),Zoom) end;
 begin
-  if Length(FRoute)<2 then raise Exception.Create('No route points');
+  if Length(FRoute)<1 then raise Exception.Create('No route points');
   S:=Default(TOfflineReadiness);
   S.Preparing:=FPrepareSources;
   Hash:=ComputeGenHash(FSettings,GEO_TILE_EDGE_M,'',FSettings.GenerateRouteOnly,FFitName,FSettings.RouteOnlyRadiusM);
   C:=TGeoTileCache.Create(TOsm3dStreamingSession.EffectiveCacheRoot(FSettings),Hash,FSettings.HeightmapZoom,0,FRoute[0].Lat);
   D:=nil;H:=nil;Dem:=nil;OsmTiles:=nil;HeightTiles:=nil;Overpass:=nil;OsmHttp:=nil;
   try
+    C.ConfigureReadyTiles(nil,ComputeGenHash(FSettings,GEO_TILE_EDGE_M,'',False,'',0));
     D:=TFileSystemCache.Create(TOsm3dStreamingSession.EffectiveCacheRoot(FSettings));
     H:=THTTPFetcherWithCache.Create(D,False);
     OsmHttp:=THTTPFetcherWithCache.Create(D,False);
@@ -205,32 +215,16 @@ begin
     Dem:=TTerrariumFetcher.Create(H,FSettings.TerrariumUrlTemplate,4);
     OsmTiles:=TStringList.Create;OsmTiles.Sorted:=True;OsmTiles.Duplicates:=dupIgnore;
     HeightTiles:=TStringList.Create;HeightTiles.Sorted:=True;HeightTiles.Duplicates:=dupIgnore;
-    Tiles:=RouteCoverageTiles(C.Grid,FRoute,ROUTE_SNAP_MARGIN_M,Self);
+    if Length(FRoute)=1 then begin SetLength(Tiles,1);Tiles[0]:=C.TileAt(FRoute[0]) end
+    else Tiles:=RouteCoverageTiles(C.Grid,FRoute,ROUTE_SNAP_MARGIN_M,Self);
     S.Tiles:=Length(Tiles);Publish(S);
     for I:=0 to High(Tiles)do begin
       CheckCancelled;
       B:=C.Grid.TileBox(Tiles[I]);
       AddSlippy(OsmTiles,FSettings.OverpassTileZoom,B);
       AddSlippy(HeightTiles,FSettings.HeightmapZoom,B.ExpandMeters(2));
-      Path:=C.PathFor(Tiles[I]);
-      if SameText(ExtractFileExt(Path),'.o3dt')then Other:=ChangeFileExt(Path,'.x3d')
-      else Other:=ChangeFileExt(Path,'.o3dt');
-      Good:=False;
-      for J:=0 to 1 do begin
-        if J=1 then Path:=Other;
-        if not FileExists(Path)then Continue;
-        Model:=nil;
-        try
-          if SameText(ExtractFileExt(Path),'.o3dt')then Model:=TTileBinary.ValidateFile(Path,Self)
-          else Model:=TTileX3D.LoadFile(Path);
-          Good:=(Model.GenHash=Hash)and Model.TileId.Equals(Tiles[I]);
-        except
-          on E:EAbort do raise;
-          on E:Exception do Good:=False;
-        end;
-        Model.Free;
-        if Good then begin Inc(S.ReadyTiles);Inc(S.LocalBytes,FileBytes(Path));Break end;
-      end;
+      Good:=C.ValidateCached(Tiles[I],TileBytes,Self);
+      if Good then begin Inc(S.ReadyTiles);Inc(S.LocalBytes,TileBytes) end;
       if not Good and(S.FirstMissing='')then S.FirstMissing:=C.PathFor(Tiles[I]);
       Publish(S);
     end;

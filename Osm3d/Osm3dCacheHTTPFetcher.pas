@@ -507,6 +507,8 @@ var
   TransportOutput:TCheckedHttpOutput;
   PlatformRequest: TOsmPlatformHttpRequest;
   InFlightObject: TObject;
+  EffectiveAuthorization: string;
+  AccountRequest: Boolean;
   {$ifdef REZVIVO_STARTUP_TIMING}
   TimingStart: QWord;
   {$endif}
@@ -518,9 +520,26 @@ begin
     [TimingStart, QWord(GetCurrentThreadId), BoolToStr(GetCurrentThreadId = MainThreadID, True), Method]);
   {$endif}
   Result := TFetchResult.Failure('not attempted');
-  if ((Method = 'POST') and (OsmRequiresAccess(URL) or OsmPublicNativeEndpoint(URL))) or
-     ((Method = 'GET') and (HeightRequiresAccess(URL) or MapRequiresAccess(URL))) then
+  AccountRequest := ((Method='POST') and OsmRequiresAccess(URL)) or
+    ((Method='GET') and (HeightRequiresAccess(URL) or MapRequiresAccess(URL)));
+  if not Assigned(OsmPlatformHttpFactory) and
+     (AccountRequest or ((Method='POST') and OsmPublicNativeEndpoint(URL))) then
     Exit(DoAuthenticatedOSM(URL, Method, Body, ConnectTimeoutLimitMs));
+  { Android must use its TLS transport for protected tiles too. Keep the
+    endpoint allowlist and never forward account credentials on redirects. }
+  EffectiveAuthorization:=Authorization;
+  if AccountRequest then begin
+    if FAbortAll then Exit(TFetchResult.Failure('aborted'));
+    if not Assigned(OsmAccessTokenProvider) then
+      Exit(TFetchResult.Failure('OSM requires an active REZVIVO account',401));
+    try EffectiveAuthorization:=OsmAccessTokenProvider();
+    except Exit(TFetchResult.Failure('OSM request failed'));end;
+    if EffectiveAuthorization='' then
+      Exit(TFetchResult.Failure('OSM requires an active REZVIVO account',401));
+    if (Pos(#13,EffectiveAuthorization)>0) or (Pos(#10,EffectiveAuthorization)>0) then
+      Exit(TFetchResult.Failure('Invalid authorization header'));
+    EffectiveAuthorization:='Bearer '+EffectiveAuthorization;
+  end;
 
   Client := TFPHTTPClient.Create(nil);
   PlatformRequest := nil;
@@ -536,10 +555,10 @@ begin
   end;
   try
     Client.AddHeader('User-Agent', FUserAgent);
-    Client.AllowRedirect  := Authorization = '';
-    if Authorization <> '' then begin
-      if SameText(FAuthenticationHeaderName,'X-API-Key') then Client.AddHeader('X-API-Key',Authorization)
-      else Client.AddHeader('Authorization', Authorization);
+    Client.AllowRedirect  := EffectiveAuthorization = '';
+    if EffectiveAuthorization <> '' then begin
+      if not AccountRequest and SameText(FAuthenticationHeaderName,'X-API-Key') then Client.AddHeader('X-API-Key',EffectiveAuthorization)
+      else Client.AddHeader('Authorization', EffectiveAuthorization);
     end;
     Client.ConnectTimeout := FTimeoutMs;
     { A per-request cap lets endpoint failover skip a dead connection quickly,
@@ -593,7 +612,7 @@ begin
           end
           else if Method = 'GET' then
           begin
-            if (Authorization='') and Assigned(FPublicGetTransport) then
+            if (EffectiveAuthorization='') and Assigned(FPublicGetTransport) then
             begin
               TransportHeaders:=TStringList.Create;TransportHeaders.NameValueSeparator:=':';
               TransportOutput:=TCheckedHttpOutput.Create(Response,Self,TransportHeaders);
@@ -783,6 +802,11 @@ begin
     if Assigned(FOnError) then
       FOnError(Self, URL, ValidateMsg, 0, Length(Data), 0);
   end;
+
+  { Offline mode still reads valid cached GET/POST responses above. A miss
+    is transient: no transport, retries, cache deletion or negative entry. }
+  if GetEnvironmentVariable('REZVIVO_OFFLINE')='1' then
+    Exit(TFetchResult.Failure('offline: resource not available in cache'));
 
   NetworkStarted:=GetTickCount64;
   Result := DoHttp(URL, Method, ContentType, Body, ConnectTimeoutLimitMs, AttemptLimit, Authorization);

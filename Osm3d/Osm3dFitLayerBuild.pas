@@ -53,7 +53,7 @@ const
 function BuildFitHeightLayer(const AFolder, ASelectedFile: string;
   AFetcher: TTerrariumFetcher; AZoom: Integer;
   ALayer: TFitHeightLayer; ALog: TStrings = nil;
-  AOnlySelected: Boolean = False): string;
+  AOnlySelected: Boolean = False; AllowNetworkDEM: Boolean = True): string;
 
 implementation
 
@@ -419,7 +419,8 @@ function ComputeRideDatum(const AFolder, AName: string;
   AFetcher: TTerrariumFetcher; AZoom: Integer; ALog: TStrings;
   out AT, ALat, ALon, AAltFit, ADem, AAltCal: TDblArr;
   out ADeck: TBoolArr; out ALanding: Double;
-  out ACut: Integer; out AReject: string; out ACacheable: Boolean): Boolean;
+  out ACut: Integer; out AReject: string; out ACacheable: Boolean;
+  AllowNetworkDEM: Boolean): Boolean;
 var
   Fit: TFitFile;
   Geo, GeoAll: TFitGeoAltArray;
@@ -513,7 +514,8 @@ begin
     if AFetcher <> nil then
     begin
       Box := Box.ExpandMeters(50.0);
-      Hm := AFetcher.GetRegion(Box, AZoom);
+      if AllowNetworkDEM then Hm:=AFetcher.GetRegion(Box,AZoom)
+      else Hm:=AFetcher.GetRegionCachedOnly(Box,AZoom);
     end;
     { Не сохранять ни отказ синтетики, ни неприземлённую барометрию
       как окончательный результат при временном отсутствии DEM. }
@@ -629,7 +631,8 @@ end;
 
 function BuildFitHeightLayer(const AFolder, ASelectedFile: string;
   AFetcher: TTerrariumFetcher; AZoom: Integer;
-  ALayer: TFitHeightLayer; ALog: TStrings; AOnlySelected: Boolean): string;
+  ALayer: TFitHeightLayer; ALog: TStrings; AOnlySelected: Boolean;
+  AllowNetworkDEM: Boolean): string;
 var
   Sr: TSearchRec;
   Names: TStringList;
@@ -771,7 +774,7 @@ begin
 
       if ComputeRideDatum(AFolder, Names[I], AFetcher, AZoom, ALog,
                           T0, Lat, Lon, AltFit, Dem, AltCal, Deck,
-                          Landing, Cut, Reject, Cacheable) then
+                          Landing, Cut, Reject, Cacheable,AllowNetworkDEM) then
       begin
         if Cacheable then
           WriteCacheCsv(CacheCsvPath(FitPath), SrcSig(Names[I], MTimes[I])+DemSig,

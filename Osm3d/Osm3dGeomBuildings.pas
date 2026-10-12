@@ -5628,6 +5628,9 @@ begin
   Parts:=nil;
   try
     Parts:=TBuildingPartSelection.Create(Dataset);
+    { The same guard used at recipe publication must also protect loaded
+      catalogs and direct generation from silently discarding photo targets. }
+    Parts.ValidatePhotoParts(Dataset);
     { plain building ways — the building tag lives on the way itself.
       Шардирование по Id: детерминированное разбиение для BuildAllParallel;
       AShardCount=1 (дефолт) — прежний однопоточный полный проход. }

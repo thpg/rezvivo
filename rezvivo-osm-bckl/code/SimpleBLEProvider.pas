@@ -20,7 +20,8 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs,
-  SimpleBle, TrainerData, GameTransportBase, FTMSProtocol;
+  SimpleBle, TrainerData, GameTransportBase, FTMSProtocol,
+  ZwiftControllerProtocol, EliteSterzoProtocol;
 
 type
   TSimpleBLESession = class;
@@ -48,6 +49,14 @@ type
     FHasFEC: Boolean;
     FHasHR: Boolean;
     FHasCSC: Boolean;
+    FHasZwift, FHasSterzo, FSteeringReady, FSteeringEncrypted: Boolean;
+    FSteeringSubscribed, FSteeringCanWrite: Boolean;
+    FSteeringServiceUUID, FSteeringControlUUID: TSimpleBleUuid;
+    FSteeringEvent: TEvent;
+    FSterzoResponse: TBytes;
+    FZwiftParser: TZwiftControllerParser;
+    function ActivateSteering: Boolean;
+  private
 
     { Service+Characteristic UUIDs for writing commands }
     FFTMSServiceUUID: TSimpleBleUuid;
@@ -465,6 +474,8 @@ begin
   FPeripheral := 0;
   FOwnsPeripheral := False;
   FFTMSParser := TFTMSParser.Create;
+  FSteeringEvent:=TEvent.Create(nil,False,False,'');
+  FZwiftParser:=TZwiftControllerParser.Create;
   FHasFTMS := False;
   FHasPower := False;
   FHasFEC := False;
@@ -484,6 +495,8 @@ begin
       SimpleBlePeripheralReleaseHandle(FPeripheral);
   end;
   FreeAndNil(FFTMSParser);
+  FreeAndNil(FSteeringEvent);
+  FreeAndNil(FZwiftParser);
   inherited;
 end;
 
@@ -512,6 +525,28 @@ end;
 
 { ── Connect: discover services, subscribe to notifications ── }
 
+function TSimpleBLESession.ActivateSteering: Boolean;
+var Response: TBytes;
+begin
+  Result:=False;
+  FLock.Enter;
+  try Result:=FSteeringReady and not FSteeringEncrypted finally FLock.Leave end;
+  if Result then Exit;
+  if not FSteeringSubscribed or not FSteeringCanWrite then Exit;
+  FSteeringEvent.ResetEvent;
+  if FHasZwift then Response:=ZwiftHandshakeRequest else Response:=TBytes.Create($03,$10);
+  if not WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,Response,True) then Exit;
+  FSteeringEvent.WaitFor(4000);
+  FLock.Enter;
+  try
+    Result:=FSteeringReady and not FSteeringEncrypted;
+    Response:=Copy(FSterzoResponse);
+  finally FLock.Leave end;
+  if Result or FHasZwift or (Length(Response)=0) then Exit;
+  Result:=WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,Response,True);
+  if Result then Result:=WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,TBytes.Create($02,$02),True);
+end;
+
 function TSimpleBLESession.Connect: Boolean;
 var
   SvcCount, ChCount: NativeUInt;
@@ -524,11 +559,15 @@ var
   ConnAttempt: Integer;
   HasUsefulService: Boolean;
   ControlReady:Boolean;
+  InitialData:TTrainerDataRecord;
 begin
   Result := False;
   if FDestroying then Exit;
   ClearNotifications;
   FHasFTMS:=False;FHasPower:=False;FHasFEC:=False;FHasHR:=False;FHasCSC:=False;
+  FHasZwift:=False; FHasSterzo:=False; FSteeringReady:=False; FSteeringEncrypted:=False;
+  FSteeringSubscribed:=False; FSteeringCanWrite:=False; FSterzoResponse:=nil;
+  FSteeringEvent.ResetEvent; FZwiftParser.Reset;
   FillChar(FFTMSServiceUUID,SizeOf(FFTMSServiceUUID),0);
   FillChar(FFTMSControlUUID,SizeOf(FFTMSControlUUID),0);
   ControlReady:=False;
@@ -581,7 +620,8 @@ begin
          (Pos('00001818', SvcStr) > 0) or  { Cycling Power }
          (Pos('6e40fec1', SvcStr) > 0) or  { FE-C }
          (Pos('0000180d', SvcStr) > 0) or  { Heart Rate }
-         (Pos('00001816', SvcStr) > 0) then { CSC }
+         (Pos('00001816', SvcStr) > 0) or { CSC }
+         (SvcStr=ZwiftServiceUUID) or (SvcStr=ZwiftRideServiceUUID) or (SvcStr=SterzoServiceUUID) then
       begin
         HasUsefulService := True;
         Break;
@@ -630,6 +670,8 @@ begin
     if Pos('6e40fec1', SvcStr) > 0 then begin FHasFEC := True; Logger.Info('[SimpleBLE]     → FE-C over BLE service detected'); end;
     if Pos('0000180d', SvcStr) > 0 then begin FHasHR := True; Logger.Info('[SimpleBLE]     → Heart Rate service detected'); end;
     if Pos('00001816', SvcStr) > 0 then begin FHasCSC := True; Logger.Info('[SimpleBLE]     → Cycling Speed & Cadence service detected'); end;
+    if (SvcStr=ZwiftServiceUUID) or (SvcStr=ZwiftRideServiceUUID) then FHasZwift:=True;
+    if SvcStr=SterzoServiceUUID then FHasSterzo:=True;
 
     { Subscribe to notifiable characteristics }
     ChCount := Svc.CharacteristicCount;
@@ -638,6 +680,13 @@ begin
     for J := 0 to Integer(ChCount) - 1 do
     begin
       ChStr := LowerCase(UUIDToStr(Svc.Characteristics[J].Uuid));
+      if ((ChStr=ZwiftWriteUUID) or (ChStr=SterzoControlUUID)) and
+        Svc.Characteristics[J].CanWriteRequest then
+      begin
+        FSteeringServiceUUID:=Svc.Uuid;
+        FSteeringControlUUID:=Svc.Characteristics[J].Uuid;
+        FSteeringCanWrite:=True;
+      end;
 
       Props := '';
       if Svc.Characteristics[J].CanRead then Props := Props + 'R';
@@ -655,7 +704,9 @@ begin
         FTMS Control Point is normally INDICATE-only, without CanNotify. }
       if not (ClassifyBLECharacteristic(ChStr) in [fctIndoorBikeData,
         fctCyclingPowerMeasurement,fctCSCMeasurement,fctHeartRateMeasurement,
-        fctFitnessMachineCP]) then Continue;
+        fctFitnessMachineCP]) and
+        (ChStr<>ZwiftNotifyUUID) and (ChStr<>ZwiftResponseUUID) and
+        (ChStr<>SterzoAngleUUID) and (ChStr<>SterzoChallengeUUID) then Continue;
       if Svc.Characteristics[J].CanIndicate and
          ((Pos('2ad9',ChStr)>0) or not Svc.Characteristics[J].CanNotify) and
          Assigned(SimpleBlePeripheralIndicate) then
@@ -669,6 +720,7 @@ begin
         N:=Length(FSubscriptions);SetLength(FSubscriptions,N+1);
         FSubscriptions[N].Service:=Svc.Uuid;
         FSubscriptions[N].Characteristic:=Svc.Characteristics[J].Uuid;
+        if (ChStr=ZwiftNotifyUUID) or (ChStr=SterzoAngleUUID) then FSteeringSubscribed:=True;
         if (Pos('2ad9',ChStr)>0) and Svc.Characteristics[J].CanWriteRequest then begin
           FFTMSServiceUUID:=Svc.Uuid;FFTMSControlUUID:=Svc.Characteristics[J].Uuid;
           ControlReady:=True;
@@ -684,6 +736,7 @@ begin
   FDeviceInfo.SupportsPower := FHasPower or FHasFTMS;
   FDeviceInfo.SupportsCadence := FHasFTMS or FHasCSC or FHasPower;
   FDeviceInfo.SupportsHeartRate := FHasHR;
+  FDeviceInfo.SupportsSteering:=FHasZwift or FHasSterzo;
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'SimpleBLE';
 
@@ -701,7 +754,26 @@ begin
     merely advertising the service is insufficient without its ACK channel. }
   FHasFTMS := ControlReady;
 
+  if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
+  begin
+    FDeviceInfo.SupportsSteering:=True;
+    Disconnect;
+    SetConnectionState(csError,'Zwift controller service is unavailable. This firmware may require activation in the vendor app.');
+    Exit;
+  end;
+  if FDeviceInfo.SupportsSteering and not ActivateSteering then
+  begin
+    Disconnect;
+    SetConnectionState(csError,'Steering activation failed. Wake the controller and close other cycling apps. Encrypted or locked Zwift firmware is not supported.');
+    Exit;
+  end;
   SetConnectionState(csConnected, 'Connected');
+  if FDeviceInfo.SupportsSteering then
+  begin
+    FLock.Enter;
+    try InitialData:=FLastData finally FLock.Leave end;
+    if tmSteering in InitialData.ValidMetrics then PublishMeasurement(InitialData);
+  end;
   Logger.Info('[SimpleBLE] Connection complete');
   Result := True;
 end;
@@ -732,12 +804,37 @@ var
   Buf: TBytes;
   HexStr: string;
   I: Integer;
+  Parsed: TTrainerDataRecord; Handshake: TZwiftHandshake; Valid: Boolean;
 begin
   if FDestroying then Exit;
   if (Data = nil) or (DataLen = 0) or (DataLen > 65535) then Exit;
 
   SetLength(Buf, DataLen);
   Move(Data^, Buf[0], DataLen);
+  if (CharUUID=ZwiftNotifyUUID) or (CharUUID=ZwiftResponseUUID) or
+     (CharUUID=SterzoAngleUUID) or (CharUUID=SterzoChallengeUUID) then
+  begin
+    Valid:=False;
+    FLock.Enter;
+    try
+      if CharUUID=SterzoChallengeUUID then
+      begin
+        FSterzoResponse:=SterzoChallengeResponse(Buf);
+        if Length(FSterzoResponse)>0 then FSteeringEvent.SetEvent;
+      end else if CharUUID=SterzoAngleUUID then
+        Valid:=ParseSterzoAngle(Buf,Parsed)
+      else begin
+        Handshake:=ZwiftHandshakeReply(Buf);
+        if Handshake=zhEncrypted then FSteeringEncrypted:=True;
+        if Handshake=zhPlaintext then FSteeringReady:=True;
+        if (Handshake=zhNone) and not FSteeringEncrypted then Valid:=FZwiftParser.Parse(Buf,Parsed);
+      end;
+      if Valid then FSteeringReady:=True;
+      if FSteeringReady or FSteeringEncrypted then FSteeringEvent.SetEvent;
+    finally FLock.Leave end;
+    if Valid then PublishMeasurement(Parsed);
+    Exit;
+  end;
 
   HexStr := '';
   for I := 0 to Min(Integer(DataLen) - 1, 15) do
@@ -1047,6 +1144,7 @@ const
         DevInfo.Address := FScanned[J].Address;
         DevInfo.TransportType := ttBLE;
         DevInfo.ProviderName := 'SimpleBLE';
+        DevInfo.SupportsSteering:=IsSterzoName(DevInfo.Name) or IsZwiftControllerName(DevInfo.Name);
         DevInfo.RSSI := SimpleBlePeripheralRssi(FScanned[J].Handle);
 
         if Assigned(OnDeviceFound) then

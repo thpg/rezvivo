@@ -39,6 +39,7 @@ type
     procedure ClickDevice(Sender:TObject);
     procedure ClickDisconnect(Sender:TObject);
     procedure ClickCenterSteering(Sender:TObject);
+    procedure ClickSteeringCompanion(Sender:TObject);
     procedure ClickScan(Sender:TObject);
     procedure ClickAdvanced(Sender:TObject);
     procedure WheelChanged(Sender:TObject);
@@ -60,7 +61,7 @@ var ViewDevices:TDevicesPage;
 implementation
 uses Math,CastleColors,CastleVectors,UiTranslations,GameDeviceService,GameDeviceTypes,
   GameDeviceSensor,GameTransportBase,GameDeviceManager,GameSensorPanel,AppSettings,TrainerData,
-  CastleWindow,CastleURIUtils,GameFilePicker;
+  CastleWindow,CastleURIUtils,GameFilePicker,ZwiftControllerProtocol;
 
 function VisibleDevice(const E:TGameDeviceEntry):Boolean;
 begin
@@ -199,7 +200,9 @@ begin
   if FSensorPanel<>nil then TSensorPanel(FSensorPanel).Refresh;
   for I:=0 to DeviceService.Devices.Count-1 do begin E:=DeviceService.Devices[I];
     if not VisibleDevice(E) then Continue;Inc(Count);
-    Sig:=Sig+E.DeviceInfo.Address+IntToStr(Ord(E.ConnectionState))+IntToStr(E.Sensors.Count)+';';end;
+    Sig:=Sig+E.DeviceInfo.Address+IntToStr(Ord(E.ConnectionState))+IntToStr(E.Sensors.Count)+
+      BoolToStr(DeviceService.IsSteeringCompanion(E),True)+
+      BoolToStr(DeviceService.CanPairSteering(E),True)+';';end;
   if Sig<>FSignature then begin FSignature:=Sig;Rebuild;end;
   FEmpty.Exists:=(Count=0)and not FAdvanced.Exists and not Settings.GetSimulationEnabled;
   if Settings.GetSimulationEnabled then BindUiText(FStatus,'Simulation is enabled. Sensors are not required.')
@@ -238,6 +241,10 @@ begin
     Card:=TMenuPanel.Create(FRows);Card.Width:=W;Card.Height:=124/S;
     Card.Anchor(vpTop,-Y);Card.Color:=MenuSurface;FContent.InsertFront(Card);
     L:=TMenuLabel.Create(Card);L.Caption:=E.DisplayName;L.Color:=White;L.FontSize:=20/S;L.MaxWidth:=W-210/S;
+    { Both Play halves advertise the same name. Keep the selected card
+      identifiable without exposing an unwieldy full BLE identifier. }
+    if IsZwiftControllerName(E.DeviceInfo.Name) then
+      L.Caption:=L.Caption+' · '+Copy(E.DeviceInfo.Address,Max(1,Length(E.DeviceInfo.Address)-7),8);
     if E.DeviceInfo.TransportType=ttSim then begin
       L.Caption:=UiText('Simulation')+': '+ExtractFileName(Settings.EffectiveSimulationFitPath);
       L.MaxWidth:=W-28/S;
@@ -255,10 +262,16 @@ begin
     if E.ConnectionState=gdcsConnected then begin
       B:=TMenuButton.Create(Card);B.Name:='DisconnectDevice'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickDisconnect;
       BindUiText(B,'Disconnect');B.FontSize:=14/S;B.Anchor(hpRight,-14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
-      if E.DeviceInfo.SupportsSteering then begin
+      if E.DeviceInfo.SupportsSteering and not IsZwiftControllerName(E.DeviceInfo.Name) then begin
         B:=TMenuButton.Create(Card);B.Name:='CenterSteering'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickCenterSteering;
         BindUiText(B,'Center steering');B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
       end;
+    end;
+    if DeviceService.CanPairSteering(E) then begin
+      B:=TMenuButton.Create(Card);B.Name:='PairSteering'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickSteeringCompanion;
+      if DeviceService.IsSteeringCompanion(E) then BindUiText(B,'Remove from steering pair')
+      else BindUiText(B,'Add to steering pair');
+      B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
     end;
     Y:=Y+138/S;
   end;
@@ -272,6 +285,17 @@ begin
   if(DeviceService=nil)or(I<0)or(I>=DeviceService.Devices.Count)then Exit;
   DeviceService.SelectDeviceForRoles(DeviceService.Devices[I]);
   DeviceService.CenterSteering;
+end;
+
+procedure TDevicesPage.ClickSteeringCompanion(Sender:TObject);
+var I:Integer;E:TGameDeviceEntry;
+begin
+  I:=TComponent(Sender).Tag;
+  if(DeviceService=nil)or(I<0)or(I>=DeviceService.Devices.Count)then Exit;
+  E:=DeviceService.Devices[I];
+  if DeviceService.IsSteeringCompanion(E) then DeviceService.SelectSteeringCompanion(nil)
+  else DeviceService.SelectSteeringCompanion(E);
+  FSignature:='#refresh';
 end;
 
 procedure TDevicesPage.ClickDevice(Sender:TObject);

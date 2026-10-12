@@ -12,7 +12,7 @@ unit GameViewPlay;
 
 interface
 
-uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,
+uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,GameRouteReturn,Osm3dTravelRoads,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleKeysMouse, CastleViewport, CastleScene, CastleVectors, CastleCameras,
   CastleTransform, CastleInputs, CastleThirdPersonNavigation, CastleDebugTransform,
@@ -68,9 +68,7 @@ type
     SceneAvatar, SceneLevel, SceneRoadBarrier: TCastleScene;
     AvatarTransform: TCastleTransform;
     AvatarRigidBody: TCastleRigidBody;
-    CheckboxCameraFollows: TCastleCheckbox;
     CheckboxAimAvatar: TCastleCheckbox;
-    CheckboxDebugAvatarColliders: TCastleCheckbox;
     CheckboxImmediatelyFixBlockedCamera: TCastleCheckbox;
     SliderAirRotationControl: TCastleFloatSlider;
     SliderAirMovementControl: TCastleFloatSlider;
@@ -96,7 +94,19 @@ type
     FExploreSteer,FExplorePowerAxis,FExploreWalkAxis:Single;
     FHardwareSteer: Single;
     FHardwareSteering: Boolean;
+    FManualSteerIntent,FSteeringIntentHold:Single;
     FWalkHold:THeldMovement;
+    FRoadGuidance:TRoadGuidance;
+    FRouteReturn:TRouteReturnGuide;
+    FRouteExcursion,FLeftRouteCorridor,FCancelWarmup:Boolean;
+    FRoadRefresh,FExplicitTurnTime,FExcursionTime,FReturnDwell:Single;
+    FLastManualTurn:Integer;
+    procedure CancelWarmup(Sender:TObject);
+    procedure LeaveRoute;
+    procedure ResumeRoute;
+    procedure SyncRestoredTravel;
+    function GuideTravel(Dt,Steer:Single;Turn:Integer):Single;
+    procedure UpdateRouteReturn(Dt:Single);
     procedure ClickTouchCamera(Sender:TObject);
     procedure ConfigureTravel;
     procedure UpdateTravelInput(Dt:Single;AllowInput:Boolean);
@@ -634,7 +644,7 @@ function CreateGameFpsControl(AOwner:TComponent):TCastleUserInterface;
 implementation
 
 
-uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,
+uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,GameClientUpdate,GameActivitySource,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
   GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
@@ -1182,6 +1192,15 @@ begin
     Result.Add('speed',FActiveAvatarAgent.State.CurrentSpeed);
     Result.Add('distance',FActiveAvatarAgent.State.CumulativeDistance);
     Result.Add('steer',FActiveAvatarAgent.State.TravelSteering);
+    Result.Add('off_road',FActiveAvatarAgent.State.TravelOffRoad);
+    Result.Add('route_excursion',FRouteExcursion);
+    if FRoadGuidance<>nil then begin
+      Result.Add('on_road',FRoadGuidance.OnRoad);
+      Result.Add('road_following',FRoadGuidance.Following);
+      Result.Add('road_way',FRoadGuidance.WayId);
+      Result.Add('pending_turn',FRoadGuidance.PendingTurn);
+    end;
+    if FRouteReturn<>nil then Result.Add('return_distance',FRouteReturn.Distance);
     Result.Add('hardware_steering',FHardwareSteering);
     Result.Add('hardware_steer_axis',FHardwareSteer);
     Result.Add('lane_offset',FActiveAvatarAgent.State.LaneOffset);
@@ -1196,6 +1215,11 @@ begin
 end;
 procedure TViewPlay.ConfigureTravel;
 begin
+  if FRoadGuidance=nil then FRoadGuidance:=TRoadGuidance.Create;
+  FRoadGuidance.Reset;FRoadRefresh:=0;FExplicitTurnTime:=0;FLastManualTurn:=0;
+  FManualSteerIntent:=0;FSteeringIntentHold:=0;
+  FRouteExcursion:=False;FLeftRouteCorridor:=False;FReturnDwell:=0;
+  if FRouteReturn<>nil then FRouteReturn.Hide;
   if FTouchControls<>nil then FTouchControls.Reset;
   FKeyboardPower:=0;FExploreInputOverride:=False;
   FExploreLoadHintTick:=0;FExploreLoadHint:='';
@@ -1205,6 +1229,7 @@ begin
   if FBLEHud<>nil then begin FBLEHud.ManualPower:=-1;FBLEHud.ManualCadence:=0 end;
   if HasActiveState then begin
     FActiveAvatarAgent.State.FreeTravel:=FFreeExplore;
+    FActiveAvatarAgent.State.TravelOffRoad:=False;
     FActiveAvatarAgent.State.Walking:=FTravelMode=travelWalk;
     FActiveAvatarAgent.State.TravelSteering:=0;
     FActiveAvatarAgent.State.GroundTurn:=Default(TGroundTurnState);
@@ -1253,8 +1278,11 @@ begin
     FWorkoutHud.ReleaseTrainer;WorkoutPlayer.Stop;FWorkoutHud.Exists:=False;
   end;
 end;
+{$I GameTravelRoads.inc}
+
 procedure TViewPlay.UpdateTravelInput(Dt:Single;AllowInput:Boolean);
-var PowerAxis,Steer,WalkAxis,WalkStart,SteeringDegrees:Single;KeyState:TKeysPressed;
+var PowerAxis,Steer,WalkAxis,WalkStart,SteeringAxisValue:Single;KeyState:TKeysPressed;
+  SteeringTurn,ManualTurn:Integer;
   Sensor,Simulated,Fast,SimPaused:Boolean;SimCurrent,SimTotal:Integer;
   LoadStage,LoadError:string;
   Touch,Look:TVector2;CanInput,TouchSteering:Boolean;
@@ -1280,7 +1308,7 @@ begin
   PowerAxis:=0;Steer:=0;WalkAxis:=0;Fast:=False;TouchSteering:=False;
   if FExploreInputOverride then begin
     PowerAxis:=FExplorePowerAxis;Steer:=FExploreSteer;WalkAxis:=FExploreWalkAxis;
-  end else if AllowInput and(Container<>nil)and(Container.FrontView=Self)and
+  end else if CanInput and(Container<>nil)and(Container.FrontView=Self)and
     Container.Focused and(Container.ForceCaptureInput=nil)and(FCameraMode<>pcmFree)then begin
     KeyState:=Container.Pressed;
     if KeyState[keyW]or KeyState[keyArrowUp]or KeyState[keyEqual]or KeyState[keyNumpadPlus]then PowerAxis:=1;
@@ -1300,14 +1328,26 @@ begin
       if FTouchControls.Braking then FKeyboardPower:=0;
     end;
   end;
-  FHardwareSteering:=(FTravelMode=travelBicycle) and not FExploreInputOverride and
-    not RidePreparationHeld and Assigned(DeviceService) and
-    DeviceService.ReadSteering(SteeringDegrees);
+  ManualTurn:=0;if Abs(Steer)>0.25 then ManualTurn:=Sign(Steer);
+  SteeringTurn:=0;SteeringAxisValue:=0;
+  FHardwareSteering:=(FTravelMode in[travelBicycle,travelWalk]) and not FExploreInputOverride and
+    CanInput and Assigned(DeviceService) and
+    DeviceService.ReadSteeringInput(SteeringAxisValue,SteeringTurn);
   if FHardwareSteering then
   begin
-    FHardwareSteer:=SmoothSteering(FHardwareSteer,SteeringAxis(SteeringDegrees),Dt);
-    Steer:=FHardwareSteer;
+    FHardwareSteer:=SmoothSteering(FHardwareSteer,SteeringAxisValue,Dt);
+    Steer:=EnsureRange(Steer+FHardwareSteer,-1,1);
   end else FHardwareSteer:=0;
+  if not CanInput and not FExploreInputOverride and Assigned(DeviceService)then
+    DeviceService.ResetSteeringInput;
+  if(ManualTurn<>0)and(ManualTurn<>FLastManualTurn)then SteeringTurn:=ManualTurn;
+  FLastManualTurn:=ManualTurn;
+  { Keep the user's combined intent before road assistance replaces Steer.
+    A connected neutral controller permits rejoin; an active axis/button does not. }
+  FManualSteerIntent:=Steer;
+  if(Abs(Steer)>=0.15)or(SteeringTurn<>0)then FSteeringIntentHold:=1.25
+  else FSteeringIntentHold:=Math.Max(0,FSteeringIntentHold-Dt);
+  Steer:=GuideTravel(Dt,Steer,SteeringTurn);
   if FLaneManager<>nil then
     FLaneManager.SetSteering(FLocalLaneHandle,(FHardwareSteering or TouchSteering) and not FFreeExplore,Steer);
   if not FFreeExplore then begin Steer:=0;WalkAxis:=0 end;
@@ -3001,8 +3041,8 @@ begin
     ThirdPersonNavigation,
     AvatarTransform,
     FreeAtStop,
-    CheckboxCameraFollows, CheckboxAimAvatar,
-    CheckboxDebugAvatarColliders, CheckboxImmediatelyFixBlockedCamera,
+    nil, CheckboxAimAvatar,
+    nil, CheckboxImmediatelyFixBlockedCamera,
     SliderAirRotationControl, SliderAirMovementControl,
     ButtonChangeTransformationAuto, ButtonChangeTransformationDirect,
     ButtonChangeTransformationVelocity, ButtonChangeTransformationForce
@@ -3711,6 +3751,9 @@ procedure TViewPlay.Stop;
 var
   I: Integer;
 begin
+  RideRooms.EndAutomatic;
+  FreeAndNil(FRouteReturn);FreeAndNil(FRoadGuidance);
+  FRouteExcursion:=False;FCancelWarmup:=False;
   if FFocusMode then SetTrainingFocus(False);
   FExploreHint:=nil;
   if FTouchControls<>nil then FTouchControls.Reset;
@@ -3854,7 +3897,12 @@ procedure TViewPlay.ConnectRideRoom;
 var WorldId:string;I:TRideRoomInfo;
 begin
   if FRemoteRiders=nil then Exit;
+  if not ClientCanUseOnlineServices(False) then Exit;
   WorldId:='';if FDreamWorld<>nil then WorldId:=FDreamWorld.Id;
+  if(WorldId='')and(FTravelMode=travelBicycle)and not Settings.GetSimulationEnabled then begin
+    if Assigned(DeviceService)then RideRooms.AutoJoin(FCurrentFitPath,
+      DeviceService.HasControlDevice or((DeviceService.ActivitySourceFlags and ActivitySourceSmartTrainer)<>0));
+  end else RideRooms.EndAutomatic;
   if not RideRooms.MatchesRide(FCurrentFitPath,WorldId)then begin
     if(FRemoteRiders.RideClient<>nil)and FRemoteRiders.RideClient.PrivateRoom then
       FRemoteRiders.StopRelay;
@@ -3867,7 +3915,7 @@ begin
     RideRooms.RelayError:=FRemoteRiders.RideClient.LastError;Exit;
   end;
   RideRooms.RelayError:='';
-  FRemoteRiders.StartRelay(I.RelayUrl,BikeJsonFileName,BikeJsonFileName2,True,I.RiderId,VeloSite.CachedProfile.Nickname);
+  FRemoteRiders.StartRelay(I.RelayUrl,BikeJsonFileName,BikeJsonFileName2,True,I.RiderId,EffectiveRiderProfile.Nickname,I.SessionToken);
   if FActiveAvatarAgent<>nil then FRemoteRiders.LocalDistance:=FActiveAvatarAgent.State.CumulativeDistance;
   FRemoteRiders.RideClient.OnRiderCountChanged:=@RiderCountChanged;
 end;
@@ -4102,8 +4150,6 @@ begin
   if FBotPanel <> nil then FBotPanel.Exists := ShowPanels;
   if LabelFps <> nil then LabelFps.Exists := ShowPanels;
   if FFpsBgRect <> nil then FFpsBgRect.Exists := ShowPanels;
-  if CheckboxCameraFollows <> nil then CheckboxCameraFollows.Exists := ShowPanels;
-  if CheckboxDebugAvatarColliders <> nil then CheckboxDebugAvatarColliders.Exists := ShowPanels;
   { VerticalGroup1 also holds the normal rider list: keep that list visible. }
   if FRiderScroll <> nil then
   begin
@@ -4150,7 +4196,7 @@ procedure TViewPlay.UpdateRiderListVisibility;
 begin
   if FRiderScroll <> nil then FRiderScroll.Exists := FHasOtherRiders and not FFocusMode;
   if VerticalGroup1 <> nil then
-    VerticalGroup1.Exists := (AdminPanelsVisible or FHasOtherRiders)and not FFocusMode;
+    VerticalGroup1.Exists := FHasOtherRiders and not FFocusMode;
 end;
 
 procedure TViewPlay.RiderCountChanged(Sender: TObject);
@@ -4238,6 +4284,7 @@ end;
 
 procedure TViewPlay.OpenMenu;
 begin
+  if FOsmPrepHold then begin FCancelWarmup:=True;Exit end;
   if Container.PendingFrontView <> Self then Exit;
   if FFocusPanel<>nil then FFocusPanel.SyncWindow(False);
   FCameraDragging := False;
@@ -4673,7 +4720,7 @@ begin
   if Assigned(FBotBikes) then
     for I := 0 to FBotBikes.Count - 1 do
       if FBotBikes[I]<>nil then TBikeInstance(FBotBikes[I]).Group.Exists := AOn;
-  if FLocalBots<>nil then FLocalBots.SetRenderEnabled(AOn and not FFreeExplore);
+  if FLocalBots<>nil then FLocalBots.SetRenderEnabled(AOn and(not FFreeExplore or FRouteExcursion));
   if Assigned(FRemoteRiders) then
     FRemoteRiders.SetRidersVisible(AOn);
   { Теневая плоскость аватара: при скрытых райдерах пробы не нужны. }
@@ -4820,14 +4867,16 @@ var
   LeanAgent:TPhysicalAgent;
 begin
   T0 := Timer;
+  if FCancelWarmup then begin
+    FCancelWarmup:=False;Container.View:=ViewMenu;Exit;
+  end;
   CountRiderWork(rwViewUpdate);
   if FProfileFrameNum=High(Integer) then FProfileFrameNum:=0;
   Inc(FProfileFrameNum); { scheduling must advance with logging disabled too }
   TStart := GetTickCount64;
   if TStart>=FRoomCheckAt then begin
     FRoomCheckAt:=TStart+1000;RideRooms.Update;
-    if(FRemoteRiders<>nil)and(FRemoteRiders.RideClient<>nil)and FRemoteRiders.RideClient.PrivateRoom then
-      ConnectRideRoom;
+    ConnectRideRoom;
   end;
 
   { The watchdog uses an in-memory heartbeat. Log only a real stall;
@@ -4920,6 +4969,8 @@ begin
     if (not FOsmPrepRaised) and Assigned(FOsmStreaming) then
     begin
       FOsmPrepRaised := True;
+      if(FOsmStreaming.Session<>nil)and(FOsmStreaming.Session.Map.WarmupOverlay<>nil)then
+        FOsmStreaming.Session.Map.WarmupOverlay.OnCancel:=@CancelWarmup;
       FOsmStreaming.RaiseWarmupToFront(Self);
     end;
     if (not Assigned(FOsmStreaming)) or (not FOsmStreaming.Active) then
@@ -5116,7 +5167,7 @@ begin
   try
     if (not RidePreparationHeld) and (PhysDt>0) then
     begin
-      if FFreeExplore then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
+      if FFreeExplore and not FRouteExcursion then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
       else begin
       if FLocalBots<>nil then FLocalBots.BeforePhysics(PhysDt);
       UpdateRiderTraffic(FLaneManager,PhysDt);
@@ -5135,6 +5186,7 @@ begin
     end;
   end;
   T2 := Timer;
+  UpdateRouteReturn(PhysDt);
   FreezeDiagMainBeat;
   FreezeDiagSetLocation('TViewPlay.Update: after physics');
   TAfterPhysics := GetTickCount64;
@@ -5379,7 +5431,7 @@ begin
   T4c := Timer;   { TEMP-DIAG: конец AnimateFrame аватара }
 
   { Боты на общем пайплайне: без AnimateFrame их Tripo-райдер не позируется. }
-  if not FFreeExplore and not FFocusMode and (PhysDt>0) then
+  if (not FFreeExplore or FRouteExcursion) and not FFocusMode and (PhysDt>0) then
   begin
     UpdateBotPoseManagers(PhysDt);
     AnimateBotBikes(PhysDt);
@@ -6403,6 +6455,7 @@ begin
     if(C.LocalBots.CrossIdentity<>nil)and(FLocalBots<>nil)then
       FLaneManager.ReplaceRiderTag(C.LocalBots.CrossIdentity,Pointer(FLocalBots.CrossAgent));
   end;
+  SyncRestoredTravel;
   if C.HasBike and Assigned(FBikeInstance) then FBikeInstance.RestoreReplay(C.Bike);
   FCameraMode:=TPlayCameraMode(C.CameraMode);
   ApplyCameraMode;

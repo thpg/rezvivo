@@ -31,6 +31,7 @@ type
     function ViewBox(Sender: TObject; out Box: TLatLonBox): Boolean;
     procedure StyleSearch(Sender: TObject);
     procedure Zoom(Sender: TObject);
+    procedure LayoutControls;
   protected
     procedure Resize; override;
   public
@@ -87,10 +88,10 @@ begin
   FSearch.Color:=MenuSurface;FSearch.Anchor(hpLeft,12);FSearch.Anchor(vpTop,-70);StyleMenuFields(FSearch);
   FPanel.InsertFront(FSearch);
   FCoords:=TMenuLabel.Create(Self);FCoords.FontSize:=13;FCoords.Color:=MenuMuted;
-  FCoords.Anchor(hpLeft,12);FCoords.Anchor(vpBottom,64);FPanel.InsertFront(FCoords);
+  FCoords.Anchor(hpLeft,20);FCoords.Anchor(vpBottom,60);InsertFront(FCoords);
   FStart:=TMenuButton.Create(Self);FStart.Name:='ExploreStart';FStart.Style:=mbPrimary;
   BindUiText(FStart,'Start here');FStart.Anchor(hpLeft,12);FStart.Anchor(vpBottom,12);
-  FStart.OnClick:=@Start;FStart.Enabled:=False;FPanel.InsertFront(FStart);
+  FStart.OnClick:=@Start;FStart.Enabled:=False;InsertFront(FStart);
   for I:=0 to 1 do begin
     B:=TMenuButton.Create(Self);B.AutoIcon:=False;B.Caption:='+';if I=1 then B.Caption:='-';
     B.Tag:=1-I*2;B.OnClick:=@Zoom;B.Width:=42;B.Height:=40;B.AutoSize:=False;
@@ -99,15 +100,27 @@ begin
 end;
 procedure TExplorePage.Resize;
 begin
-  inherited;if FPanel=nil then Exit;
-  FPanel.Width:=Min(352,Max(210,EffectiveWidth*0.42));FHint.MaxWidth:=FPanel.Width-24;
+  inherited;LayoutControls;
+end;
+procedure TExplorePage.LayoutControls;
+var ShortPage:Boolean;SearchTop:Single;
+begin
+  if FPanel=nil then Exit;
+  ShortPage:=EffectiveHeightForChildren<340;
+  FPanel.Width:=Min(352,Max(210,EffectiveWidthForChildren*0.42));
+  FHint.MaxWidth:=FPanel.Width-24;
+  FHint.Exists:=not ShortPage;
+  if ShortPage then SearchTop:=4 else SearchTop:=Max(70,FHint.EffectiveHeight+24);
   FSearch.Width:=FPanel.Width-24;
+  FSearch.Anchor(vpTop,-SearchTop);
+  FPanel.Height:=SearchTop+FSearch.EffectiveHeight+8;
+  FStart.Anchor(hpLeft,20);FStart.Anchor(vpBottom,12);
+  FCoords.Anchor(hpLeft,20);FCoords.Anchor(vpBottom,60);
 end;
 procedure TExplorePage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 begin
   inherited;
-  FSearch.Anchor(vpTop,-Max(70,FHint.EffectiveHeight+24));
-  FPanel.Height:=Max(256,Max(70,FHint.EffectiveHeight+24)+FSearch.EffectiveHeight+112);
+  LayoutControls;
 end;
 procedure TExplorePage.ShowMap;
 begin

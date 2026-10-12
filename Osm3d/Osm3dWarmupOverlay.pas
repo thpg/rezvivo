@@ -63,6 +63,7 @@ const
   WARMUP_MIN_LABEL_CELL_PX = 34.0; { уже — текст в столбике не читается, гасим }
   WARMUP_MARGIN   = 24.0;   { поля вокруг панели карты, локальные px }
   WARMUP_HEADER_H = 48.0;   { полоса заголовка сверху }
+  WARMUP_ACTION_H = 72.0;
   { Список этапов загрузки — фиксированные шаги конвейера подготовки
     маршрута; состояния толкаются хостом через SetStageState. Рисуется
     колонкой слева от панели карты (её ширина зарезервирована в
@@ -133,6 +134,7 @@ type
     BarHeight: Single;        { measured label plus padding, local UI pixels }
     LabelDirty: Boolean;
     PhotoSummary: string;
+    ServerReady: Boolean;
   end;
 
   TRasterTile = record
@@ -150,12 +152,14 @@ type
   private
     FOwner: TOsm3dWarmupOverlay;
     FMapHttp:THTTPFetcherWithCache;
+    FJoined:Boolean;
   protected
     procedure Execute; override;
   public
     constructor Create(AOwner: TOsm3dWarmupOverlay);
     destructor Destroy;override;
     procedure Cancel;
+    procedure Join;
   end;
 
   TOsm3dWarmupOverlay = class(TCastleUserInterface)
@@ -202,8 +206,14 @@ type
     FErrorMsg:    string;
     FErrorLabel:  TCastleLabel;
     FNetworkTitle:TCastleLabel;
+    FReadyLegend,FCacheLegend,FPendingLegend:TCastleLabel;
     FNetworkLabels:array[0..5]of TCastleLabel;
     FNetworkSince,FNetworkNextUpdate:QWord;
+    FCancelButton:TCastleButton;
+    FOnCancel:TNotifyEvent;
+    procedure SetOnCancel(const Value:TNotifyEvent);
+    procedure ClickCancel(Sender:TObject);
+    function ActionHeight:Single;
 
     function  MercOf(const P: TLatLon): TMercPt;
     { Прямоугольник панели карты в ЛОКАЛЬНЫХ (немасштабированных)
@@ -283,12 +293,15 @@ type
 
     property Showing: Boolean read FShowing;
     property TileCount: Integer read GetTileCount;
+    { The host schedules cancellation outside input dispatch, since disposing
+      a streaming session also disposes this overlay. }
+    property OnCancel:TNotifyEvent read FOnCancel write SetOnCancel;
   end;
 
 implementation
 
 uses
-  StrUtils, URIParser, Osm3dFlatMap, CastleGLUtils, Osm3dPhotoStatusText;
+  StrUtils, URIParser, Osm3dFlatMap, CastleGLUtils, Osm3dPhotoStatusText, Osm3dReadyTiles;
 
 { ── TWarmupRasterThread ───────────────────────────────────────────── }
 
@@ -302,7 +315,12 @@ begin
 end;
 
 destructor TWarmupRasterThread.Destroy;
-begin Cancel;WaitFor;FMapHttp.Free;inherited;end;
+begin Cancel;Join;FMapHttp.Free;inherited;end;
+procedure TWarmupRasterThread.Join;
+begin
+  if FJoined then Exit;
+  WaitFor;FJoined:=True;
+end;
 procedure TWarmupRasterThread.Cancel;
 begin Terminate;FMapHttp.AbortAllRequests;end;
 
@@ -388,6 +406,43 @@ begin
   FErrorLabel.Anchor(vpBottom, 14 + 8);
   FErrorLabel.Exists := False;
   InsertFront(FErrorLabel);
+
+  FCancelButton:=TCastleButton.Create(Self);
+  FCancelButton.Name:='OsmWarmupCancel';
+  BindUiText(FCancelButton,'Cancel preparation');
+  FCancelButton.FontSize:=18;FCancelButton.MinHeight:=44;
+  FCancelButton.Anchor(hpRight,-WARMUP_MARGIN);
+  FCancelButton.Anchor(vpBottom,18);
+  FCancelButton.OnClick:=@ClickCancel;FCancelButton.Exists:=False;
+  InsertFront(FCancelButton);
+
+  FReadyLegend:=TCastleLabel.Create(Self);FReadyLegend.Name:='OsmServerReadyLegend';
+  FReadyLegend.Color:=Vector4(0.3,0.7,1,1);FReadyLegend.FontSize:=12;
+  FReadyLegend.Anchor(hpLeft,WARMUP_MARGIN);FReadyLegend.Anchor(vpBottom,50);InsertFront(FReadyLegend);
+  FCacheLegend:=TCastleLabel.Create(Self);FCacheLegend.Name:='OsmCachedLegend';
+  FCacheLegend.Color:=Vector4(0.4,0.9,0.5,1);FCacheLegend.FontSize:=12;
+  FCacheLegend.Anchor(hpLeft,WARMUP_MARGIN);FCacheLegend.Anchor(vpBottom,34);InsertFront(FCacheLegend);
+  FPendingLegend:=TCastleLabel.Create(Self);FPendingLegend.Name:='OsmPendingLegend';
+  FPendingLegend.Color:=Vector4(0.65,0.68,0.72,1);FPendingLegend.FontSize:=12;
+  FPendingLegend.Anchor(hpLeft,WARMUP_MARGIN);FPendingLegend.Anchor(vpBottom,18);InsertFront(FPendingLegend);
+  FErrorLabel.Anchor(vpBottom,22+ActionHeight);
+end;
+
+function TOsm3dWarmupOverlay.ActionHeight:Single;
+begin
+  Result:=WARMUP_ACTION_H;
+end;
+
+procedure TOsm3dWarmupOverlay.SetOnCancel(const Value:TNotifyEvent);
+begin
+  FOnCancel:=Value;FCancelButton.Exists:=Assigned(FOnCancel);
+  FErrorLabel.Anchor(vpBottom,22+ActionHeight);
+  FLabelsDirty:=True;FNetworkNextUpdate:=0;
+end;
+
+procedure TOsm3dWarmupOverlay.ClickCancel(Sender:TObject);
+begin
+  if FShowing and Assigned(FOnCancel)then FOnCancel(Self);
 end;
 
 destructor TOsm3dWarmupOverlay.Destroy;
@@ -609,7 +664,6 @@ begin
   if FRasterTh <> nil then
   begin
     FRasterTh.Cancel;
-    FRasterTh.WaitFor;
     FreeAndNil(FRasterTh);
   end;
   for I := 0 to High(FRaster) do
@@ -694,7 +748,7 @@ end;
 
 procedure TOsm3dWarmupOverlay.JoinBackgroundStop;
 begin
-  if FRasterTh<>nil then FRasterTh.WaitFor;
+  if FRasterTh<>nil then FRasterTh.Join;
 end;
 
 procedure TOsm3dWarmupOverlay.SetTileHarvest(AIndex: Integer;
@@ -832,7 +886,7 @@ begin
   { слева зарезервирована колонка списка этапов — панель карты (а значит
     клетки тайлов и линия маршрута) её не перекрывает }
   W := EffectiveWidth  - WARMUP_MARGIN * 2 - WARMUP_STAGE_COL_W;
-  H := EffectiveHeight - WARMUP_MARGIN * 2 - WARMUP_HEADER_H;
+  H := EffectiveHeight - WARMUP_MARGIN * 2 - WARMUP_HEADER_H - ActionHeight;
   if W < 8 then W := 8;
   if H < 8 then H := 8;
   SpanX := FMercMax.X - FMercMin.X;
@@ -844,7 +898,7 @@ begin
   PH := SpanY * Scale;
   Result := FloatRectangle(
     WARMUP_MARGIN + WARMUP_STAGE_COL_W + (W - PW) * 0.5,
-    WARMUP_MARGIN + (H - PH) * 0.5,
+    WARMUP_MARGIN + ActionHeight + (H - PH) * 0.5,
     PW, PH);
 end;
 
@@ -981,12 +1035,23 @@ end;
 
 procedure TOsm3dWarmupOverlay.UpdateNetworkLabels;
 var Rows:TOsmEndpointSnapshots;Tmp:TOsmEndpointSnapshot;
-    I,J,N,StageRows:Integer;Tick:QWord;Top,Available:Single;
+    I,J,N,StageRows,ServerReadyN,CachedN:Integer;Tick:QWord;Top,Available:Single;
     Caption,Status,Host:string;U:TURI;L:TCastleLabel;
 begin
   { Read-only snapshots; no network work, callbacks into workers or per-frame
     text allocation. Hidden overlays do not poll at all. }
   Tick:=GetTickCount64;FNetworkNextUpdate:=Tick+500;
+  { Read-only in-memory catalogue; this never starts a server request. Keep
+    the marker separate from progress: advertised tiles still need validation. }
+  ServerReadyN:=0;CachedN:=0;
+  for I:=0 to High(FTiles)do begin
+    FTiles[I].ServerReady:=ReadyTileAvailable(FTiles[I].Id);
+    if FTiles[I].ServerReady then Inc(ServerReadyN);
+    if FTiles[I].State.Done then Inc(CachedN);
+  end;
+  FReadyLegend.Caption:=UiText('Ready on server')+': '+IntToStr(ServerReadyN);
+  FCacheLegend.Caption:=UiText('Ready in cache')+': '+IntToStr(CachedN);
+  FPendingLegend.Caption:=UiText('Pending')+': '+IntToStr(Length(FTiles)-CachedN);
   Rows:=OsmEndpointSnapshots(FNetworkSince);
   for I:=0 to High(Rows)do for J:=I+1 to High(Rows)do
     if (Ord(Rows[J].Active>0)>Ord(Rows[I].Active>0))or
@@ -1000,7 +1065,7 @@ begin
   FNetworkTitle.FontSize:=14/Max(0.25,FNetworkTitle.UIScale);
   FNetworkTitle.Anchor(hpLeft,WARMUP_MARGIN);
   FNetworkTitle.Anchor(vpTop,-Top);Top:=Top+FNetworkTitle.EffectiveHeight+10;
-  Available:=EffectiveHeight-24;
+  Available:=EffectiveHeight-24-ActionHeight;
   if FErrorLabel.Exists then Available:=Available-FErrorLabel.EffectiveHeight-20;
   N:=Min(Length(Rows),Length(FNetworkLabels));
   for I:=0 to High(FNetworkLabels)do FNetworkLabels[I].Exists:=False;
@@ -1115,6 +1180,13 @@ begin
     DrawRectangle(DevRect(CellL, CellB + CellH - 1, CellW, 1), Vector4(1, 1, 1, 0.22));
     DrawRectangle(DevRect(CellL, CellB, 1, CellH), Vector4(1, 1, 1, 0.22));
     DrawRectangle(DevRect(CellL + CellW - 1, CellB, 1, CellH), Vector4(1, 1, 1, 0.22));
+
+    { Cyan inset corner identifies compatible ready geometry on the server,
+      even before its download starts. Yellow/green keep their progress meaning. }
+    if FTiles[I].ServerReady then
+      DrawRectangle(DevRect(CellL+CellW-Min(12,CellW*0.3),
+        CellB+CellH-Min(12,CellH*0.3),Min(9,CellW*0.22),Min(9,CellH*0.22)),
+        Vector4(0.3,0.7,1,1));
 
     { Заливка клетки целиком по завершённым фазам:
         wpGenDone — тайл готов на диске, ждёт harvest: приглушённый жёлтый
@@ -1263,7 +1335,7 @@ begin
     EH := FErrorLabel.EffectiveHeight + 16;
     if EW > EffectiveWidth - WARMUP_MARGIN * 2 then
       EW := EffectiveWidth - WARMUP_MARGIN * 2;
-    DrawRectangle(DevRect((EffectiveWidth - EW) * 0.5, 14, EW, EH),
+    DrawRectangle(DevRect((EffectiveWidth - EW) * 0.5, 14+ActionHeight, EW, EH),
       Vector4(0.75, 0.10, 0.10, 0.78));
   end;
 end;
@@ -1271,7 +1343,10 @@ end;
 function TOsm3dWarmupOverlay.Press(const Event: TInputPressRelease): Boolean;
 begin
   { The host must still be able to open its menu while loading/retrying. }
-  if FShowing and Event.IsKey(keyEscape) then Exit(False);
+  if FShowing and Event.IsKey(keyEscape) then begin
+    if Assigned(FOnCancel)then begin ClickCancel(nil);Exit(True) end;
+    Exit(False);
+  end;
   Result := inherited;
   if FShowing then Result := True;     { навигация под оверлеем заблокирована }
 end;

@@ -18,7 +18,7 @@ uses
   Osm3dGeoTileGrid,
   Osm3dTileX3D,
   Osm3dBuildingObstacleIndex,
-  Osm3dStudioSettings, Osm3dKnowledgeRecipe
+  Osm3dStudioSettings, Osm3dKnowledgeRecipe, Osm3dReadyTiles, Osm3dCacheHTTPFetcher
   {$IFDEF TILE_MEM_PROFILE}, Osm3dTileMemProfile, Osm3dMemCensus{$ENDIF}
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ;
@@ -29,11 +29,15 @@ type
   TGeoTileCache = class
   private
     FRootDir:   string;       { '<root>/o3dt/v1/<genHash>/E<edge>/' }
+    FBaseDir: string;
     FGenHash:   string;
     FRecipes: TKnowledgeRecipeSnapshot;
     FTextFormat: Boolean;
     FGrid:      TGeoTileGrid;
     FLock:      TCriticalSection;
+    FReadyTiles: TReadyTiles;
+    FReadyInstallLock: TCriticalSection;
+    FUniversal: TGeoTileCache;
 
     { In-memory presence index — set of PathFor() keys known to exist on
       disk. Has() consults this instead of hitting the filesystem every
@@ -50,6 +54,9 @@ type
       never Synchronizes (a TFileLogTarget). nil = silent. }
     FLog:       TLogTarget;
 
+    procedure InstallReadyTile(const T: TGeoTileId; Model: TTileModel; const Revision: string);
+    function ReadyRevision(const T: TGeoTileId): string;
+    function ReadyCompatible(const T: TGeoTileId; const Hash: string): Boolean;
     function ZoneDir(const T: TGeoTileId): string;
     function FormatPath(const T: TGeoTileId; TextFormat: Boolean): string;
     function ExpectedHash(const T: TGeoTileId): string;
@@ -90,6 +97,12 @@ type
       owns Model and must Free it. }
     {$IFDEF TILE_MEM_PROFILE}function MemoryBytes: Int64;{$ENDIF}
     function TryLoad(const T: TGeoTileId; out Model: TTileModel): Boolean;
+    function ValidateCached(const T: TGeoTileId; out SizeBytes: Int64;
+      Cancel: TThread = nil): Boolean;
+    procedure ConfigureReadyTiles(Http: THTTPFetcherWithCache; const UniversalHash: string = '');
+    function HasReady(const T: TGeoTileId): Boolean;
+    function TryLoadReady(const T: TGeoTileId; out Model: TTileModel): Boolean;
+    property ReadyTiles: TReadyTiles read FReadyTiles;
 
     { Write Model as tile T. Stamps Model.TileId := T and
       Model.GenHash := this cache's hash before writing. Atomic
@@ -147,7 +160,7 @@ const
   MOVEFILE_REPLACE_EXISTING заменяет target ОДНОЙ операцией — без окна
   «файла нет» между DeleteFile и RenameFile (SysUtils.RenameFile
   перезаписать существующий target не умеет). На прочих платформах —
-  прежний delete+rename. ALastError — код ошибки ОС при неудаче
+  атомарный POSIX rename с заменой target. ALastError — код ошибки ОС при неудаче
   (0 на не-Windows и при успехе). }
 function PublishFile(const TmpPath, Path: string;
   out ALastError: LongWord): Boolean;
@@ -167,7 +180,6 @@ begin
     ALastError := O3DGetLastError;
   {$ELSE}
   ALastError := 0;
-  if FileExists(Path) then DeleteFile(Path);
   Result := RenameFile(TmpPath, Path);
   {$ENDIF}
 end;
@@ -201,11 +213,13 @@ var
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1052);{$ENDIF}
   inherited Create;
+  FBaseDir:=ARootDir;
   FGenHash := AGenHash;
   EnsureTileCacheSupport(ARootDir);
   FTextFormat := TileCacheUsesText(ARootDir);
   FGrid    := TGeoTileGrid.Create(AHeightmapZoom, AEdgePx, ARefLatDeg);
   FLock    := TCriticalSection.Create;
+  FReadyInstallLock:=TCriticalSection.Create;
   FIndex      := specialize TDictionary<string, Boolean>.Create;
   FIndexBuilt := False;
   {$IFDEF TILE_MEM_PROFILE}
@@ -233,9 +247,12 @@ end;
 
 destructor TGeoTileCache.Destroy;
 begin
+  FreeAndNil(FReadyTiles);
+  FreeAndNil(FUniversal);
   {$IFDEF IAM_LIVE}IamLiveTrack(1053);{$ENDIF}
   {$IFDEF TILE_MEM_PROFILE}MemProbeRemove(Self);{$ENDIF}
   FIndex.Free;
+  FReadyInstallLock.Free;
   FLock.Free;
   FRecipes.Free;
   FGrid.Free;
@@ -376,6 +393,7 @@ end;
 
 function TGeoTileCache.Has(const T: TGeoTileId): Boolean;
 begin
+  if (FUniversal<>nil) and FUniversal.Has(T) then Exit(True);
   {$IFDEF IAM_LIVE}IamLiveTrack(129);{$ENDIF}
   { EnsureIndex does its own (mostly unlocked) work; the lock here only
     guards the dictionary lookup — microseconds, never disk I/O. }
@@ -419,6 +437,10 @@ var Path: string; M: TTileModel; Attempt: Integer; TextFormat: Boolean;
   T0: QWord;
 begin
   Result := False; Model := nil; T0 := GetTickCount64;
+  if (FUniversal<>nil) and FUniversal.TryLoad(T,Model) then begin
+    if FReadyTiles<>nil then FReadyTiles.CheckLater(T,FUniversal.ExpectedHash(T),FUniversal.ReadyRevision(T));
+    Exit(True);
+  end;
   for Attempt := 0 to 1 do
   begin
     TextFormat := FTextFormat xor (Attempt = 1);
@@ -443,10 +465,133 @@ begin
         on E: Exception do Log('binary migration deferred: ' + E.Message);
       end;
     Model := M; Result := True;
+    if FReadyTiles<>nil then begin
+      if FUniversal<>nil then
+        FReadyTiles.CheckLater(T,FUniversal.ExpectedHash(T),FUniversal.ReadyRevision(T))
+      else FReadyTiles.CheckLater(T,ExpectedHash(T),ReadyRevision(T));
+    end;
     {$IFDEF TILE_MEM_PROFILE}
     ProfileTileModel(Model, 'cache', T.ToString, GetTickCount64 - T0, FLog);
     {$ENDIF}
     Exit;
+  end;
+end;
+
+function TGeoTileCache.ValidateCached(const T:TGeoTileId;out SizeBytes:Int64;Cancel:TThread):Boolean;
+var TextFormat:Boolean; Path:string; M:TTileModel; F:TFileStream;
+begin
+  Result:=False; SizeBytes:=0;
+  if (FUniversal<>nil) and FUniversal.ValidateCached(T,SizeBytes,Cancel) then Exit(True);
+  for TextFormat:=False to True do begin
+    Path:=FormatPath(T,TextFormat); if not FileExists(Path) then Continue;
+    M:=nil;
+    try
+      try
+        if TextFormat then M:=TTileX3D.LoadFile(Path)
+        else M:=TTileBinary.ValidateFile(Path,Cancel);
+        if (M.GenHash<>ExpectedHash(T)) or not M.TileId.Equals(T) then Continue;
+        F:=TFileStream.Create(Path,fmOpenRead or fmShareDenyNone);
+        try SizeBytes:=F.Size finally F.Free end;
+        Exit(True);
+      except on E:EAbort do raise; on E:Exception do SizeBytes:=0 end;
+    finally M.Free end;
+  end;
+end;
+
+procedure TGeoTileCache.ConfigureReadyTiles(Http: THTTPFetcherWithCache; const UniversalHash: string);
+var Target:TGeoTileCache;
+begin
+  FreeAndNil(FReadyTiles);
+  FreeAndNil(FUniversal);
+  if (UniversalHash<>'') and (UniversalHash<>FGenHash) then
+    FUniversal:=TGeoTileCache.Create(FBaseDir,UniversalHash,FGrid.Zoom,FGrid.EdgePx);
+  Target:=Self; if FUniversal<>nil then Target:=FUniversal;
+  FReadyTiles:=TReadyTiles.Create(Http,Target.GenHash,FGrid.Zoom,FGrid.EdgePx,
+    FRootDir+'downloads',@InstallReadyTile,'',True,@ReadyCompatible);
+end;
+
+function TGeoTileCache.ReadyCompatible(const T: TGeoTileId; const Hash: string): Boolean;
+var Target:TGeoTileCache; S:string; C:Char;
+begin
+  Target:=Self; if FUniversal<>nil then Target:=FUniversal;
+  if Target.ExpectedHash(T)=Hash then Exit(True);
+  Result:=False;
+  { The owner can author photo/height recipes that recipients do not possess.
+    Trust their checksummed geometry only within this exact geometry-config
+    namespace. A recipient's explicit local recipe always takes priority. }
+  if Target.Recipes.TileHash(T)<>'' then Exit;
+  if Copy(Hash,1,Length(Target.GenHash)+2)<>Target.GenHash+'-k' then Exit;
+  S:=Copy(Hash,Length(Target.GenHash)+3,MaxInt);
+  if Length(S)<>32 then Exit;
+  for C in S do if not(C in ['0'..'9','a'..'f']) then Exit;
+  Result:=True;
+end;
+
+function TGeoTileCache.ReadyRevision(const T: TGeoTileId): string;
+var F: TFileStream; P: string;
+begin
+  Result:=''; P:=PathFor(T)+'.ready';
+  try
+    if not FileExists(P) then Exit;
+    F:=TFileStream.Create(P,fmOpenRead or fmShareDenyNone);
+    try
+      if (F.Size<64) or (F.Size>512) then Exit;
+      SetLength(Result,64); F.ReadBuffer(Result[1],64);
+    finally F.Free end;
+  except Result:='' end;
+end;
+
+procedure TGeoTileCache.InstallReadyTile(const T: TGeoTileId;
+  Model: TTileModel; const Revision: string);
+var F: TFileStream; P,Temp,Provenance: string; G: TGUID; Error: LongWord;
+begin
+  if FUniversal<>nil then begin FUniversal.InstallReadyTile(T,Model,Revision); Exit end;
+  { Never stamp an incompatible downloaded model into the current cache. }
+  if (Model=nil) or not Model.TileId.Equals(T) or not ReadyCompatible(T,Model.GenHash) then
+    raise EGeoTileCacheError.Create('Ready tile is incompatible');
+  { Preserve the owner revision and original recipe hash separately. Save
+    normalizes identity into the already-validated local geometry namespace;
+    generated vertices, measured heights and authored facades are unchanged. }
+  { IO and generation workers can acquire the same object concurrently.
+    Serialize only publication, never local reads, and reuse the first
+    installation instead of racing mkdir/replace on Windows. }
+  FReadyInstallLock.Enter;
+  try
+    if (ReadyRevision(T)=Revision) and Has(T) then begin
+      Model.GenHash:=ExpectedHash(T); Exit;
+    end;
+    Provenance:=Revision+#10+Model.GenHash;
+    Save(T,Model);
+    P:=PathFor(T)+'.ready'; CreateGUID(G);
+    Temp:=ExtractFilePath(P)+GUIDToString(G)+'.tmp';
+    try
+      F:=TFileStream.Create(Temp,fmCreate);
+      try F.WriteBuffer(Provenance[1],Length(Provenance)) finally F.Free end;
+      PublishFile(Temp,P,Error);
+    finally DeleteFile(Temp) end;
+  finally FReadyInstallLock.Leave end;
+end;
+
+function TGeoTileCache.HasReady(const T: TGeoTileId): Boolean;
+var H:string;
+begin
+  H:=ExpectedHash(T); if FUniversal<>nil then H:=FUniversal.ExpectedHash(T);
+  Result:=(FReadyTiles<>nil) and FReadyTiles.Available(T,H);
+end;
+
+function TGeoTileCache.TryLoadReady(const T: TGeoTileId; out Model: TTileModel): Boolean;
+var Revision,H: string;
+begin
+  Model:=nil; Result:=False; if FReadyTiles=nil then Exit;
+  H:=ExpectedHash(T); if FUniversal<>nil then H:=FUniversal.ExpectedHash(T);
+  if not FReadyTiles.Acquire(T,H,Model,Revision) then Exit;
+  try
+    InstallReadyTile(T,Model,Revision); Result:=True;
+  except
+    on E:Exception do begin
+      Log('Ready tile install failed: '+E.Message);
+      FreeAndNil(Model)
+    end
   end;
 end;
 
@@ -473,7 +618,7 @@ begin
     .tmp+rename is per-tile independent, and holding the cache lock
     across a disk write would block every Has / TryLoad. The lock is
     taken only for the FIndex update at the end. }
-  if not ForceDirectories(Dir) then
+  if not ForceDirectories(Dir) and not DirectoryExists(Dir) then
     raise EGeoTileCacheError.CreateFmt(
       'Cannot create tile directory: %s', [Dir]);
 
@@ -502,6 +647,9 @@ begin
       'Failed publishing tile %s (gle=%d, tmp="%s")',
       [T.ToString, PubErr, TmpPath]);
   end;
+
+  { A later local rebuild must not claim to carry a server revision. }
+  DeleteFile(Path+'.ready');
 
   { Keep the presence index current — the tile now exists. }
   FLock.Enter;
@@ -595,6 +743,7 @@ var
   M: TTileModel;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(133);{$ENDIF}
+  if (FUniversal<>nil) and FUniversal.TryLoadRoadSegs(T,ASegs,AOrigin) then Exit(True);
   Result := False;
   SetLength(ASegs, 0);
   AOrigin := TLatLon.Make(0, 0);
@@ -672,6 +821,7 @@ function TGeoTileCache.TryLoadBuildingObstacles(const T: TGeoTileId;
   out AObstacles: TBuildingObstacleArray; out AOrigin: TLatLon): Boolean;
 var Path: string; M: TTileModel; Attempt: Integer; TextFormat: Boolean;
 begin
+  if (FUniversal<>nil) and FUniversal.TryLoadBuildingObstacles(T,AObstacles,AOrigin) then Exit(True);
   Result := False; AObstacles := nil; AOrigin := TLatLon.Make(0, 0);
   for Attempt := 0 to 1 do
   begin
@@ -697,6 +847,9 @@ end;
 function TGeoTileCache.RoadFingerprint(const T: TGeoTileId): string;
 var Path: string;
 begin
+  if FUniversal<>nil then begin
+    Result:=FUniversal.RoadFingerprint(T); if Result<>'' then Exit;
+  end;
   Result := '';
   Path := FormatPath(T, False);
   if FileExists(Path) and
@@ -715,6 +868,7 @@ begin
     Path := FormatPath(T, TextFormat);
     if FileExists(Path) and not DeleteFile(Path) then Continue;
     DeleteFile(Path + '.roads');
+    DeleteFile(Path + '.ready');
     FLock.Enter;
     try FIndex.Remove(Path) finally FLock.Leave end;
   end;

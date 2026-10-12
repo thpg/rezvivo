@@ -432,6 +432,8 @@ begin
     A[I].Position := P.Position; A[I].Rotation := P.Rotation;
   end;
   WriteU(S, Length(A)); WriteArray(S, Pointer(A), Length(A), 20);
+  { Optional parallel height array. Legacy POIS payloads end after placements. }
+  for I:=0 to High(A) do begin P:=M.POIs[I]; S.WriteBuffer(P.Height,4) end;
 end;
 
 procedure ReadPOIs(S: TStream; M: TTileModel);
@@ -439,7 +441,8 @@ var A: TPOIsWire; P: TTilePOIRecArray; Kinds: array of Integer; I, N: Integer;
 begin
   N := Count(S, 4); SetLength(Kinds, N);
   for I := 0 to N-1 do Kinds[I] := GetEnumValue(TypeInfo(TPOIKindExt), ReadString(S));
-  N := Count(S, 20); ExactSize(S, Int64(N)*20);
+  N := Count(S, 20);
+  Require((S.Size-S.Position=Int64(N)*20) or (S.Size-S.Position=Int64(N)*24),'POI payload size');
   SetLength(A, N); ReadArray(S, Pointer(A), N, 20); SetLength(P, N);
   for I := 0 to N-1 do
   begin
@@ -448,6 +451,10 @@ begin
     CheckFloats(@A[I].Position.X, 4);
     P[I].Kind := TPOIKindExt(Kinds[A[I].Kind]);
     P[I].Position := A[I].Position; P[I].Rotation := A[I].Rotation;
+  end;
+  if S.Position<S.Size then for I:=0 to N-1 do begin
+    S.ReadBuffer(P[I].Height,4);CheckFloats(@P[I].Height,1);
+    Require((P[I].Height>=0) and (P[I].Height<=20),'POI height range');
   end;
   M.SetPOIs(P);
 end;

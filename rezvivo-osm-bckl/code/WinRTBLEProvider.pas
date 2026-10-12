@@ -14,7 +14,8 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs,
-  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol;
+  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol,
+  ZwiftControllerProtocol;
 
 type
   TScannedDev = record Name, Address: string; RSSI: Int16; end;
@@ -41,6 +42,10 @@ type
     FSterzoControl: Pointer;
     FSterzoChallengeEvent: TEvent;
     FSterzoResponse: TBytes;
+    FHasZwift, FZwiftSubscribed, FZwiftReady, FZwiftEncrypted: Boolean;
+    FZwiftControl: Pointer;
+    FZwiftEvent: TEvent;
+    FZwiftParser: TZwiftControllerParser;
     FFTMSCtrlChar: Pointer;
     FFECWriteChar: Pointer;  { FE-C control write (6e40fec3) }
     FFECChannel: Byte;
@@ -54,6 +59,7 @@ type
     FConnStatusUD: Pointer;   { callback gate, owned by FConnStatusDel }
     FConnStatusDel: Pointer;  { PDelegate, released on disconnect }
     function ActivateSteering: Boolean;
+    function ActivateZwift: Boolean;
     procedure DiscoverAndSubscribe;
     procedure CleanupSubscriptions;
     { IClosable.Close + Release на BLE-объектах. Без Close Windows
@@ -638,8 +644,27 @@ end;
 
 procedure TWinRTBLESession.ReceiveCharacteristicData(const UUID: string; const Data: TBytes);
 var U: string; Parsed: TTrainerDataRecord; Page: TBytes; Channel: Byte; Valid: Boolean;
+  Handshake: TZwiftHandshake;
 begin
   U:=LowerCase(UUID);
+  if (Pos(ZwiftNotifyUUID,U)>0) or (Pos(ZwiftResponseUUID,U)>0) then
+  begin
+    Valid:=False;
+    FLock.Enter;
+    try
+      Handshake:=ZwiftHandshakeReply(Data);
+      if Handshake=zhEncrypted then FZwiftEncrypted:=True;
+      if Handshake=zhPlaintext then FZwiftReady:=True;
+      if (Handshake=zhNone) and not FZwiftEncrypted then
+      begin
+        Valid:=FZwiftParser.Parse(Data,Parsed);
+        if Valid then FZwiftReady:=True;
+      end;
+      if FZwiftReady or FZwiftEncrypted then FZwiftEvent.SetEvent;
+    finally FLock.Leave end;
+    if Valid then PublishMeasurement(Parsed);
+    Exit;
+  end;
   if Pos(SterzoChallengeUUID,U)>0 then
   begin
     Page:=SterzoChallengeResponse(Data);
@@ -861,6 +886,8 @@ constructor TWinRTBLESession.Create(const AAddress: string; const AFriendlyName:
 begin
   inherited Create(AAddress, AFriendlyName);
   FSterzoChallengeEvent := TEvent.Create(nil, False, False, '');
+  FZwiftEvent:=TEvent.Create(nil,False,False,'');
+  FZwiftParser:=TZwiftControllerParser.Create;
   FDevice := nil;
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
@@ -916,9 +943,23 @@ begin
   ShutdownControl;
   Disconnect;
   FreeAndNil(FSterzoChallengeEvent);
+  FreeAndNil(FZwiftEvent);
+  FreeAndNil(FZwiftParser);
   FFTMSParser.Free;
   FFECParser.Free;
   inherited;
+end;
+
+function TWinRTBLESession.ActivateZwift: Boolean;
+begin
+  Result:=False;
+  if not FZwiftSubscribed or (FZwiftControl=nil) then Exit;
+  FZwiftEvent.ResetEvent;
+  if not WriteFTMSControl(FZwiftControl,ZwiftHandshakeRequest) then Exit;
+  { Connect already runs on the manager's worker, never the render thread. }
+  FZwiftEvent.WaitFor(4000);
+  FLock.Enter;
+  try Result:=FZwiftReady and not FZwiftEncrypted finally FLock.Leave end;
 end;
 
 function TWinRTBLESession.ActivateSteering: Boolean;
@@ -973,6 +1014,9 @@ begin
   FHasFTMS := False; FHasPower := False; FHasFEC := False;
   FHasHR := False; FHasCSC := False;
   FHasSteering:=False; FSteeringSubscribed:=False; FSteeringReceived:=False;
+  FHasZwift:=False; FZwiftSubscribed:=False;
+  FZwiftReady:=False; FZwiftEncrypted:=False;
+  FZwiftParser.Reset; FZwiftEvent.ResetEvent;
   FSterzoResponse:=nil; FSterzoChallengeEvent.ResetEvent;
   FDeviceInfo.SupportsSteering:=False;
   FLock.Enter;
@@ -1059,7 +1103,22 @@ begin
     FDeviceInfo.SupportsCadence := FDeviceInfo.SupportsCadence or FTrainerFeatures.SupportsCadence;
     FDeviceInfo.SupportsSpeed := FDeviceInfo.SupportsSpeed or FHasFEC or FHasFTMS;
     FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
-    FDeviceInfo.SupportsSteering := FHasSteering;
+    FDeviceInfo.SupportsSteering := FHasSteering or FHasZwift;
+
+    if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
+    begin
+      FDeviceInfo.SupportsSteering:=True;
+      Disconnect;
+      SetConnectionState(csError,'Zwift controller service is unavailable. This firmware may require activation in the vendor app.');
+      Exit;
+    end;
+
+    if FHasZwift and not ActivateZwift then
+    begin
+      Disconnect;
+      SetConnectionState(csError, 'Zwift controller did not accept RideOn. Wake it and close other cycling apps. Encrypted or locked firmware is not supported.');
+      Exit;
+    end;
 
     if FHasSteering and not ActivateSteering then
     begin
@@ -1075,7 +1134,7 @@ begin
 
     { Не фитнес-устройство — отключаемся, не засоряем список }
     if (not FHasFTMS) and (not FHasPower) and (not FHasFEC)
-       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) then
+       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) and (not FHasZwift) then
     begin
       Logger.Info('[WinRT] No fitness services — disconnecting');
       Disconnect;
@@ -1124,7 +1183,7 @@ begin
       on E: Exception do
         Logger.Warning('[WinRT] ConnectionStatusChanged subscribe error: ' + E.ClassName + ': ' + E.Message);
     end;
-    if FHasSteering then
+    if FHasSteering or FHasZwift then
     begin
       FLock.Enter;
       try InitialData:=FLastData finally FLock.Leave end;
@@ -1451,6 +1510,8 @@ begin
           if Pos('0000180d', SvcS) > 0 then FHasHR := True;
           if Pos('00001816', SvcS) > 0 then FHasCSC := True;
           if Pos(SterzoServiceUUID, SvcS) > 0 then FHasSteering := True;
+          if (Pos(ZwiftServiceUUID,SvcS)>0) or (Pos(ZwiftRideServiceUUID,SvcS)>0) then
+            FHasZwift:=True;
 
           Svc3 := nil;
           if QI(Svc, IID_ISvc3, Svc3) = S_OK then
@@ -1526,6 +1587,11 @@ begin
                           Logger.Debug(Format('[WinRT]     Char[%d]: %s props=$%.2X', [J, ChS, Props]));
 
                           { Save write chars for trainer control }
+                          if (Pos(ZwiftWriteUUID,ChS)>0) and ((Props and $08)<>0) then
+                          begin
+                            FZwiftControl:=Ch;
+                            TVtNoArg(VT(Ch)^[1])(Ch);
+                          end;
                           if (Pos(SterzoControlUUID,ChS)>0) and ((Props and $08)<>0) then
                           begin
                             FSterzoControl:=Ch;
@@ -1550,7 +1616,8 @@ begin
                                (Pos('6e40fec2', ChS) > 0) or (Pos('2a37', ChS) > 0) or
                                (Pos('2a5b', ChS) > 0) or (Pos('2ad9', ChS) > 0) or
                                (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) or
-                               (Pos(SterzoAngleUUID,ChS)>0) or (Pos(SterzoChallengeUUID,ChS)>0) then
+                               (Pos(SterzoAngleUUID,ChS)>0) or (Pos(SterzoChallengeUUID,ChS)>0) or
+                               (Pos(ZwiftNotifyUUID,ChS)>0) or (Pos(ZwiftResponseUUID,ChS)>0) then
                             begin
                               { Don't set ProtectionLevel — let Windows handle encryption transparently }
 
@@ -1593,6 +1660,7 @@ begin
                                 FSubs[FSubCount].DelegateHandle := Del;
                                 Inc(FSubCount);
                                 if Pos(SterzoAngleUUID,ChS)>0 then FSteeringSubscribed:=True;
+                                if Pos(ZwiftNotifyUUID,ChS)>0 then FZwiftSubscribed:=True;
 
                                 { Check for FTMS Control Point }
                                 if Pos('2ad9', ChS) > 0 then
@@ -1691,6 +1759,7 @@ begin
   SetLength(FSubs, 0);
   FFTMSCtrlChar := nil;
   if FSterzoControl<>nil then begin SafeRelease(PIUnk(FSterzoControl)); FSterzoControl:=nil end;
+  if FZwiftControl<>nil then begin SafeRelease(PIUnk(FZwiftControl)); FZwiftControl:=nil end;
   if FFECWriteChar <> nil then begin SafeRelease(PIUnk(FFECWriteChar)); FFECWriteChar := nil; end;
 end;
 
@@ -2103,7 +2172,7 @@ begin
         DevInfo.TransportType := ttBLE;
         DevInfo.ProviderName := 'WinRT';
         DevInfo.RSSI := Snap[J].RSSI;
-        DevInfo.SupportsSteering := IsSterzoName(DevInfo.Name);
+        DevInfo.SupportsSteering := IsSterzoName(DevInfo.Name) or IsZwiftControllerName(DevInfo.Name);
 
         if Assigned(OnDeviceFound) then
           OnDeviceFound(DevInfo);

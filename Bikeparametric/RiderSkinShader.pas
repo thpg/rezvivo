@@ -7,6 +7,7 @@ type
   private
     FScale,FHeadSurfaceOffset:Single;
     FTime:Double;
+    FDiffusionTexture:TImageTextureNode;
     FFields:array of TSFVec4f;
     FMouthFields:array of TSFFloat;
     FEyes,FEyeSkin,FIris:array[0..1]of TVector3;
@@ -27,15 +28,15 @@ type
 procedure ApplyRiderSkin(Root:TX3DNode;Height:Single);
 implementation
 uses SysUtils,Math,Classes,fpjson,jsonparser,CastleRenderOptions,CastleImages,RiderSurfaceMotion,RiderFace;
-var SkinDiffusionTexture:TImageTextureNode;
+var SkinDiffusionImage:TRGBAlphaFloatImage;
 
-function SkinDiffusionLut:TImageTextureNode;
+function SkinDiffusionLut:TRGBAlphaFloatImage;
 const Width=128;Height=32;Samples=65;
   Diffusion:array[0..2]of Double=(0.0018,0.00075,0.00040);
-var Img:TRGBAlphaFloatImage;Props:TTexturePropertiesNode;
+var Img:TRGBAlphaFloatImage;
   X,Y,C,K:Integer;NL,Curvature,T,Weight,Integral,Total,Theta:Double;Pixel:TVector4;
 begin
-  if SkinDiffusionTexture<>nil then Exit(SkinDiffusionTexture);
+  if SkinDiffusionImage<>nil then Exit(SkinDiffusionImage);
   { Integrate diffuse irradiance across a curved surface once. The three
     diffusion widths are an appearance approximation in metres. One linear
     data texture is shared by every avatar, with no screen-space pass. }
@@ -55,15 +56,26 @@ begin
       end;
       PVector4(Img.PixelPtr(X,Y))^:=Pixel;
     end;
-    SkinDiffusionTexture:=TImageTextureNode.Create;
-    SkinDiffusionTexture.KeepExistingBegin;
+    SkinDiffusionImage:=Img;Img:=nil;
+  finally Img.Free end;
+  Result:=SkinDiffusionImage;
+end;
+
+function CreateSkinDiffusionTexture:TImageTextureNode;
+var Props:TTexturePropertiesNode;
+begin
+  { A texture node owns its renderer resource and must stay within one scene.
+    Closing a preview/bot scene unprepares its nodes even if another scene
+    still references them. Share the immutable pixels and the URL-keyed GPU
+    cache instead: each scene then holds its own cache reference. }
+  Result:=TImageTextureNode.Create;
+  try
     Props:=TTexturePropertiesNode.Create;Props.GUITexture:=True;Props.GenerateMipMaps:=False;
     Props.FdMinificationFilter.Value:='AVG_PIXEL';Props.FdMagnificationFilter.Value:='AVG_PIXEL';
-    SkinDiffusionTexture.FdTextureProperties.Value:=Props;
-    SkinDiffusionTexture.RepeatS:=False;SkinDiffusionTexture.RepeatT:=False;
-    SkinDiffusionTexture.LoadFromImage(Img,True,'');Img:=nil;
-  finally Img.Free end;
-  Result:=SkinDiffusionTexture;
+    Result.FdTextureProperties.Value:=Props;
+    Result.RepeatS:=False;Result.RepeatT:=False;
+    Result.LoadFromImage(SkinDiffusionLut,False,'castle-internal:/rider/skin-diffusion-v1');
+  except Result.Free;raise end;
 end;
 const
   OralVS=
@@ -316,7 +328,8 @@ begin
   for I:=0 to App.FdEffects.Count-1 do if App.FdEffects[I].X3DName='RiderSkinSurface'then Exit;
   Eff:=TEffectNode.Create('RiderSkinSurface');Eff.Language:=slGLSL;Eff.UniformMissing:=umIgnore;
   DiffusionField:=TSFNode.Create(Eff,True,'rsDiffusion',[TImageTextureNode]);
-  DiffusionField.Value:=SkinDiffusionLut;Eff.AddCustomField(DiffusionField);
+  if FDiffusionTexture=nil then FDiffusionTexture:=CreateSkinDiffusionTexture;
+  DiffusionField.Value:=FDiffusionTexture;Eff.AddCustomField(DiffusionField);
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsPortrait',Ord(Portrait)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsCleanPortrait',Ord(Pos('anatomicalportrait',Nm)>0)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsFaceValid',Ord(FFaceValid and Portrait)));
@@ -396,7 +409,5 @@ procedure ApplyRiderSkin(Root:TX3DNode;Height:Single);
 var Skin:TRiderSkin;
 begin Skin:=TRiderSkin.Create(Root,Height,'');Skin.Free end;
 finalization
-  if SkinDiffusionTexture<>nil then begin
-    SkinDiffusionTexture.KeepExistingEnd;SkinDiffusionTexture.FreeIfUnused;
-  end;
+  FreeAndNil(SkinDiffusionImage);
 end.

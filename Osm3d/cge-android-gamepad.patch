@@ -1,0 +1,34 @@
+--- a/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
++++ b/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java
+@@ -56,6 +56,22 @@
+             service.onDestroy();
+         }
+         super.onDestroy();
++    }
++
++    @Override
++    public boolean dispatchGenericMotionEvent(android.view.MotionEvent event) {
++        for (ServiceAbstract service : services) {
++            if (service.onControllerMotionEvent(event)) return true;
++        }
++        return super.dispatchGenericMotionEvent(event);
++    }
++
++    @Override
++    public boolean dispatchKeyEvent(android.view.KeyEvent event) {
++        for (ServiceAbstract service : services) {
++            if (service.onControllerKeyEvent(event)) return true;
++        }
++        return super.dispatchKeyEvent(event);
+     }
+ 
+     @SuppressLint("NewApi") @Override
+--- a/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/ServiceAbstract.java
++++ b/tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/ServiceAbstract.java
+@@ -179,4 +179,6 @@
+     public void onPause() { }
+     public void onNewIntent(Intent intent) { }
+     public void onPurchase(AvailableProduct product, String originalJson, String signature) { }
++    public boolean onControllerMotionEvent(android.view.MotionEvent event) { return false; }
++    public boolean onControllerKeyEvent(android.view.KeyEvent event) { return false; }
+ }

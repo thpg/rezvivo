@@ -5,7 +5,7 @@ unit Osm3dRiderShadow;
 
 interface
 
-uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, fpjson;
+uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, Osm3dForestShadowCache, fpjson;
 
 type
   TRiderShadowMatrices = array[0..3] of TMatrix4;
@@ -61,6 +61,9 @@ type
     FAvatarReceiver: Boolean;
     FLayout: TShadowReceiverLayout;
     FRtx:TRtxShadow;
+    FForest:TForestShadowCache;
+    FTreeCasters,FTreesSelected:TCastleTransformList;
+    FShadowMinDepth,FShadowMaxDepth:Single;
     FRtxRequested,FFrameRtx,FRtxRasterComparison,FRtxReflections:Boolean;
     FRtxRevision:QWord;
     procedure RenderSelected(const Camera: TRenderingCamera);
@@ -305,7 +308,7 @@ implementation
 
 uses SysUtils, Math, CastleBoxes, CastleRectangles, CastleTimeUtils, CastleApplicationProperties,
   CastleSceneCore, CastleInternalRenderer, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, Osm3dRenderInstanced, Osm3dStudioSettings,
-  CastleRendererInternalShader, CastleRendererInternalTextureEnv;
+  CastleRendererInternalShader, CastleRendererInternalTextureEnv, Osm3dProceduralVegetation;
 
 type
   { Each ground scene owns its own X3D node. Only the GPU resource is borrowed. }
@@ -653,6 +656,9 @@ begin
   inherited Create;
   Configure(AtlasSize, 16, 160);
   FProbe := TShadowGroundProbe.Create;
+  FForest:=TForestShadowCache.Create;
+  FTreeCasters:=TCastleTransformList.Create(False);
+  FTreesSelected:=TCastleTransformList.Create(False);
   FWorldSelected := TCastleTransformList.Create(False);
   FRidersSelected := TCastleTransformList.Create(False);
   FCasters := TCastleTransformList.Create(False);
@@ -690,6 +696,7 @@ end;
 procedure TRiderShadowAtlas.ContextClose(Sender: TObject);
 begin
   FreeAndNil(FRtx);
+  FForest.ContextClose;
   FProbe.ContextClose;
   { Release before the engine renderer cache. Recreated lazily next Render. }
   TTextureResources.Unprepare(FMap);
@@ -698,6 +705,7 @@ end;
 destructor TRiderShadowAtlas.Destroy;
 begin
   FreeAndNil(FRtx);
+  FForest.Free;FTreeCasters.Free;FTreesSelected.Free;
   ApplicationProperties.OnGLContextCloseObject.Remove(@ContextClose);
   if CurrentMap = FMap then ClearGroundRiderShadow;
   TTextureResources.Unprepare(FMap);
@@ -748,48 +756,30 @@ begin
 end;
 
 procedure TRiderShadowAtlas.RenderSelected(const Camera: TRenderingCamera);
-var I: Integer;
+var I:Integer;Caster:TCastleTransform;UseForest:Boolean;
 begin
-  if FFrameRtx then begin
-    if FRtxRasterComparison then begin
-      { Keep native per-shape/cascade culling for buildings. Only trees need
-        the cached cards; batching the whole city's mesh into every cascade
-        needlessly repeats distant roof and wall vertex work. }
-      FWorldSelected.Clear;
-      for I:=0 to FSelected.Count-1 do
-        if FWorldSet.ContainsKey(FSelected[I]) and
-          (FSelected[I] is TCastleSceneCore) then FWorldSelected.Add(FSelected[I]);
-      FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
-      FRtx.DrawCachedRaster(FRenderingZone);
-    end else begin
-      FRtx.CopyDepth;
-    end;
-    if FProbeEnabled and (FRenderingZone=FProbeZone) and FProbe.SampleDue(FProbePoint) then
-      FProbe.Submit(FProbePoint,FProbeClip,FTileSize,2*FZoneHalfExtent[FRenderingZone]/FTileSize);
-    FRidersSelected.Clear;
-    for I:=0 to FSelected.Count-1 do
-      if not FWorldSet.ContainsKey(FSelected[I]) then FRidersSelected.Add(FSelected[I]);
-    if FRidersSelected.Count>0 then
-      FViewport.InternalRenderShadowCasters(Camera,FRidersSelected,nil,False);
-    Exit;
+  FWorldSelected.Clear;FRidersSelected.Clear;FTreesSelected.Clear;
+  UseForest:=FRtxRequested and FForest.Ready and (FRenderingZone=3);
+  for I:=0 to FSelected.Count-1 do begin
+    Caster:=FSelected[I];
+    if not FWorldSet.ContainsKey(Caster) then FRidersSelected.Add(Caster)
+    else if Caster is TOsmProceduralVegetation then FTreesSelected.Add(Caster)
+    else FWorldSelected.Add(Caster);
   end;
-  if FWorldShadows and FProbeEnabled and (FRenderingZone = FProbeZone) then
-  begin
-    FWorldSelected.Clear;
-    FRidersSelected.Clear;
-    for I := 0 to FSelected.Count - 1 do
-      if FWorldSet.ContainsKey(FSelected[I]) then FWorldSelected.Add(FSelected[I])
-      else FRidersSelected.Add(FSelected[I]);
-    FViewport.InternalRenderShadowCasters(Camera, FWorldSelected, @AcceptShadowShape);
-    if FProbe.SampleDue(FProbePoint) then
-      FProbe.Submit(FProbePoint, FProbeClip, FTileSize,
-        2 * FZoneHalfExtent[FRenderingZone] / FTileSize);
-    { Append riders without clearing the world depth we just sampled. }
-    FViewport.InternalRenderShadowCasters(Camera, FRidersSelected, nil, False);
-  end else if FWorldShadows then
-    FViewport.InternalRenderShadowCasters(Camera, FSelected, @AcceptShadowShape)
-  else
-    FViewport.InternalRenderShadowCasters(Camera, FSelected);
+  { RTX supplies static buildings only. Vegetation stays on the same path
+    before/after BVH readiness, so warming a cache cannot freeze nearby leaves. }
+  if FFrameRtx then FRtx.CopyDepth
+  else FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
+  if UseForest then
+    FForest.Draw(FLayout.Zones[FRenderingZone].X,FLayout.Zones[FRenderingZone].Y,
+      FZoneHalfExtent[FRenderingZone],FShadowMinDepth,FShadowMaxDepth)
+  else if FTreesSelected.Count>0 then
+    FViewport.InternalRenderShadowCasters(Camera,FTreesSelected,nil,False);
+  if FWorldShadows and FProbeEnabled and (FRenderingZone=FProbeZone) and
+    FProbe.SampleDue(FProbePoint) then
+    FProbe.Submit(FProbePoint,FProbeClip,FTileSize,2*FZoneHalfExtent[FRenderingZone]/FTileSize);
+  if FRidersSelected.Count>0 then
+    FViewport.InternalRenderShadowCasters(Camera,FRidersSelected,nil,False);
 end;
 
 procedure TRiderShadowAtlas.Render(const Viewport: TCastleViewport;
@@ -812,6 +802,7 @@ var
   RayMatrix:TMatrix4;
   RayEnd,RayRow:TVector3;
   MembershipChanged: Boolean;
+  ForestRevision:QWord;
 begin
   FWorldShapeCount := 0;
   { Callers refill the list every frame, but the resident world usually
@@ -920,7 +911,7 @@ begin
   PreviousX := 0; PreviousY := 0;
   Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
   FFrameRtx:=False;
-  if not FRtxRequested then FreeAndNil(FRtx)
+  if not FRtxRequested or FRtxRasterComparison then FreeAndNil(FRtx)
   else if FWorldShadows then begin
     { The static world uses the cache/BVH. Probe it before appending dynamic
       riders to the same depth map, exactly like the ordinary raster path. }
@@ -957,8 +948,21 @@ begin
       FFrameRtx:=FRtx.Trace(RayZones);
     end;
   end;
+  FShadowMinDepth:=MinDepth;FShadowMaxDepth:=MaxDepth;
   BeginVegetationShadowPass(CameraPosition);
   try
+    if FRtxRequested and FWorldShadows then begin
+      FTreeCasters.Clear;ForestRevision:=FRtxRevision;
+      for I:=0 to FWorldCasters.Count-1 do
+        if FWorldCasters[I] is TOsmProceduralVegetation then begin
+          FTreeCasters.Add(FWorldCasters[I]);
+          ForestRevision:=(ForestRevision xor QWord(PtrUInt(FWorldCasters[I])))*16777619;
+          ForestRevision:=ForestRevision xor TOsmProceduralVegetation(FWorldCasters[I]).ShadowCacheRevision;
+        end;
+      FForest.Prepare(Viewport,FTreeCasters,ForestRevision,D,Side,Up,
+        FLayout.Zones[3].X,FLayout.Zones[3].Y,FZoneHalfExtent[3],
+        MinDepth,MaxDepth,FTileSize);
+    end;
     for Zone := 0 to 3 do
     begin
       FRenderingZone := Zone;
@@ -1038,8 +1042,16 @@ end;
 procedure TRiderShadowAtlas.RtxSnapshot(const J:TJSONObject);
 var Zones:TJSONArray; Row:TJSONObject; I:Integer;
 begin
-  J.Add('enabled',FRtxRequested);J.Add('used_this_frame',FFrameRtx);
-  if FRtx<>nil then FRtx.Snapshot(J) else begin J.Add('active',False);J.Add('failed',False);end;
+  J.Add('enabled',FRtxRequested);
+  J.Add('used_this_frame',FWorldShadows and (FFrameRtx or
+    (FRtxRequested and FRtxRasterComparison and FForest.Ready)));
+  if FRtx<>nil then FRtx.Snapshot(J) else begin
+    J.Add('active',FRtxRequested and FRtxRasterComparison and FForest.Ready);
+    J.Add('failed',False);J.Add('trace_fallbacks',0);
+    J.Add('cached_raster',FRtxRequested and FRtxRasterComparison);
+    J.Add('individual_tree_bakes',0);J.Add('tree_cards',0);
+  end;
+  FForest.Snapshot(J);
   J.Add('avatar_receiver',FAvatarReceiver);
   J.Add('view_distance',FLayout.ViewDistance);
   J.Add('atlas_size',FAtlasSize);

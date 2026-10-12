@@ -139,7 +139,7 @@ type
 
     procedure StartRelay(const AServerUrl: string;
       const ABikeJsonFileName, AFallbackBikeJsonFileName: string;
-      APrivateRoom:Boolean=False;AAccountId:Integer=0;const AName:string='Player');
+      APrivateRoom:Boolean=False;AAccountId:Integer=0;const AName:string='Player';const ARoomToken:string='');
     procedure StopRelay;
 
     procedure UpdateRelayClient(const SecondsPassed: Single;
@@ -831,7 +831,7 @@ end;
 
 procedure TRemoteRidersManager.StartRelay(const AServerUrl: string;
   const ABikeJsonFileName, AFallbackBikeJsonFileName: string;
-  APrivateRoom:Boolean;AAccountId:Integer;const AName:string);
+  APrivateRoom:Boolean;AAccountId:Integer;const AName,ARoomToken:string);
 var SL: TStringList;
 begin
   StopRelay;
@@ -848,6 +848,7 @@ begin
   FRideClient := TRideRelayClient.Create;
   FRideClient.ServerUrl := AServerUrl;
   FRideClient.PrivateRoom:=APrivateRoom;
+  FRideClient.RoomToken:=ARoomToken;
   if APrivateRoom then FRideClient.LocalRiderId:=AAccountId
   else FRideClient.LocalRiderId := 1 + Random(9999);
   FRideClient.LocalRiderName := AName;

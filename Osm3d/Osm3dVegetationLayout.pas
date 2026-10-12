@@ -4,7 +4,7 @@ interface
 uses SysUtils, Classes, fpjson, Osm3dGeoMath;
 const
   VEGETATION_LAYOUT_TAG = 'rezvivo:vegetation_layout';
-  VEGETATION_LAYOUT_GENERATOR = 1;
+  VEGETATION_LAYOUT_GENERATOR = 2;
 type
   TPhotoPlant = record
     Id, Kind, Genus, LeafType: string;

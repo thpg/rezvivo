@@ -5,7 +5,8 @@ unit GameDeviceAssignments;
 interface
 uses SysUtils, fpjson;
 type
-  TDeviceRole = (drHeartRate, drPower, drCadence, drSpeed, drSteering, drControllable);
+  TDeviceRole = (drHeartRate, drPower, drCadence, drSpeed, drSteering,
+    drControllable, drSteeringCompanion);
   TDeviceSelectionMode = (dsmAutomatic, dsmNone, dsmDevice);
   TDeviceSelection = record
     Mode: TDeviceSelectionMode;
@@ -35,7 +36,8 @@ type
   end;
 const
   DeviceRoleKeys: array[TDeviceRole] of String =
-    ('heart_rate', 'power', 'cadence', 'speed', 'steering', 'controllable');
+    ('heart_rate', 'power', 'cadence', 'speed', 'steering', 'controllable',
+     'steering_companion');
 implementation
 uses Math;
 

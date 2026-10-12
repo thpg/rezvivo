@@ -51,6 +51,10 @@ type
     TargetPower: Word;           // Целевая мощность (ERG режим)
     Incline: SmallInt;           // Уклон в 0.1%
     SteeringAngle: Single;       // Degrees, clockwise positive; never a power source
+    { Last radio button edge, retained across release packets and UI coalescing.
+      Zero serial means an absolute-angle sensor without discrete commands. }
+    SteeringTurnSerial: Cardinal;
+    SteeringTurnDirection: ShortInt; // +1 left, -1 right
     IsMoving: Boolean;
     IsPaused: Boolean;
   end;
@@ -168,7 +172,11 @@ begin
       tmResistance: Dest.ResistanceLevel:=Source.ResistanceLevel;
       tmIncline: Dest.Incline:=Source.Incline;
       tmTargetPower: Dest.TargetPower:=Source.TargetPower;
-      tmSteering: Dest.SteeringAngle:=Source.SteeringAngle;
+      tmSteering: begin
+        Dest.SteeringAngle:=Source.SteeringAngle;
+        Dest.SteeringTurnSerial:=Source.SteeringTurnSerial;
+        Dest.SteeringTurnDirection:=Source.SteeringTurnDirection;
+      end;
       tmState: begin Dest.IsMoving:=Source.IsMoving; Dest.IsPaused:=Source.IsPaused end;
     end;
     Include(Dest.PresentMetrics, M);

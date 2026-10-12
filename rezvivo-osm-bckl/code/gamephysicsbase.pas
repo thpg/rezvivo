@@ -1585,6 +1585,7 @@ var
   Curv: Single;
   SpeedLim: Single;
   BrakeForceN: Single;
+  SurfaceResistance:Single;
 begin
   if not Assigned(FState) then begin Result := 0; Exit; end;
   { Preserve the road-scale grade with or without FIT. Contact pitch is
@@ -1607,13 +1608,15 @@ begin
   BrakeForceN := 0;
   if FControlInput <> nil then BrakeForceN := FControlInput^.BrakeForceN;
   if FState.FreeTravel then BrakeForceN:=Max(BrakeForceN,FState.TravelBrake*FState.AvatarMass);
+  SurfaceResistance:=1;
+  if FState.FreeTravel and FState.TravelOffRoad then SurfaceResistance:=1.10;
   Result := ComputeCyclingAcceleration(
     FState.AppliedPowerWatts,
     FState.CurrentSpeed,
     FState.AvatarMass,
-    FState.DragCoefficient,
+    FState.DragCoefficient*SurfaceResistance,
     FState.FrontalArea,
-    FState.RollingResistance,
+    FState.RollingResistance*SurfaceResistance,
     FState.CurrentSlopeAngle,
     DeltaTime,
     Curv,

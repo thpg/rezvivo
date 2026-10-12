@@ -22,7 +22,7 @@ uses
   X3DNodes
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ,
-  Osm3dOsmIndex;      { TOsmRoadIndex — единый пер-блочный индекс дорог }
+  Osm3dOsmIndex, Osm3dStreetLamps;      { TOsmRoadIndex — единый пер-блочный индекс дорог }
 
 type
   TPOIKind = (
@@ -56,7 +56,7 @@ const
 
 
 type
-  { Extended enum. First 5 values match TPOIKind for fall-through delegation. }
+  { Extended enum. First 6 values match TPOIKind for fall-through delegation. }
   TPOIKindExt = (
     pkxNone,
     pkxTrafficSignal,
@@ -69,7 +69,8 @@ type
     pkxBench,
     pkxPlaceOfWorship,
     pkxInfoBoard,
-    pkxBin
+    pkxBin,
+    pkxLampRoad, pkxLampCurved, pkxLampDouble, pkxLampPark, pkxLampBollard
   );
 
   { Compact POI placement for the tiled cache. The assembler bakes templates
@@ -78,7 +79,8 @@ type
   TPOIInstance = record
     Kind:     TPOIKindExt;
     Position: TVector3;
-    Rotation: Single;     { yaw about +Y (rad); bus stops face the road, else 0 }
+    Height: Single;       { lamp height in metres; zero = template default }
+    Rotation: Single;     { yaw about +Y (rad); road-facing lamps and stops }
   end;
   TPOIInstanceArray = array of TPOIInstance;
 
@@ -130,11 +132,14 @@ type
 
     { Small TMesh for one kind, built at origin; caller owns and frees it. nil for pkxNone/unknown. }
     class function BuildKindMesh(Kind: TPOIKindExt): TMesh;
+    class function IsLamp(Kind: TPOIKindExt): Boolean; static;
+    class function LampScale(Kind: TPOIKindExt; Height: Single): Single; static;
+    class function BuildLampLens(Kind: TPOIKindExt): TMesh; static;
 
     { Bake one placed template into a static material batch. Rotation matches
       the X3D +Y axis-angle transform; normals rotate, UVs stay unchanged. }
     class procedure AppendInstance(Target, Template: TMesh;
-      const Position: TVector3; Yaw: Single);
+      const Position: TVector3; Yaw: Single; ScaleY: Single = 1);
 
     { Traffic signal split into pole + head box so the assembler can texture the
       box (traffic_light.png) while the pole keeps the plain POI material. Both
@@ -426,7 +431,15 @@ begin
   if V = 'bus_stop' then Exit(pkxBusStop);
   if V = 'platform' then Exit(pkxBusStop);
   if V = 'traffic_signals' then Exit(pkxTrafficSignal);
-  if V = 'street_lamp' then Exit(pkxPole);
+  if V = 'street_lamp' then
+  begin
+    V:=LowerCase(Tags.Get('rezvivo:lamp_style'));
+    if V='curved' then Exit(pkxLampCurved);
+    if V='double' then Exit(pkxLampDouble);
+    if V='park' then Exit(pkxLampPark);
+    if V='bollard' then Exit(pkxLampBollard);
+    Exit(pkxLampRoad);
+  end;
 
   V := Tags.GetLower('public_transport');
   if (V = 'platform') or (V = 'stop_position') or (V = 'station') then
@@ -741,7 +754,7 @@ var
   Kind: TPOIKindExt;
   Pos:  TVector3;
   Y:    Single;
-  Yaw:  Single;
+  Yaw,Qx,Qz,Ex,Ez: Single;
   N, Cap: Integer;  OwnIdx: Boolean;                 { индекс построен здесь (хост без общего) }
 begin
   OwnIdx := False;
@@ -763,7 +776,7 @@ begin
       POI already covers this stop (POI is more precise; avoids doubled shelters).
       Индекс строится лениво один раз — старый путь обходил весь датасет
       на КАЖДУЮ остановку. }
-    if Kind = pkxBusStop then
+    if (Kind = pkxBusStop) or IsLamp(Kind) then
     begin
       if ARoadIdx = nil then
       begin
@@ -772,14 +785,18 @@ begin
         ARoadIdx := TOsmRoadIndex.Build(Dataset, Projection);
         OwnIdx := True;
       end;
-      if IsRedundantStopPositionNode(ARoadIdx, Dataset, Projection, Node) then
+      if (Kind=pkxBusStop) and IsRedundantStopPositionNode(ARoadIdx, Dataset, Projection, Node) then
         Continue;
     end;
 
     Pos := NodePlanePos(Dataset, Node, Projection);   { int-first }
     Yaw := 0;
-    if Node.Tags.HasKey('rezvivo:local_photo_object') and Node.Tags.HasKey('direction') then
-      Yaw:=-DegToRad(ParseOSMMeters(Node.Tags.Get('direction'))); { geographic east is -X }
+    if Node.Tags.HasKey('direction') and
+      (IsLamp(Kind) or Node.Tags.HasKey('rezvivo:local_photo_object')) then
+      Yaw:=-DegToRad(ParseOSMMeters(Node.Tags.Get('direction'))) { geographic east is -X }
+    else if IsLamp(Kind) and ARoadIdx.NearestVehicularSeg(Pos.X,Pos.Z,40,Qx,Qz,Ex,Ez) then
+      if Sqr(Qx-Pos.X)+Sqr(Qz-Pos.Z)>0.01 then Yaw:=ArcTan2(Qx-Pos.X,Qz-Pos.Z);
+    { Only turn an OSM lamp towards a nearby road; never move its mapped foot. }
 
     { Bus stops / platforms: move to the roadside and turn to face the road,
       then re-sample the ground at the moved position. }
@@ -796,6 +813,11 @@ begin
     begin
       Cap := Cap * 2;
       SetLength(Result, Cap);
+    end;
+    Result[N].Height := 0;
+    if IsLamp(Kind) and Node.Tags.HasKey('height') then begin
+      Y:=ParseOSMMeters(Node.Tags.Get('height'));
+      if Y>0 then Result[N].Height:=EnsureRange(Y,0.3,20.0);
     end;
     Result[N].Kind     := Kind;
     Result[N].Position := Pos;
@@ -832,6 +854,22 @@ begin
   AppendBox(Result, Vector3(0, 3.7, 0), 0.30, 0.80, 0.30, False, True);
 end;
 
+class function TPOIBuilderExt.IsLamp(Kind: TPOIKindExt): Boolean;
+begin Result:=Kind in [pkxLampRoad..pkxLampBollard] end;
+
+class function TPOIBuilderExt.LampScale(Kind: TPOIKindExt; Height: Single): Single;
+begin
+  Result:=1;
+  if IsLamp(Kind) and (Height>0) then
+    Result:=EnsureRange(Height,0.3,20.0)/StreetLampHeight(TStreetLampStyle(Ord(Kind)-Ord(pkxLampRoad)));
+end;
+
+class function TPOIBuilderExt.BuildLampLens(Kind: TPOIKindExt): TMesh;
+begin
+  Result:=nil;
+  if IsLamp(Kind) then Result:=BuildStreetLamp(TStreetLampStyle(Ord(Kind)-Ord(pkxLampRoad)),True);
+end;
+
 class function TPOIBuilderExt.BuildKindMesh(Kind: TPOIKindExt): TMesh;
 { Geometry for one kind at the origin. Static batches bake its placement;
   the diagnostic instance path keeps a shared shape and transforms. }
@@ -841,6 +879,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1103);{$ENDIF}
   Result := nil;
   if Kind = pkxNone then Exit;
+  if IsLamp(Kind) then Exit(BuildStreetLamp(TStreetLampStyle(Ord(Kind)-Ord(pkxLampRoad))));
 
   Result := TMesh.Create('poi_template');
   try
@@ -864,7 +903,7 @@ begin
 end;
 
 class procedure TPOIBuilderExt.AppendInstance(Target, Template: TMesh;
-  const Position: TVector3; Yaw: Single);
+  const Position: TVector3; Yaw: Single; ScaleY: Single);
 var
   Vertices: TMeshVertexArray;
   Indices: TMeshIndexArray;
@@ -882,9 +921,10 @@ begin
     V := Vertices[I];
     X := V.Position.X; Z := V.Position.Z;
     V.Position := Vector3(C * X + S * Z + Position.X,
-      V.Position.Y + Position.Y, -S * X + C * Z + Position.Z);
+      V.Position.Y * ScaleY + Position.Y, -S * X + C * Z + Position.Z);
     X := V.Normal.X; Z := V.Normal.Z;
     V.Normal := Vector3(C * X + S * Z, V.Normal.Y, -S * X + C * Z);
+    if ScaleY<>1 then V.Normal:=VecNormalize(Vector3(V.Normal.X,V.Normal.Y/ScaleY,V.Normal.Z));
     Target.AddVertex(V);
   end;
   for I := 0 to Template.TriangleCount - 1 do
@@ -893,31 +933,25 @@ begin
 end;
 
 class function TPOIBuilderExt.BuildAll(Dataset: TOSMDataset; HM: THeightmap;
-  Projection: TLocalProjection;
-  Terrain: TTerrainSampler): TMesh;
-var
-  Instances: TPOIInstanceArray;
-  I: Integer;
+  Projection: TLocalProjection; Terrain: TTerrainSampler): TMesh;
+var Instances: TPOIInstanceArray; Templates,Lenses: array[TPOIKindExt] of TMesh;
+  I: Integer; K: TPOIKindExt; Scale: Single;
 begin
-  {$IFDEF IAM_LIVE}IamLiveTrack(1104);{$ENDIF}
-  Result := TMesh.Create('poi_ext');
-  if (Dataset = nil) or (Projection = nil) then Exit;
-
-  Instances := BuildAllInstances(Dataset, HM, Projection, Terrain);
-  for I := 0 to High(Instances) do
-    case Instances[I].Kind of
-      pkxTrafficSignal:  TPOIBuilder.AppendTrafficSignal(Result, Instances[I].Position);
-      pkxHydrant:        TPOIBuilder.AppendHydrant(Result, Instances[I].Position);
-      pkxTower:          TPOIBuilder.AppendTower(Result, Instances[I].Position);
-      pkxFountain:       TPOIBuilder.AppendFountain(Result, Instances[I].Position);
-      pkxPole:           TPOIBuilder.AppendPole(Result, Instances[I].Position, 6.0);
-      pkxMonument:       AppendMonument(Result, Instances[I].Position);
-      pkxBusStop:        AppendBusStop(Result, Instances[I].Position);
-      pkxBench:          AppendBench(Result, Instances[I].Position);
-      pkxPlaceOfWorship: AppendPlaceOfWorship(Result, Instances[I].Position);
-      pkxInfoBoard:      AppendInfoBoard(Result, Instances[I].Position);
-      pkxBin:            AppendBin(Result, Instances[I].Position);
-    end;
+  Result:=TMesh.Create('poi_ext');
+  for K:=Low(K) to High(K) do begin Templates[K]:=nil;Lenses[K]:=nil end;
+  try
+    try
+      Instances:=BuildAllInstances(Dataset,HM,Projection,Terrain);
+      for I:=0 to High(Instances) do
+      begin
+        K:=Instances[I].Kind;
+        if Templates[K]=nil then begin Templates[K]:=BuildKindMesh(K);Lenses[K]:=BuildLampLens(K) end;
+        Scale:=LampScale(K,Instances[I].Height);
+        AppendInstance(Result,Templates[K],Instances[I].Position,Instances[I].Rotation,Scale);
+        AppendInstance(Result,Lenses[K],Instances[I].Position,Instances[I].Rotation,Scale);
+      end;
+    except Result.Free;raise end;
+  finally for K:=Low(K) to High(K) do begin Templates[K].Free;Lenses[K].Free end end;
 end;
 
 type

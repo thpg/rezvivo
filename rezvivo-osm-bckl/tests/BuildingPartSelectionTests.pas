@@ -2,8 +2,10 @@ program BuildingPartSelectionTests;
 {$mode objfpc}{$H+}
 uses SysUtils,Osm3dGeoMath,Osm3dOsmData,Osm3dBuildingParts,
   Osm3dGeomBuildings,Osm3dHeightmap;
+const EnvelopeTags:array[0..3] of string=('rezvivo:architecture',
+  'rezvivo:building_massing','rezvivo:facade_layout','rezvivo:roof_layout');
 var D:TOSMDataset;S:TBuildingPartSelection;Checks,I:Integer;
-  P:TLocalProjection;HM:THeightmap;M:TBuildingMeshes;R:TOSMRelation;
+  P:TLocalProjection;HM:THeightmap;M:TBuildingMeshes;R:TOSMRelation;Tag:string;Rejected:Boolean;
 procedure Check(B:Boolean;const LabelText:string);
 begin if not B then raise Exception.Create(LabelText);Inc(Checks) end;
 procedure Node(Id,X,Y:Integer);
@@ -56,12 +58,38 @@ begin
     R.Members[1].Kind:=omkWay;R.Members[1].Ref:=11;R.Members[1].Role:='outer';D.AddRelation(R);
     Way(101,[1,2,5,6,1],True,False);Way(102,[2,3,4,5,2],True,False);Selection;
     Check(S.Hidden('relation',100),'stitched multipolygon parent partitions correctly');
+    R.Tags.Add('rezvivo:photo_building','yes');R.Tags.Add('rezvivo:architecture','{}');Selection;
+    Check(not S.Hidden('relation',100),'reviewed multipolygon envelope retained');
+    Check(S.Hidden('way',101) and S.Hidden('way',102),'ordinary parts cannot seal a reviewed passage');
+    S.ValidatePhotoParts(D);Inc(Checks);
     { An unrelated part in a courtyard does not fill or replace its envelope. }
     Node(7,8,3);Node(8,12,3);Node(9,12,7);Node(10,8,7);Way(12,[7,8,9,10,7],False,False);
     SetLength(R.Members,3);R.Members[2].Kind:=omkWay;R.Members[2].Ref:=12;R.Members[2].Role:='inner';
     D.Ways.Remove(101);D.Ways.Remove(102);Node(11,9,4);Node(12,11,4);Node(13,11,6);Node(14,9,6);
     Way(103,[11,12,13,14,11],True,False);Selection;
     Check(not S.Hidden('relation',100) and S.PartVisible('way',103),'courtyard survives, separate inner object remains');
+    for Tag in EnvelopeTags do begin
+      Reset;Way(101,[1,2,5,6,1],True,False);Way(102,[2,3,4,5,2],True,False);
+      D.FindWay(100).Tags.Add('rezvivo:photo_building','yes');D.FindWay(100).Tags.Add(Tag,'{}');Selection;
+      Check(not S.Hidden('way',100) and S.Hidden('way',101) and S.Hidden('way',102),'whole envelope priority: '+Tag);
+      S.ValidatePhotoParts(D);Inc(Checks);
+      D.FindWay(101).Tags.Add('rezvivo:photo_building','yes');Rejected:=False;
+      try S.ValidatePhotoParts(D) except on E:Exception do Rejected:=Pos('whole-building envelope',E.Message)>0 end;
+      Check(Rejected,'conflicting reviewed parent and part must be rejected: '+Tag);
+    end;
+    Reset;Way(101,[1,2,5,6,1],True,False);Way(102,[2,3,4,5,2],True,False);
+    D.FindWay(100).Tags.Add('rezvivo:photo_building','yes');D.FindWay(100).Tags.Add('building:colour','#aabbcc');Selection;
+    Check(S.Hidden('way',100),'colour alone must not replace detailed OSM parts');
+    Rejected:=False;try S.ValidatePhotoParts(D) except on E:Exception do Rejected:=Pos('parent hidden by building parts',E.Message)>0 end;
+    Check(Rejected,'scalar photo observation must not disappear on a hidden parent');
+    P:=TLocalProjection.Create(TLatLon.Make(59.76,60.19));HM:=THeightmap.Create(4,4,TLatLonBox.Make(59.75,60.18,59.77,60.2));
+    try
+      Rejected:=False;
+      try M:=TBuildingBuilderExt.BuildAll(D,HM,P);
+        for I:=Low(M.Walls) to High(M.Walls) do begin M.Walls[I].Free;M.Roofs[I].Free end
+      except on E:Exception do Rejected:=Pos('parent hidden by building parts',E.Message)>0 end;
+      Check(Rejected,'native builder also rejects a silently lost photo target');
+    finally HM.Free;P.Free end;
     WriteLn('PASS ',Checks,' building partition checks');
   finally S.Free;D.Free end;
 end.

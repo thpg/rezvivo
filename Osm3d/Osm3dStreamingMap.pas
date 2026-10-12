@@ -31,7 +31,7 @@ uses UiTranslations,
   Osm3dPrevTexFetcher,   { превью-текстуры по блокам (.ptex.png) }
   Osm3dWarmupOverlay,    { плоский прогрев маршрута — общий для студии и игры }
   Osm3dHeightmap,        { THeightmap / THeightmapSampler — source-height dump }
-  Osm3dTileX3D, Osm3dSoundscape,
+  Osm3dTileX3D, Osm3dSoundscape, Osm3dTravelRoads,
   Osm3dTilePreview,
   CastleRenderOptions,   { stVertex / stFragment для TEffectPartNode.ShaderType }
   Osm3dEffectUtils,   { ChainEffectApp — навесить блендинг-эффект на меш земли }
@@ -146,6 +146,7 @@ type
     CenterX, CenterZ: Single;
     HasMarineWater: Boolean; { captured before the source model is released }
     Soundscape: TSoundscapeField;
+    TravelRoads:TTravelRoadIndex;
     { Set once the snapped-route (green) cluster has been parented to
       this tile — guards against the completion sweep and a later
       MountBatch both mounting it. }
@@ -562,6 +563,7 @@ type
     FMainLog:   TLogTarget;
 
     FDestroying: Boolean;
+    FOwnWorkersJoined: Boolean; { teardown-only; POSIX joins are one-shot }
 
     { diagnostics }
     FLastFrameTick: QWord;
@@ -680,7 +682,7 @@ type
     { Снять ЧИСТЫЙ DEM под точками маршрута. Тяжёлое: GetRegion может уйти
       на диск или в сеть — звать ТОЛЬКО из воркера, никогда с главного
       потока. Фетчер потокобезопасен (см. ComputeFitCorrectionOffThread). }
-    procedure CaptureRouteDem;
+    procedure CaptureRouteDem(AllowNetworkDEM: Boolean);
     procedure CaptureRawGroundY(const AModels: array of TTileModel;
       const AIds: array of TGeoTileId);
 
@@ -760,7 +762,7 @@ type
       FPendingRouteAltCal/FPendingRouteDem. Прогресс по заездам банка
       пишет в FFitCorrProgCur/FFitCorrProgTotal. НЕ трогает
       FFitCorr/FBatchList/FRouteSnapped. }
-    procedure ComputeFitCorrectionOffThread;
+    procedure ComputeFitCorrectionOffThread(AllowNetworkDEM: Boolean);
     { Публикация готовых результатов фит-воркера на ГЛАВНОМ потоке (из
       OnRouteSnapDone): FRouteAltCal/FRouteDem + FIT-слой физики. }
     procedure PublishFitCorrection;
@@ -787,7 +789,8 @@ type
       AOverpass: TOverpassClient;
       const ASettings: TStudioSettings;
       ALog: TLogTarget = nil;
-      AMainLog: TLogTarget = nil; AStartUTC: TDateTime = 0); reintroduce;
+      AMainLog: TLogTarget = nil; AStartUTC: TDateTime = 0;
+      const AReadyGenHash: string = ''); reintroduce;
     destructor Destroy; override;
     { Retiring detached map: signal on main, wait on a reaper, then Destroy
       on main. Neither phase frees Castle/GL objects. }
@@ -937,6 +940,7 @@ type
       Detects bridge-like spans (green Y >> ground), approach/exit dips
       under the deck, missing green Y (disappearing spheres), way flips.
       Optionally refreshes Y from resident tiles first. }
+    function NearbyTravelRoads(const P:TVector3;Radius:Single):TTravelRoads;
     function AnalyzeSnapPathJSON(ARefreshY: Boolean = True;
       ABridgeClearM: Single = 1.5): string;
     { Full parallel dump of raw vs snapped arrays (+ Y channels) for MCP.
@@ -956,6 +960,7 @@ type
     function CameraGeo(LocalX, LocalZ: Single): TLatLon;
     property WorldScaleLatitude: Double read FWorldScaleLat;
     function KnowledgeRecipeHash: string;
+    function CameraTileCachePath(LocalX, LocalZ: Single): string;
 
     { Обратное к CameraGeo: гео lat/lon → мировые XZ в системе координат
       (фиксированной проекции) этой сессии. Нужно, чтобы перенести камеру в
@@ -1111,10 +1116,11 @@ type
   TFitCorrOnlyWorker = class(TThread)
   private
     FMap: TOsm3dStreamingMap;
+    FAllowNetworkDEM: Boolean;
   protected
     procedure Execute; override;
   public
-    constructor Create(AMap: TOsm3dStreamingMap);
+    constructor Create(AMap: TOsm3dStreamingMap; AllowNetworkDEM: Boolean = True);
   end;
 
 implementation
@@ -1388,7 +1394,8 @@ constructor TOsm3dStreamingMap.Create(AOwner: TComponent;
   AHttp: THTTPFetcherWithCache;
   ATerrFetcher: TTerrariumFetcher; AOverpass: TOverpassClient;
   const ASettings: TStudioSettings;
-  ALog: TLogTarget; AMainLog: TLogTarget; AStartUTC: TDateTime);
+  ALog: TLogTarget; AMainLog: TLogTarget; AStartUTC: TDateTime;
+  const AReadyGenHash: string);
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1265);{$ENDIF}
   inherited Create(AOwner);
@@ -1457,6 +1464,7 @@ begin
   FCache := TGeoTileCache.Create(ACacheRoot, AGenHash,
                                  FHeightmapZoom, GEO_TILE_EDGE_PX, FWorldScaleLat);
   FCache.LogTarget := FMainLog;
+  FCache.ConfigureReadyTiles(AHttp,AReadyGenHash);
   { Slippy lattice — no UTM zone to pin (PinZone removed). }
 
   FEdge := FCache.Grid.EdgeMeters;
@@ -1630,10 +1638,17 @@ end;
 
 procedure TOsm3dStreamingMap.JoinBackgroundStop;
 begin
-  if FAssembleWorker<>nil then FAssembleWorker.WaitFor;
-  if FMountWorker<>nil then FMountWorker.WaitFor;
-  if FSnapWorker<>nil then FSnapWorker.WaitFor;
-  if FFitCorrWorker<>nil then FFitCorrWorker.WaitFor;
+  if (FCache<>nil) and (FCache.ReadyTiles<>nil) then FCache.ReadyTiles.JoinStopped;
+  if not FOwnWorkersJoined then
+  begin
+    if FAssembleWorker<>nil then FAssembleWorker.WaitFor;
+    if FMountWorker<>nil then FMountWorker.WaitFor;
+    if FSnapWorker<>nil then FSnapWorker.WaitFor;
+    if FFitCorrWorker<>nil then FFitCorrWorker.WaitFor;
+    { Keep the objects and queues for their existing destructor cleanup.
+      Only the OS join is consumed here by the background reaper. }
+    FOwnWorkersJoined:=True;
+  end;
   if FHmFetcher<>nil then FHmFetcher.JoinBackgroundStop;
   if FWarmup<>nil then FWarmup.JoinBackgroundStop;
   { Disk flushing is last: a filesystem error must not skip a provider join. }
@@ -1678,7 +1693,7 @@ begin
     SceneLifecycleLog('OSM-DESTROY step 3a: assemble worker terminate...');
     FAssembleWorker.Terminate;
     RTLEventSetEvent(FAsmWake);
-    FAssembleWorker.WaitFor;
+    if not FOwnWorkersJoined then FAssembleWorker.WaitFor;
     SceneLifecycleLog('OSM-DESTROY step 3b: assemble worker joined');
     FreeAndNil(FAssembleWorker);
     FreeRemainingAssembleJobs;
@@ -1697,7 +1712,7 @@ begin
     SceneLifecycleLog('OSM-DESTROY step 4a: mount worker terminate...');
     FMountWorker.Terminate;
     RTLEventSetEvent(FMountWake);   { разбудить из WaitFor, чтобы увидел Terminated }
-    FMountWorker.WaitFor;
+    if not FOwnWorkersJoined then FMountWorker.WaitFor;
     SceneLifecycleLog('OSM-DESTROY step 4b: mount worker joined');
     FreeAndNil(FMountWorker);
   end else
@@ -1718,7 +1733,7 @@ begin
     SceneLifecycleLog('OSM-DESTROY step 5a: snap worker terminate...');
     FSnapCancel := True;
     FSnapWorker.Terminate;
-    FSnapWorker.WaitFor;
+    if not FOwnWorkersJoined then FSnapWorker.WaitFor;
     SceneLifecycleLog('OSM-DESTROY step 5b: snap worker joined');
     FreeAndNil(FSnapWorker);
   end else
@@ -1730,7 +1745,7 @@ begin
     SceneLifecycleLog('OSM-DESTROY step 6a: fitcorr worker terminate...');
     FSnapCancel := True;
     FFitCorrWorker.Terminate;
-    FFitCorrWorker.WaitFor;
+    if not FOwnWorkersJoined then FFitCorrWorker.WaitFor;
     SceneLifecycleLog('OSM-DESTROY step 6b: fitcorr worker joined');
     FreeAndNil(FFitCorrWorker);
   end else
@@ -1940,6 +1955,12 @@ end;
 function TOsm3dStreamingMap.KnowledgeRecipeHash: string;
 begin
   if (FCache<>nil) and (FCache.Recipes<>nil) then Result:=FCache.Recipes.ContentHash else Result:='';
+end;
+
+function TOsm3dStreamingMap.CameraTileCachePath(LocalX, LocalZ: Single): string;
+begin
+  Result:='';
+  if FCache<>nil then Result:=FCache.PathFor(FCache.TileAt(CameraGeo(LocalX,LocalZ)));
 end;
 
 function TOsm3dStreamingMap.TileScaleX(const AId: TGeoTileId): Double;
@@ -2834,6 +2855,7 @@ begin
       if (AModels[J] <> nil) and
          AModels[J].TileId.Equals(CT.Tile) then
       begin
+        CT.TravelRoads:=TTravelRoadIndex.Create(AModels[J],CT.CenterX,CT.CenterZ,TileScaleX(CT.Tile));
         BuildGroundField(CT, AModels[J], Assembled.Tiles[I].CurbVertices);
         Assembled.Tiles[I].CurbVertices:=Default(TCurbMesh);
         MountTileGrass(CT, AModels[J]);
@@ -3698,7 +3720,16 @@ end;
 destructor TCacheTile.Destroy;
 begin
   if (GpuOwner<>nil)and(GpuGround<>nil) then GpuOwner.RemoveTile(GpuGround);
-  FreeAndNil(Soundscape);FreeAndNil(GpuGround);inherited;
+  FreeAndNil(TravelRoads);FreeAndNil(Soundscape);FreeAndNil(GpuGround);inherited;
+end;
+
+function TOsm3dStreamingMap.NearbyTravelRoads(const P:TVector3;Radius:Single):TTravelRoads;
+var CT:TCacheTile;N:Integer;
+begin
+  Result:=nil;N:=0;
+  for CT in FTileIndex.Values do if CT.TravelRoads<>nil then
+    CT.TravelRoads.Nearby(P.X,P.Z,Radius,Result,N);
+  SetLength(Result,N);
 end;
 
 procedure TOsm3dStreamingMap.RenderGpuGround;
@@ -5792,7 +5823,7 @@ end;
   мировые метры карты (FProj), классифицировать мосты по снапнутым way,
   и отдать профиль в FFitCorr. Вызывается на снапе (OnRouteSnapDone) —
   общий путь студии и игры. }
-procedure TOsm3dStreamingMap.CaptureRouteDem;
+procedure TOsm3dStreamingMap.CaptureRouteDem(AllowNetworkDEM: Boolean);
 var
   Box: TLatLonBox;
   Hm:  THeightmap;
@@ -5817,7 +5848,8 @@ begin
   { ACancel=@FSnapCancel: зовём из фонового fitcorr-воркера; деструктор
     взводит флаг и ждёт поток — без отмены целый регион маршрута
     (сотни тайлов × HTTP до 30 с) держал бы Stop несколько секунд. }
-  Hm := FHmFetcher.GetRegion(Box, FHeightmapZoom, @FSnapCancel);
+  if AllowNetworkDEM then Hm:=FHmFetcher.GetRegion(Box,FHeightmapZoom,@FSnapCancel)
+  else Hm:=FHmFetcher.GetRegionCachedOnly(Box,FHeightmapZoom);
   if FSnapCancel then
   begin
     if Hm <> nil then Hm.Free;
@@ -5840,7 +5872,7 @@ begin
     [Length(FPendingRouteDem), FHeightmapZoom]));
 end;
 
-procedure TOsm3dStreamingMap.ComputeFitCorrectionOffThread;
+procedure TOsm3dStreamingMap.ComputeFitCorrectionOffThread(AllowNetworkDEM: Boolean);
 const
   { Высота устройства над дорогой, вычитаемая из цели грунта. Сплайн
     дрейфа (медиана fit−Dem) уже вбирает постоянный подъём устройства,
@@ -6160,7 +6192,7 @@ begin
   { Красный канал снимаем ВСЕГДА и ПЕРВЫМ — до всех проверок: чистый DEM
     это независимый референс, а не производная коррекции, и папка заездов
     ему не нужна. }
-  CaptureRouteDem;
+  CaptureRouteDem(AllowNetworkDEM);
 
   if (FRoutesFolder = '') or (FSelectedFit = '') then Exit;
   FitT0 := GetTickCount64;
@@ -6169,7 +6201,7 @@ begin
     (30+ файлов × GetRegion с HTTP до 30 с/тайл на холодном кэше). }
   BankStat := BuildFitBank(FRoutesFolder, FSelectedFit, FHmFetcher,
     FHeightmapZoom, Bank, Sel, @FFitCorrProgCur, @FFitCorrProgTotal,
-    @FSnapCancel);
+    @FSnapCancel,AllowNetworkDEM);
   if FSnapCancel then Exit;
   LogMain(Format('[fitcorr] bank: %s, %d ms',
     [BankStat, GetTickCount64 - FitT0]));
@@ -6330,7 +6362,7 @@ begin
     FreeAndNil(FPendingFitLayer);
     FPendingFitLayer := TFitHeightLayer.Create;
     LogMain('[fitlayer] ' + BuildFitHeightLayer(FRoutesFolder, FSelectedFit,
-      FHmFetcher, FHeightmapZoom, FPendingFitLayer, nil));
+      FHmFetcher, FHeightmapZoom, FPendingFitLayer, nil,False,AllowNetworkDEM));
   end;
   R := 0;
   for I := 0 to N - 1 do
@@ -8454,11 +8486,12 @@ begin
   Start;
 end;
 
-constructor TFitCorrOnlyWorker.Create(AMap: TOsm3dStreamingMap);
+constructor TFitCorrOnlyWorker.Create(AMap: TOsm3dStreamingMap; AllowNetworkDEM: Boolean);
 begin
   inherited Create(True);           { suspended до присвоения FMap }
   FreeOnTerminate := False;         { карта джойнит + освобождает }
   FMap := AMap;
+  FAllowNetworkDEM:=AllowNetworkDEM;
   Start;
 end;
 
@@ -8470,7 +8503,7 @@ begin
       { Тяжёлое (BuildFitBank+DEM+сплайн) — off-thread; публикация голубых
         высот — на главном потоке (Queue). Тайлы/меши не трогаем: при
         FitLayerBuild=False PublishFitCorrection только ставит FRouteAltCal. }
-      FMap.ComputeFitCorrectionOffThread;
+      FMap.ComputeFitCorrectionOffThread(FAllowNetworkDEM);
       Queue(@FMap.PublishFitCorrection);
     end;
   except
@@ -8832,7 +8865,7 @@ begin
         FMap.FFitCorrWorker.WaitFor;    { прошлый проход (лёгкий путь) }
         FreeAndNil(FMap.FFitCorrWorker);
       end;
-      FMap.FFitCorrWorker := TFitCorrOnlyWorker.Create(FMap);
+      FMap.FFitCorrWorker := TFitCorrOnlyWorker.Create(FMap,False);
       Queue(@FMap.OnRouteSnapDone);
     end;
   except

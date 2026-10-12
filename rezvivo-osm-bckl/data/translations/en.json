@@ -1653,5 +1653,15 @@
   "Run": "Run",
   "Brake": "Brake",
   "+ W": "+ W",
-  "Trees: textured": "Trees: textured"
+  "Trees: textured": "Trees: textured",
+  "Shared route room": "Shared route room",
+  "Smart-trainer riders on this route join automatically.": "Smart-trainer riders on this route join automatically.",
+  "This route was updated. Reopen it in Real World.": "This route was updated. Reopen it in Real World.",
+  "Ready on server": "Ready on server",
+  "Ready in cache": "Ready in cache",
+  "Pending": "Pending",
+  "This version requires an update to use online services.": "This version requires an update to use online services.",
+  "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.": "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.",
+  "Add to steering pair": "Add to steering pair",
+  "Remove from steering pair": "Remove from steering pair"
 }

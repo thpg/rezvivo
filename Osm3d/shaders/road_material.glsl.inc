@@ -468,9 +468,9 @@
 '    vec2 salt=vec2(mod(seed,251.0),floor(seed/251.0));' + #10 +
 '    // Millimeter detail is evaluated at its own metric scale and filtered out' + #10 +
 '    // smoothly once smaller than a pixel, independently of the page mip.' + #10 +
-'    // style.z packs marking + 2*grain class + 16*condition + 128*concrete.' + #10 +
+'    // style.z: marking + 2*grain + 16*condition + 128*concrete + 256*edge-only.' + #10 +
 '    // including the direct fallback, so pages never acquire a different grain.' + #10 +
-'    bool concrete=style.z>=128.0;' + #10 +
+'    bool concrete=mod(style.z,256.0)>=128.0;' + #10 +
 '    vec4 aggregate=concrete ? vec4(0.016,0.062,0.00042,0.91)' + #10 +
 '        : rp_grainProfile(floor(mod(style.z,16.0)*0.5));' + #10 +
 '    if(!concrete) {' + #10 +
@@ -518,6 +518,7 @@
 '    // Wheel polishing follows the existing irregular tyre accumulation.' + #10 +
 '    colorRough.a=clamp(colorRough.a-dirt*1.6,0.55,0.99);' + #10 +
 '    if (marked>0.5 && width>=3.0) {' + #10 +
+'        if(style.z>=256.0) lane=vec4(0.12,width-0.12,2.0,2.0);' + #10 +
 '        float pattern=rp_dash(p.x+mod(seed,9.0),footprint.x);' + #10 +
 '        float left=rp_cover(lateral-lane.x,0.06,footprint.y)*(lane.z>1.5 ? 1.0 : pattern);' + #10 +
 '        float right=rp_cover(lateral-lane.y,0.06,footprint.y)*(lane.w>1.5 ? 1.0 : pattern);' + #10 +

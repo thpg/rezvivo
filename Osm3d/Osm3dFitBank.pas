@@ -65,7 +65,7 @@ function BuildFitBank(const AFolder, ASelectedFile: String;
   AFetcher: TTerrariumFetcher; AHeightmapZoom: Integer;
   out Rides: TFitBankRideArray; out OutSelected: Integer;
   AProgCur: PInteger = nil; AProgTotal: PInteger = nil;
-  ACancel: PBoolean = nil): String;
+  ACancel: PBoolean = nil; AllowNetworkDEM: Boolean = True): String;
 
 implementation
 
@@ -84,7 +84,7 @@ function BuildFitBank(const AFolder, ASelectedFile: String;
   AFetcher: TTerrariumFetcher; AHeightmapZoom: Integer;
   out Rides: TFitBankRideArray; out OutSelected: Integer;
   AProgCur: PInteger = nil; AProgTotal: PInteger = nil;
-  ACancel: PBoolean = nil): String;
+  ACancel: PBoolean = nil; AllowNetworkDEM: Boolean = True): String;
 var
   Sr: TSearchRec;
   Names: TStringList;
@@ -182,7 +182,8 @@ begin
         if (AFetcher <> nil) and (Length(Geos[R]) > 0) then
         begin
           RideBox := RideBox.ExpandMeters(50.0);
-          Hm := AFetcher.GetRegion(RideBox, AHeightmapZoom, ACancel);
+          if AllowNetworkDEM then Hm:=AFetcher.GetRegion(RideBox,AHeightmapZoom,ACancel)
+          else Hm:=AFetcher.GetRegionCachedOnly(RideBox,AHeightmapZoom);
         end;
         if Hm <> nil then Inc(DemHit) else Inc(DemMiss);
 

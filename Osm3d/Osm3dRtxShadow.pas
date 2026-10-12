@@ -94,9 +94,6 @@ type
     procedure AddTriangle(Shape:TObject;const Triangle,Normal:TTriangle3;
       const TexCoord:TTriangle4;const Face:TFaceIndex);
     function CollectGround:Boolean;
-    procedure Bake(const Layer:Integer;Renderer:TTreeRenderer;
-      const Instance:TreeModel.TTreeInstance;const Profile:TTreeParams;
-      const MinX,MaxX,MinY,MaxY,MinD,MaxD:Single);
     procedure CopyLOD(const Layer:Integer;Texture:Cardinal;Source:Integer;
       Seasonal,Fruit:Boolean;Leaf,FruitAmount:Single);
     procedure AppendCard(const P:TRtxProjection;const Position:TVector3;Phase:Single);
@@ -388,8 +385,8 @@ begin
     for I:=0 to Casters.Count-1 do begin
       { Snapshot cursors must not survive an unordered caster-list change. }
       Revision:=(Revision xor QWord(PtrUInt(Casters[I])))*16777619;
-      if Casters[I] is TOsmProceduralVegetation then
-        TreeRevision:=TreeRevision+TOsmProceduralVegetation(Casters[I]).ShadowGeneration;
+      if FReflections and (Casters[I] is TOsmProceduralVegetation) then
+        TreeRevision:=TreeRevision+TOsmProceduralVegetation(Casters[I]).ShadowAtlasRevision;
     end;
     Revision:=Revision xor (QWord(Ord(FReflections)) shl 63);
     if TreeRevision<>FObservedTrees then begin FObservedTrees:=TreeRevision;FLastTreeChange:=GetTickCount64;end;
@@ -476,7 +473,7 @@ begin
           end else Shape.LocalTriangulate(@AddTriangle,False);
         end;
         if FShape<Shapes.Count then Break;
-      end else if (Casters[FSource] is TOsmProceduralVegetation) and RenderTreesActive then begin
+      end else if (Casters[FSource] is TOsmProceduralVegetation) and RenderTreesActive and FReflections then begin
         NativeReady:=TOsmProceduralVegetation(Casters[FSource]).CollectRtxTrees(Self,FCell,FEntry);
         if not NativeReady then Break;
       end;
@@ -514,30 +511,6 @@ begin
   if Result<0 then Exit;
   FSlots.Remove(Key);
 end;
-procedure TRtxShadow.Bake(const Layer:Integer;Renderer:TTreeRenderer;
-  const Instance:TreeModel.TTreeInstance;const Profile:TTreeParams;
-  const MinX,MaxX,MinY,MaxY,MinD,MaxD:Single);
-var S:TGLState;Env,OldEnv:TTreeRenderEnvironment;Projection,View:TTreeMat4;Eye:TVector3;I:Integer;
-begin
-  SaveGL(S);OldEnv:=Renderer.Environment;
-  try
-    glBindFramebuffer(GL_FRAMEBUFFER,FFramebuffer);glFramebufferTextureLayer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,AlphaTexture,0,Layer);
-    glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_COLOR_ATTACHMENT0);
-    if glCheckFramebufferStatus(GL_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('RTX silhouette framebuffer is incomplete');
-    glViewport(0,0,ALPHA_SIZE,ALPHA_SIZE);glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB_RTX);
-    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glClearColor(0,0,0,0);glClear(GL_COLOR_BUFFER_BIT);
-    Projection:=TreeMath.Orthographic(MinX,MaxX,MinY,MaxY,0.1,MaxD-MinD+2);
-    Eye:=FSun*(MinD-1);View:=TreeMath.Identity;
-    for I:=0 to 2 do begin View[I*4]:=FSide.Data[I];View[I*4+1]:=FUp.Data[I];View[I*4+2]:=-FSun.Data[I];end;
-    View[12]:=-TVector3.DotProduct(FSide,Eye);View[13]:=-TVector3.DotProduct(FUp,Eye);View[14]:=TVector3.DotProduct(FSun,Eye);
-    Env:=Default(TTreeRenderEnvironment);Env.Enabled:=True;Env.DepthOnly:=True;Env.DirectBranches:=True;
-    Env.BranchSides:=4;Env.BranchSegments:=3;Env.LeafFraction:=1;Env.NeedleDetail:=0;Env.ViewportHeight:=ALPHA_SIZE;
-    Env.SunDirection:=TreeMath.Vec(-FSun.X,-FSun.Y,-FSun.Z);Env.BillboardRight:=TreeMath.Vec(FSide.X,FSide.Y,FSide.Z);Env.OutputGamma:=1;
-    Renderer.Environment:=Env;
-    Renderer.Render(Instance,Profile,Projection,View,TreeMath.Identity,TreeMath.Vec(Eye.X,Eye.Y,Eye.Z),4,0,0,False,False,True,False,False,True);
-    Inc(FBakesThisStep);Inc(FBakedTrees);
-  finally Renderer.Environment:=OldEnv;RestoreGL(S);end;
-end;
 procedure TRtxShadow.CopyLOD(const Layer:Integer;Texture:Cardinal;Source:Integer;Seasonal,Fruit:Boolean;Leaf,FruitAmount:Single);
 var S:TGLState;
 begin
@@ -565,37 +538,15 @@ begin
 end;
 function TRtxShadow.AddTree(const Instance:TreeModel.TTreeInstance;const Profile:TTreeParams;
   const Position:TVector3;Renderer,Shared:TTreeRenderer;Season:Single):Boolean;
-var Key:string;P:TRtxProjection;B:TBox3D;Corner:TVector3;I,Age,View,Source:Integer;
-    MinX,MaxX,MinY,MaxY,MinD,MaxD,X,Y,D,Phase,Angle:Single;
+var Key:string;P:TRtxProjection;Age,View,Source:Integer;
+    Phase,Angle:Single;
     Actual:TTreeParams;Frames:TLODFrames;Texture:Cardinal;Seasonal,Fruit:Boolean;
     State:TTreeSeasonState;Right:TVector3;
 begin
   Result:=False;if not TimeAvailable then Exit;
   Actual:=ResolveTreeParams(Instance,Profile);Phase:=HashUnit(Actual.Seed,10);
-  if FBuildNear>=384 then Renderer:=nil; { room for active + replacement snapshots and shared LODs }
-  if Renderer<>nil then begin
-    Key:='N'+IntToHex(Renderer.ShadowFingerprint,8)+'/'+IntToStr(Round(Season*12));
-    if not FSlots.TryGetValue(Key,P) then begin
-      begin
-        MinX:=1e30;MaxX:=-1e30;MinY:=1e30;MaxY:=-1e30;MinD:=1e30;MaxD:=-1e30;
-        B:=Box3D(Vector3(Renderer.ShadowBoundsMin.X,Renderer.ShadowBoundsMin.Y,Renderer.ShadowBoundsMin.Z),Vector3(Renderer.ShadowBoundsMax.X,Renderer.ShadowBoundsMax.Y,Renderer.ShadowBoundsMax.Z));
-        for I:=0 to 7 do begin
-          Corner:=Vector3(B.Data[I and 1].X,B.Data[(I shr 1) and 1].Y,B.Data[(I shr 2) and 1].Z);
-          X:=TVector3.DotProduct(FSide,Corner);Y:=TVector3.DotProduct(FUp,Corner);D:=TVector3.DotProduct(FSun,Corner);
-          MinX:=Min(MinX,X);MaxX:=Max(MaxX,X);MinY:=Min(MinY,Y);MaxY:=Max(MaxY,Y);MinD:=Min(MinD,D);MaxD:=Max(MaxD,D);
-        end;
-        MinX:=MinX-0.1;MaxX:=MaxX+0.1;MinY:=MinY-0.1;MaxY:=MaxY+0.1;
-        P.Layer:=AllocateLayer;
-        if P.Layer<0 then
-          Exit(AddTree(Instance,Profile,Position,nil,Shared,Season));
-        P.Origin:=FSide*MinX+FUp*MinY+FSun*((MinD+MaxD)*0.5);
-        P.U:=FSide*(MaxX-MinX);P.V:=FUp*(MaxY-MinY);
-        Bake(P.Layer,Renderer,Instance,Profile,MinX,MaxX,MinY,MaxY,MinD,MaxD);
-      end;
-    end else Inc(FReusedProjections);
-    P.Used:=FCollectionSerial;FSlots.AddOrSetValue(Key,P);Inc(FBuildNear);
-    if Renderer<>nil then begin AppendCard(P,Position,Phase);Exit(True);end;
-  end;
+  { Only reflections use these cards. They share the species/age atlas;
+    near shadows render live and distant shadows use a single group depth. }
   if (Shared=nil) or not Shared.ShadowLOD(Profile,Texture,Frames,Seasonal,Fruit) then Exit;
   if Actual.Maturity<0.55 then Age:=0 else if Actual.Maturity<1.8 then Age:=1 else Age:=2;
   Angle:=ArcTan2(-FSun.X,-FSun.Z)/(2*Pi)+Phase;Angle:=Angle-Floor(Angle);View:=Floor(Angle*4+0.5) mod 4;Source:=Age*4+View;

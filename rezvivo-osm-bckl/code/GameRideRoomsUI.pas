@@ -8,7 +8,7 @@ type
     FKeyboard:TUiKeyboardNavigation;
     FDialog:TMenuDialog;
     FCode:TCastleEdit;
-    FStatus, FSource:TCastleLabel;
+    FStatus, FSource,FCodeLabel:TCastleLabel;
     FCreate,FJoin,FRide,FLeave,FSignIn,FCopy:TMenuButton;
     procedure ClickCreate(Sender:TObject);
     procedure ClickJoin(Sender:TObject);
@@ -27,7 +27,7 @@ type
     function Press(const Event:TInputPressRelease):Boolean;override;
   end;
 implementation
-uses SysUtils,CastleVectors,GameRideRooms,UiTranslations,VeloSiteAPI;
+uses SysUtils,CastleVectors,GameRideRooms,UiTranslations,VeloSiteAPI,GameClientUpdate,GameReadyRoutes;
 procedure TViewRideRooms.Start;
 var L:TCastleLabel;Actions:TMenuFlow;
   function Button(const Name,Key:string;Parent:TCastleUserInterface;Handler:TNotifyEvent):TMenuButton;
@@ -45,6 +45,7 @@ begin
   FSource.Caption:=UiText('Selected world')+': '+SourceTitle;
   FCreate:=Button('RoomCreate','Create room',FDialog.Content,@ClickCreate);
   L:=TMenuLabel.Create(FreeAtStop);BindUiText(L,'Room code');L.FontSize:=15;FDialog.Content.InsertFront(L);
+  FCodeLabel:=L;
   FCode:=TMenuEdit.Create(FreeAtStop);FCode.Name:='RoomCode';FCode.Text:='';FCode.Width:=310;FCode.Height:=44;FCode.FontSize:=20;
   FDialog.Content.InsertFront(FCode);
   Actions:=TMenuFlow.Create(FreeAtStop);FDialog.Content.InsertFront(Actions);
@@ -60,19 +61,26 @@ end;
 procedure TViewRideRooms.Stop;
 begin if FKeyboard<>nil then FKeyboard.Clear;inherited;FKeyboard:=nil;FDialog:=nil;end;
 procedure TViewRideRooms.Update(const SecondsPassed:Single;var HandleInput:Boolean);
-var RoomActive,Busy,Authorized:Boolean;S:string;I:TRideRoomInfo;
+var RoomActive,Busy,Authorized,Automatic:Boolean;S:string;I:TRideRoomInfo;
 begin
   inherited;RideRooms.Update;RoomActive:=RideRooms.Active;Busy:=RideRooms.Busy;
   Authorized:=VeloSite.IsAuthorized;I:=RideRooms.Info;
+  Automatic:=I.SessionToken<>'';
   FCreate.Enabled:=Authorized and not Busy and not RoomActive and(SourceFile<>'');
   FJoin.Enabled:=Authorized and not Busy and not RoomActive;
   FJoin.Exists:=not RoomActive;FCopy.Exists:=RoomActive;FCopy.Enabled:=not Busy;
   FCode.Enabled:=not Busy and not RoomActive;
   FRide.Exists:=RoomActive;FRide.Enabled:=not Busy;FLeave.Exists:=RoomActive;FLeave.Enabled:=not Busy;
-  FSignIn.Exists:=not Authorized;
+  FSignIn.Exists:=not Authorized and not Automatic and not Busy;
+  FCode.Exists:=not Automatic;FCodeLabel.Exists:=not Automatic;FJoin.Exists:=not Automatic and not RoomActive;
+  FCreate.Exists:=not Automatic;
+  if Automatic then begin FCopy.Exists:=False;FLeave.Exists:=False end;
   if Busy then S:=UiText('Connecting to room...')
   else if RideRooms.ErrorText<>''then S:=UiText(RideRooms.ErrorText)
-  else if RoomActive then begin
+  else if Automatic then begin
+    S:=UiText('Shared route room')+#10+ReadyRoutes.Title(I.RouteFile)+#10+UiText('Smart-trainer riders on this route join automatically.');
+    if RideRooms.RelayError<>''then S:=S+#10+UiText('Connection lost. Reconnecting...');
+  end else if RoomActive then begin
     S:=UiText('Room code')+': '+I.Code+#10+I.Title+#10+UiText('Share this code with your friend.');
     if RideRooms.RelayError<>''then S:=S+#10+UiText('Connection lost. Reconnecting...');
     if FCode.Text<>I.Code then FCode.Text:=I.Code;
@@ -81,14 +89,15 @@ begin
   if S<>FStatus.Caption then FStatus.Caption:=S;
 end;
 procedure TViewRideRooms.ClickCreate(Sender:TObject);
-begin RideRooms.CreateRoom(SourceKind,SourceFile);end;
+begin if ClientCanUseOnlineServices then RideRooms.CreateRoom(SourceKind,SourceFile);end;
 procedure TViewRideRooms.ClickCopy(Sender:TObject);
 begin if RideRooms.Active then Clipboard.AsText:=RideRooms.Info.Code;end;
 procedure TViewRideRooms.ClickJoin(Sender:TObject);
-begin RideRooms.Join(FCode.Text);end;
+begin if ClientCanUseOnlineServices then RideRooms.Join(FCode.Text);end;
 procedure TViewRideRooms.ClickRide(Sender:TObject);
 begin
   if not RideRooms.Active or RideRooms.Busy then Exit;
+  if not ClientCanUseOnlineServices then Exit;
   Container.PopView(Self);if Assigned(OnRide)then OnRide(Self);
 end;
 procedure TViewRideRooms.ClickLeave(Sender:TObject);

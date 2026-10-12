@@ -43,7 +43,7 @@ implementation
 uses Math, MD5, Osm3dTileKnowledge, Osm3dKnowledgeContext, Osm3dKnowledgeOsm,
   Osm3dPhotoSources, Osm3dFacadeLayout, Osm3dSceneMaterials, Osm3dBuildingMassing, Osm3dArchitecture, Osm3dCompoundRoof,
   Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,
-  Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts,CastleLog;
+  Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dMeasuredRoadHeight,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts,CastleLog;
 const RecipeVersion = 1;
   CatalogMaxBytes = 16*1024*1024;
 
@@ -99,6 +99,7 @@ begin
     23: Result:=CanonicalVegetationLayout(Value);
     24,25: Result:=CanonicalPhotoRoadProfile(Value,Index=25);
     26..30: Result:=CanonicalEnvironmentLayout(Value,KnowledgeProperties[Index].Category);
+    32,36: Result:=CanonicalMeasuredRoadHeight(Value);
     else raise ETileKnowledge.Create('Unsupported structured property');
   end;
 end;
@@ -133,6 +134,8 @@ begin
     if I=23 then P.Add('library',VegetationLayoutCapabilities);
     if I in [24,25] then P.Add('library',PhotoRoadCapabilities);
     if I in [26..30] then P.Add('library',EnvironmentLayoutCapabilities);
+    if I in [32,36] then P.Add('note','version=1 or 2, datum=dem_aligned, width_m 1..30, feather_m 10..80, stations [{at_m,elevation_m}] 2..2048. Version 2 optionally adds terrain_sections [{at_m,points:[[signed_offset_m,relative_height_m],...]}], 2..256 sections spanning the height profile, 2..32 points per section, +/-60m lateral and +/-30m vertical, slope <=200%. Positive offset is LEFT of original OSM way. Both road edges must be explicit zero-height knots; paved core stays flat. Between sections interpolate side profiles; beyond outer knots blend to DEM. Distances along original complete open OSM way, spaced >=1m; ground roads only. Align datum and remove barometer drift; photo bank dimensions must carry estimated uncertainty, never claim survey precision. Cannot combine with road.profile until reprojected. Bakes both road and surrounding terrain; unchanged outside corridor.');
+    if I=33 then P.Add('note','edge: continuous white edge lines only, no centre line; lane-manager widths/directions unchanged. none disables paint, lanes uses the existing lane layout.');
     if I=8 then P.Add('note','version=1, type=colonnade, front_start/end [lon,lat], columns 1..24 per row, rows 1..2, pier_width_m 1..20, column_radius_m .2..2.5, opening_height_m 3..40, tower_height_m 0..3; fits a rectangular OSM footprint and height, otherwise retains OSM envelope. Baked geometry; separate pier/column obstacles, open passage ground preserved.');
     if I=7 then P.Add('note','version=1; facades: directed start/end [lon,lat], bays [{width_m, floor_shift, balcony_floors}], cornice_floors, balcony_depth_m, balcony_width; outward normal = edge cross up; floor 0 is ground; whole straight exterior edges only; repeated unseen bays must be labelled inferred');
   end;
@@ -321,6 +324,8 @@ begin
     Result.Add('vegetation_layout_generator',VEGETATION_LAYOUT_GENERATOR);
   if TJSONObject(T.Find('set_tags')).Find(PHOTO_ROAD_PROFILE_TAG)<>nil then
     Result.Add('road_profile_generator',PHOTO_ROAD_PROFILE_GENERATOR);
+  if TJSONObject(T.Find('set_tags')).Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then
+    Result.Add('measured_height_generator',2);
   if TJSONObject(T.Find('set_tags')).Find(ENVIRONMENT_LAYOUT_TAG)<>nil then
     Result.Add('environment_layout_generator',ENVIRONMENT_LAYOUT_GENERATOR);
 end;
@@ -633,7 +638,8 @@ begin
       SetTags:=AsObject(T.Find('set_tags'),'tags');
       SplitId(AnchorId(T),Kind,Id); Current:=R.ObjectInfo(Kind,Id,
         ((T.Get('category','building')='vegetation') and not IsLocalTarget(T)) or
-        (SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil));
+        (SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil) or
+        (SetTags.Find(MEASURED_ROAD_HEIGHT_TAG)<>nil));
       try
         if Current=nil then raise ETileKnowledge.Create('knowledge_recipe_stale: missing '+AnchorId(T));
         if Current.Get('fingerprint','')<>T.Get('fingerprint','') then
@@ -643,6 +649,11 @@ begin
           SetTags:=AsObject(T.Find('set_tags'),'tags');
           if SetTags.Find(VEGETATION_LAYOUT_TAG)<>nil then
             ValidatePlantLayoutSource(SetTags.Get(VEGETATION_LAYOUT_TAG,''),Current);
+          if SetTags.Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then begin
+            ValidateMeasuredRoadHeight(SetTags.Get(MEASURED_ROAD_HEIGHT_TAG,''),Current);
+            if SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil then
+              raise ETileKnowledge.Create('Review elevation distances after changing a road centreline');
+          end;
           if SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil then begin
             Effective:=TJSONObject(Current.Find('tags').Clone);
             try
@@ -760,9 +771,9 @@ begin
     if (Kind<>'way') or (Source.Get('category','')<>'road') then
       raise ETileKnowledge.Create('Road/sidewalk refinement requires a highway way: '+Id);
     if Category='sidewalk' then begin
-      if (H<>'footway') and (H<>'path') and (H<>'pedestrian') then
+      if (H<>'footway') and (H<>'path') and (H<>'pedestrian') and (H<>'steps') then
         raise ETileKnowledge.Create('Sidewalk refinement requires a separate pedestrian way: '+Id);
-    end else if (H='') or (Pos('|'+H+'|','|motorway|trunk|primary|secondary|tertiary|residential|unclassified|road|living_street|service|busway|raceway|track|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|')=0) then
+    end else if (H='') or (Pos('|'+H+'|','|motorway|trunk|primary|secondary|tertiary|residential|unclassified|road|living_street|service|busway|raceway|track|cycleway|footway|path|pedestrian|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|')=0) then
       raise ETileKnowledge.Create('Road refinement requires a supported carriageway: '+Id);
   end else if Category='vegetation' then begin
     if (Source.Find('vegetation_relations')<>nil) and (Source.Find('vegetation_relations').Count>0) then
@@ -1023,6 +1034,17 @@ begin
         try
           for J:=0 to SetTags.Count-1 do After.Strings[SetTags.Names[J]]:=SetTags.Items[J].AsString;
           if Target.Get('category','building')='road' then ValidateRoadTags(After,Ordered[I]);
+          if SetTags.Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then begin
+            ValidateMeasuredRoadHeight(SetTags.Get(MEASURED_ROAD_HEIGHT_TAG,''),Source);
+            if SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil then
+              raise ETileKnowledge.Create('Review elevation distances after changing a road centreline');
+            { Match the real sampler footprint. A fixed 100 m margin asked
+              neighboring tiles to apply ways wholly outside their dataset. }
+            LocalBox:=KnowledgeBox(Source.Find('bbox')).ExpandMeters(
+              MeasuredRoadHeightRadius(SetTags.Get(MEASURED_ROAD_HEIGHT_TAG,''))+1);
+            Target.Delete('bbox');Target.Add('bbox',TJSONArray.Create([
+              LocalBox.MinLon,LocalBox.MinLat,LocalBox.MaxLon,LocalBox.MaxLat]));
+          end;
           if SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil then begin
             ValidatePhotoRoadSource(SetTags.Get(PHOTO_ROAD_PROFILE_TAG,''),Source,ProfileBaseWidth(After));
             { A moved sidewalk/changed edge can affect a neighbour tile too. }

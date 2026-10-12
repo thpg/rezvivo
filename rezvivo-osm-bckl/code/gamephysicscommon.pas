@@ -97,7 +97,7 @@ type
 
   TPhysicsReplayState = record
     GroundTurn: TGroundTurnState;
-    AutoMove: Boolean;
+    AutoMove, FreeTravel: Boolean;
     WorldPosition: TVector3;
     MovementVelocity: TVector3;
     ForwardDir: TVector3;
@@ -165,6 +165,10 @@ type
       with no route carrot, lane pull or endpoint turnaround. }
     FreeTravel, Walking: Boolean;
     TravelSteering, TravelTargetSpeed, TravelBrake: Single;
+    { Extra passive resistance off mapped roads; never modifies sensor watts. }
+    TravelOffRoad:Boolean;
+    TravelRoadGuided:Boolean;
+    TravelRoadSpeedLimit:Single;
     GroundTurn: TGroundTurnState;
     PositionConstraint: TPositionConstraint;
     CollisionHalfWidth, CollisionBodyHeight: Single;
@@ -660,6 +664,7 @@ end;
 function TPhysicsState.CaptureReplay: TPhysicsReplayState;
 begin
   Result.AutoMove:=AutoMove;
+  Result.FreeTravel:=FreeTravel;
   Result.GroundTurn:=GroundTurn;
   Result.WorldPosition:=WorldPosition;
   Result.MovementVelocity:=MovementVelocity;
@@ -707,6 +712,7 @@ end;
 procedure TPhysicsState.RestoreReplay(const Saved: TPhysicsReplayState);
 begin
   AutoMove:=Saved.AutoMove;
+  FreeTravel:=Saved.FreeTravel;
   GroundTurn:=Saved.GroundTurn;
   WorldPosition:=Saved.WorldPosition;
   MovementVelocity:=Saved.MovementVelocity;

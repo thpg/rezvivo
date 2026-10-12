@@ -44,7 +44,8 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs, CastleStringUtils,
-  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol;
+  TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol,
+  EliteSterzoProtocol, ZwiftControllerProtocol;
 
 {$ifdef ANDROID}
 
@@ -70,6 +71,9 @@ type
 
     FHasPower, FHasFEC, FHasHR, FHasCSC: Boolean;
     FFECParser: TCyclingANTParser;
+    FZwiftParser: TZwiftControllerParser;
+    FZwiftService: String;
+    FZwiftReady, FZwiftEncrypted: Boolean;
 
     procedure ProcessNotification(const CharUUID: string; const Data: TBytes);
     procedure ProcessFTMSData(const Buf: TBytes);
@@ -199,6 +203,7 @@ begin
   inherited Create(AAddress, AFriendlyName);
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
+  FZwiftParser:=TZwiftControllerParser.Create;
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'AndroidBLE';
 end;
@@ -211,6 +216,7 @@ begin
   Disconnect;
   FreeAndNil(FFTMSParser);
   FreeAndNil(FFECParser);
+  FreeAndNil(FZwiftParser);
   inherited;
 end;
 
@@ -223,6 +229,9 @@ function TAndroidBLESession.Connect: Boolean;
 begin
   Result := False;
   if FConnectionState = csConnected then Exit(True);
+  FZwiftService:=''; FZwiftReady:=False; FZwiftEncrypted:=False;
+  FZwiftParser.Reset;
+  FLastData:=Default(TTrainerDataRecord);
   SetConnectionState(csConnecting, 'Android: connecting...');
   Messaging.Send(['ble-connect', FDeviceInfo.Address, FDeviceInfo.Name]);
   Result := True;  { асинхронно — статус придёт через ble-connection }
@@ -238,9 +247,14 @@ end;
 
 procedure TAndroidBLESession.OnConnectionStateChanged(const AState, AMessage: string);
 begin
+  if FZwiftEncrypted and SameText(AState,'connected') then Exit;
   case LowerCase(AState) of
     'connecting'  : SetConnectionState(csConnecting, AMessage);
-    'connected'   : SetConnectionState(csConnected, AMessage);
+    'connected'   :
+      if (FZwiftService<>'') and not FZwiftReady then
+      begin
+        if not FZwiftEncrypted then SetConnectionState(csConnecting,'Waiting for Zwift RideOn response');
+      end else SetConnectionState(csConnected, AMessage);
     'disconnected': SetConnectionState(csDisconnected, AMessage);
     'error'       : SetConnectionState(csError, AMessage);
   end;
@@ -255,6 +269,27 @@ begin
   FHasFEC   := Pos('6e40fec1', LowerCase(ServicesJson)) > 0;
   FHasHR    := Pos('0000180d', LowerCase(ServicesJson)) > 0;
   FHasCSC   := Pos('00001816', LowerCase(ServicesJson)) > 0;
+  FDeviceInfo.SupportsSteering:=Pos(SterzoServiceUUID,LowerCase(ServicesJson))>0;
+  if Pos(ZwiftRideServiceUUID,LowerCase(ServicesJson))>0 then FZwiftService:=ZwiftRideServiceUUID
+  else if Pos(ZwiftServiceUUID,LowerCase(ServicesJson))>0 then FZwiftService:=ZwiftServiceUUID;
+  if IsZwiftControllerName(FDeviceInfo.Name) and (FZwiftService='') then
+  begin
+    FDeviceInfo.SupportsSteering:=True; FZwiftEncrypted:=True;
+    SetConnectionState(csError,'Zwift controller service is unavailable. This firmware may require activation in the vendor app.');
+    Exit;
+  end;
+  if FZwiftService<>'' then
+  begin
+    FDeviceInfo.SupportsSteering:=True;
+    Messaging.Send(['ble-subscribe',FDeviceInfo.Address,FZwiftService,ZwiftNotifyUUID]);
+    Messaging.Send(['ble-subscribe',FDeviceInfo.Address,FZwiftService,ZwiftResponseUUID]);
+    WriteCharacteristic(FZwiftService,ZwiftWriteUUID,ZwiftHandshakeRequest,True);
+  end else if FDeviceInfo.SupportsSteering then
+  begin
+    Messaging.Send(['ble-subscribe',FDeviceInfo.Address,SterzoServiceUUID,SterzoAngleUUID]);
+    Messaging.Send(['ble-subscribe',FDeviceInfo.Address,SterzoServiceUUID,SterzoChallengeUUID]);
+    WriteCharacteristic(SterzoServiceUUID,SterzoControlUUID,TBytes.Create($03,$10),True);
+  end;
 
   Logger.Info(Format('[AndroidBLE] %s services: FTMS=%s POWER=%s FEC=%s HR=%s CSC=%s',
     [FDeviceInfo.Address,
@@ -298,7 +333,45 @@ end;
 
 procedure TAndroidBLESession.ProcessNotification(const CharUUID: string;
   const Data: TBytes);
+var Parsed: TTrainerDataRecord; Response: TBytes; Handshake: TZwiftHandshake;
 begin
+  if CharUUID=SterzoAngleUUID then
+  begin
+    if ParseSterzoAngle(Data,Parsed) then PublishMeasurement(Parsed);
+    Exit;
+  end;
+  if CharUUID=SterzoChallengeUUID then
+  begin
+    Response:=SterzoChallengeResponse(Data);
+    if Length(Response)>0 then
+    begin
+      WriteCharacteristic(SterzoServiceUUID,SterzoControlUUID,Response,True);
+      WriteCharacteristic(SterzoServiceUUID,SterzoControlUUID,TBytes.Create($02,$02),True);
+    end;
+    Exit;
+  end;
+  if (CharUUID=ZwiftNotifyUUID) or (CharUUID=ZwiftResponseUUID) then
+  begin
+    Handshake:=ZwiftHandshakeReply(Data);
+    if Handshake=zhEncrypted then
+    begin
+      FZwiftEncrypted:=True;
+      SetConnectionState(csError,'Encrypted Zwift firmware is not supported. Use a controller with plaintext RideOn support.');
+      Exit;
+    end;
+    if FZwiftEncrypted then Exit;
+    if Handshake=zhPlaintext then
+    begin
+      FZwiftReady:=True;
+      if FConnectionState<>csConnected then SetConnectionState(csConnected,'Zwift controller connected');
+    end else if FZwiftParser.Parse(Data,Parsed) then
+    begin
+      FZwiftReady:=True;
+      if FConnectionState<>csConnected then SetConnectionState(csConnected,'Zwift controller connected');
+      PublishMeasurement(Parsed);
+    end;
+    Exit;
+  end;
   case ClassifyBLECharacteristic(CharUUID) of
     fctFitnessMachineCP:       ReceiveControlPoint(Data);
     fctIndoorBikeData:          ProcessFTMSData(Data);
@@ -358,7 +431,9 @@ var
   ResponseFlag: string;
 begin
   Result := False;
-  if FConnectionState <> csConnected then Exit;
+  { Service discovery/activation precede csConnected for steering devices.
+    Java queues writes behind CCCD subscriptions once GATT is ready. }
+  if not (FConnectionState in [csConnecting,csConnected]) then Exit;
   if UseRequest then ResponseFlag := '1' else ResponseFlag := '0';
   Messaging.Send(['ble-write', FDeviceInfo.Address, SvcUUID, CharUUID,
     BytesToHex(Data), ResponseFlag]);
@@ -530,6 +605,7 @@ begin
       Dev.RSSI := RssiInt;
       Dev.TransportType := ttBLE;
       Dev.ProviderName := 'AndroidBLE';
+      Dev.SupportsSteering:=IsSterzoName(Dev.Name) or IsZwiftControllerName(Dev.Name);
       OnDeviceFound(Dev);
     end;
     Exit;
@@ -561,7 +637,7 @@ begin
     Exit;
   end;
 
-  if (Tag = 'ble-notify') and (Received.Count >= 5) then
+  if ((Tag = 'ble-notify') or (Tag = 'ble-notification')) and (Received.Count >= 5) then
   begin
     FLock.Enter;
     try

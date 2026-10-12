@@ -5,7 +5,8 @@ uses Osm3dGeoMath, Osm3dOsmData, Osm3dTileX3D, TreeModel;
 function TreeIdentity(const LL: TLatLon): TTreeWorldPosition;
 function TreeTagJSON(Tags: TOSMTags): string;
 function ClassifyTreeTag(const Json: string; const LL: TLatLon;
-  Shrub: Boolean; Forest: Boolean = False; Elevation: Double = 0): TProceduralTreeTag;
+  Shrub: Boolean; Forest: Boolean = False; Elevation: Double = 0;
+  PhotoHeight: Double = 0): TProceduralTreeTag;
 function ProceduralTreeInstance(const Rec: TTileTreeRec;
   Projection: TLocalProjection): TreeModel.TTreeInstance;
 function TreeClassificationErrors: LongInt;
@@ -103,8 +104,10 @@ begin
   finally J.Free; end;
 end;
 function ClassifyTreeTag(const Json: string; const LL: TLatLon;
-  Shrub: Boolean; Forest: Boolean; Elevation: Double): TProceduralTreeTag;
+  Shrub: Boolean; Forest: Boolean; Elevation, PhotoHeight: Double): TProceduralTreeTag;
 var Code: TTreeTypeCode; Classification: TTreeClassification;Location:TForestLocation;
+    Instance:TTreeInstance; Profile,Resolved:TTreeParams;
+    Lo,Hi,Mid,Variant:Integer;UpperError:Double;
 begin
   Result := Default(TProceduralTreeTag);
   try
@@ -115,6 +118,32 @@ begin
     Code := Classification.TypeCode;
     if Shrub and (Classification.Source='fallback') then
       Code:=PackTreeType(tsShrub,TreeTypeAge(Code),TreeTypeVariant(Code));
+    { Photo-authored height used to affect only the legacy billboard Scale.
+      Procedural geometry and its generated LOD read the packed growth stage.
+      Fit that stage once during baking; both render paths then use the same
+      natural crown/trunk proportions, without runtime scaling or extra work.
+      The inferred stage is visual, not a surveyed biological age. Preserve
+      explicit ages and leave all ordinary OSM scatter unchanged. }
+    if (PhotoHeight>0) and not IsNan(PhotoHeight) and not IsInfinite(PhotoHeight)
+      and (TreeTypeAge(Code)=0) then begin
+      Instance:=Default(TTreeInstance);Instance.Position:=TreeIdentity(LL);
+      Instance.TypeCode:=Code;Profile:=DefaultTreeParams(Instance.Species);
+      Variant:=TreeTypeVariant(Code);Lo:=1;Hi:=Min(TREE_MAX_AGE,MatureTreeAge(Profile.Species)*3);
+      while Lo<Hi do begin
+        Mid:=(Lo+Hi) div 2;
+        Instance.TypeCode:=PackTreeType(Profile.Species,Mid,Variant);
+        Resolved:=ResolveTreeParams(Instance,Profile);
+        if Resolved.Height<PhotoHeight then Lo:=Mid+1 else Hi:=Mid;
+      end;
+      Instance.TypeCode:=PackTreeType(Profile.Species,Lo,Variant);
+      Resolved:=ResolveTreeParams(Instance,Profile);UpperError:=Abs(Resolved.Height-PhotoHeight);
+      if Lo>1 then begin
+        Instance.TypeCode:=PackTreeType(Profile.Species,Lo-1,Variant);
+        Resolved:=ResolveTreeParams(Instance,Profile);
+        if Abs(Resolved.Height-PhotoHeight)<UpperError then Dec(Lo);
+      end;
+      Code:=PackTreeType(Profile.Species,Lo,Variant);
+    end;
   except
     on E: Exception do begin
       { Bad age/taxon on one object must not abort an entire chunk. }

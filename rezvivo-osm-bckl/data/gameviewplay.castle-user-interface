@@ -293,63 +293,7 @@
       },
       "VerticalAnchorParent": "vpTop",
       "VerticalAnchorSelf": "vpTop",
-      "$Children": [
-        {
-          "$$ClassName": "TCastleCheckbox",
-          "Caption": "Camera Follows Avatar",
-          "CheckboxColorPersistent": {
-            "$$ClassName": "TCastleColorPersistent",
-            "Blue": 1.0,
-            "Green": 1.0,
-            "Red": 1.0
-          },
-          "Checked": true,
-          "FontSize": 20.0,
-          "HorizontalAnchorParent": "hpRight",
-          "HorizontalAnchorSelf": "hpRight",
-          "Name": "CheckboxCameraFollows",
-          "TextColorPersistent": {
-            "$$ClassName": "TCastleColorPersistent",
-            "Blue": 1.0,
-            "Green": 1.0,
-            "Red": 1.0
-          },
-          "TranslationPersistent": {
-            "$$ClassName": "TCastleVector2Persistent",
-            "X": -10.0,
-            "Y": -10.0
-          },
-          "VerticalAnchorParent": "vpTop",
-          "VerticalAnchorSelf": "vpTop"
-        },
-        {
-          "$$ClassName": "TCastleCheckbox",
-          "Caption": "Debug Avatar Colliders",
-          "CheckboxColorPersistent": {
-            "$$ClassName": "TCastleColorPersistent",
-            "Blue": 1.0,
-            "Green": 1.0,
-            "Red": 1.0
-          },
-          "FontSize": 20.0,
-          "HorizontalAnchorParent": "hpRight",
-          "HorizontalAnchorSelf": "hpRight",
-          "Name": "CheckboxDebugAvatarColliders",
-          "TextColorPersistent": {
-            "$$ClassName": "TCastleColorPersistent",
-            "Blue": 1.0,
-            "Green": 1.0,
-            "Red": 1.0
-          },
-          "TranslationPersistent": {
-            "$$ClassName": "TCastleVector2Persistent",
-            "X": -10.0,
-            "Y": -44.0
-          },
-          "VerticalAnchorParent": "vpTop",
-          "VerticalAnchorSelf": "vpTop"
-        }
-      ]
+      "$Children": []
     },
     {
       "$$ClassName": "TCastleLabel",

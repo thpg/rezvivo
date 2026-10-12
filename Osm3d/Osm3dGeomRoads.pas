@@ -98,6 +98,7 @@ type
     Kind:          TRoadKind;
     Material:      TPathMaterial;
     IsMarked:      Boolean;
+    EdgeOnly:      Boolean;
     Width:         Single;
     Layout:        TRoadLaneLayout;
     LanesForward:  Integer;
@@ -493,6 +494,12 @@ begin
     Result.LanesBackward, Result.Layout);
   Result.IsMarked := DefMarked and (Result.Material = pmAsphalt) and
     (Result.Kind in [rkMajor, rkSecondary, rkMinor, rkService]);
+  if Tags.GetLower('rezvivo:road_markings')='none' then Result.IsMarked:=False
+  else if (Result.Material in [pmAsphalt,pmConcrete]) and
+    (Tags.GetLower('rezvivo:road_markings')='edge') then begin
+    Result.IsMarked:=True; Result.EdgeOnly:=True;
+  end else if (Result.Material in [pmAsphalt,pmConcrete]) and
+    (Tags.GetLower('rezvivo:road_markings')='lanes') then Result.IsMarked:=True;
 
   { Streets-gl getRoadUV — pick the horizontal slice of the road atlas
     cell that corresponds to this road's lane count. Only applies to
@@ -1146,6 +1153,7 @@ begin
               UVMin := Job.Params.UVMinX; UVMax := Job.Params.UVMaxX;
               UVScale := TRoadBuilder.ClassUVScaleY(Job.Params);
               Marked := Ord(Job.Params.IsMarked);
+              if Job.Params.EdgeOnly then Marked:=Marked+ROAD_STYLE_EDGE_ONLY;
               if Job.Params.Material=pmConcrete then Asphalt:=ROAD_SURFACE_CONCRETE
               else Asphalt := ROAD_SURFACE_ASPHALT + Ord(Job.Params.Material <> pmAsphalt);
               Condition := RoadConditionFromSmoothness(Job.Way.Tags.GetLower('smoothness'));
@@ -1242,6 +1250,7 @@ var
           ForwardLanes:=BParams.LanesForward; BackwardLanes:=BParams.LanesBackward;
           UVMin:=BParams.UVMinX; UVMax:=BParams.UVMaxX;
           UVScale:=ClassUVScaleY(BParams); Marked:=Ord(BParams.IsMarked);
+          if BParams.EdgeOnly then Marked:=Marked+ROAD_STYLE_EDGE_ONLY;
           if BParams.Material=pmConcrete then Asphalt:=ROAD_SURFACE_CONCRETE
           else Asphalt:=ROAD_SURFACE_ASPHALT+Ord(BParams.Material<>pmAsphalt);
           Condition:=RoadConditionFromSmoothness(BridgeWays[bi].Tags.GetLower('smoothness'));
@@ -1293,6 +1302,7 @@ var
       Result := (Kind = Jobs[jb].Params.Kind)
         and (Material = Jobs[jb].Params.Material)
         and (IsMarked = Jobs[jb].Params.IsMarked)
+        and (EdgeOnly = Jobs[jb].Params.EdgeOnly)
         and (Abs(Width - Jobs[jb].Params.Width) <= 0.01)
         and (Abs(UVMinX - Jobs[jb].Params.UVMinX) <= 0.001)
         and (Abs(UVMaxX - Jobs[jb].Params.UVMaxX) <= 0.001);

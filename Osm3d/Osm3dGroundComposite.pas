@@ -1454,7 +1454,7 @@ begin
     '    }' + #10 +
     '    // Footway U spans its width; use the existing metric tangent before normalization.' + #10 +
     '    vec3 sidewalkCurb=vec3(0.0,0.0,1.0), sidewalkConcrete=vec3(0.0);' + #10 +
-    '    if (matId==28 && rp_mode>0.5 && abs(tbnDet)>1e-12) {' + #10 +
+    '    if (matId==28 && rp_mode>0.5 && abs(tbnDet)>1e-12 && mod(floor(vRoadStyle.z/256.0),2.0)<0.5) {' + #10 +
     '    float sidewalkWidth=length(dp1*duv2.y-dp2*duv1.y)/max(abs(tbnDet),1e-12);' + #10 +
     '    vec2 sidewalkFootprint=vec2(max(abs(duv1.y),abs(duv2.y))*10.0,' + #10 +
     '      max(abs(duv1.x),abs(duv2.x))*sidewalkWidth)*0.5;' + #10 +
@@ -2716,12 +2716,12 @@ end;
 procedure TGroundCompositeMesh.ReserveForSlice(AVertCount, ATriCount: Integer);
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1511);{$ENDIF}
-  { Always precedes any append (per the call sequence), so the pool is
-    empty here — recreate sized to this slice's upper bound. Position-only
-    weld at 1 mm (see Create — fine on purpose; boundaries are closed later
-    by StitchBoundaryGaps). }
+  { Always precedes any append; recreate sized to this slice's upper bound.
+    Carving and leveling have finished: preserve hard surface normals now. }
   FPool.Free;
-  FPool := TVertexPool.Create(1e-3, -1.0, AVertCount);
+  { These are copies of finalized geometry, including vertical stair risers
+    and bridge sides. Never weld across a hard normal at this stage. }
+  FPool := TVertexPool.Create(1e-3, 0.999, AVertCount);
   if Length(FVerts)       < AVertCount     then SetLength(FVerts,       AVertCount);
   if Length(FMaterialIds) < AVertCount     then SetLength(FMaterialIds, AVertCount);
   if Length(FIndices)     < ATriCount * 3  then SetLength(FIndices,     ATriCount * 3);

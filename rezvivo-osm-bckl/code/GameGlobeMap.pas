@@ -11,6 +11,7 @@ type
     Tile:TTileXY;Needed,Visible,Attempted,Detailed,DetailReady,DetailPartial,Pinned:Boolean;
     Texture:TPixelTextureNode;Task:TFlatMapTask;Patch:TGlobePatch;Used:QWord;
     RenderSource:TGlobeTile;RetryAt:QWord;Failures:Integer;
+    OverviewZoom:Integer;
     destructor Destroy;override;
     procedure SetImage(Img:TCastleImage);
   end;
@@ -70,7 +71,7 @@ type
   end;
 implementation
 uses Math, CastleTransform, CastleRectangles, CastleColors, CastleGLUtils, CastleGLImages,
-  CastleRenderContext, Osm3dStudioSettings, GameGlobeCoverage;
+  CastleRenderContext, CastleControls, Osm3dStudioSettings, GameGlobeCoverage;
 type
   TGlobeOverlay=class(TCastleUserInterface)
     Map:TGlobeMap;
@@ -94,7 +95,7 @@ begin
   if Old<>nil then begin Old.KeepExistingEnd;Old.FreeIfUnused;end;
 end;
 constructor TGlobeMap.Create(AOwner:TComponent);
-var Overlay:TGlobeOverlay;
+var Overlay:TGlobeOverlay;Attribution:TCastleLabel;
 begin
   inherited;FTiles:=TList.Create;FCenter:=TLatLon.Make(35,35);
   FAltitude:=2.8;FTargetAltitude:=FAltitude;FRequestedZoom:=-1;
@@ -111,6 +112,9 @@ begin
   { A viewport child gets CGE's ordinary 2D render state. Drawing directly
     after inherited viewport Render still uses its perspective/depth state. }
   Overlay:=TGlobeOverlay.Create(Self);Overlay.Map:=Self;Overlay.FullSize:=True;InsertFront(Overlay);
+  Attribution:=TCastleLabel.Create(Self);Attribution.Caption:='© OpenStreetMap contributors';
+  Attribution.FontSize:=11;Attribution.Color:=White;Attribution.Frame:=True;
+  Attribution.Anchor(hpRight,-8);Attribution.Anchor(vpBottom,4);InsertFront(Attribution);
   SyncProjection;
 end;
 destructor TGlobeMap.Destroy;
@@ -252,7 +256,7 @@ begin
     T:=TGlobeTile(FTiles[I]);T.RenderSource:=nil;T.Pinned:=False;
     if T.Texture<>nil then begin
       Sources[N]:=T;Available[N].Tile:=T.Tile;
-      if T.DetailReady or T.DetailPartial then Available[N].Quality:=T.Tile.Zoom else Available[N].Quality:=Min(FLAT_MAP_WORLD_ZOOM,T.Tile.Zoom);
+      if T.DetailReady or T.DetailPartial then Available[N].Quality:=T.Tile.Zoom else Available[N].Quality:=T.OverviewZoom;
       Inc(N);
     end;
   end;
@@ -316,6 +320,7 @@ begin
         Img:=T.Task.TakeImage(Partial);
         if Img<>nil then begin
           T.DetailPartial:=Partial;T.DetailReady:=not Partial and T.Task.Detailed;
+          T.OverviewZoom:=T.Task.OverviewZoom;
           { A cached plain OSM tile is a valid detailed fallback, but the
             normal detail pass must still get a chance to add available DEM. }
           if not Partial then T.Detailed:=T.DetailReady and not T.Task.CachedOnly;T.SetImage(Img);
@@ -349,10 +354,10 @@ begin
     end;
     if Best=nil then Break;T:=Best;
     if Pass=0 then T.Attempted:=True else T.Detailed:=True;
-    { A cropped z10 overview is not a z16 texture. Read any existing detail
-      from disk first; otherwise render with the best live neighbouring LOD. }
+    { Read cached detail first, otherwise finish raster previews for all
+      visible tiles before scheduling the heavier OSM/DEM pass. }
     T.Task:=TFlatMapTask.Create(T.Tile.Zoom,T.Tile.X,T.Tile.Y,DefaultCacheRoot,Pass=1,
-      (Pass=0)and(T.Tile.Zoom>=FLAT_MAP_DETAIL_ZOOM));T.Task.Start;Inc(Active);
+      (Pass=0)and(T.Tile.Zoom>=FLAT_MAP_DETAIL_ZOOM),Pass=0);T.Task.Start;Inc(Active);
   end;
   if FMeshDirty then begin PositionPatches;FMeshDirty:=False;end;
   { Active coverage pins its sources, including ancestors and descendants. }

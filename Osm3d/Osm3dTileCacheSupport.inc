@@ -164,6 +164,9 @@ const
     '`kind_count:u32`, далее kind_count строк с именами перечисления TPOIKindExt.'#10 +
     'Затем `count:u32` и массив по 20 байт (`''<I4f''`):'#10 +
     '`kind_index:u32`, `x,y,z,rotation:f32`.'#10 +
+    'Далее опционально `count` значений `height:f32` (0 — стандартная высота модели,'#10 +
+    '0.3..20 — высота фонаря в метрах). Старые файлы без массива высот читаются с 0.'#10 +
+    'Типы фонарей дописаны в словарь POI; существующие типы и 20-байтовые записи не меняются.'#10 +
     ''#10 +
     '## ROAD: оси дорог и параметры покрытия'#10 +
     ''#10 +
@@ -411,7 +414,9 @@ const
     '        records = p.records(POI, p.u32())'#10 +
     '        finite_records(records)'#10 +
     '        require(all(r[0] < len(names) for r in records), ''POI kind index'')'#10 +
-    '        result = dict(kinds=names, fields=[''kind_index'', ''x'', ''y'', ''z'', ''rotation''], records=records)'#10 +
+    '        heights = p.scalars(''f'', len(records)) if p.offset < len(p.data) else [0.0] * len(records)'#10 +
+    '        require(all(math.isfinite(h) and 0 <= h <= 20 for h in heights), ''POI height range'')'#10 +
+    '        result = dict(kinds=names, fields=[''kind_index'', ''x'', ''y'', ''z'', ''rotation''], records=records, heights=heights)'#10 +
     '    elif kind == ''ROAD'':'#10 +
     '        n, np, nl = p.values(''3I'')'#10 +
     '        records = p.records(ROAD, n)'#10 +

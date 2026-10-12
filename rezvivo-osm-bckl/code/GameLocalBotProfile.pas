@@ -86,7 +86,13 @@ begin
   Result.Body.Composition:=C.Composition; Result.Body.InseamCm:=C.Inseam;
   Result.Body.ArmLengthCm:=C.Arms; Result.Body.HeadShape:=C.Sex;
   Result.Hair:=C.Hair; Result.Headwear:=C.Headwear;
-  Result.Beard:=C.Beard; Result.Mustache:=C.Mustache;
+  { Enforce this once when creating a bot, also for oncoming/crossing riders
+    and the graphics preview that use the same catalog. }
+  if Result.Body.Sex>=0.5 then begin
+    Result.Beard:=rbNone; Result.Mustache:=rmNone;
+  end else begin
+    Result.Beard:=C.Beard; Result.Mustache:=C.Mustache;
+  end;
   Result.Colors[csJersey]:=Kits[C.Kit];
   Result.Colors[csShorts]:=ShortsColors[C.Shorts];
   Result.Colors[csSocks]:=DetailColors[C.Socks];

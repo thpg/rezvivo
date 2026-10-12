@@ -80,7 +80,8 @@ type
       шейп с ShadowCaster=False, чтобы подземная труба не отбрасывала
       тень на композит земли. }
     smkTunnelWall,
-    smkRoadFurniture { signs, zebra stripes and bump paint; one atlas batch }
+    smkRoadFurniture, { signs, zebra stripes and bump paint; one atlas batch }
+    smkStreetLamp, smkLampLens
   );
 
   { Backend-independent material. Colours in [0..1] sRGB. }
@@ -262,6 +263,16 @@ begin
       begin
         Result.Name          := 'scrub';
         Result.DiffuseColor  := Vector3(0.55, 0.58, 0.35);    { dry yellow-green }
+      end;
+    smkStreetLamp:
+      begin
+        Result.Name:='street_lamp';Result.DiffuseColor:=Vector3(0.105,0.12,0.13);
+        Result.SpecularColor:=Vector3(0.25,0.25,0.25);Result.Shininess:=0.35;
+      end;
+    smkLampLens:
+      begin
+        Result.Name:='lamp_diffuser';Result.DiffuseColor:=Vector3(0.73,0.76,0.74);
+        Result.SpecularColor:=Vector3(0.3,0.3,0.3);Result.Shininess:=0.45;
       end;
     smkPOI:
       begin

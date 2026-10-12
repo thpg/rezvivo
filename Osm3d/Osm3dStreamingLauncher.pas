@@ -136,11 +136,11 @@ uses
   md5, TreeForestRegions, Osm3dOsmDirectory; { Osm3dMapUtils is in the interface uses }
 
 { Ключевая часть метрики востока: маркер авто-режима или число фиксации. }
-function WslKey(const ASettings: TStudioSettings): string;
+function WslKey(const ASettings: TStudioSettings; const Fmt: TFormatSettings): string;
 begin
   if (ASettings.WorldScaleLatDeg > -90.0) and (ASettings.WorldScaleLatDeg < 90.0)
      and (ASettings.WorldScaleLatDeg <> 0.0) then
-    Result := Format('wsl=%.6f|', [ASettings.WorldScaleLatDeg])
+    Result := Format('wsl=%.6f|', [ASettings.WorldScaleLatDeg], Fmt)
   else
     Result := 'wsl=tile-band|';
 end;
@@ -154,26 +154,29 @@ const
     code alters what gets baked into a tile — it invalidates the whole
     on-disk tile cache so stale tiles are not read back. }
   GEO_HASH_SALT   = 'osm3d-geo-tiles/v1';
-  GEN_CODE_VERSION = 53;  { 53: complete building-part partitions replace, never overlap, parent outlines. 52: exterior facade alignment from either photo edge direction. 51: initialized roof source IDs; photo parts, areas and shared street details. 50: rowan and typed fruit variants; regional rowan admixture. 49: streams and culverts preserve ground roads; water/FIT masks share road priority. 48: omit crossing speed bumps and their warnings where they overlap another road. 47: compact crossing approaches and board/post clearance. 46: crossing sign UV orientation and junction-safe verge placement. 45: mapped pedestrian crossings, road sign atlas and physical speed bumps. 44: full-size manhole surrounds and exact image aspect. 43: precise manhole placement and pavement alignment. 42: cached sewer manhole placements on finished ground. 41: flat lakes, transverse river profiles and welded banks. 40: метрика востока — от географии САМОГО блока (полоса ln-cos широты его центра; ручная фиксация Settings.WorldScaleLatDeg по-прежнему возможна): тайл — чистая функция id, кэш универсален (сессионные входы из ключа убраны, авто-режим — маркер tile-band); стык соседних полос выравнивает монтирование пер-тайловым масштабом X (Osm3dSceneAssembler, Kx=cos(кадр)/cos(полосы тайла), внутри полосы ровно 1.0). 39: метрика мира = полоса ln-cos от широты (ε=1%, потолок ошибки 0.5% на всей планете) или ручная фиксация Settings.WorldScaleLatDeg; расстановка (Osm3dSceneAssembler.AssembleCachedTiles) получает ту же широту параметром — на 38 она осталась на широте origin и щель вылезла даже в Студии. 38: метрика мира отвязана от маршрута — ScaleLat и якорь int-решётки берутся из Settings.WorldScaleLatDeg и глобальной точки (SLat,0), а не от origin сессии; Студия и игра печут/читают одни тайлы (была щель 1.33 м по востоку на ребре 500 м). 37: откат 36 (отступ выреза не нужен — геометрия у стыка была ровной) + нормали поднятого края дороги у стыка: в проходе нормалей прижим к кромке настила действует и на мостовую сторону, градиентные сэмплы ±EPS не пересекают обрыв выреза — край был с нормалями обрыва (тёмная полоса «как провал»). 36: (отменён) отступ выреза от торцов. 35: FIT-мост сварен с дорогой «одной геометрией» (TDeckJoint). 34: кап-гейт выравнивания. 33: настил следует FIT-профилю заезда }
+  GEN_CODE_VERSION = 59;  { 59: stair face UVs preserve procedural concrete normals. 58: baked sidewalk stairs. 57: typed street lamps, height and photo layout. 56: photo-authored asymmetric terrain cross-sections, shared road/ground sampler. 55: persistent measured road heights and edge-only paint; zero FIT offsets preserve corrected terrain. 54: preserve authored building envelopes over OSM parts; validate all hidden photo targets. 53: complete building-part partitions replace, never overlap, parent outlines. 52: exterior facade alignment from either photo edge direction. 51: initialized roof source IDs; photo parts, areas and shared street details. 50: rowan and typed fruit variants; regional rowan admixture. 49: streams and culverts preserve ground roads; water/FIT masks share road priority. 48: omit crossing speed bumps and their warnings where they overlap another road. 47: compact crossing approaches and board/post clearance. 46: crossing sign UV orientation and junction-safe verge placement. 45: mapped pedestrian crossings, road sign atlas and physical speed bumps. 44: full-size manhole surrounds and exact image aspect. 43: precise manhole placement and pavement alignment. 42: cached sewer manhole placements on finished ground. 41: flat lakes, transverse river profiles and welded banks. 40: метрика востока — от географии САМОГО блока (полоса ln-cos широты его центра; ручная фиксация Settings.WorldScaleLatDeg по-прежнему возможна): тайл — чистая функция id, кэш универсален (сессионные входы из ключа убраны, авто-режим — маркер tile-band); стык соседних полос выравнивает монтирование пер-тайловым масштабом X (Osm3dSceneAssembler, Kx=cos(кадр)/cos(полосы тайла), внутри полосы ровно 1.0). 39: метрика мира = полоса ln-cos от широты (ε=1%, потолок ошибки 0.5% на всей планете) или ручная фиксация Settings.WorldScaleLatDeg; расстановка (Osm3dSceneAssembler.AssembleCachedTiles) получает ту же широту параметром — на 38 она осталась на широте origin и щель вылезла даже в Студии. 38: метрика мира отвязана от маршрута — ScaleLat и якорь int-решётки берутся из Settings.WorldScaleLatDeg и глобальной точки (SLat,0), а не от origin сессии; Студия и игра печут/читают одни тайлы (была щель 1.33 м по востоку на ребре 500 м). 37: откат 36 (отступ выреза не нужен — геометрия у стыка была ровной) + нормали поднятого края дороги у стыка: в проходе нормалей прижим к кромке настила действует и на мостовую сторону, градиентные сэмплы ±EPS не пересекают обрыв выреза — край был с нормалями обрыва (тёмная полоса «как провал»). 36: (отменён) отступ выреза от торцов. 35: FIT-мост сварен с дорогой «одной геометрией» (TDeckJoint). 34: кап-гейт выравнивания. 33: настил следует FIT-профилю заезда }
 var
   S: string;
+  Fmt: TFormatSettings;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(827);{$ENDIF}
   { Canonical tile-cache key — every geometry-affecting input that changes
     WHAT gets baked into a tile must appear here. }
+  { Shared owner geometry must have the same cache key on every locale. }
+  Fmt:=DefaultFormatSettings; Fmt.DecimalSeparator:='.';
   S := GEO_HASH_SALT + '|' +
     Format('gen=%d|', [GEN_CODE_VERSION]) +
     { Набор заездов FIT: коррекция высот печётся в узлы террейна, поэтому
       сгенерированный тайл зависит от него. Смена .fit → смена сигнатуры →
       регенерация корректированных тайлов; пусто = без коррекции. }
     Format('fit=%s|', [AFitSig]) +
-    Format('edge=%.1f|', [AEdgeMeters]) +
+    Format('edge=%.1f|', [AEdgeMeters], Fmt) +
     { Метрика востока. АВТО ('tile-band'): широта масштаба — полоса ln-cos
       от широты САМОГО БЛОКА, т.е. детерминированная функция id тайла —
       сессионного входа нет, кэш универсален, и в ключе достаточно маркера
       режима. РУЧНАЯ фиксация: число вшито в вершины всех тайлов → в ключ.
       (Origin сессии в ключ НЕ входит и не должен.) }
-    WslKey(ASettings) +
+    WslKey(ASettings,Fmt) +
     Format('b%d r%d t%d l%d w%d f%d|',
       [Ord(ASettings.GenerateBuildings),
        Ord(ASettings.GenerateRoads),
@@ -193,7 +196,7 @@ begin
     Format('lift=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%.5f',
       [ROAD_LIFT_M, WATER_LIFT_M, RAILWAY_LIFT_M, LANDUSE_LIFT_M,
        INTERSECTION_LIFT_M, BUILDING_FOUNDATION_LIFT_M,
-       FAR_BIAS_START_M, FAR_BIAS_SLOPE]);
+       FAR_BIAS_START_M, FAR_BIAS_SLOPE], Fmt);
   { Режим «только коридор пути»: тайлы этого режима держим в ОТДЕЛЬНОМ
     ключевом пространстве дискового кэша (хэш имени .fit + радиус коридора),
     чтобы они не смешивались с тайлами полного мира. Компонент добавляется
@@ -204,13 +207,13 @@ begin
     ТОЛЬКО route-only тайлы (полный мир не задет). }
   if ARouteOnly then
     S := S + Format('|routeonly=1|rclip=1|rname=%s|rrad=%.1f',
-      [LowerCase(MD5Print(MD5String(ARouteName))), ARouteRadiusM]);
+      [LowerCase(MD5Print(MD5String(ARouteName))), ARouteRadiusM], Fmt);
   S := S + '|road-width-profile=2';
   S := S + '|road-smoothness=1'; { persisted asphalt wear profile }
   { Source, sampling resolution and filtering all affect baked terrain. }
   S := S + '|height-source=' + HeightDatasetCacheKey(ASettings.TerrariumUrlTemplate)
     + Format('|height-zoom=%d|height-blur=%.5f',
-      [ASettings.HeightmapZoom, ASettings.BlurHeightmapSigmaPx]);
+      [ASettings.HeightmapZoom, ASettings.BlurHeightmapSigmaPx], Fmt);
   S := S + '|building-area-levels=3';
   S := S + '|roof-surfaces=2'; { outward faces, clipped ridges and closed gables }
   S := S + '|fence-grounding=1'; { barriers follow leveled roads and tunnel ramps }
@@ -338,7 +341,7 @@ begin
       текущему FIT без подмеса чужих проходов (см. Osm3dFitLayerBuild). }
     FMainLog.Write(llInfo, '[fitlayer] ' + BuildFitHeightLayer(
       ARoutesFolder, ASelectedFit, FTerrFetcher, ASettings.HeightmapZoom,
-      FitLayer, nil, ASettings.GenerateRouteOnly));
+      FitLayer, nil, ASettings.GenerateRouteOnly,False));
   end;
 
   { Route-only режим: имя выбранного .fit (+радиус коридора) входит в gen-hash,
@@ -353,7 +356,8 @@ begin
     the block generator and the preview builder both use them. }
   FMap := TOsm3dStreamingMap.Create(nil, AOrigin, FCacheRoot, FGenHash,
                                     FHttp, FTerrFetcher, FOverpass,
-                                    ASettings, FLog, FMainLog, AStartUTC);
+                                    ASettings, FLog, FMainLog, AStartUTC,
+                                    ComputeGenHash(ASettings,GEO_TILE_EDGE_M,'',False,'',0));
 
   { Hand the FIT route to the map so each tile materialises its own
     slice of marker spheres as it streams in. The altitude track (if any)

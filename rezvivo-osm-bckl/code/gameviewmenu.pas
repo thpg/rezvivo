@@ -711,7 +711,11 @@ begin
     H:=FPageScroll.EffectiveHeightForChildren;
     { Pages with internal lists keep their full remaining viewport. Forms
       and the bike editor get a scrollable canvas instead of clipped feet/buttons. }
-    if not ((FProfilePage<>nil) and FProfilePage.Exists) then H:=Max(H,700);
+    if not (((FProfilePage<>nil) and FProfilePage.Exists) or
+      ((FExplorePage<>nil) and FExplorePage.Exists)) then H:=Max(H,700);
+    { A map is an interactive viewport, not a tall form. Scrolling its parent
+      clips the globe and moves the pick coordinates outside the visible page. }
+    if (FExplorePage<>nil) and FExplorePage.Exists then FPageScroll.Scroll:=0;
     if (FBikeFitPage<>nil) and FBikeFitPage.Exists and (EffectiveWidth<760) then H:=Max(H,1040);
     FPageHost.Height:=H;FPageScroll.ScrollArea.Height:=H;
   end;
@@ -750,6 +754,7 @@ begin if RideUnderneath then ViewPlay.ConnectRideRoom;end;
 procedure TViewMenu.LaunchRoom(Sender:TObject);
 var I:TRideRoomInfo;WorldId:string;
 begin
+  if not ClientCanUseOnlineServices then Exit;
   if not RideRooms.Active then Exit;I:=RideRooms.Info;WorldId:='';
   if RideUnderneath then begin
     if ViewPlay.DreamWorld<>nil then WorldId:=ViewPlay.DreamWorld.Id;
@@ -846,7 +851,8 @@ begin
     if Assigned(FTrainingPage) and FTrainingPage.Exists and FTrainingPage.HandleBack then Exit(True);
     if (Assigned(FRouteCreatorPage) and FRouteCreatorPage.Exists)or
        (Assigned(FRouteLibraryPage) and FRouteLibraryPage.Exists)then begin ShowRoutesPage;Exit(True);end;
-    if SessionUnderneath then ReturnToRide;
+    if (FStartPage=nil)or not FStartPage.Exists then ClickHome(nil)
+    else if SessionUnderneath then ReturnToRide;
     Exit(True);
   end;
   Result:=inherited;

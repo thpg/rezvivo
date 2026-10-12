@@ -194,13 +194,6 @@ begin
   Result:='';
 end;
 
-function FabricPrimitive(Doc: TGlbDoc; P: TJSONObject): Boolean;
-var N: string;
-begin
-  N:=LowerCase(StrOf(ObjAt(ArrOf(Doc.Root,'materials'),IntOf(P,'material',-1)),'name',''));
-  Result:=(Pos('part_jersey',N)>0) or (Pos('part_sleeves',N)>0);
-end;
-
 function BuildWeldNormals(Doc:TGlbDoc;Base:TJSONArray;const Region:string):TWeldNormals;
 var I,J,K,C,Idx:Integer;Prims:TJSONArray;Attr:TJSONObject;P,N,Indices:TFloats;
   Key:string;Sum:TNormalSum;Used:array of Boolean;
@@ -311,7 +304,9 @@ begin
       P:=ObjAt(Prims,J);Hide:=False;
       if (Region='top') and Top then
         Hide:=LongSleeve or (Pos('skin',LowerCase(StrOf(ObjAt(ArrOf(Doc.Root,'materials'),IntOf(P,'material',-1)),'name','')))=0);
-      if Region='bottom' then Hide:=Bottom or (Top and FabricPrimitive(Doc,P));
+      { The bib leg bands share the jersey material for colour, but belong
+        to the lower garment. Replacing the top must not cut holes in them. }
+      if Region='bottom' then Hide:=Bottom;
       if (Region='logo') and Top then Hide:=True;
       if (Region='feet') and Feet then Hide:=True;
       N:=TJSONObject(P.Clone);

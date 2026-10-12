@@ -1842,5 +1842,15 @@
   "Run": "Бег",
   "Brake": "Тормоз",
   "+ W": "+ Вт",
-  "Trees: textured": "Деревья: текстуры"
+  "Trees: textured": "Деревья: текстуры",
+  "Shared route room": "Общая комната маршрута",
+  "Smart-trainer riders on this route join automatically.": "Участники со смарт-станком подключаются на этом маршруте автоматически.",
+  "This route was updated. Reopen it in Real World.": "Маршрут обновлён. Выберите его заново в Real World.",
+  "Ready on server": "Готовы на сервере",
+  "Ready in cache": "Готовы в кэше",
+  "Pending": "Ожидают подготовки",
+  "This version requires an update to use online services.": "Для сетевых функций необходимо обновить игру.",
+  "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.": "Ближние тени деревьев остаются анимированными. Общий кэш глубины ускоряет тени дальнего леса. RTX требует видеокарту с трассировкой лучей.",
+  "Add to steering pair": "Добавить в пару руления",
+  "Remove from steering pair": "Убрать из пары руления"
 }

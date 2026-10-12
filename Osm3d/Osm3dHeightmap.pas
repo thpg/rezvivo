@@ -156,6 +156,7 @@ type
     FGridQueue:  specialize TQueue<TGridJob>;   { очередь грид-задач }
     FGridWake:   TEvent;
     FGridWorker: TThread;                        { ОДИН персистентный воркер }
+    FGridJoined:Boolean;
     FMaxTiles:    Integer;
     FSeq:         Int64;
     { Отмена по teardown карты: AcquireTile не ждёт чужой загрузчик, сетевые
@@ -728,10 +729,9 @@ begin
   begin
     FGridWorker.Terminate;
     if FGridWake <> nil then FGridWake.SetEvent;
-    FGridWorker.WaitFor;
-    FreeAndNil(FGridWorker);
   end;
-  while InterlockedCompareExchange(FActiveLoads, 0, 0) > 0 do Sleep(1);
+  JoinBackgroundStop;
+  FreeAndNil(FGridWorker);
   { FFetcher is DI — NOT owned, do not free. Callers must have stopped
     using this object before it is destroyed. }
   FreeAndNil(FFitLayer);
@@ -889,7 +889,9 @@ end;
 
 procedure TTerrariumFetcher.JoinBackgroundStop;
 begin
-  if FGridWorker<>nil then FGridWorker.WaitFor;
+  if(FGridWorker<>nil)and not FGridJoined then begin
+    FGridWorker.WaitFor;FGridJoined:=True;
+  end;
   while InterlockedCompareExchange(FActiveLoads,0,0)>0 do Sleep(1);
 end;
 

@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/thpg/castle-engine.git",
   "branch": "rezvivo",
-  "commit": "a2788a6825e312c1723c5a6e5650bdc4d3b3bf23",
+  "commit": "74dcf081f7aa237aedd1871b09d3af9e981ff246",
   "upstream_repository": "https://github.com/castle-engine/castle-engine.git",
   "upstream_commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "modified_files": [
@@ -179,7 +179,11 @@
     },
     {
       "path": "tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/MainActivity.java",
-      "sha256_lf": "3c2ea221eba74f232ad66ddf1444b1bbc4575a2eb2ee4d0f699bac185cae1d65"
+      "sha256_lf": "d54d06188c0cd6104c250dc3bd46698c3d1744d7ea9f4917781f10e3da67fdb6"
+    },
+    {
+      "path": "tools/build-tool/data/android/integrated/app/src/main/java/io/castleengine/ServiceAbstract.java",
+      "sha256_lf": "7d9a563195d1d5943873ce76c2292068bebd44494d38906e9cc63845b462afa7"
     }
   ]
 }

@@ -119,7 +119,8 @@ var
   Center, Size: TVector3;
   Extent: Single;
   OldProjection: TMatrix4;
-  OldViewport, OldScissor: TRectangle;
+  OldViewport: TRectangle;
+  OldScissor: array[0..3] of GLint;
   OldDelta: TVector2Integer;
   OldOcclusion, OldMultisample, HadScissor: Boolean;
   OldShapeFilter: TRenderShapeFilter;
@@ -144,7 +145,8 @@ begin
   OldViewport := RenderContext.Viewport;
   OldProjection := RenderContext.ProjectionMatrix;
   OldDelta := RenderContext.ViewportDelta;
-  HadScissor := RenderContext.FinalScissor(OldScissor);
+  HadScissor := glIsEnabled(GL_SCISSOR_TEST) <> 0;
+  glGetIntegerv(GL_SCISSOR_BOX, @OldScissor[0]);
   OldOcclusion := Viewport.OcclusionCulling;
     {$ifndef OpenGLES}  OldMultisample := glIsEnabled(GL_MULTISAMPLE) <> 0;{$endif}
   OldShapeFilter := nil;
@@ -174,7 +176,12 @@ begin
     FVisited := 0;
     FSelected := 0;
     Viewport.OcclusionCulling := False;
-    RenderContext.ScissorDisable;
+    { Ignore clipping only for this offscreen draw. FinalScissor includes
+      parent scroll/viewport clips: restoring that intersection through
+      ScissorEnable would install it as a persistent GLOBAL clip after the
+      menu closes. Leave CGE's scissor stack untouched, just like a shadow
+      atlas pass. InternalRenderSubset does not render UI. }
+    glDisable(GL_SCISSOR_TEST);
     RenderContext.ViewportDelta := Vector2Integer(0, 0);
     {$ifndef OpenGLES}    if (FPass = 0) and OldMultisample then glEnable(GL_MULTISAMPLE){$endif}
     {$ifndef OpenGLES}    else glDisable(GL_MULTISAMPLE);{$endif}
@@ -198,8 +205,9 @@ begin
     RenderContext.ProjectionMatrix := OldProjection;
     RenderContext.ViewportDelta := OldDelta;
     RenderContext.Viewport := OldViewport;
-    if HadScissor then RenderContext.ScissorEnable(OldScissor)
-    else RenderContext.ScissorDisable;
+    glScissor(OldScissor[0], OldScissor[1], OldScissor[2], OldScissor[3]);
+    if HadScissor then glEnable(GL_SCISSOR_TEST)
+    else glDisable(GL_SCISSOR_TEST);
     {$ifndef OpenGLES}    if OldMultisample then glEnable(GL_MULTISAMPLE) else glDisable(GL_MULTISAMPLE);{$endif}
     FTotalMs := FTotalMs + GetTickCount64 - Started;
     FMaxMs := Max(FMaxMs, GetTickCount64 - Started);

@@ -15,8 +15,14 @@ procedure AndroidHttpRequest(Id: Int64; const Method, Url: String;
   FollowRedirects: Boolean = True; MaxBytes: Int64 = 0);
 
 implementation
-uses JNI, CastleAndroidNativeAppGlue, CastleFilesUtils, CastleURIUtils, Osm3dPlatformHttp;
+uses JNI, CastleAndroidNativeAppGlue, CastleFilesUtils, CastleURIUtils, Osm3dPlatformHttp,
+  CastleMessaging, CastleStringUtils, CastleWindow, CastleKeysMouse;
 type
+  TAndroidNavigation=class
+    constructor Create;
+    destructor Destroy;override;
+    function Receive(const Parts:TCastleStringList;const Stream:TMemoryStream):Boolean;
+  end;
   TAndroidMapRequest = class(TOsmPlatformHttpRequest)
   private FId: Int64;
   public
@@ -30,6 +36,25 @@ type
 var
   PlatformClass: jclass;
   NewRequestMethod, CancelMethod, FinishMethod, HttpMethod: jmethodID;
+  Navigation:TAndroidNavigation;
+
+constructor TAndroidNavigation.Create;
+begin inherited;Messaging.OnReceive.Add(@Receive) end;
+destructor TAndroidNavigation.Destroy;
+begin Messaging.OnReceive.Remove(@Receive);inherited end;
+function TAndroidNavigation.Receive(const Parts:TCastleStringList;
+  const Stream:TMemoryStream):Boolean;
+var Event:TInputPressRelease;
+begin
+  Result:=(Parts.Count=1)and(Parts[0]='rezvivo-back');
+  if not Result or(Application.MainWindow=nil)then Exit;
+  { Dispatch on the native UI thread through the same hierarchy as Escape:
+    dialogs first, then page details, then menu/ride. }
+  with Application.MainWindow.Container do begin
+    Event:=InputKey(MousePosition,keyEscape,'',[]);
+    EventPress(Event);EventRelease(Event);
+  end;
+end;
 
 function CreateMapRequest: TOsmPlatformHttpRequest;
 begin Result := TAndroidMapRequest.Create end;
@@ -140,6 +165,7 @@ begin
     PlatformClass := Env^^.NewGlobalRef(Env, Found);
     Check(Env, 'platform reference');
     OsmPlatformHttpFactory := @CreateMapRequest;
+    Navigation:=TAndroidNavigation.Create;
   finally Release(Env, Detach) end;
 end;
 
@@ -227,4 +253,6 @@ end;
 
 { PlatformClass lives as long as the native library. Worker finalizers can still
   use it after Application.OnInitialize's owning unit has finalized. }
+finalization
+  FreeAndNil(Navigation);
 end.

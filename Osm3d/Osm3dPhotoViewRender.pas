@@ -71,7 +71,8 @@ begin
   C:=PhotoCameraFromVectors(LL.Lat,LL.Lon,P.Y,S.Map.WorldScaleLatitude,RadToDeg(Fov),Rect.Width/Rect.Height,D,U);
   if S.Map.GroundYAt(P.X,P.Z,Y) then begin C.Add('ground_elevation_m',Y); C.Add('height_above_ground_m',P.Y-Y) end;
   Result:=TJSONObject.Create(['camera',C,'viewport_width',Rect.Width,'viewport_height',Rect.Height,
-    'pending_tiles',S.Map.PendingTileWork,'generator_hash',S.GenHash,'recipe_hash',S.Map.KnowledgeRecipeHash]);
+    'pending_tiles',S.Map.PendingTileWork,'generator_hash',S.GenHash,'recipe_hash',S.Map.KnowledgeRecipeHash,
+    'tile_cache_path',S.Map.CameraTileCachePath(P.X,P.Z)]);
 end;
 
 function TPhotoViewRender.Apply(View:TJSONObject; V:TCastleViewport; S:TOsm3dStreamingSession):TJSONObject;

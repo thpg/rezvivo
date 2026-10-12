@@ -30,7 +30,7 @@ uses
   Osm3dCarveGround,
   Osm3dGeomRoads, Osm3dRoadSurface,
   Osm3dGroundComposite,
-  Osm3dGeomBridges,
+  Osm3dGeomBridges, Osm3dGeomSteps,
   Osm3dGeomTunnels,
   Osm3dRoadDistField,
   Osm3dGeomPOI,
@@ -153,7 +153,7 @@ uses
   Osm3dIntGeo,      { TLatticeProjection, DegToE7 — int-first ядро }
   Osm3dOsmIndex,    { TOsmRoadIndex — единый пер-блочный индекс дорог }
   Osm3dRoadProfile, { продольное сглаживание профиля дорог на HM }
-  Osm3dWaterLevel, Osm3dGenerationProgress, Osm3dGroundSurfaceQuery;
+  Osm3dWaterLevel, Osm3dMeasuredRoadHeight, Osm3dGenerationProgress, Osm3dGroundSurfaceQuery;
 
 var
   { Diagnostic: total carve/capture pool threads live across ALL concurrent block
@@ -416,6 +416,7 @@ var
   rFound, rAnyInt: Boolean;
   HaveFit, anyInterior: Boolean;
   fitY: Double;
+  authoredY, authoredWeight: Single;
 
   function TerrAt(AX, AZ: Single): Single; inline;
   begin
@@ -556,12 +557,19 @@ begin
           концов сегмента — плавный съезд вместо «стены». Под настилом моста
           узлы не прикалываются (v25) → поперечная уходит ПОД мост. }
       gridE := TerrAt(fx, fz);
-      if HaveFit
+      if (c^.Sampler.RoadHeights<>nil) and
+         c^.Sampler.RoadHeights.TargetGeo(c^.Projection.Unproject(fx,fz),authoredY,authoredWeight) and
+         (authoredWeight>=0.9999) then
+        ey:=authoredY
+      else if HaveFit
          and c^.FitLayer.RoadTargetGeo(c^.Projection.Unproject(fx, fz), fitY)
          and not ((Abs(fitY - gridE) > ROAD_FIT_DEM_BAND_M)
                   and PointUnderBridge(c^.BridgeSegs, fx, fz)) then
         ey := fitY
-      else if S <= High(c^.SegOffA) then
+      { A zero FIT offset is not an embankment: max(raw DEM, corrected
+        terrain) would undo every downward road correction. }
+      else if (S <= High(c^.SegOffA)) and
+        ((c^.SegOffA[S]<>0) or (c^.SegOffB[S]<>0)) then
       begin
         { База конуса — СЫРОЙ рельеф. Офсет узла считался как FIT − сырой DEM
           (полный провал), поэтому складывать его можно только с сырым
@@ -2990,6 +2998,7 @@ var
   RoadIdx:       TOsmRoadIndex;      { единый индекс дорог блока }
   TerrainSampler: TTerrainSampler;
   WaterLevels: TWaterLevelField;
+  RoadHeights: TMeasuredRoadHeight;
   BridgeMask:    TBridgeSpanMask;    { пролёты OSM-мостов: под ними земля по DEM }
   TerrainGridX, TerrainGridZ: Integer;
   WaterRivers:   TMesh;
@@ -3131,6 +3140,7 @@ begin
   RoadIdx := nil;   { до try: finally делает FreeAndNil, мусор недопустим }
   TerrainSampler := nil;
   WaterLevels := nil;
+  RoadHeights := nil;
   Proj := TLocalProjection.Create(FChunk.Origin, FChunk.ScaleLat);
   try
     CheckGenerationCancelled;
@@ -3211,6 +3221,8 @@ begin
       if FChunk.Dataset <> nil then
         LogInfo('  ' + SmoothRoadProfilesOnHeightmap(FChunk.Heightmap,
           FChunk.Dataset, Proj, FSettings.HeightmapZoom));
+      RoadHeights := TMeasuredRoadHeight.Create(FChunk.Dataset);
+      if RoadHeights.Empty then FreeAndNil(RoadHeights);
 
       { Маска пролётов мостов ДО постройки террейна: под пролётом OSM-моста
         земля берётся по чистому DEM / нижнему уровню (без насыпи-двойника),
@@ -3230,7 +3242,7 @@ begin
         GenerationProgress('Terrain', 0, 0);
         AInput.Terrain := TTerrainBuilder.Build(FChunk.Heightmap, Proj,
           FSettings.TerrainGridStepMeters, FSettings.HeightmapZoom,
-          FSettings.TerrainSubdiv, FitLayer, BridgeMask, RouteCorridor, WaterLevels);
+          FSettings.TerrainSubdiv, FitLayer, BridgeMask, RouteCorridor, WaterLevels, RoadHeights);
         LogStep('terrain', AInput.Terrain);
 
         { Sampler on the SAME lattice as the mesh (TerrainGridOf) — so
@@ -3239,7 +3251,7 @@ begin
         TerrainSampler := TTerrainSampler.Create(
           FChunk.Heightmap, Proj,
           FSettings.TerrainGridStepMeters, FSettings.HeightmapZoom,
-          FSettings.TerrainSubdiv, FitLayer, BridgeMask, WaterLevels);
+          FSettings.TerrainSubdiv, FitLayer, BridgeMask, WaterLevels, RoadHeights);
         TerrainGridX := TerrainSampler.GridX;
         TerrainGridZ := TerrainSampler.GridZ;
         LogInfo(Format('  + TerrainSampler ready (%dx%d nodes, %.1f MB)',
@@ -3554,6 +3566,9 @@ begin
             [E.ClassName, E.Message]));
       end;
       CheckGenerationCancelled;
+      if FSettings.GenerateRoads and (AInput.GroundComposite<>nil) then
+        LogInfo(Format('Baked stair ways: %d', [AppendStairWays(
+          FChunk.Dataset,Proj,TerrainSampler,AInput.GroundComposite)]));
       { Route-only: земляной композит (карвом = сплошная земля на весь тайл)
         пересобираем, оставляя только треугольники, у которых ХОТЯ БЫ одна
         вершина в коридоре маршрута — иначе тайл в отдельном кэше был бы
@@ -3728,6 +3743,7 @@ begin
     FreeAndNil(RoadIdx);   { единый индекс дорог блока (Osm3dOsmIndex) }
     TerrainSampler.Free;
     WaterLevels.Free;
+    RoadHeights.Free;
     Proj.Free;
   end;
 end;

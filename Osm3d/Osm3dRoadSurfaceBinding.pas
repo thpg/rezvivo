@@ -230,9 +230,12 @@ begin
       if W.MatId in [28,29] then
       begin
         if W.Surface.Asphalt=ROAD_SURFACE_OTHER then begin Ways[Id]:=W; Continue end;
-        // No car wheel wear or painted lines on sidewalks.
+        // No car wheel wear or default lane lines on pedestrian ribbons.
+        // Explicit edge paint also applies to paved sports tracks mapped
+        // as footway/path, independently of their OSM highway class.
         W.Surface.ForwardLanes:=Ord(W.MatId<>GROUND_MAT_ROAD_FOOTWAY); W.Surface.BackwardLanes:=0;
-        W.Surface.UVMin:=0; W.Surface.UVMax:=1; W.Surface.Marked:=0;
+        W.Surface.UVMin:=0; W.Surface.UVMax:=1;
+        if (W.Surface.Marked and ROAD_STYLE_EDGE_ONLY)=0 then W.Surface.Marked:=0;
         if W.MatId=28 then W.Surface.UVScale:=ROAD_UV_SCALE_Y_FOOTWAY
         else W.Surface.UVScale:=ROAD_UV_SCALE_Y_CYCLEWAY;
       end;

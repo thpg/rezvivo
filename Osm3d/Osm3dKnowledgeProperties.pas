@@ -16,7 +16,7 @@ type
     Values: string;
   end;
 const
-  KnowledgeProperties: array[0..31] of TKnowledgeProperty = (
+  KnowledgeProperties: array[0..36] of TKnowledgeProperty = (
     (Name:'building.height_m'; TagName:'height'; Category:'building'; Kind:kvNumber; UnitName:'m'; MinValue:0.5; MaxValue:1000; Values:''),
     (Name:'building.levels'; TagName:'building:levels'; Category:'building'; Kind:kvInteger; UnitName:'storeys'; MinValue:1; MaxValue:250; Values:''),
     (Name:'building.min_height_m'; TagName:'min_height'; Category:'building'; Kind:kvNumber; UnitName:'m'; MinValue:0; MaxValue:1000; Values:''),
@@ -48,7 +48,12 @@ const
     (Name:'vegetation.areas'; TagName:'rezvivo:environment_layout'; Category:'vegetation'; Kind:kvObject; UnitName:''; MinValue:0; MaxValue:0; Values:''),
     (Name:'terrain.layout'; TagName:'rezvivo:environment_layout'; Category:'terrain'; Kind:kvObject; UnitName:''; MinValue:0; MaxValue:0; Values:''),
     (Name:'building.local'; TagName:'rezvivo:environment_layout'; Category:'building'; Kind:kvObject; UnitName:''; MinValue:0; MaxValue:0; Values:''),
-    (Name:'road.oneway'; TagName:'oneway'; Category:'road'; Kind:kvEnum; UnitName:''; MinValue:0; MaxValue:0; Values:'|yes|no|-1|')
+    (Name:'road.oneway'; TagName:'oneway'; Category:'road'; Kind:kvEnum; UnitName:''; MinValue:0; MaxValue:0; Values:'|yes|no|-1|'),
+    (Name:'road.elevation_profile'; TagName:'rezvivo:elevation_profile'; Category:'road'; Kind:kvObject; UnitName:''; MinValue:0; MaxValue:0; Values:''),
+    (Name:'road.markings'; TagName:'rezvivo:road_markings'; Category:'road'; Kind:kvEnum; UnitName:''; MinValue:0; MaxValue:0; Values:'|none|edge|lanes|'),
+    (Name:'sidewalk.steps'; TagName:'rezvivo:steps'; Category:'sidewalk'; Kind:kvEnum; UnitName:''; MinValue:0; MaxValue:0; Values:'|yes|no|'),
+    (Name:'sidewalk.step_count'; TagName:'step_count'; Category:'sidewalk'; Kind:kvInteger; UnitName:''; MinValue:1; MaxValue:2048; Values:''),
+    (Name:'sidewalk.elevation_profile'; TagName:'rezvivo:elevation_profile'; Category:'sidewalk'; Kind:kvObject; UnitName:''; MinValue:0; MaxValue:0; Values:'')
   );
 function KnowledgePropertyIndex(const Name: string): Integer;
 function KnowledgeTagIndex(const TagName, Category: string): Integer;

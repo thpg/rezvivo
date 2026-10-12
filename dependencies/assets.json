@@ -1491,8 +1491,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/gameviewplay.castle-user-interface",
-    "bytes": 12939,
-    "sha256": "f5b2347e575d0511f270ecd9a60f4c20c8ec3887c587277d4f49b8b13713606c",
+    "bytes": 11117,
+    "sha256": "bb7efd05a6f765813fe91c46c913ba47878c1876e5ecd03a4cf1e6551c2ed3c1",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4138,8 +4138,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/shaders/rtx/shadow.spv",
-    "bytes": 6264,
-    "sha256": "67f527895a3a99046688bb3bafed9a987e9c97b0c8cb92b22819dd9718b2bcc4",
+    "bytes": 4252,
+    "sha256": "ff3e226293b935f46d189d5b002df031fd2f57353763618569ac20233d9570ce",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "Compiled from Osm3d/rtx/*.comp with Osm3d/rtx/build.ps1"
@@ -4364,8 +4364,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 93219,
-    "sha256": "5a07351b122f8bf304762d786554f1e35d939f46da0a78ac57458a939eb500d7",
+    "bytes": 94081,
+    "sha256": "eab2226c5c71ec1ae853482f798c31c221d799d528f7a3c804af97e504f91bf4",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4420,8 +4420,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 144611,
-    "sha256": "78b1269813ce51d24803398d1641764c6aae37244d36dedce441fa2c1c5ef7f0",
+    "bytes": 145868,
+    "sha256": "c6a78de6b37f7b98e5abf5107439434c7418edde6829c8268e5e057a6b49164b",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

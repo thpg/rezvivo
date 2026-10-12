@@ -84,7 +84,7 @@ begin
       if Preset<>''then A.Add(TJSONObject.Create(['slot',WardrobeSlots[I],'preset',Preset]));
     end;
     if(A.Count=0)or(BasePath='')then Exit;
-    O.Add('base',BasePath);Key:='wardrobe-v14|'+O.AsJSON;
+    O.Add('base',BasePath);Key:='wardrobe-v15|'+O.AsJSON;
     if FindFirst(BasePath,faAnyFile,Info)=0 then begin
       Key:=Key+'|'+IntToStr(Info.Time)+'|'+IntToStr(Info.Size);FindClose(Info);
     end;

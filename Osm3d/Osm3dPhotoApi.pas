@@ -607,7 +607,7 @@ begin
     if Provider='mapillary' then Result.Add('graph_sample_limited',GraphSample);
     Result.Add('discovery_complete',State='complete');
     if (Provider='mapillary') and (FFullPhotoDiscovery or (Added=0)) and
-      ((State='complete') or (State='cache_miss') or
+      ((State='complete') or (State='cache_miss') or (State='unavailable') or
        (FFullPhotoDiscovery and ((State='truncated') or (State='sample_limited')))) then begin
       Coverage:=SearchMapillaryCoverage(Box,Min(4096,MaxPages),Max(0,MaxPhotos-Added),Offline,Refresh,Photos);
       Result.Strings['status']:=Coverage.Get('status','unavailable');Result.Booleans['complete']:=False;

@@ -18,7 +18,7 @@ uses
   CastleVectors,
   Osm3dGeoMath,
   Osm3dHeightmap,
-  Osm3dWaterLevel,
+  Osm3dWaterLevel, Osm3dMeasuredRoadHeight,
   Osm3dGeomMesh,
   Osm3dGeomUtils,
   Osm3dStudioSettings,       { FAR_DEPRESS_M and other spatial tuning }
@@ -129,7 +129,8 @@ type
       AFitLayer: TFitHeightLayer = nil;
       const AMask: TBridgeSpanMask = nil;
       ACorridor: TRouteCorridor = nil;
-      AWaterLevels: TWaterLevelField = nil): TMesh;
+      AWaterLevels: TWaterLevelField = nil;
+      ARoadHeights: TMeasuredRoadHeight = nil): TMesh;
   end;
 
   TFarTerrainBuilder = class
@@ -169,6 +170,7 @@ type
     FCorrectedNodes: Integer;   { диагностика: узлов высоты сдвинул FIT-слой }
     FMaskedNodes: Integer;      { диагностика: узлов под маской пролётов мостов }
     FWaterLevels: TWaterLevelField; { borrowed; applied after interpolation }
+    FRoadHeights: TMeasuredRoadHeight; { borrowed; persistent authored elevations }
   public
     { Builds the sampler on the SAME lattice as TTerrainBuilder.Build
       (via TerrainGridOf): node heights are read straight from the
@@ -183,9 +185,11 @@ type
       Subdiv: Integer = 1;
       AFitLayer: TFitHeightLayer = nil;
       const AMask: TBridgeSpanMask = nil;
-      AWaterLevels: TWaterLevelField = nil);
+      AWaterLevels: TWaterLevelField = nil;
+      ARoadHeights: TMeasuredRoadHeight = nil);
     destructor Destroy; override;
     property WaterLevels: TWaterLevelField read FWaterLevels;
+    property RoadHeights: TMeasuredRoadHeight read FRoadHeights;
 
     { Y at (Lat,Lon) with triangle-barycentric interpolation. P outside
       Box → clamped to the nearest node. }
@@ -675,7 +679,7 @@ class function TTerrainBuilder.Build(HM: THeightmap; Projection: TLocalProjectio
   GridStepMeters: Single; HeightmapZoom: Integer;
   Subdiv: Integer; AFitLayer: TFitHeightLayer;
   const AMask: TBridgeSpanMask; ACorridor: TRouteCorridor;
-  AWaterLevels: TWaterLevelField): TMesh;
+  AWaterLevels: TWaterLevelField; ARoadHeights: TMeasuredRoadHeight): TMesh;
 { Vertices sit on the terrain lattice (TerrainGridOf): node (JX,JZ) is
   heightmap pixel (JX*PitchPx, JZ*PitchPx). At Subdiv=1 that pixel is integer
   and the height is read straight from it (bit-identical to the old lattice);
@@ -770,6 +774,7 @@ begin
         end;
 
         if AWaterLevels <> nil then H := AWaterLevels.ApplyGeo(LL, H);
+        if ARoadHeights <> nil then H := ARoadHeights.ApplyGeo(LL, H);
         Heights[JZ * G.NX + JX] := H;
         Pos := Projection.Project(LL, H);
         IndexAt[JZ * G.NX + JX] := Result.AddVertex(Pos);
@@ -933,7 +938,8 @@ end;
 constructor TTerrainSampler.Create(HM: THeightmap;
   Projection: TLocalProjection; GridStepMeters: Single;
   HeightmapZoom: Integer; Subdiv: Integer; AFitLayer: TFitHeightLayer;
-  const AMask: TBridgeSpanMask; AWaterLevels: TWaterLevelField);
+  const AMask: TBridgeSpanMask; AWaterLevels: TWaterLevelField;
+  ARoadHeights: TMeasuredRoadHeight);
 var
   IX, IZ:   Integer;
   PxX, PxY: Integer;
@@ -944,6 +950,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1135);{$ENDIF}
   inherited Create;
   FWaterLevels := AWaterLevels;
+  FRoadHeights := ARoadHeights;
   FNodePosReady := False;
   FCorrectedNodes := 0;
   FMaskedNodes := 0;
@@ -1035,6 +1042,8 @@ begin
   Result := FHeights[IZ * FGridX + IX];
   if FWaterLevels <> nil then
     Result := FWaterLevels.ApplyGeo(NodeLatLon(IX, IZ), Result);
+  if FRoadHeights <> nil then
+    Result := FRoadHeights.ApplyGeo(NodeLatLon(IX, IZ), Result);
 end;
 
 function TTerrainSampler.NodeLatLon(IX, IZ: Integer): TLatLon;
@@ -1107,7 +1116,7 @@ begin
   hNE := FHeights[rz0 + ix1];
   hSE := FHeights[rz1 + ix1];
   hSW := FHeights[rz1 + ix0];
-  if FWaterLevels <> nil then
+  if (FWaterLevels <> nil) or (FRoadHeights <> nil) then
   begin
     hNW := NodeHeight(ix0, iz0);
     hNE := NodeHeight(ix1, iz0);
@@ -1275,6 +1284,7 @@ begin
   { Evaluate after interpolation: even a pond smaller than a DEM cell
     gets one exact level; interpolating corrected nodes would tilt it. }
   if FWaterLevels <> nil then Result := FWaterLevels.ApplyGeo(P, Result);
+  if FRoadHeights <> nil then Result := FRoadHeights.ApplyGeo(P, Result);
 end;
 
 function TTerrainSampler.SampleAtCubic(const P: TLatLon): Single;
@@ -1354,6 +1364,7 @@ begin
   end;
   Result := CR(col[0], col[1], col[2], col[3], FZ);
   if FWaterLevels <> nil then Result := FWaterLevels.ApplyGeo(P, Result);
+  if FRoadHeights <> nil then Result := FRoadHeights.ApplyGeo(P, Result);
 end;
 
 function TTerrainSampler.SampleAtXZCubic(Projection: TLocalProjection;

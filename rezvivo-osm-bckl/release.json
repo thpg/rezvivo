@@ -1,7 +1,7 @@
 {
-  "version": "0.3.5-alpha.1",
-  "build": 12,
-  "file_version": "0.3.5.12",
+  "version": "0.3.6-alpha.1",
+  "build": 13,
+  "file_version": "0.3.6.13",
   "channel": "alpha",
-  "notes": "Improve compact menus and route selection wheels, add F5 screenshots, and use the same generated tree atlases in all graphics modes. Add touch navigation for mobile layouts and fix a graphics-context shutdown crash. Updated screenshots are available on the website and GitHub. Windows installer release; no Android APK is published to the website."
+  "notes": "Improve ready routes and photo-guided scenery, fix Android map loading, and correct rendering after returning from menus. Keep nearby tree shadows animated while caching distant forest shadows as a group. Preserve bib leg bands when changing tops and prevent facial hair on female bots."
 }

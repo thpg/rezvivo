@@ -192,8 +192,15 @@ begin
       KnownFields(S,'id|kind|provider|media_id|source_url|cache_key|author|license|license_url|captured_at|time_s|coordinate_role|latitude|longitude|uncertainty_m|note|sequence_id|sequence_index|heading_deg|projection|width|height|review_status|review_note|review_reason|review_origin');
       EnumValue(S,'kind','photo|video_frame'); Str(S,'provider'); Str(S,'media_id');
       Key:=Str(S,'source_url');
-      if (Pos('https://',LowerCase(Key))<>1) and (Pos('http://',LowerCase(Key))<>1) then
-        raise ETileKnowledge.Create('source_url must be a public HTTP(S) reference');
+      if (S.Get('provider','')='local-file') then begin
+        Id:=S.Get('media_id','');
+        if (Length(Id)<>64) or (Key<>'local://sha256/'+Id) or
+          (S.Get('cache_key','')<>'photo-api/v1/local/'+Id) then
+          raise ETileKnowledge.Create('local photo requires matching SHA256 reference and cache key');
+        for K:=1 to Length(Id) do if not (Id[K] in ['0'..'9','a'..'f']) then
+          raise ETileKnowledge.Create('invalid local photo SHA256');
+      end else if (Pos('https://',LowerCase(Key))<>1) and (Pos('http://',LowerCase(Key))<>1) then
+        raise ETileKnowledge.Create('source_url must be a public HTTP(S) or content-addressed local photo reference');
       Str(S,'author',False); Str(S,'license',False);
       if (Str(S,'kind')='video_frame') or (S.Find('time_s')<>nil) then Number(S,'time_s',0,1e8);
       if S.Find('latitude')<>nil then begin Number(S,'latitude',-90,90); Number(S,'longitude',-180,180) end;
@@ -305,7 +312,7 @@ begin
       end;
     end;
     if Document.Find('photo_views')<>nil then begin
-      Views:=Arr(Document,'photo_views',64); RefIds.Clear;
+      Views:=Arr(Document,'photo_views',256); RefIds.Clear;
       for I:=0 to Views.Count-1 do begin
         if not (Views.Items[I] is TJSONObject) then raise ETileKnowledge.Create('Photo view must be an object');
         S:=TJSONObject(Views.Items[I]); UniqueId(S,RefIds);
@@ -535,6 +542,9 @@ begin
       D.Strings['updated_at']:=FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"',LocalTimeToUniversal(Now));
       D.Strings['updated_by']:=Author; D.Strings['change_note']:=Note;
       S:=D.FormatJSON([],2);
+      { Keep the same bounded document, including all prior evidence. A dense
+        photo inventory can exceed the disk limit through indentation alone. }
+      if Length(S)>KnowledgeMaxBytes then S:=D.FormatJSON([foSingleLineArray,foSingleLineObject,foSkipWhiteSpace],0);
       if Length(S)>KnowledgeMaxBytes then raise ETileKnowledge.Create('Formatted knowledge exceeds 2 MiB');
       History:=Path+'.history';
       if Hash<>'' then begin

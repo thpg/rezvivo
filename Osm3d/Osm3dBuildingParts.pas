@@ -21,7 +21,7 @@ uses Math,Osm3dGeoMath,Osm3dGeomUtils;
 type
   TPartFootprint=record
     Key:string;
-    Part,Valid,HasParent,Selected:Boolean;
+    Part,Valid,HasParent,Selected,AuthoredEnvelope,EnvelopeBlocked:Boolean;
     Chains:TInt64ArrayArray;
     OuterCount:Integer;
     Box:TLatLonBox;
@@ -31,6 +31,16 @@ type
 
 function PartTag(Tags:TOSMTags):Boolean;
 begin Result:=Tags.HasKey('building:part') and (Tags.GetLower('building:part')<>'no') end;
+function AuthoredEnvelope(Tags:TOSMTags):Boolean;
+begin
+  { These recipes address the original outline, including its facade axes and
+    openings. They cannot be inherited by arbitrary OSM partitions. A colour
+    observation alone is not a replacement for a complete building envelope. }
+  Result:=(Tags.Get('rezvivo:architecture')<>'') or
+    (Tags.Get('rezvivo:building_massing')<>'') or
+    (Tags.Get('rezvivo:facade_layout')<>'') or
+    (Tags.Get('rezvivo:roof_layout')<>'');
+end;
 function Key(const Kind:string;Id:Int64):string;
 begin Result:=Kind+'/'+IntToStr(Id) end;
 function NewSet:TStringList;
@@ -49,10 +59,11 @@ constructor TBuildingPartSelection.Create(Dataset:TOSMDataset);
 var E:TFootprints;W:TOSMWay;R:TOSMRelation;N:TOSMNode;
   I,J,K,C,A,B,Count,FootprintCount:Integer;Candidate:array of Integer;TotalArea:Double;
   ParentEdges,PartEdges:TStringList;Valid:Boolean;
-  procedure Append(const Id:string;IsPart:Boolean;const Outers,Inners:TInt64ArrayArray;Complete:Boolean);
+  procedure Append(const Id:string;Tags:TOSMTags;const Outers,Inners:TInt64ArrayArray;Complete:Boolean);
   var F:TPartFootprint;Q,H:Integer;P,Prev,Origin:TLatLon;SignedArea:Double;
   begin
-    F:=Default(TPartFootprint);F.Key:=Id;F.Part:=IsPart;
+    F:=Default(TPartFootprint);F.Key:=Id;F.Part:=PartTag(Tags);
+    F.AuthoredEnvelope:=AuthoredEnvelope(Tags);
     F.Valid:=Complete and (Length(Outers)>0);F.Box:=TLatLonBox.Empty;
     F.OuterCount:=Length(Outers);F.Chains:=Copy(Outers);
     SetLength(F.Chains,Length(Outers)+Length(Inners));
@@ -79,7 +90,7 @@ var E:TFootprints;W:TOSMWay;R:TOSMRelation;N:TOSMNode;
   var Chains:TInt64ArrayArray;
   begin
     SetLength(Chains,1);Chains[0]:=ExtractNodeRefs(Way);
-    Append(Key('way',Way.Id),PartTag(Way.Tags),Chains,nil,True);
+    Append(Key('way',Way.Id),Way.Tags,Chains,nil,True);
   end;
   procedure AddRelation(Rel:TOSMRelation);
   var Outers,Inners:TOSMWayArray;Q,H:Integer;Member:TOSMWay;Role:string;Complete:Boolean;
@@ -94,7 +105,7 @@ var E:TFootprints;W:TOSMWay;R:TOSMRelation;N:TOSMNode;
       if Role='inner' then begin H:=Length(Inners);SetLength(Inners,H+1);Inners[H]:=Member end
       else begin H:=Length(Outers);SetLength(Outers,H+1);Outers[H]:=Member end;
     end;
-    Append(Key('relation',Rel.Id),PartTag(Rel.Tags),StitchWaysIntoRingChains(Outers),StitchWaysIntoRingChains(Inners),Complete);
+    Append(Key('relation',Rel.Id),Rel.Tags,StitchWaysIntoRingChains(Outers),StitchWaysIntoRingChains(Inners),Complete);
   end;
   function ContainsBox(const Parent,Part:TPartFootprint):Boolean;
   begin
@@ -157,8 +168,12 @@ begin
           coverage AND additive area below must prove a complete partition. }
         E[J].HasParent:=True;
         if not ContainsBox(E[I],E[J]) then Continue;
+        if E[I].AuthoredEnvelope then E[J].EnvelopeBlocked:=True;
         K:=Length(Candidate);SetLength(Candidate,K+1);Candidate[K]:=J;TotalArea+=E[J].Area;
       end;
+      { Keep the reviewed whole-building geometry even if OSM also supplies a
+        complete partition. Block its parts independently of iteration order. }
+      if E[I].AuthoredEnvelope then Continue;
       if (Length(Candidate)=0) or (Abs(TotalArea-E[I].Area)>Max(1e-14,E[I].Area*1e-7)) then Continue;
       ParentEdges.Clear;PartEdges.Clear;AddEdges(E[I],ParentEdges);
       for J in Candidate do AddEdges(E[J],PartEdges);
@@ -173,7 +188,8 @@ begin
       FHidden.Add(E[I].Key);for J in Candidate do E[J].Selected:=True;
     end;
     for I:=0 to High(E) do if E[I].Part then begin
-      if E[I].Valid and (E[I].Selected or not E[I].HasParent) then FParts.Add(E[I].Key)
+      if E[I].Valid and not E[I].EnvelopeBlocked and
+        (E[I].Selected or not E[I].HasParent) then FParts.Add(E[I].Key)
       else begin FBlocked.Add(E[I].Key);FHidden.Add(E[I].Key) end;
     end;
   finally PartEdges.Free;ParentEdges.Free end;
@@ -188,8 +204,10 @@ procedure TBuildingPartSelection.ValidatePhotoParts(Dataset:TOSMDataset);
 var W:TOSMWay;R:TOSMRelation;
   procedure Check(Tags:TOSMTags;const Id:string);
   begin
-    if Tags.HasKey('rezvivo:photo_building') and (FBlocked.IndexOf(Id)>=0) then
-      raise Exception.Create(Id+': building parts do not form a complete, non-overlapping partition of the parent outline; retain the parent and resolve missing/overlapping parts before applying this photo');
+    if not Tags.HasKey('rezvivo:photo_building') or (FHidden.IndexOf(Id)<0) then Exit;
+    if FBlocked.IndexOf(Id)>=0 then
+      raise Exception.Create(Id+': photo target is hidden: building parts do not form a complete, non-overlapping partition of the parent outline, or an authored whole-building envelope takes priority; resolve the parent/part recipes before applying this photo');
+    raise Exception.Create(Id+': photo target is a parent hidden by building parts; target the visible parts or author an explicit whole-building envelope before applying this photo');
   end;
 begin
   for W in Dataset.Ways.Values do Check(W.Tags,Key('way',W.Id));

@@ -83,6 +83,7 @@ type
   private
     FFitUrl:         String;
     FFileNames:      TStringList;           { имена *.fit/*.gpx в routes }
+    FReadyGeneration:Cardinal;
     FCarousel:      TRideCarousel;
     FThumbQueue:     TStringList;           { файлы, ждущие генерации мини-карты }
     FOnLaunchRide:   TNotifyEvent;          { кнопка «Ехать» → меню }
@@ -315,7 +316,7 @@ uses AppRuntimePaths, UiTranslations, GameFilePicker,
   Osm3dSceneMaterials,    { TSceneMaterialKind (smk*) — фильтр ground-мешей }
   Osm3dStreamingMap,      { методы карты сессии (BeginRouteSnap и др.) }
   GpxFile,               { NewRouteParserForFile: .fit/.gpx по расширению }
-  VeloSiteAPI, DebugLog, GameRouteLibraryData, GameViewMenu, GameViewPlay, AppSettings, GameUserData;
+  VeloSiteAPI, DebugLog, GameRouteLibraryData, GameViewMenu, GameViewPlay, AppSettings, GameUserData,GameReadyRoutes;
 
 type
   TRouteDetailsBackdrop = class(TCastleRectangleControl)
@@ -408,7 +409,7 @@ begin
   FPendingMulti := False;
   FPendingDelay := 0;
   FFileNames := TStringList.Create;
-  FFileNames.Sorted := True;
+  FFileNames.Sorted := False; { public catalogue order, then sorted personal files }
   FThumbQueue := TStringList.Create;
   FOnLaunchRide := nil;
   FOnStopRide := nil;
@@ -532,6 +533,7 @@ var
   Tk, Dt: QWord;
 begin
   inherited;
+  if FReadyGeneration<>ReadyRoutes.Generation then RefreshFilesList;
   if FReviewTask<>nil then begin
     FReview:=FReviewTask.Snapshot;FReviewLabel.Caption:=FReview.Caption;
     if FReview.Done then begin
@@ -950,6 +952,7 @@ begin
     'review_error',FReview.ErrorText,
     'report_length', Length(FLabelEstimate.Caption)]);
   Result.Add('carousel',FCarousel.Diagnostics);
+  Result.Add('ready_routes',ReadyRoutes.Diagnostics);
   AddButton(Self);
 end;
 
@@ -1238,11 +1241,12 @@ end;
 procedure TRoutesPage.RefreshFilesList;
 var
   SR: TSearchRec;
-  Dir, Mask, Png, TxtPath: String;
+  Dir, Mask, Png, TxtPath,ResolvedPath: String;
   I: Integer;
   SL: TStringList;
 begin
   if FCarousel=nil then Exit;
+  ResolvedPath:=ReadyRoutes.ResolveFile(SelectedFitPath);
   FCarousel.Clear;
   FThumbQueue.Clear;
   FFileNames.Clear;
@@ -1258,15 +1262,19 @@ begin
     if FindFirst(Dir + Mask, 0, SR) = 0 then
     begin
       repeat
-        FFileNames.Add(SR.Name);
+        FFileNames.Add(Dir+SR.Name);
       until FindNext(SR) <> 0;
       SysUtils.FindClose(SR);
     end;
   end;
 
+    FFileNames.Sort;
+    SL:=TStringList.Create;
+    try ReadyRoutes.AppendFiles(SL);SL.AddStrings(FFileNames);FFileNames.Assign(SL);finally SL.Free end;
+    FReadyGeneration:=ReadyRoutes.Generation;
     for I := 0 to FFileNames.Count - 1 do
     begin
-      FCarousel.AddItem(ChangeFileExt(FFileNames[I],''),'','');
+      FCarousel.AddItem(ReadyRoutes.Title(FFileNames[I]),'','');
       { Свежий кэш мини-карты — грузим сразу; иначе файл в очередь
         генерации (ProcessThumbQueue, один за тик Update). }
       Png := ThumbCachePath(FFileNames[I]);
@@ -1293,7 +1301,8 @@ begin
         FThumbQueue.Add(FFileNames[I]);
     end;
 
-  SelectCard(FFileNames.IndexOf(ExtractFileName(SelectedFitPath)));
+  FCarousel.Select(FFileNames.IndexOf(SelectedFitPath),False,False);
+  if ResolvedPath<>SelectedFitPath then OpenLibraryFile(ResolvedPath);
 
   Logger.Info(Format('[Routes] %s: %d файлов', [Dir, FFileNames.Count]));
 end;
@@ -1304,7 +1313,7 @@ var
   SR: TSearchRec;
   Size, MTime: Int64;
 begin
-  Src := UserRoutesDir + AFileName;
+  Src := AFileName;
   Size := 0;
   MTime := 0;
   if FindFirst(Src, 0, SR) = 0 then
@@ -1315,7 +1324,7 @@ begin
   end;
   Dir := UserRoutesDir + '.thumbs' + PathDelim;
   ForceDirectories(Dir);
-  Base := ChangeFileExt(AFileName, '');
+  Base := ChangeFileExt(ExtractFileName(AFileName), '');
   Result := Dir + Format('%s-%d-%d.png', [Base, Size, MTime]);
 end;
 
@@ -1485,7 +1494,7 @@ begin
   Result := False;
   APngPath := '';
   AInfo := '';
-  Src := UserRoutesDir + AFileName;
+  Src := AFileName;
   Png := ThumbCachePath(AFileName);
   TxtPath := ChangeFileExt(Png, '.txt');
 
@@ -1654,20 +1663,20 @@ procedure TRoutesPage.ClickCreate(Sender:TObject);
 begin ViewMenu.OpenTab('route-create');end;
 
 procedure TRoutesPage.OpenLibraryFile(const FileName:String);
-var I:Integer;
+var I:Integer;ResolvedPath:string;
 begin
+  ResolvedPath:=ReadyRoutes.ResolveFile(FileName);
+  if ResolvedPath<>FileName then begin OpenLibraryFile(ResolvedPath);Exit end;
   if not FileExists(FileName)then begin
     FFitUrl:='';FPendingFitUrl:='';FLoadedUrl:='';StopWarmSession;
     FHeader.SetSelection(ChangeFileExt(ExtractFileName(FileName),''),UiText('Route file not found.'),False);
     SetProgress(UiText('File not found: ')+FileName);Exit;
   end;
-  if SameFileName(ExpandFileName(ExtractFileDir(FileName)),ExpandFileName(ExcludeTrailingPathDelimiter(UserRoutesDir)))then begin
-    I:=FFileNames.IndexOf(ExtractFileName(FileName));if I>=0 then SelectCard(I);
-  end;
+  I:=FFileNames.IndexOf(FileName);if I>=0 then FCarousel.Select(I,False,False);
   FFitUrl:=FilenameToURISafe(FileName);FPendingFitUrl:=FFitUrl;FPendingDelay:=2;
   Settings.SetSelectedRoutePath(FileName);
   RememberRideMap(rmkReal,FileName);
-  FHeader.SetSelection(ChangeFileExt(ExtractFileName(FileName),''),UiText('Reading route…'),False);
+  FHeader.SetSelection(ReadyRoutes.Title(FileName),UiText('Reading route…'),False);
   SetProgress(UiText('Reading route…'));
 end;
 
@@ -1678,7 +1687,7 @@ begin
   I := FCarousel.Selected;
   if (I < 0) or (I >= FFileNames.Count) then Exit;
   SelectCard(I);
-  FFitUrl := FilenameToURISafe(UserRoutesDir + FFileNames[I]);
+  FFitUrl := FilenameToURISafe(FFileNames[I]);
   Settings.SetSelectedRoutePath(SelectedFitPath);
   RememberRideMap(rmkReal,SelectedFitPath);
   FHeader.SetSelection(FCarousel.ItemTitle(I),FCarousel.ItemInfo(I),False);
@@ -1821,7 +1830,7 @@ begin
       else
         Descent := Descent + (Fit.RouteAltM[I - 1] - Fit.RouteAltM[I]);
     end;
-    AddStatHeader(ExtractFileName(FitPath));
+    AddStatHeader(ReadyRoutes.Title(FitPath));
     AddStatRow(UiText('Points'),     IntToStr(N));
     AddStatRow(UiText('Distance'), Format(UiText('%.1f km'), [DistKm]));
     AddStatRow(UiText('Time'),     Format('%d:%.2d:%.2d',
@@ -1885,7 +1894,7 @@ begin
     DisplayRoute(Route, FLoadedUrl <> AFitUrl);
     FLoadedUrl := AFitUrl;
     CheckOffline;
-    FHeader.SetSelection(ChangeFileExt(ExtractFileName(FitPath),''),
+    FHeader.SetSelection(ReadyRoutes.Title(FitPath),
       Format(UiText('%.1f km  ·  Ascent %.0f m'),[DistKm,Ascent]),True);
     FHeader.SetRideState(ViewMenu.RideUnderneath,SameFileName(SelectedFitPath,ViewPlay.CurrentFitPath));
     SetProgress('');
@@ -3138,9 +3147,9 @@ begin
   NOk := 0;
   for I := 0 to FFileNames.Count - 1 do
   begin
-    Fit := NewRouteParserForFile(UserRoutesDir + FFileNames[I]);
+    Fit := NewRouteParserForFile(FFileNames[I]);
     try
-      if Fit.LoadFromFile(UserRoutesDir + FFileNames[I]) and
+      if Fit.LoadFromFile(FFileNames[I]) and
          (Length(Fit.RouteLatLon) >= 2) then
       begin
         Rides[NOk] := Fit.ToRideSamples;

@@ -131,6 +131,20 @@
   '            paint*=0.94+0.10*grain-0.24*seam;' + #10 +
   '            bldCavity=1.0-0.16*seam;' + #10 +
   '        }' + #10 +
+  '        if (surface>2.5 && surface<3.5) {' + #10 +
+  '            // Photo-authored openings retain brickwork on the remaining wall.' + #10 +
+  '            // Metric running bond; derivatives remove subpixel mortar shimmer.' + #10 +
+  '            vec2 cell=vBldMetric/vec2(.26,.075);' + #10 +
+  '            cell.x+=mod(floor(cell.y),2.0)*.5;' + #10 +
+  '            vec2 edge=min(fract(cell),1.0-fract(cell));' + #10 +
+  '            vec2 aa=max(fwidth(cell),vec2(.001));' + #10 +
+  '            vec2 brick=smoothstep(vec2(.017,.047)-aa,vec2(.017,.047)+aa,edge);' + #10 +
+  '            float detail=1.0-smoothstep(.2,.8,max(aa.x,aa.y));' + #10 +
+  '            float mortar=(1.0-brick.x*brick.y)*detail;' + #10 +
+  '            float variation=(bldHash(floor(cell))-.5)*.18*detail;' + #10 +
+  '            paint=mix(paint*(1.0+variation),paint*.62+vec3(.13),mortar*.72);' + #10 +
+  '            bldCavity=1.0-.20*mortar;' + #10 +
+  '        }' + #10 +
   '        bldAlbedo=gc_SRGBtoLINEAR(paint);' + #10 +
   '        if (surface>0.5 && surface<1.5) {' + #10 +
   '            vec3 reflected=reflect(-bldView,N);' + #10 +

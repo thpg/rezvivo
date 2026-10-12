@@ -1280,7 +1280,7 @@ begin
       PlantTags.Add('height',FloatToStr(Plants[I].Height,F));
       One[0]:=MakeSingleTreeInstance(PhotoPlantSeed(Plants[I].Id,Plants[I].Position),Pos,PlantTags);
       if IsShrub then begin One[0].Scale:=Plants[I].Height;One[0].SeedAsTexId:=0 end;
-      One[0].Procedural:=ClassifyTreeTag(TreeTagJSON(PlantTags),Plants[I].Position,IsShrub);
+      One[0].Procedural:=ClassifyTreeTag(TreeTagJSON(PlantTags),Plants[I].Position,IsShrub,False,Pos.Y,Plants[I].Height);
       if IsShrub then AppendInstances(ShrubsOut,ShrubsCount,One)
       else AppendInstances(TreesOut,TreesCount,One);
     end;
@@ -1322,7 +1322,7 @@ procedure ProcessOnePolygon(const MP: TPolygonMultipolygon;
 var
   Species:   TTreeType;
   TaggedH:   Double;
-  PhotoSpacing: Double;
+  PhotoSpacing, PhotoHeight: Double;
   Local:     TTreeInstanceArray;
   MinX, MaxX, MinZ, MaxZ: Single;
   SubMPs:    TMultipolygonArray;
@@ -1340,6 +1340,8 @@ begin
       TreesOut,ShrubsOut,TreesCount,ShrubsCount);
     Exit;
   end;
+  PhotoHeight:=0;
+  if Tags.HasKey('rezvivo:local_photo_object') then PhotoHeight:=GetTreeHeight(Tags);
 
   MultipolygonBBox(MP, MinX, MaxX, MinZ, MaxZ);
 
@@ -1383,7 +1385,7 @@ begin
       TagsJSON := TreeTagJSON(Tags);
       for K := 0 to High(Local) do
         Local[K].Procedural := ClassifyTreeTag(TagsJSON,
-          HeightCtx.Projection.Unproject(Local[K].X, Local[K].Z), False, True, Local[K].Y);
+          HeightCtx.Projection.Unproject(Local[K].X, Local[K].Z), False, True, Local[K].Y, PhotoHeight);
       AppendInstances(TreesOut, TreesCount, Local);
     end;
   end
@@ -1403,7 +1405,7 @@ begin
       TagsJSON := TreeTagJSON(Tags);
       for K := 0 to High(Local) do
         Local[K].Procedural := ClassifyTreeTag(TagsJSON,
-          HeightCtx.Projection.Unproject(Local[K].X, Local[K].Z), True, True, Local[K].Y);
+          HeightCtx.Projection.Unproject(Local[K].X, Local[K].Z), True, True, Local[K].Y, PhotoHeight);
       AppendInstances(ShrubsOut, ShrubsCount, Local);
     end;
   end;

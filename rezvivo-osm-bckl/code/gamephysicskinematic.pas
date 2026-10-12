@@ -96,7 +96,9 @@ begin
   AdvanceGroundTurn(FState.GroundTurn,Dt,FState.TravelSteering,OldSpeed,
     FState.AppliedPowerWatts,not FState.Walking);
   if FState.Walking then begin
-    Accel:=EnsureRange((FState.TravelTargetSpeed-OldSpeed)*5,-5,3);
+    if FState.TravelOffRoad then
+      Accel:=EnsureRange((FState.TravelTargetSpeed/1.10-OldSpeed)*5,-5,3)
+    else Accel:=EnsureRange((FState.TravelTargetSpeed-OldSpeed)*5,-5,3);
     Turn:=FState.TravelSteering*1.8;
   end else if FState.GroundTurn.Frame.Active then begin
     { Lift and set down before riding away; zero travel does not become
@@ -105,6 +107,8 @@ begin
     Turn:=FState.GroundTurn.Frame.YawDelta/Dt;
   end else begin
     Accel:=CalculateAcceleration(Dt);
+    if FState.TravelRoadGuided and(OldSpeed>FState.TravelRoadSpeedLimit)then
+      Accel:=Min(Accel,-Min(3,(OldSpeed-FState.TravelRoadSpeedLimit)*2));
     { Bicycle steering: large handlebar angle at low speed, bounded lateral
       acceleration at speed. Rear tyre follows the integrated heading. }
     Turn:=FState.TravelSteering*Min(1.25,FState.CurrentSpeed*0.55);

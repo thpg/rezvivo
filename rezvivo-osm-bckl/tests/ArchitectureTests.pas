@@ -54,6 +54,10 @@ begin
     Face.Floats['metallic']:=0.8;R:=ParseArchitecture(J);Check(Abs(R.Facades[0].Metallic-0.8)<0.00001,'metal facade uses shared PBR');
     K:=GetJSON(CanonicalArchitecture(J));try R:=ParseArchitecture(K);Check(Abs(R.Facades[0].Metallic-0.8)<0.00001,'metallic survives canonical recipe') finally K.Free end;
     Face.Delete('metallic');
+    Face.Strings['wall_material']:='brick';
+    K:=GetJSON(CanonicalArchitecture(J));
+    try R:=ParseArchitecture(K);Check(R.Facades[0].MaterialKind=3,'brick wall survives canonical recipe') finally K.Free end;
+    Face.Delete('wall_material');
     Row.Floats['count']:=2.5;Rejected:=False;try R:=ParseArchitecture(J) except on E:EConvertError do Rejected:=True end;
     Check(Rejected,'reject fractional count');Row.Integers['count']:=3;
     Row.Floats['step_m']:=1;Rejected:=False;try R:=ParseArchitecture(J) except on E:EConvertError do Rejected:=True end;

@@ -87,7 +87,7 @@ type
     FHooked, FInactive: Boolean;
     FViewer, FLocalViewer, FViewerRight, FSunRayDirection: TVector3;
     FPlanTime, FSeconds, FDelta: Single;
-    FGenerationCount, FUploadCount, FDiscardedJobs: QWord;
+    FGenerationCount, FUploadCount, FDiscardedJobs, FShadowMembershipVersion: QWord;
     FSelectionHash: LongWord;
     FMemory: TGLMemoryInfo;
     FCacheBudget, FDetailBytes, FFreeVram: Int64;
@@ -112,6 +112,8 @@ type
       const Origin:TTreeWorldPosition):TProceduralFarBatch;
     function CellInRange(Cell: TProceduralCell; const Camera: TVector3): Boolean;
     function FindCell(ID: Integer): TProceduralCell;
+    function GetShadowCacheRevision:QWord;
+    function GetShadowAtlasRevision:QWord;
   protected
     procedure LocalRender(const Params: TRenderParams); override;
   public
@@ -125,6 +127,8 @@ type
     function CollectRtxTrees(Cache:TRtxShadow;var CellIndex,EntryIndex:Integer):Boolean;
     property SunRayDirection: TVector3 read FSunRayDirection write FSunRayDirection;
     property ShadowGeneration:QWord read FGenerationCount;
+    property ShadowCacheRevision:QWord read GetShadowCacheRevision;
+    property ShadowAtlasRevision:QWord read GetShadowAtlasRevision;
   end;
 function ProceduralVegetationDiagnostics: string;
 function ProceduralTreeQuality(const Distance: Single): Single;
@@ -136,6 +140,18 @@ uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Math, {$ifdef OpenGLES}CastleGLES{$else}
 const
   CELL_METERS = 128;
 var LastRenderer: TOsmProceduralVegetation;
+
+function TOsmProceduralVegetation.GetShadowAtlasRevision:QWord;
+begin
+  Result:=(QWord(FAtlasCount) shl 16) xor (QWord(FSerial) shl 32) xor
+    QWord(Round(FSeason*12)) xor QWord(Ord(RenderTreesActive));
+end;
+
+function TOsmProceduralVegetation.GetShadowCacheRevision:QWord;
+begin
+  Result:=GetShadowAtlasRevision xor FShadowMembershipVersion xor
+    (FGenerationCount shl 24) xor (QWord(Ord(ProceduralVegetationActive)) shl 8);
+end;
 
 function TOsmProceduralVegetation.CollectRtxTrees(Cache:TRtxShadow;var CellIndex,EntryIndex:Integer):Boolean;
 var C:TProceduralCell;E:TProceduralEntry;R:TTreeRenderer;S:TTreeSpecies;M:TMatrix4;P:TVector3;
@@ -534,7 +550,7 @@ begin
     Changed:=Length(PackedItems)<>Length(Cell.FarItems[S]);
     if not Changed and (N>0) then
       Changed:=not CompareMem(@PackedItems[0],@Cell.FarItems[S][0],N*SizeOf(TTreeGPUItem));
-    if Changed then begin Cell.FarItems[S]:=PackedItems;Inc(Cell.FarVersion[S]);end;
+    if Changed then begin Cell.FarItems[S]:=PackedItems;Inc(Cell.FarVersion[S]);Inc(FShadowMembershipVersion);end;
     Cell.FarCount[S]:=N;
   end;
   Cell.Dirty:=False;Cell.Uploaded:=True;

@@ -19,22 +19,11 @@ void main() {
     vec3 origin=z.origin.xyz+uv.x*z.du.xyz+uv.y*z.dv.xyz;
     rayQueryEXT q;
     // Nearest ACCEPTED hit is required for an atlas depth, not the first hit.
-    rayQueryInitializeEXT(q,world,gl_RayFlagsNoneEXT,1,origin,0.0,z.ray.xyz,z.ray.w);
-    while(rayQueryProceedEXT(q)) {
-        if(rayQueryGetIntersectionTypeEXT(q,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
-            // Ground is reflection-only. Never interpret its primitive index
-            // as a foliage card or make it cast a blanket terrain shadow.
-            if(rayQueryGetIntersectionGeometryIndexEXT(q,false)!=1u)continue;
-            uint p=rayQueryGetIntersectionPrimitiveIndexEXT(q,false);
-            Card c=cards[p/2u];
-            vec2 b=rayQueryGetIntersectionBarycentricsEXT(q,false);
-            vec2 st=(p&1u)==0u ? vec2(b.x+b.y,b.y) : vec2(b.x,b.x+b.y);
-            float alpha=textureLod(silhouettes,vec3(st,c.origin.w),0.0).r;
-            vec2 cell=floor(st*256.0)+c.spare.x*vec2(971,613);
-            float threshold=max(.003,fract(sin(dot(cell,vec2(12.9898,78.233)))*43758.5453));
-            if(alpha>=threshold) rayQueryConfirmIntersectionEXT(q);
-        }
-    }
+    rayQueryInitializeEXT(q,world,gl_RayFlagsCullNoOpaqueEXT,1,origin,0.0,z.ray.xyz,z.ray.w);
+    // Opaque building triangles commit automatically. Non-opaque foliage
+    // cards belong to reflections only: their shadows are rasterized live in
+    // near cascades and copied from the shared distant forest depth cache.
+    while(rayQueryProceedEXT(q)) { }
     float d=1.0;
     if(rayQueryGetIntersectionTypeEXT(q,true)!=gl_RayQueryCommittedIntersectionNoneEXT)
         d=clamp(rayQueryGetIntersectionTEXT(q,true)/z.ray.w,0.0,1.0);

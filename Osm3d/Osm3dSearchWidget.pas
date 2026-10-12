@@ -138,7 +138,7 @@ begin
   FEdit.Width  := W_WIDTH - 2 * W_PAD - 78;
   FEdit.Height := EDIT_HEIGHT;
   BindUiText(FEdit, 'Place, address…', 'Placeholder');
-  FEdit.AutoOnScreenKeyboard := False;
+  FEdit.AutoOnScreenKeyboard := {$ifdef ANDROID}True{$else}False{$endif};
   InsertFront(FEdit);
 
   { кнопка «Найти» }

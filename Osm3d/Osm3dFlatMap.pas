@@ -16,11 +16,13 @@ type
   private
     FHttp:THTTPFetcherWithCache;FLock:TCriticalSection;
     FImage:TCastleImage;FDone,FDetail,FRequestedDetail,FCachedOnly,FCancelled,FImagePartial,FFinalTaken:Boolean;FZ,FX,FY:Integer;
+    FOverviewFallback:Boolean;
+    FOverviewZoom:Integer;
     procedure Publish(Img:TCastleImage;Partial:Boolean=False);
   protected
     procedure Execute;override;
   public
-    constructor Create(Z,X,Y:Integer;const CacheRoot:string;Detail:Boolean=False;CachedOnly:Boolean=False);
+    constructor Create(Z,X,Y:Integer;const CacheRoot:string;Detail:Boolean=False;CachedOnly:Boolean=False;OverviewFallback:Boolean=False);
     destructor Destroy;override;
     procedure Cancel;
     function Done:Boolean;
@@ -31,6 +33,7 @@ type
     property RequestedDetail:Boolean read FRequestedDetail;
     property Cancelled:Boolean read FCancelled;
     property FinalTaken:Boolean read FFinalTaken;
+    property OverviewZoom:Integer read FOverviewZoom;
   end;
 const
   FLAT_MAP_URL = 'rezvivo-map://{z}/{x}/{y}';
@@ -129,9 +132,13 @@ end;
 procedure EndBuild;
 begin SourceLock.Enter;try Dec(ActiveBuilds);finally SourceLock.Leave;end;end;
 
-constructor TFlatMapTask.Create(Z,X,Y:Integer;const CacheRoot:string;Detail,CachedOnly:Boolean);
+function World(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread;LandOnly:Boolean=False;Quality:PInteger=nil):TCastleImage;forward;
+
+constructor TFlatMapTask.Create(Z,X,Y:Integer;const CacheRoot:string;Detail,CachedOnly,OverviewFallback:Boolean);
 begin
   inherited Create(True);FreeOnTerminate:=False;FZ:=Z;FX:=X;FY:=Y;FRequestedDetail:=Detail;FCachedOnly:=CachedOnly;
+  FOverviewFallback:=OverviewFallback;
+  FOverviewZoom:=Math.Min(Z,FLAT_MAP_WORLD_ZOOM);
   FLock:=SyncObjs.TCriticalSection.Create;FHttp:=THTTPFetcherWithCache.Create(TFileSystemCache.Create(CacheRoot),True);
   FHttp.TimeoutMs:=5000;FHttp.MaxRetries:=1;
 end;
@@ -162,6 +169,10 @@ begin
   try
     try
       Img:=FlatMapTileInfo(FHttp,FZ,FX,FY,FRequestedDetail,FCachedOnly,FDetail,Self);
+      { Finish the fast preview pass for every visible tile before any worker
+        waits on Overpass. Cached detail remains preferable to raster fallback. }
+      if (Img=nil) and FCachedOnly and FOverviewFallback and not Terminated then
+        Img:=World(FHttp,FZ,FX,FY,Self,False,@FOverviewZoom);
       Publish(Img,FRequestedDetail and not FDetail);
     except { Keep the last valid overview if an optional detail source fails. } end;
   finally FLock.Enter;try FDone:=True;finally FLock.Leave;end;end;
@@ -263,7 +274,7 @@ begin
   finally Img.Free;end;
 end;
 
-function World(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread;LandOnly:Boolean=False):TCastleImage;
+function World(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread;LandOnly:Boolean;Quality:PInteger):TCastleImage;
 var SZ,D,I,PX,PY:Integer;URL:string;R:TFetchResult;Img:TFPMemoryImage;C:TFPColor;P:PVector3Byte;
   Terrain:TCastleImage;HasLand:Boolean;
 begin
@@ -278,9 +289,25 @@ begin
     if Img<>nil then Break;
     if R.Success then Http.InvalidateGetUrl(URL);
   end;
+  { The overview must also work for a local/guest profile. Only request the
+    visible overview tiles; keep the public response in the HTTP disk cache.
+    A styled raster must never be used as the land-only coastline mask. }
+  if (Img=nil) and not LandOnly and not FlatMapCancelled(Http,Cancel) then begin
+    { Public raster tiles can show streets immediately while the shared OSM
+      source is still downloading. Do not enlarge a z10 overview at z16. }
+    SZ:=Math.Min(Z,19);D:=1 shl(Z-SZ);
+    URL:='https://tile.openstreetmap.org/'+IntToStr(SZ)+'/'+
+      IntToStr(X div D)+'/'+IntToStr(Y div D)+'.png';
+    R:=Http.GetUrl(URL,3000,1);
+    if R.Success then begin
+      Img:=Decode(R.Data);
+      if Img=nil then Http.InvalidateGetUrl(URL);
+    end;
+  end;
   if Img=nil then Exit;
   try
     Result:=TRGBImage.Create(256,256);HasLand:=False;
+    if Quality<>nil then Quality^:=SZ;
     for PY:=0 to 255 do for PX:=0 to 255 do begin
       C:=Img.Colors[((X mod D)*256+PX) div D,((Y mod D)*256+PY) div D];
       P:=PVector3Byte(Result.PixelPtr(PX,255-PY));P^.X:=C.Red shr 8;P^.Y:=C.Green shr 8;P^.Z:=C.Blue shr 8;

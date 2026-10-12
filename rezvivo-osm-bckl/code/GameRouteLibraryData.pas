@@ -36,7 +36,7 @@ procedure WriteAccountJSON(const Name:String;Obj:TJSONObject);
 function ReadAccountJSON(const Name:String):TJSONObject;
 
 implementation
-uses AppRuntimePaths, UiTranslations, Math, DateUtils, jsonparser, CastleURIUtils, CastleApplicationProperties, VeloSiteAPI
+uses AppRuntimePaths, UiTranslations, Math, DateUtils, jsonparser, CastleURIUtils, CastleApplicationProperties, VeloSiteAPI,GameReadyRoutes,GameRideRooms
   {$ifdef MSWINDOWS}, Windows{$endif};
 
 type TRoutePump=class
@@ -204,7 +204,7 @@ begin
   until FindNext(SR)<>0;finally SysUtils.FindClose(SR);end;
 end;
 procedure TRoutePump.Update(Sender:TObject);
-begin RouteLibraryTick;end;
+begin RouteLibraryTick;ReadyRoutesTick;RideRooms.Update;end;
 initialization
   Detached:=TList.Create;
   Pump:=TRoutePump.Create;ApplicationProperties.OnUpdate.Add(@Pump.Update);

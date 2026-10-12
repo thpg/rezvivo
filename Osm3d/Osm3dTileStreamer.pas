@@ -231,6 +231,7 @@ type
     FSaveQueue:  specialize TQueue<TSaveJob>;
     FSaveLock:   TCriticalSection;
     FShutdown:   Boolean;             { also the generator cancel flag }
+    FWorkersJoined:Boolean;
 
     { shadow worker — gen + upload FIFO lists guarded by FShadowLock }
     FShadowLock:   TCriticalSection;
@@ -676,6 +677,7 @@ end;
 procedure TTileStreamer.RequestStop;
 var I: Integer;
 begin
+  if (FCache<>nil) and (FCache.ReadyTiles<>nil) then FCache.ReadyTiles.Stop;
   FShutdown := True;
 
   for I := 0 to High(FIOWorkers) do
@@ -696,10 +698,14 @@ end;
 procedure TTileStreamer.JoinStoppedWorkers;
 var I,DI:Integer;SJob:TSaveJob;DItem:TStreamResultItem;Slot:TTileSlot;
 begin
+  { The reaper joins first, then the main thread destroys this owner.
+    FPC Unix WaitFor performs pthread_join even after a previous WaitFor. }
+  if FWorkersJoined then Exit;
   for I:=0 to High(FIOWorkers)do if FIOWorkers[I]<>nil then FIOWorkers[I].WaitFor;
   for I:=0 to High(FGenWorkers)do if FGenWorkers[I]<>nil then FGenWorkers[I].WaitFor;
   if FShadowWorker<>nil then FShadowWorker.WaitFor;
   if FSaveWorker<>nil then FSaveWorker.WaitFor;
+  FWorkersJoined:=True;
   if FSaveQueue <> nil then
     while FSaveQueue.Count > 0 do
     begin
@@ -748,23 +754,19 @@ begin
   for I := 0 to High(FIOWorkers) do
     if FIOWorkers[I] <> nil then
     begin
-      FIOWorkers[I].WaitFor;
       FIOWorkers[I].Free;
     end;
   for I := 0 to High(FGenWorkers) do
     if FGenWorkers[I] <> nil then
     begin
-      FGenWorkers[I].WaitFor;
       FGenWorkers[I].Free;
     end;
   if FShadowWorker <> nil then
   begin
-    FShadowWorker.WaitFor;
     FShadowWorker.Free;
   end;
   if FSaveWorker <> nil then
   begin
-    FSaveWorker.WaitFor;
     FSaveWorker.Free;
   end;
 
@@ -871,7 +873,7 @@ begin
   Model := nil;
   try
     if not FCache.TryLoad(Id, Model) then
-      Model := nil;
+      if not FCache.TryLoadReady(Id,Model) then Model := nil;
   except
     Model := nil;
   end;
@@ -890,6 +892,10 @@ var
   Res:   TBlockGenResult;
   I:     Integer;
   PrevIds: TGeoTileIdArray;       { id тайлов пачки для WriteBatch блок-PNG }
+  ReadyIds: TGeoTileIdArray;
+  ReadyModels: array of Boolean;
+  ReadyModel: TTileModel;
+  J, ReadyCount: Integer;
   Slot, Now64: QWord;             { gen-start stagger reservation }
   {$IFDEF TILE_MEM_PROFILE}HS0, HS1: TFPCHeapStatus;{$ENDIF}
 begin
@@ -934,8 +940,33 @@ begin
   Res.Success := False;
   Res.Error   := '';
   SetLength(Res.Tiles, 0);
+  { Missing geometry may already be published by the server owner. Resolve
+    every available tile through the shared HTTP cache before generation.
+    Even partial coverage is mounted immediately and never overwritten by
+    the block generator's incidental output for neighbouring tiles. }
+  ReadyIds:=BlockTiles(Blk,FBlockSize);
+  SetLength(ReadyModels,Length(ReadyIds)); ReadyCount:=0;
+  for I:=0 to High(ReadyIds) do begin
+    if FShutdown then Exit;
+    ReadyModel:=nil;
+    if FCache.TryLoad(ReadyIds[I],ReadyModel) or
+      FCache.TryLoadReady(ReadyIds[I],ReadyModel) then begin
+      ReadyModels[I]:=True; Inc(ReadyCount);
+      PushTileLoaded(ReadyIds[I],ReadyModel);
+    end;
+  end;
+  if ReadyCount=Length(ReadyIds) then begin
+    PushBlockDone(Blk,Epoch,Res.Tiles); Exit;
+  end;
   try
     Res := FBlockGen(Blk, Halo, FOrigin, @FShutdown);
+    if Res.Success then
+      for I:=0 to High(Res.Tiles) do
+        if Res.Tiles[I]<>nil then
+          for J:=0 to High(ReadyIds) do
+            if ReadyModels[J] and Res.Tiles[I].TileId.Equals(ReadyIds[J]) then begin
+              FreeAndNil(Res.Tiles[I]); Break;
+            end;
   except
     on E: Exception do
     begin
@@ -1520,7 +1551,7 @@ begin
 
   case Slot.State of
     tssUnknown:
-      if FCache.Has(AId) then
+      if FCache.Has(AId) or FCache.HasReady(AId) then
         EnqueueIO(Slot)
       else
         ScheduleBlockFor(AId, Slot, APriority);
@@ -1533,7 +1564,7 @@ begin
         зеркально блокам (ScheduleBlockFor/RetryFrame). }
       if FFrame >= Slot.RetryFrame then
       begin
-        if FCache.Has(AId) then
+        if FCache.Has(AId) or FCache.HasReady(AId) then
           EnqueueIO(Slot)
         else
           ScheduleBlockFor(AId, Slot, APriority);

@@ -17,7 +17,7 @@ uses Classes, SysUtils, Math, fpjson, CastleVectors, Osm3dGeoMath, Osm3dGeomMesh
   Osm3dArchitectureVoids;
 const
   ARCHITECTURE_TAG = 'rezvivo:architecture';
-  ARCHITECTURE_GENERATOR = 8;
+  ARCHITECTURE_GENERATOR = 9;
   ARCHITECTURE_UV_MARKER = -1000000;
 type
   TArchProfile = array of TVector2; { height fraction, projection fraction }
@@ -48,7 +48,7 @@ type
     A,B: TVector3;
     WallColor: Cardinal;
     Roughness,Metallic,Inset: Single;
-    MaterialKind: Integer; { 0 painted/plain; 2 horizontal timber boards }
+    MaterialKind: Integer; { 0 painted/plain; 2 timber boards; 3 brick }
     Openings: TArchOpenings;
     Components: TArchComponents;
     function Axis: TVector3;
@@ -155,7 +155,7 @@ var A:TJSONArray; K:TArchComponentKind;
 begin
   A:=TJSONArray.Create;for K:=Low(K) to High(K) do A.Add(KindNames[K]);
   Result:=TJSONObject.Create(['version',1,'generator',ARCHITECTURE_GENERATOR,'components',A,
-    'facades','start/end [lon,lat] in either order; local x along the supplied edge, y up, z outward. Exterior orientation is resolved from the footprint without moving openings. wall_color, wall_material plain/wood, roughness, metallic, inset_m (0..6, recessed wall behind a portico, closed sides/floor/ceiling). Exact metre dimensions; no automatic stretching.',
+    'facades','start/end [lon,lat] in either order; local x along the supplied edge, y up, z outward. Exterior orientation is resolved from the footprint without moving openings. wall_color, wall_material plain/wood/brick, roughness, metallic, inset_m (0..6, recessed wall behind a portico, closed sides/floor/ceiling). Exact metre dimensions; no automatic stretching.',
     'rows','x_m = first opening centre; bottom_m, width_m, height_m, count, step_m; shape rectangle/round_arch, arch_rise_m; kind window/door; recess_m, frame_width_m, frame_depth_m, frame_color, pane_color, mullions_x/y (divider counts). Omitted rows means blank wall.',
     'cornices','Component cornice: x_m=center, bottom_m, width_m, height_m, depth_m, offset_m, color. Optional profile: 2..16 [height_fraction,projection_fraction] pairs in 0..1; nondecreasing heights, first 0, last 1. Repeat a height for a horizontal ledge. Default three-step moulding. Repeats use count/step_m.',
     'parts','components per facade; kind, x_m, bottom_m, offset_m, width_m, height_m, depth_m, color, roughness, metallic, anchor ground/eave/ridge, count/step_m, segments. Combine columns + canopy + pediment for a portico; drum + dome/spire for a roof landmark.',
@@ -209,8 +209,9 @@ begin
     end;
     WallColor:=Color(F,'wall_color','#bdb7a7');Roughness:=Num(F,'roughness',0.85,0.15,1);
     Metallic:=Num(F,'metallic',0,0,1);
-    S:=Str(F,'wall_material','plain');Check((S='plain') or (S='wood'),'wall_material must be plain or wood');
+    S:=Str(F,'wall_material','plain');Check((S='plain') or (S='wood') or (S='brick'),'wall_material must be plain, wood or brick');
     if S='wood' then MaterialKind:=2;
+    if S='brick' then MaterialKind:=3;
     Inset:=Num(F,'inset_m',0,0,6);
     if F.Find('rows')<>nil then begin
       Rows:=Arr(F.Find('rows'),32);
@@ -317,6 +318,7 @@ begin
         'wall_color',Hex(WallColor),'roughness',Double(Roughness),'inset_m',Double(Inset),'rows',Rows,'components',Parts]);Faces.Add(F);
       if Metallic<>0 then F.Add('metallic',Double(Metallic));
       if MaterialKind=2 then F.Add('wall_material','wood');
+      if MaterialKind=3 then F.Add('wall_material','brick');
       { Preserve compact repetitions in canonical JSON. Validate above has
         expanded them only for bounds/budget/overlap checks. Normalize each
         supplied row through its first expanded opening. }

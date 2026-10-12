@@ -54,7 +54,9 @@ type
     FErrorMsg: string;
     FPrivateRoom:Boolean;
     FAuthRiderId:Integer;
+    FRoomToken:string;
     FCancel:TGameHttpCancellation;
+    FJoined:Boolean;
     FRefreshAt:QWord;
     { Config push — set once, thread sends it }
     FConfigPushJson: string;
@@ -80,9 +82,10 @@ type
     procedure DoGuestSync;
   public
     constructor Create(const AServerUrl: string; AInterval: Integer;
-      APrivateRoom:Boolean=False;AAuthRiderId:Integer=0);
+      APrivateRoom:Boolean=False;AAuthRiderId:Integer=0;const ARoomToken:string='');
     destructor Destroy; override;
     procedure Cancel;
+    procedure Join;
 
     procedure SetPushState(const State: TRiderBroadcast);
     procedure SetGuestSyncData(const AJson: string);
@@ -105,6 +108,7 @@ type
     FRemoteLock: TCriticalSection;
     FStarted: Boolean;
     FPrivateRoom:Boolean;
+    FRoomToken:string;
     FAccumDistance: Single;
     FKnownRiders: array of Integer;  { rider IDs we already fetched config for }
     FHasNewData: Boolean;            { true after UpdateRemoteRiders got fresh pull }
@@ -164,6 +168,7 @@ type
     property LocalRiderName: string read FLocalRiderName write FLocalRiderName;
     property Started: Boolean read FStarted;
     property PrivateRoom:Boolean read FPrivateRoom write FPrivateRoom;
+    property RoomToken:string read FRoomToken write FRoomToken;
     property AccumDistance: Single read FAccumDistance write FAccumDistance;
     property HasNewData: Boolean read FHasNewData;
     property OnRiderCountChanged: TNotifyEvent read FOnRiderCountChanged write FOnRiderCountChanged;
@@ -199,14 +204,14 @@ end;
   ═══════════════════════════════════════════════════════════════════ }
 
 constructor TRelayThread.Create(const AServerUrl: string; AInterval: Integer;
-  APrivateRoom:Boolean;AAuthRiderId:Integer);
+  APrivateRoom:Boolean;AAuthRiderId:Integer;const ARoomToken:string);
 begin
   inherited Create(true); { create suspended }
   FreeOnTerminate := false;
   FServerUrl := AServerUrl;
   FInterval := AInterval;
   FLock := TCriticalSection.Create;
-  FPrivateRoom:=APrivateRoom;FAuthRiderId:=AAuthRiderId;FCancel:=TGameHttpCancellation.Create;
+  FPrivateRoom:=APrivateRoom;FAuthRiderId:=AAuthRiderId;FRoomToken:=ARoomToken;FCancel:=TGameHttpCancellation.Create;
   FPushData := Default(TRiderBroadcast);
   FPullResult := '';
   FPullReady := false;
@@ -218,7 +223,7 @@ end;
 
 destructor TRelayThread.Destroy;
 begin
-  Cancel;if Suspended then Start;WaitFor;
+  Cancel;Join;
   FCancel.Free;
   FLock.Free;
   inherited;
@@ -227,20 +232,28 @@ end;
 procedure TRelayThread.Cancel;
 begin Terminate;FCancel.Cancel end;
 
+procedure TRelayThread.Join;
+begin
+  if FJoined then Exit;
+  if Suspended then Start;
+  WaitFor;
+  FJoined:=True;
+end;
+
 function TRelayThread.Request(const Method,Path,Body:string):string;
 var H:TStringList;Input,Output:TStringStream;Status:Integer;Token:string;
 begin
   FCancel.Check;H:=TStringList.Create;Input:=TStringStream.Create(Body);Output:=TRelayResponseStream.Create('');
   try
     if FPrivateRoom then begin
-      Token:=VeloSite.GetAccessTokenForUser(FAuthRiderId);
+      Token:=FRoomToken;if Token=''then Token:=VeloSite.GetAccessTokenForUser(FAuthRiderId);
       if Token=''then raise Exception.Create('Room account changed');
       H.Add('Authorization: Bearer '+Token);
     end;
     H.Add('Content-Type: application/json');
     GameHttpRequest(Method,FServerUrl+Path,H,Input,2000,3000,Output,Status,FCancel);
     if(Status<200)or(Status>=300)then begin
-      if(Status=401)and FPrivateRoom and(GetTickCount64>=FRefreshAt)then begin
+      if(Status=401)and FPrivateRoom and(FRoomToken='')and(GetTickCount64>=FRefreshAt)then begin
         FRefreshAt:=GetTickCount64+10000;VeloSite.RefreshProfileAsync;
       end;
       raise Exception.CreateFmt('Relay HTTP %d',[Status]);
@@ -605,7 +618,7 @@ end;
 procedure TRideRelayClient.Start;
 begin
   if FStarted then Exit;
-  FThread := TRelayThread.Create(FServerUrl, 500,FPrivateRoom,FLocalRiderId); { 2 Hz }
+  FThread := TRelayThread.Create(FServerUrl, 500,FPrivateRoom,FLocalRiderId,FRoomToken); { 2 Hz }
   FThread.Start;
   FStarted := true;
 end;
@@ -618,7 +631,7 @@ begin
   begin
     FThread.Cancel;
     ThreadWatch('Relay WaitFor BEGIN');
-    FThread.WaitFor;
+    FThread.Join;
     ThreadWatch('Relay WaitFor END');
     FreeAndNil(FThread);
   end;
