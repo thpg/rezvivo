@@ -42,6 +42,44 @@ The source build currently targets **Windows x86-64**;
 graphics performance and device compatibility are still being refined.
 For the ready-to-use application, visit the [download page](https://rezvivo.com/download).
 
+## Looking for a Zwift alternative?
+
+REZVIVO combines indoor cycling workouts with free exploration of OpenStreetMap
+in 3D. It may suit you if you want to choose a starting point, follow a route or
+explore on foot, by bike or in free flight. It is an **open-source alpha**;
+graphics, device compatibility and features are still being refined.
+
+These apps share parts of the indoor cycling space, with different approaches:
+
+| App | What its official site describes |
+| --- | --- |
+| [Zwift](https://www.zwift.com/eu/about/app) | Virtual worlds, structured workouts, social rides and racing. |
+| [MyWhoosh](https://www.mywhoosh.com/) | Virtual cycling routes, training plans, group rides and racing events. |
+| [TrainingPeaks Virtual](https://www.trainingpeaks.com/virtual/) | Cycling within the TrainingPeaks ecosystem, workout sync, group rides and GPXplore for imported real-world routes. |
+| [ROUVY](https://rouvy.com/) | Cycling on filmed real-world routes, training and group rides. |
+| [TrainerRoad](https://www.trainerroad.com/) | Personalized cycling plans and workouts that adapt to training history and progress. |
+
+REZVIVO's focus is a navigable 3D world generated from map and elevation data,
+alongside smart-trainer intervals and Dream Worlds. Compare the features and
+hardware support you need; an alternative is not a promise of feature parity.
+The links above are official sources, checked on **2026-10-13**.
+
+**Will my equipment work?** Support in another app does not guarantee support in
+REZVIVO. Compatibility depends on the device, protocol, firmware and platform.
+Check the [current download information](https://rezvivo.com/download) and try
+your setup before relying on it for a workout. You can also explore with your
+keyboard, without an account or a smart trainer.
+
+**Are the apps connected?** REZVIVO is an independent project, not affiliated
+with or endorsed by the products listed above. Names belong to their respective
+owners. This comparison does not imply shared accounts, workout synchronization
+or route transfers between apps.
+
+[Compare indoor cycling apps on the website](https://rezvivo.com/#indoor-cycling-alternatives).
+Related topics: [zwift-alternative](https://github.com/topics/zwift-alternative),
+[indoor-cycling](https://github.com/topics/indoor-cycling),
+[openstreetmap](https://github.com/topics/openstreetmap).
+
 ## Screenshots
 
 Click any preview to view the original, full-size screenshot.
