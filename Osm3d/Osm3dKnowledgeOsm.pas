@@ -4,7 +4,7 @@ unit Osm3dKnowledgeOsm;
 { The authoring context and the generator must fingerprint exactly the same
   original OSM data. Dataset is borrowed; this reader never mutates it. }
 interface
-uses Classes, SysUtils, fpjson, Generics.Collections, Osm3dGeoMath, Osm3dOsmData;
+uses Classes, SysUtils, fpjson, Generics.Collections, Osm3dGeoMath, Osm3dOsmData,Osm3dBuildingParts;
 type
   TKnowledgeOsmReader = class
   private
@@ -14,6 +14,7 @@ type
     FGeometryComplete: Boolean;
     FNodeUses: specialize TDictionary<Int64,Integer>;
     FBuildingOwners: specialize TDictionary<Int64,TOSMRelation>;
+    FBuildingSelection:TBuildingPartSelection;
     procedure IndexNodeUses;
     procedure IndexBuildingOwners;
     procedure Step;
@@ -29,6 +30,10 @@ function KnowledgeBox(J: TJSONData): TLatLonBox;
 function KnowledgeBoxesIntersect(const A,B: TLatLonBox): Boolean;
 implementation
 uses Math, MD5, Osm3dTileKnowledge;
+
+function IsBuildingTag(Tags:TOSMTags;const Key:string):Boolean;
+var S:string;
+begin S:=Tags.GetLower(Key);Result:=(S<>'') and (S<>'no') and (S<>'false') and (S<>'0') end;
 
 function TagsJSON(Tags: TOSMTags): TJSONObject;
 var I: Integer;
@@ -64,7 +69,7 @@ constructor TKnowledgeOsmReader.Create(Dataset: TOSMDataset; Cancel: TThread);
 begin inherited Create; FDataset:=Dataset; FCancel:=Cancel end;
 
 destructor TKnowledgeOsmReader.Destroy;
-begin FBuildingOwners.Free;FNodeUses.Free; inherited end;
+begin FBuildingSelection.Free;FBuildingOwners.Free;FNodeUses.Free; inherited end;
 
 procedure TKnowledgeOsmReader.IndexBuildingOwners;
 var R:TOSMRelation;M:TOSMRelationMember;
@@ -73,7 +78,7 @@ begin
   FBuildingOwners:=specialize TDictionary<Int64,TOSMRelation>.Create;
   for R in FDataset.Relations.Values do
     if R.Tags.HasKeyValue('type','multipolygon') and
-      (R.Tags.HasKey('building') or R.Tags.HasKey('building:part')) then
+      (IsBuildingTag(R.Tags,'building') or IsBuildingTag(R.Tags,'building:part')) then
     for M in R.Members do if (M.Kind=omkWay) and ((M.Role='') or SameText(M.Role,'outer')) then begin
       if FBuildingOwners.ContainsKey(M.Ref) then FBuildingOwners[M.Ref]:=nil
       else FBuildingOwners.Add(M.Ref,R);
@@ -173,7 +178,7 @@ begin
     if Copy(ObjTags.Keys[I],1,5)='addr:' then A.Add(ObjTags.Keys[I],ObjTags.Values[I]);
   end;
   Category:='other';
-  if ObjTags.HasKey('building') or ObjTags.HasKey('building:part') then Category:='building'
+  if IsBuildingTag(ObjTags,'building') or IsBuildingTag(ObjTags,'building:part') then Category:='building'
   else if ObjTags.HasKey('highway') then Category:='road'
   else if (ObjTags.Get('natural')='tree') or (ObjTags.Get('natural')='tree_row') or
     (ObjTags.Get('natural')='shrub') or (ObjTags.Get('natural')='scrub') or
@@ -200,6 +205,11 @@ begin
     'latitude',B.Center.Lat,'longitude',B.Center.Lon,
     'fingerprint',MD5Print(MD5String(StableId+#10+T.AsJSON+#10+Geo))]);
   Result.Add('geometry_complete',FGeometryComplete);
+  if IncludeGeometry and (Category='building') then begin
+    if FBuildingSelection=nil then FBuildingSelection:=TBuildingPartSelection.Create(FDataset);
+    Result.Add('render_visible',not FBuildingSelection.Hidden(Kind,Id));
+    Result.Add('rendered_part',FBuildingSelection.PartVisible(Kind,Id));
+  end;
   if BuildingOwner<>nil then Result.Add('component_of','relation/'+IntToStr(BuildingOwner.Id));
   if IncludeGeometry and (Kind='relation') then begin
     Owners:=TJSONArray.Create;Result.Add('members',Owners);Rel:=FDataset.FindRelation(Id);

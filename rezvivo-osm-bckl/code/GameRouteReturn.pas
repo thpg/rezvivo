@@ -2,7 +2,7 @@ unit GameRouteReturn;
 {$mode objfpc}{$H+}
 interface
 uses Classes,Math,CastleVectors,CastleScene,CastleTransform,X3DNodes,GamePath,Osm3dTravelRoads,
-  GamePhysicalAgent;
+  GamePhysicalAgent,GameRoadGuidance;
 type
   TRouteReturnGuide=class
   private
@@ -73,7 +73,7 @@ end;
 
 function RouteReturnAligned(Distance,HeadingDot,ManualAxis:Single;TurnPending:Boolean):Boolean;
 begin
-  Result:=(Distance<1.5)and(HeadingDot>0.85)and(Abs(ManualAxis)<0.15)and not TurnPending;
+  Result:=(Distance<1.5)and(HeadingDot>RoadAcquireHeadingDot)and(Abs(ManualAxis)<0.15)and not TurnPending;
 end;
 
 function RestoredRouteExcursion(Agent:TPhysicalAgent;PointExplore:Boolean):Boolean;
@@ -142,7 +142,7 @@ begin
   end;
   Distance:=Sqrt(RoadDistanceSq(P,Point));FScene.Exists:=Distance>2.5;
   D:=Point-P;
-  FScene.Translation:=P+Heading*2.8+Vector3(0,1.0,0);
+  FScene.Translation:=P+Heading*6.0+Vector3(0,1.0,0);
   FScene.Rotation:=Vector4(0,1,0,ArcTan2(-D.X,-D.Z));
 end;
 end.

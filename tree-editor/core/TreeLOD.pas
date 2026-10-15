@@ -21,6 +21,7 @@ procedure SaveLODPng(const Path: string; const Pixels: TLODPixels; W,H: Integer)
 function LoadLODPng(const Path: string; W,H: Integer): TLODPixels;
 function ReadLODMetadata(const Path: string; const Profile: TTreeParams; out Frames: TLODFrames): Boolean;
 function ReadLODSeasonMetadata(const Path: string): Boolean;
+function ReadLODRelightMetadata(const Path:string):Boolean;
 implementation
 uses Math, Classes, TreeRecipe, TreeFoliageLOD, FPImage, FPWritePNG, FPReadPNG, fpjson, jsonparser;
 function LODProfileKey(const Profile: TTreeParams): string;
@@ -29,6 +30,8 @@ begin
   { Atlas keys were authored on Windows. FormatJSON uses the host line ending;
     hash the same CRLF representation on Android/Linux without rebaking images. }
   S:=AdjustLineBreaks(TreeToJSON(Profile),tlbsCRLF); H:=Hash32(TREE_LOD_VERSION);
+  H:=Hash32(H xor (TREE_WOOD_VERSION shl 4));
+  if LeafSprayIndex(Profile.Species)>=0 then H:=Hash32(H xor (TREE_LEAF_SPRAY_VERSION shl 20));
   if IsConifer(Profile.Species) then H:=Hash32(H xor (NEEDLE_COVERAGE_VERSION shl 24));
   if Profile.Species=tsBirch then H:=Hash32(H xor (TREE_BIRCH_GEOMETRY_VERSION shl 16));
   if HasTreeFruit(Profile.Species) then H:=Hash32(H xor (TREE_FRUIT_GEOMETRY_VERSION shl 12));
@@ -116,6 +119,16 @@ begin
     end;
     Result:=True;
   finally Data.Free; Lines.Free; end;
+end;
+function ReadLODRelightMetadata(const Path:string):Boolean;
+var Lines:TStringList;Data:TJSONData;
+begin
+  Result:=False;if not FileExists(Path)then Exit;Lines:=TStringList.Create;Data:=nil;
+  try
+    Lines.LoadFromFile(Path);Data:=GetJSON(Lines.Text);
+    if Data is TJSONObject then Result:=(TJSONObject(Data).Get('relight_version',0)=1) and
+      (TJSONObject(Data).Get('normal_size',0)=LOD_SIZE div 2);
+  finally Data.Free;Lines.Free;end;
 end;
 function ReadLODSeasonMetadata(const Path: string): Boolean;
 var Lines: TStringList; Data: TJSONData;

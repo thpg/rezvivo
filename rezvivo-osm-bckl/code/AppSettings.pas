@@ -230,6 +230,7 @@ type
     property GraphicsHair: Integer index Ord(goHair) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsSoftening: Integer index Ord(goSoftening) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsWorldShadows: Integer index Ord(goWorldShadows) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsWorldCache: Integer index Ord(goWorldCache) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsRtxReflections: Integer index Ord(goRtxReflections) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsRiderComplexity: Integer index Ord(goRiderComplexity) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsWorldComplexity: Integer index Ord(goWorldComplexity) read GetGraphicsOption write SetGraphicsOption;

@@ -93,6 +93,8 @@ type
 
     { Query helpers }
     function LastSentBLESlope: Single;
+    function PowerZone(Watts:Single;Ftp:Single=-1):Integer;
+    function PowerZoneCount:Integer;
     property TrainerTargetGrade:Single read FTrainerTargetGrade;
     property TrainerFilteredGrade:Single read FTrainerGrade;
 
@@ -109,6 +111,15 @@ implementation
 
 uses UiTranslations, VeloSiteAPI, CastleColors, CastleVectors, GameDailyTraining, GameUserData,GameSensorLog,
   AppSettings,GameTrainerGrade;
+
+function TBLEHudUpdater.PowerZone(Watts,Ftp:Single):Integer;
+begin
+  if Ftp<0 then Ftp:=FFtp;
+  if Ftp<=0 then Exit(-1);
+  Result:=ZoneAt(Watts*100/Ftp,FPowerBounds);
+end;
+function TBLEHudUpdater.PowerZoneCount:Integer;
+begin Result:=Length(FPowerBounds) end;
 
 constructor TBLEHudUpdater.Create;
 begin

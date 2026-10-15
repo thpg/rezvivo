@@ -1,0 +1,7 @@
+Khronos PBR Neutral tone mapper
+https://github.com/KhronosGroup/ToneMapping
+Copyright 2024 The Khronos Group Inc.
+Licensed under the Apache License, Version 2.0 (see LICENSE.txt).
+
+REZVIVO uses an adapted GLSL implementation of the PBR Neutral curve in
+Osm3d/shaders/scene_lighting.glsl, alongside its exposure and display encoding.

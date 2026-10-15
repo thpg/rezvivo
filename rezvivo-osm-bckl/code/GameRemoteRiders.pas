@@ -14,7 +14,7 @@ unit GameRemoteRiders;
 
 interface
 
-uses Classes, SysUtils, Math, CastleVectors, CastleTransform, CastleViewport, CastleScene, CastleURIUtils, CastleTimeUtils, GamePath, GameRideClient, BikeParametric, GameBikeAvatar, TrainerData, GamePhysicalAgent, GamePhysicsCommon, GameAgentControllers, GameAgentNetwork;
+uses Classes, SysUtils, Math, CastleVectors, CastleTransform, CastleViewport, CastleScene, CastleURIUtils, CastleTimeUtils, GamePath, GameRideClient, BikeParametric, GameBikeAvatar, TrainerData, GamePhysicalAgent, GamePhysicsCommon, GameAgentControllers, GameAgentNetwork, GameCameraEncounters;
 
 type
   TRemoteRiderVisual = record
@@ -29,6 +29,7 @@ type
     { Server-provided data (informational) }
     ServerDistance: Single;
     ServerSpeed: Single;
+    Ftp:Single;
 
     LastUpdateTime: Double;
     LastPacketTimestamp:Int64;
@@ -149,7 +150,9 @@ type
     procedure UpdateDistanceCulling;
 
     function GetProfilingData: TRelayProfilingData;
+    function BikeAtIndex(Index: Integer): TBikeInstance;
     function CountRemoteShapes: Integer;
+    function HudRider(Id:Integer;out Bike:TBikeInstance;out Position:TVector3;out Ftp:Single):Boolean;
     procedure GetRemoteRiderShapeInfo(out Lines: string);
 
     property RideClient: TRideRelayClient read FRideClient;
@@ -166,6 +169,8 @@ type
     procedure AnimateAllRiders(SecondsPassed: Single);
     procedure GetNearbyRiderPositions(const ACenter: TVector3; ARange: Single;
       var APositions: array of TVector3; out ACount: Integer);
+    procedure GetNearbyCameraRiders(const Center:TVector3;Range:Single;
+      var Riders:array of TCameraRider;out Count:Integer);
     property OnProfileLog: TProfileLogEvent read FOnProfileLog write FOnProfileLog;
 
     { Lane management }
@@ -179,7 +184,7 @@ implementation
 
 
 uses
-  BikeJSON, fpjson, GameMath, DebugLog, GameRiderTraffic, GameRemoteBikeConfig;
+  BikeJSON, fpjson, jsonparser, GameUserData, GameMath, DebugLog, GameRiderTraffic, GameRemoteBikeConfig;
 
 const
   GuestSyncInterval = 5.0;
@@ -212,6 +217,13 @@ begin
   FPathTotalLength := 0;
   FGuestSyncTimer := 0;
   FLocalLaneHandle := -1;
+end;
+
+function TRemoteRidersManager.BikeAtIndex(Index: Integer): TBikeInstance;
+begin
+  Result := nil;
+  if (Index < 0) or (Index >= FRemoteVisualCount) then Exit;
+  if FRemoteVisuals[Index].Active then Result := FRemoteVisuals[Index].BikeInst;
 end;
 
 destructor TRemoteRidersManager.Destroy;
@@ -392,6 +404,7 @@ end;
 
 procedure TRemoteRidersManager.ProcessBuildQueue;
 var Idx, I: Integer; Inst: TBikeInstance; Ms: QWord; Json,SafeJson,ConfigError: string;
+  Config:TJSONData;Hud:TJSONData;
 begin
   if FPendingBuildCount = 0 then Exit;
   Idx := FPendingBuilds[0].VisualIdx;
@@ -409,6 +422,11 @@ begin
   end;
   Ms := GetTickCount64;
   try
+    Config:=GetJSON(SafeJson);
+    try
+      FRemoteVisuals[Idx].Ftp:=0;Hud:=TJSONObject(Config).Find('hud');
+      if Hud is TJSONObject then FRemoteVisuals[Idx].Ftp:=TJSONObject(Hud).Get('ftp',0.0);
+    finally Config.Free end;
     if Assigned(FRemoteVisuals[Idx].BikeInst) then
     begin
       { Remove from Scene (where we add it below) }
@@ -769,11 +787,10 @@ begin
 
     { Run the SAME physics as avatar: UpdateOffline does fixed-step accumulation.
       CumulativeDistance is tracked inside FixedStep — no manual accumulation needed. }
-    if not AHoldPhysics then Ag.UpdateOffline(SecondsPassed, FixedTimeStep);
-
-
-    { Ground placement — same as avatar's render-frame placement }
-    if Assigned(Ag.Physics) then
+    if not AHoldPhysics then Ag.UpdateOffline(SecondsPassed, FixedTimeStep)
+    { UpdateOffline already places the wheels in FinishVisualUpdate. Keep
+      placement alive while physics is held, without applying it twice. }
+    else if Assigned(Ag.Physics) then
       Ag.Physics.UpdateVisualGroundPlacement(SecondsPassed);
   end;
 
@@ -829,10 +846,26 @@ begin
       FRemoteVisuals[I].BikeInst.ShadowMode := AMode;
 end;
 
+function TRemoteRidersManager.HudRider(Id:Integer;out Bike:TBikeInstance;
+  out Position:TVector3;out Ftp:Single):Boolean;
+var I:Integer;
+begin
+  Bike:=nil;Position:=Vector3(0,0,0);Ftp:=0;Result:=False;
+  for I:=0 to FRemoteVisualCount-1 do
+    if FRemoteVisuals[I].Active and(FRemoteVisuals[I].RiderId=Id) then begin
+      Bike:=FRemoteVisuals[I].BikeInst;Ftp:=FRemoteVisuals[I].Ftp;
+      if FRemoteVisuals[I].Agent<>nil then begin
+        Position:=FRemoteVisuals[I].Agent.State.WorldPosition;
+        Result:=FRemoteVisuals[I].Initialized;
+      end;
+      Exit;
+    end;
+end;
+
 procedure TRemoteRidersManager.StartRelay(const AServerUrl: string;
   const ABikeJsonFileName, AFallbackBikeJsonFileName: string;
   APrivateRoom:Boolean;AAccountId:Integer;const AName,ARoomToken:string);
-var SL: TStringList;
+var SL: TStringList;Config:TJSONData;
 begin
   StopRelay;
   FLocalDistance := 0; FLocalTime := 0;
@@ -858,7 +891,14 @@ begin
   try
     SL := TStringList.Create;
     try SL.LoadFromFile(URIToFilenameSafe(ABikeJsonFileName));
-        FRideClient.PushBikeConfig(SL.Text);
+        Config:=GetJSON(SL.Text);
+        try
+          if Config is TJSONObject then begin
+            TJSONObject(Config).Delete('hud');
+            TJSONObject(Config).Add('hud',TJSONObject.Create(['ftp',EffectiveRiderProfile.FtpW]));
+          end;
+          FRideClient.PushBikeConfig(Config.AsJSON);
+        finally Config.Free end;
     finally SL.Free; end;
   except on E: Exception do
     Logger.Info('[Relay] ' + 'Config push failed: ' + E.Message);
@@ -1015,6 +1055,27 @@ begin
        (FRemoteVisuals[I].BikeInst.ShowShadow <> AVisible) then
       FRemoteVisuals[I].BikeInst.ShowShadow := AVisible;
   UpdateDistanceCulling;
+end;
+
+procedure TRemoteRidersManager.GetNearbyCameraRiders(const Center:TVector3;Range:Single;
+  var Riders:array of TCameraRider;out Count:Integer);
+var I:Integer;
+begin
+  Count:=0;
+  for I:=0 to FRemoteVisualCount-1 do with FRemoteVisuals[I]do begin
+    if not Active or not Initialized or(Transform=nil)or not Transform.Exists or
+      (BikeInst=nil)or not BikeInst.Group.Exists then Continue;
+    if(Transform.Translation-Center).LengthSqr>Sqr(Range)then Continue;
+    if Count>=Length(Riders)then Break;
+    Riders[Count].Id:=RiderId;Riders[Count].Position:=Transform.Translation;
+    Riders[Count].Direction:=Transform.Direction;Riders[Count].Speed:=ServerSpeed;
+    Riders[Count].Pitch:=0;
+    if(Agent<>nil)and(Agent.State<>nil)then begin
+      Riders[Count].Speed:=Agent.State.CurrentSpeed;
+      Riders[Count].Pitch:=Agent.State.CurrentModelPitch;
+    end;
+    Inc(Count);
+  end;
 end;
 
 procedure TRemoteRidersManager.GetNearbyRiderPositions(

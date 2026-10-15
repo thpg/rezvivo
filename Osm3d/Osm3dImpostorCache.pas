@@ -9,19 +9,22 @@ unit Osm3dImpostorCache;
   No world geometry, collision indices, or streaming state is modified. }
 interface
 
-uses Classes, SysUtils, Math, fpjson, CastleVectors, CastleViewport,
+uses Classes, SysUtils, Math, fpjson, CastleVectors, CastleViewport, CastleFrustum,
   CastleTransform, CastleRectangles, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, CastleInternalShapesRenderer,
   CastleTimeUtils, CastleRenderOptions, Osm3dGpuTimer, GameFrameStatistics, Osm3dRtxShadow, CastleShapes;
 
 type
   TImpostorLayer = record
     Fbo, Color, Depth: GLuint;
+    Shadow:GLuint;
     Width, Height: Integer;
     Valid: Boolean;
+    ShadowValid:Boolean;
     Captured: TTimerResult;
     Projection, InverseProjection, View, InverseView: TMatrix4;
     Position, Direction, Up: TVector3;
     Captures: QWord;
+    TranslationInvalidations, RotationInvalidations, PeriodCaptures: QWord;
   end;
 
   TOsmImpostorViewport = class(TCastleViewport)
@@ -29,26 +32,39 @@ type
     FEnabled, FFailed, FContextHooked: Boolean;
     FWorld: TCastleTransform;
     FRtx:TRtxShadow;
-    FLayers: array[0..3] of TImpostorLayer;
+    FLayers: array[0..4] of TImpostorLayer;
     FCollector, FFiltered: TShapesCollector;
     FRenderer: TShapesRenderer;
     FCaptureCamera: TRenderingCamera;
     FProgram, FVAO: GLuint;
-    FUniforms: array[0..6] of GLint;
-    FTextureUniforms: array[0..7] of GLint;
+    FUniforms: array[0..9] of GLint;
+    FTextureUniforms: array[0..13] of GLint;
+    FShadowProgram,FShadowFbo:GLuint;
+    FRtxCache:Boolean;
+    FShadowRevision:QWord;
+    FShadowCapture:Integer;
+    FShadowBakes:QWord;
     FWidth, FHeight: Integer;
+    FNearSamples:Integer;
+    FNearFbo,FNearColor,FNearDepth:GLuint;
     FBaseProjection: TMatrix4;
     FFrames, FFallbacks: QWord;
+    FFrameCacheUsed: Boolean;
+    FDepthReuseFrames: QWord;
+    FLightingMode: Integer;
     FNear, FMiddle, FFar: Single;
-    FPeriods: array[1..3] of Single;
+    FDetail: Single;
+    FDetailLayer: Boolean;
+    FPeriods: array[1..4] of Single;
     FResolution: Single;
+    FOverscanX, FOverscanY: Single;
     FLastError: string;
     FMeasuring, FHaveLast: Boolean;
     FMeasureStart, FMeasureLast: TTimerResult;
     FFrameSamples, FSubmitSamples, FGPUSamples: TFrameSamples;
     FGPUTimer: TAsyncGpuTimer;
-    FStageTimers:array[0..4]of TAsyncGpuTimer;
-    FStageSamples:array[0..4]of TFrameSamples;
+    FStageTimers:array[0..5]of TAsyncGpuTimer;
+    FStageSamples:array[0..5]of TFrameSamples;
     FResetOcclusionFrames:Integer;
     FWorldRevision: QWord;
     FProbeActive: Boolean;
@@ -62,6 +78,8 @@ type
     FStabilityFrames:TMemoryStream;
     FStabilityPath:string;
     FStabilityDepth:Boolean;
+    function FirstCachedLayer:Integer;
+    function LiveDistance:Single;
     procedure SampleStability;
     procedure SetEnabled(Value: Boolean);
     procedure SetWorld(Value: TCastleTransform);
@@ -69,11 +87,14 @@ type
     procedure EnsureResources(W,H:Integer);
     procedure CaptureLayer(Index:Integer; const Params:TRenderParams;
       const BaseProjection:TMatrix4);
-    procedure Composite(const Current:TRenderingCamera; const AProjection:TMatrix4);
-    procedure DrawCachedWorld(const Params:TRenderParams);
+    procedure Composite(const Current:TRenderingCamera; const AProjection:TMatrix4;ReusePass:Boolean);
+    procedure BakeShadow(const Params:TRenderParams);
+    procedure LayerRange(Index:Integer;const P:TMatrix4;out N,F:Single);
+    procedure DrawCachedWorld(const Params:TRenderParams;UpdateLayers:Boolean=True);
     procedure DrawWorld(const Params:TRenderParams);
     function ReflectionShape(const Shape:TShape):Boolean;
     procedure DrawReflectors(const Params:TRenderParams);
+    procedure DrawScreenDepth(const Params:TRenderParams);
   protected
     procedure RenderFromView3D(const Params:TRenderParams); override;
     procedure Notification(AComponent:TComponent;Operation:TOperation); override;
@@ -81,8 +102,11 @@ type
     constructor Create(AOwner:TComponent); override;
     destructor Destroy; override;
     procedure Invalidate;
+    { Current camera after Update/resize, without changing OpenGL state. }
+    function TryCurrentFrustum(out Value:TFrustum):Boolean;
     procedure WorldRevision(Value:QWord);
     procedure Configure(NearM,MiddleM,FarM,Hz1,Hz2,Hz3,Resolution:Single);
+    procedure ConfigureOptions(const Args:TJSONObject);
     procedure Snapshot(Dest:TJSONObject);
     procedure Measure(Start:Boolean;Dest:TJSONObject);
     procedure ProbeCamera(const Args,Dest:TJSONObject);
@@ -96,23 +120,44 @@ type
 
 implementation
 
-uses CastleRenderContext, CastleApplicationProperties, CastleFrustum, CastleComponentSerialize,
-  CastleLog, Osm3dRtxMaterials, Osm3dRiderShadow;
+uses CastleRenderContext, CastleApplicationProperties, CastleProjection, CastleComponentSerialize,
+  CastleLog, CastleRendererInternalShader, Osm3dRtxMaterials, Osm3dRiderShadow, Osm3dRtxScreenState,
+  CastleGLUtils;
 
 const
-  Overscan=1.16;
-  LayerScale:array[0..3]of Single=(1.0,1.0,0.8,0.6);
+  BaseOverscan=1.16;
+  LayerScale:array[0..4]of Single=(1.0,1.0,1.0,0.8,0.6);
   VS = '#version 330 core'#10+
     'out vec2 uv; void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);'+
     'uv=p;gl_Position=vec4(p*2.0-1.0,0.0,1.0);}';
   FS = '#version 330 core'#10+
     'in vec2 uv; out vec4 color;'+
-    'uniform sampler2D color0,depth0,color1,depth1,color2,depth2,color3,depth3;'+
+    'uniform sampler2D color0,depth0,color1,depth1,color2,depth2,color3,depth3,color4,depth4;'+
+    'uniform sampler2D shadow1,shadow2,shadow3,shadow4;uniform bool reusePass;uniform ivec4 shadowValid;'+
     'uniform mat4 invCurrentProjection,currentProjection;'+
-    'uniform mat4 cacheProjection[4],invCacheProjection[4],toCache[4],fromCache[4];'+
-    'uniform float nearSafeDepth;'+
+    'uniform mat4 cacheProjection[5],invCacheProjection[5],toCache[5],fromCache[5];'+
+    'uniform float nearSafeDepth;uniform bool detailLayer;'+
     'vec3 unproject(vec2 p,float d,int n){vec4 q=invCacheProjection[n]*vec4(p*2.0-1.0,((d-0.1)/0.9)*2.0-1.0,1.0);return q.xyz/q.w;}'+
-    'bool layer(sampler2D imageTex,sampler2D depthTex,int n,vec3 ray,inout float best,inout vec4 result){'+
+    { Nearest depth is correct only at the stored texel centre. Reusing it at
+      a subpixel UV makes flat roads into steps; RTX then self-shadows them.
+      Fit a local depth plane, choosing the closer neighbour on each axis so
+      silhouettes are not blended with the background. Intersect the current
+      ray with that plane: both colour and RTX receive the same surface. }
+    'vec3 surfacePoint(sampler2D tex,vec2 p,float d,int n,vec3 origin,vec3 dir){'+
+    'ivec2 sz=textureSize(tex,0),i=ivec2(p*vec2(sz));'+
+    'if(any(lessThan(i,ivec2(1)))||any(greaterThanEqual(i,sz-1)))return unproject(p,d,n);'+
+    'vec2 centre=(vec2(i)+.5)/vec2(sz);'+
+    'float l=d-texelFetch(tex,i-ivec2(1,0),0).r,r=texelFetch(tex,i+ivec2(1,0),0).r-d;'+
+    'float b=d-texelFetch(tex,i-ivec2(0,1),0).r,t=texelFetch(tex,i+ivec2(0,1),0).r-d;'+
+    'vec2 g=vec2(abs(l)<abs(r)?l:r,abs(b)<abs(t)?b:t)*vec2(sz)/.9;'+
+    'float z=(d-.1)*2.0/.9-1.0;vec4 plane=vec4(-g,1.0,-z+dot(g,centre*2.0-1.0));'+
+    'vec4 o=cacheProjection[n]*vec4(origin,1),v=cacheProjection[n]*vec4(dir,0);'+
+    'float den=dot(plane,v);if(abs(den)>1e-8){float hit=-dot(plane,o)/den;'+
+    'vec3 point=origin+dir*hit;vec4 q=cacheProjection[n]*vec4(point,1);'+
+    'vec2 delta=abs((q.xy/q.w*.5+.5-p)*vec2(sz));'+
+    'if(hit>0.0&&q.w>0.0&&max(delta.x,delta.y)<1.25)return point;}'+
+    'return unproject(p,d,n);}'+
+    'bool layer(sampler2D imageTex,sampler2D depthTex,sampler2D shadowTex,int n,vec3 ray,inout float best,inout vec4 result){'+
     'vec3 dir=(toCache[n]*vec4(ray,0.0)).xyz;vec3 origin=toCache[n][3].xyz;'+
     'vec4 q=cacheProjection[n]*vec4(dir,0.0);if(q.w<=0.0)return false;vec2 p=q.xy/q.w*0.5+0.5;'+
     'for(int i=0;i<4;i++){float d=texture(depthTex,p).r;float z=unproject(p,d,n).z;'+
@@ -122,20 +167,43 @@ const
     'float d=texture(depthTex,p).r;if(d>=0.9999999)return false;'+
     'vec4 now=currentProjection*fromCache[n]*vec4(unproject(p,d,n),1.0);'+
     'if(now.w<=0.0)return false;float nd=0.1+0.9*(now.z/now.w*0.5+0.5);'+
-    'if(nd<0.1||nd>=best)return false;'+
+    'if(nd<0.1)return false;'+
     'vec2 error=abs(now.xy/now.w*0.5+0.5-uv)*vec2(textureSize(imageTex,0));'+
     'if(max(error.x,error.y)>2.5)return false;'+
-    'best=nd;result=texture(imageTex,p);return true;}'+
-    'void main(){float best=1.0;vec4 result=vec4(0);float d=texture(depth0,uv).r;'+
+    'now=currentProjection*fromCache[n]*vec4(surfacePoint(depthTex,p,d,n,origin,dir),1.0);'+
+    'if(now.w<=0.0)return false;nd=.1+.9*(now.z/now.w*.5+.5);if(nd<.1||nd>=best)return false;'+
+    'best=nd;if(reusePass){vec2 s=vec2(0);if(shadowValid[n-1]!=0)s=texture(shadowTex,p).rg;'+
+    'result=vec4(s.g>.999?s.r:-1.,nd,0,1);}else result=texture(imageTex,p);return true;}'+
+    'void main(){float best=1.0;vec4 result=vec4(0);float nearDepth=1.0;vec4 nearColor=vec4(0);float d=texture(depth0,uv).r;'+
     'if(d<0.9999999){vec3 p=unproject(uv,d,0);vec4 q=currentProjection*vec4(p,1.0);'+
-    'best=0.1+0.9*(q.z/q.w*0.5+0.5);result=texture(color0,uv);'+
+    'nearDepth=0.1+0.9*(q.z/q.w*0.5+0.5);nearColor=texture(color0,uv);'+
     // Most pixels in the riding view need no reprojection or far texture reads.
     // Keep the overlap seam depth-tested; only skip at a safely closer depth.
-    'if(-p.z<nearSafeDepth){color=result;gl_FragDepth=best;return;}}'+
+    'if(-p.z<nearSafeDepth&&nearColor.a>.999){color=reusePass?vec4(-1,nearDepth,0,1):nearColor;gl_FragDepth=nearDepth;return;}}'+
     'vec4 r=invCurrentProjection*vec4(uv*2.0-1.0,0.0,1.0);vec3 ray=r.xyz/r.w;'+
-    'layer(color1,depth1,1,ray,best,result);layer(color2,depth2,2,ray,best,result);'+
-    'layer(color3,depth3,3,ray,best,result);'+
+    'if(detailLayer)layer(color1,depth1,shadow1,1,ray,best,result);layer(color2,depth2,shadow2,2,ray,best,result);'+
+    'layer(color3,depth3,shadow3,3,ray,best,result);layer(color4,depth4,shadow4,4,ray,best,result);'+
+    'if(nearDepth<=best&&nearDepth<1.0){result=reusePass?vec4(-1,nearDepth,0,1):nearColor+result*(1.0-nearColor.a);best=nearDepth;}'+
     'if(best>=1.0)discard;color=result;gl_FragDepth=best;}';
+  ShadowFS = '#version 330 core'#10+
+    'in vec2 uv;out vec2 saved;uniform sampler2D layerDepth,screenDepth,screenShadow,screenReuse;'+
+    'uniform mat4 toScreen;uniform vec2 overscan;'+
+    'void main(){saved=vec2(0);float d=texture(layerDepth,uv).r;if(d>=.9999999)return;'+
+    'vec2 p=(uv-.5)*overscan+.5;vec2 sz=vec2(textureSize(screenDepth,0));'+
+    'if(any(lessThan(p,vec2(0)))||any(greaterThan(p,vec2(1))))return;'+
+    'vec4 q=toScreen*vec4(uv*2.-1.,(d-.1)*2./.9-1.,1.);'+
+    'float expected=.1+.9*(q.z/q.w*.5+.5);'+
+    // Slab and screen share the same eye. Permit subpixel slope, but never
+    // copy coverage from live actors or across a large depth discontinuity.
+    'vec2 scale=vec2(textureSize(layerDepth,0))/sz;'+
+    'float tolerance=min(2e-6,abs(dFdx(expected))*scale.x+abs(dFdy(expected))*scale.y+1.2e-7);'+
+    'vec2 t=p*sz-.5,f=fract(t);ivec2 base=ivec2(floor(t));float sum=0.,weights=0.;'+
+    'for(int y=0;y<2;y++)for(int x=0;x<2;x++){ivec2 i=clamp(base+ivec2(x,y),ivec2(0),ivec2(sz)-1);'+
+    'float z=texelFetch(screenDepth,i,0).r,worldZ=texelFetch(screenReuse,i,0).g;'+
+    'if(z>=1.||z!=worldZ||abs(z-expected)>tolerance)continue;'+
+    'float w=(x==0?1.-f.x:f.x)*(y==0?1.-f.y:f.y);'+
+    'sum+=texelFetch(screenShadow,i,0).r*w;weights+=w;}'+
+    'if(weights>.01)saved=vec2(sum/weights,1);}';
 
 function CompileShader(Kind:GLenum;const Source:AnsiString):GLuint;
 var P:PAnsiChar;Ok:GLint;Msg:array[0..4095]of AnsiChar;
@@ -154,7 +222,11 @@ var I:Integer;
 begin
   inherited;
   FNear:=240;FMiddle:=900;FFar:=2700;
-  FPeriods[1]:=0.1;FPeriods[2]:=1/3;FPeriods[3]:=1;FResolution:=1.5;
+  FDetail:=50;FDetailLayer:=True;
+  FPeriods[1]:=1/20;FPeriods[2]:=0.1;FPeriods[3]:=1/3;FPeriods[4]:=1;FResolution:=1.5;
+  FOverscanX:=BaseOverscan;FOverscanY:=BaseOverscan;
+  FLightingMode:=-1;
+  FRtxCache:=True;FShadowCapture:=-1;
   FCollector:=TShapesCollector.Create(True);
   FFiltered:=TShapesCollector.Create(False);
   FRenderer:=TShapesRenderer.Create;
@@ -162,7 +234,7 @@ begin
   FCaptureCamera:=TRenderingCamera.Create;
   FFrameSamples:=TFrameSamples.Create;FSubmitSamples:=TFrameSamples.Create;
   FGPUSamples:=TFrameSamples.Create;FGPUTimer:=TAsyncGpuTimer.Create;
-  for I:=0 to 4 do begin
+  for I:=0 to High(FStageTimers) do begin
     FStageTimers[I]:=TAsyncGpuTimer.Create;FStageSamples[I]:=TFrameSamples.Create;
   end;
 end;
@@ -174,7 +246,7 @@ begin
   if FContextHooked then ApplicationProperties.OnGLContextCloseObject.Remove(@ContextClose);
   ContextClose(nil);
   FGPUTimer.Free;FGPUSamples.Free;FSubmitSamples.Free;FFrameSamples.Free;
-  for I:=0 to 4 do begin FStageTimers[I].Free;FStageSamples[I].Free end;
+  for I:=0 to High(FStageTimers) do begin FStageTimers[I].Free;FStageSamples[I].Free end;
   FCaptureCamera.Free;FFiltered.Free;FCollector.Free;FRenderer.Free;
   FStabilitySamples.Free;
   FStabilityFrames.Free;
@@ -206,7 +278,8 @@ end;
 procedure TOsmImpostorViewport.Invalidate;
 var I:Integer;
 begin
-  for I:=0 to 3 do FLayers[I].Valid:=False;
+  FFrameCacheUsed:=False;
+  for I:=0 to High(FLayers) do begin FLayers[I].Valid:=False;FLayers[I].ShadowValid:=False end;
 end;
 
 procedure TOsmImpostorViewport.WorldRevision(Value:QWord);
@@ -221,10 +294,43 @@ begin
   FNear:=EnsureRange(NearM,80,2000);
   FMiddle:=Max(FNear*1.5,EnsureRange(MiddleM,120,6000));
   FFar:=Max(FMiddle*1.5,EnsureRange(FarM,180,20000));
-  FPeriods[1]:=1/EnsureRange(Hz1,1,120);
-  FPeriods[2]:=Max(FPeriods[1],1/EnsureRange(Hz2,0.5,120));
-  FPeriods[3]:=Max(FPeriods[2],1/EnsureRange(Hz3,0.25,120));
+  FDetail:=Min(FDetail,FNear/1.5);
+  FPeriods[2]:=1/EnsureRange(Hz1,1,120);
+  FPeriods[1]:=Min(FPeriods[1],FPeriods[2]);
+  FPeriods[3]:=Max(FPeriods[2],1/EnsureRange(Hz2,0.5,120));
+  FPeriods[4]:=Max(FPeriods[3],1/EnsureRange(Hz3,0.25,120));
   FResolution:=EnsureRange(Resolution,0.5,1.5);Invalidate;FWidth:=0;
+end;
+
+function TOsmImpostorViewport.FirstCachedLayer:Integer;
+begin if FDetailLayer then Result:=1 else Result:=2 end;
+
+function TOsmImpostorViewport.LiveDistance:Single;
+begin if FDetailLayer then Result:=FDetail else Result:=FNear end;
+
+procedure TOsmImpostorViewport.ConfigureOptions(const Args:TJSONObject);
+begin
+  if (Args.Find('near_m')<>nil)or(Args.Find('middle_m')<>nil)or
+     (Args.Find('far_m')<>nil)or(Args.Find('hz1')<>nil)or
+     (Args.Find('hz2')<>nil)or(Args.Find('hz3')<>nil)or
+     (Args.Find('resolution')<>nil)or(Args.Find('detail_layer')<>nil)or
+     (Args.Find('detail_m')<>nil)or(Args.Find('detail_hz')<>nil)or
+     (Args.Find('overscan_x')<>nil)or(Args.Find('overscan_y')<>nil)then begin
+    Configure(Args.Get('near_m',FNear),Args.Get('middle_m',FMiddle),
+      Args.Get('far_m',FFar),Args.Get('hz1',1/FPeriods[2]),
+      Args.Get('hz2',1/FPeriods[3]),Args.Get('hz3',1/FPeriods[4]),
+      Args.Get('resolution',FResolution));
+    FDetailLayer:=Args.Get('detail_layer',FDetailLayer);
+    FDetail:=EnsureRange(Args.Get('detail_m',FDetail),20,FNear/1.5);
+    FPeriods[1]:=Min(FPeriods[2],1/EnsureRange(Args.Get('detail_hz',1/FPeriods[1]),1,120));
+    FOverscanX:=EnsureRange(Args.Get('overscan_x',FOverscanX),1,1.75);
+    FOverscanY:=EnsureRange(Args.Get('overscan_y',FOverscanY),1,1.5);
+  end;
+  if Args.Get('invalidate',False)then Invalidate;
+  if Args.Find('rtx_cache')<>nil then begin
+    if FRtxCache<>Args.Get('rtx_cache',True) then Invalidate;
+    FRtxCache:=Args.Get('rtx_cache',True);
+  end;
 end;
 
 procedure TOsmImpostorViewport.ContextClose(Sender:TObject);
@@ -233,26 +339,36 @@ begin
   { The standalone renderer owns the occlusion-box VBO/program too. Release
     those with its targets, including a context recreation or an off toggle. }
   if FRenderer<>nil then FRenderer.GLContextClose;
-  for I:=0 to 3 do with FLayers[I] do begin
+  if FNearFbo<>0 then glDeleteFramebuffers(1,@FNearFbo);
+  if FNearColor<>0 then glDeleteRenderbuffers(1,@FNearColor);
+  if FNearDepth<>0 then glDeleteRenderbuffers(1,@FNearDepth);
+  FNearFbo:=0;FNearColor:=0;FNearDepth:=0;FNearSamples:=0;
+  for I:=0 to High(FLayers) do with FLayers[I] do begin
     if Fbo<>0 then glDeleteFramebuffers(1,@Fbo);
     if Color<>0 then glDeleteTextures(1,@Color);
     if Depth<>0 then glDeleteTextures(1,@Depth);
-    Fbo:=0;Color:=0;Depth:=0;Valid:=False;Width:=0;Height:=0;
+    if Shadow<>0 then glDeleteTextures(1,@Shadow);
+    Fbo:=0;Color:=0;Depth:=0;Shadow:=0;ShadowValid:=False;Valid:=False;Width:=0;Height:=0;
   end;
   if FProgram<>0 then glDeleteProgram(FProgram);
   if FVAO<>0 then glDeleteVertexArrays(1,@FVAO);
+  if FShadowProgram<>0 then glDeleteProgram(FShadowProgram);
+  if FShadowFbo<>0 then glDeleteFramebuffers(1,@FShadowFbo);
+  FShadowProgram:=0;FShadowFbo:=0;
   FProgram:=0;FVAO:=0;FWidth:=0;FHeight:=0;
 end;
 
 procedure TOsmImpostorViewport.EnsureResources(W,H:Integer);
-const Names:array[0..6]of PAnsiChar=('invCurrentProjection',
+const Names:array[0..9]of PAnsiChar=('invCurrentProjection',
   'cacheProjection[0]','invCacheProjection[0]','toCache[0]','fromCache[0]',
-  'currentProjection','nearSafeDepth');
-  TextureNames:array[0..7]of PAnsiChar=('color0','depth0','color1','depth1',
-    'color2','depth2','color3','depth3');
-var I:Integer;Vertex,Fragment:GLuint;Ok:GLint;S:Single;
+  'currentProjection','nearSafeDepth','detailLayer','reusePass','shadowValid');
+  TextureNames:array[0..13]of PAnsiChar=('color0','depth0','color1','depth1',
+    'color2','depth2','color3','depth3','color4','depth4','shadow1','shadow2','shadow3','shadow4');
+var I,Samples:Integer;Vertex,Fragment:GLuint;Ok,OldRenderbuffer,MaxSamples:GLint;S:Single;
 begin
-  if (FWidth=W)and(FHeight=H)and(FProgram<>0)then Exit;
+  Samples:=Max(1,GLFeatures.CurrentMultiSampling);
+  glGetIntegerv(GL_MAX_SAMPLES,@MaxSamples);Samples:=Min(Samples,Max(1,MaxSamples));
+  if (FWidth=W)and(FHeight=H)and(FProgram<>0)and(FNearSamples=Samples)then Exit;
   if not Assigned(glGenFramebuffers)or not Assigned(glGenVertexArrays)then
     raise Exception.Create('OpenGL 3.3 required');
   if not FContextHooked then begin
@@ -272,9 +388,15 @@ begin
   for I:=0 to High(TextureNames)do
     FTextureUniforms[I]:=glGetUniformLocation(FProgram,TextureNames[I]);
   glGenVertexArrays(1,@FVAO);
-  for I:=0 to 3 do with FLayers[I] do begin
+  for I:=0 to High(FLayers) do with FLayers[I] do begin
+    if (I=1)and not FDetailLayer then Continue;
     S:=LayerScale[I];if I>0 then S:=S*FResolution;
     Width:=Max(64,Round(W*S));Height:=Max(64,Round(H*S));
+    { Keep the same pixel density in the visible frame when adding side margins. }
+    if I>0 then begin
+      Width:=Max(64,Round(W*S*FOverscanX/BaseOverscan));
+      Height:=Max(64,Round(H*S*FOverscanY/BaseOverscan));
+    end;
     glGenTextures(1,@Color);glBindTexture(GL_TEXTURE_2D,Color);
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,Width,Height,0,GL_RGBA,GL_UNSIGNED_BYTE,nil);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
@@ -292,6 +414,23 @@ begin
     glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,Depth,0);
     if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then
       raise Exception.Create('Incomplete impostor framebuffer');
+  end;
+  FNearSamples:=Samples;
+  if Samples>1 then begin
+    { The near layer is redrawn every frame at native resolution. Preserve
+      the user's MSAA instead of silently turning it off for all scenery. }
+    glGetIntegerv(GL_RENDERBUFFER_BINDING,@OldRenderbuffer);
+    try
+      glGenFramebuffers(1,@FNearFbo);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FNearFbo);
+      glGenRenderbuffers(1,@FNearColor);glBindRenderbuffer(GL_RENDERBUFFER,FNearColor);
+      glRenderbufferStorageMultisample(GL_RENDERBUFFER,Samples,GL_RGBA8,W,H);
+      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_RENDERBUFFER,FNearColor);
+      glGenRenderbuffers(1,@FNearDepth);glBindRenderbuffer(GL_RENDERBUFFER,FNearDepth);
+      glRenderbufferStorageMultisample(GL_RENDERBUFFER,Samples,GL_DEPTH_COMPONENT32F,W,H);
+      glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,FNearDepth);
+      if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then
+        raise Exception.Create('Incomplete multisampled near framebuffer');
+    finally glBindRenderbuffer(GL_RENDERBUFFER,OldRenderbuffer) end;
   end;
   FWidth:=W;FHeight:=H;
 end;
@@ -333,19 +472,39 @@ begin
   try DrawWorld(Params);finally FCollector.ShapeFilter:=nil;end;
 end;
 
-procedure TOsmImpostorViewport.CaptureLayer(Index:Integer;const Params:TRenderParams;
-  const BaseProjection:TMatrix4);
-var P:TMatrix4;N,F,Scale:Single;SavedCamera:TRenderingCamera;SavedRtxView:TVector4;
+function TOsmImpostorViewport.TryCurrentFrustum(out Value:TFrustum):Boolean;
+var P:TProjection;Rect:TRectangle;
 begin
-  P:=BaseProjection;
+  Value:=Default(TFrustum);Rect:=RenderRect.Round;
+  Result:=(Camera<>nil)and(Rect.Width>0)and(Rect.Height>0);
+  if not Result then Exit;
+  P:=CalculateProjection;
+  {$ifdef FPC}{$warnings off}
+  if Assigned(OnProjection)then OnProjection(P);
+  {$warnings on}{$endif}
+  P.PerspectiveAnglesRad.Y:=P.PerspectiveAnglesRad.Y*InternalDistortFieldOfViewY;
+  Value.Init(P.Matrix(InternalDistortViewAspect*Rect.Width/Rect.Height),Camera.Matrix);
+end;
+
+procedure TOsmImpostorViewport.LayerRange(Index:Integer;const P:TMatrix4;out N,F:Single);
+begin
   case Index of
-    0:begin N:=Max(0.01,BaseProjection.Data[3,2]/(BaseProjection.Data[2,2]-1));F:=FNear*1.05 end;
-    1:begin N:=FNear*0.95;F:=FMiddle*1.05 end;
-    2:begin N:=FMiddle*0.95;F:=FFar*1.05 end;
+    0:begin N:=Max(0.01,P.Data[3,2]/(P.Data[2,2]-1));F:=LiveDistance*1.05 end;
+    1:begin N:=FDetail*0.95;F:=FNear*1.05 end;
+    2:begin N:=FNear*0.95;F:=FMiddle*1.05 end;
+    3:begin N:=FMiddle*0.95;F:=FFar*1.05 end;
     else begin N:=FFar*0.95;F:=1000000 end;
   end;
+end;
+
+procedure TOsmImpostorViewport.CaptureLayer(Index:Integer;const Params:TRenderParams;
+  const BaseProjection:TMatrix4);
+var P:TMatrix4;N,F,ScaleX,ScaleY:Single;SavedCamera:TRenderingCamera;SavedRtxView:TVector4;
+begin
+  P:=BaseProjection;LayerRange(Index,P,N,F);
+  FLayers[Index].ShadowValid:=False;
   P.Data[2,2]:=-(F+N)/(F-N);P.Data[3,2]:=-2*F*N/(F-N);
-  if Index>0 then begin P.Data[0,0]:=P.Data[0,0]/Overscan;P.Data[1,1]:=P.Data[1,1]/Overscan end;
+  if Index>0 then begin P.Data[0,0]:=P.Data[0,0]/FOverscanX;P.Data[1,1]:=P.Data[1,1]/FOverscanY end;
   SavedCamera:=Params.RenderingCamera;
   FCaptureCamera.Assign(SavedCamera);FCaptureCamera.Projection:=P;
   { CGE Assign intentionally does not copy Camera/View. Both are required by
@@ -356,13 +515,15 @@ begin
   SavedRtxView:=RtxMaterialViewport;
   if FMeasuring then FStageTimers[Index].BeginSample;
   try
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FLayers[Index].Fbo);
+    if (Index=0) and (FNearFbo<>0) then glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FNearFbo)
+    else glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FLayers[Index].Fbo);
     RenderContext.Viewport:=Rectangle(0,0,FLayers[Index].Width,FLayers[Index].Height);
     { Captures use another resolution and overscan, but the same camera eye.
       Sample the reflection of the matching ray, not the same framebuffer pixel. }
-    Scale:=1;if Index>0 then Scale:=Overscan;
-    SetRtxMaterialViewport(Vector4(FLayers[Index].Width*(1-1/Scale)*0.5,
-      FLayers[Index].Height*(1-1/Scale)*0.5,FLayers[Index].Width/Scale,FLayers[Index].Height/Scale));
+    ScaleX:=1;ScaleY:=1;
+    if Index>0 then begin ScaleX:=FOverscanX;ScaleY:=FOverscanY end;
+    SetRtxMaterialViewport(Vector4(FLayers[Index].Width*(1-1/ScaleX)*0.5,
+      FLayers[Index].Height*(1-1/ScaleY)*0.5,FLayers[Index].Width/ScaleX,FLayers[Index].Height/ScaleY));
     RenderContext.ProjectionMatrix:=P;RenderContext.DepthRange:=drFar;
     RenderContext.DepthBufferUpdate:=True;
     glClearColor(0,0,0,0);glClearDepth(1);glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT);
@@ -370,6 +531,12 @@ begin
       may write/use these queries; a far slab must never share that history. }
     FRenderer.OcclusionCulling:=(Index=0)and OcclusionCulling;
     DrawWorld(Params);
+    if (Index=0) and (FNearFbo<>0) then begin
+      glBindFramebuffer(GL_READ_FRAMEBUFFER,FNearFbo);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FLayers[0].Fbo);
+      glBlitFramebuffer(0,0,FWidth,FHeight,0,0,FWidth,FHeight,
+        GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+    end;
     with FLayers[Index]do begin
       Projection:=P;if not P.TryInverse(InverseProjection) then raise Exception.Create('Singular projection');
       View:=FCaptureCamera.Matrix;
@@ -385,14 +552,14 @@ begin
 end;
 
 procedure TOsmImpostorViewport.Composite(const Current:TRenderingCamera;
-  const AProjection:TMatrix4);
+  const AProjection:TMatrix4;ReusePass:Boolean);
 var InvP:TMatrix4;
-    Projections,InverseProjections,ToCache,FromCache:array[0..3]of TMatrix4;
+    Projections,InverseProjections,ToCache,FromCache:array[0..4]of TMatrix4;
     I:Integer;
 begin
-  if FMeasuring then FStageTimers[4].BeginSample;
+  if FMeasuring then FStageTimers[High(FStageTimers)].BeginSample;
   AProjection.TryInverse(InvP);Current.InverseMatrixNeeded;
-  for I:=0 to 3 do begin
+  for I:=0 to High(FLayers) do begin
     Projections[I]:=FLayers[I].Projection;
     InverseProjections[I]:=FLayers[I].InverseProjection;
     ToCache[I]:=FLayers[I].View*Current.InverseMatrix;
@@ -400,25 +567,104 @@ begin
     glActiveTexture(GL_TEXTURE0+I*2);glBindTexture(GL_TEXTURE_2D,FLayers[I].Color);
     glActiveTexture(GL_TEXTURE0+I*2+1);glBindTexture(GL_TEXTURE_2D,FLayers[I].Depth);
   end;
-  for I:=0 to 7 do glUniform1i(FTextureUniforms[I],I);
+  for I:=1 to High(FLayers) do begin
+    glActiveTexture(GL_TEXTURE0+9+I);glBindTexture(GL_TEXTURE_2D,FLayers[I].Shadow);
+  end;
+  for I:=0 to High(FTextureUniforms) do glUniform1i(FTextureUniforms[I],I);
   glUniformMatrix4fv(FUniforms[0],1,GL_FALSE,@InvP.Data[0,0]);
-  glUniformMatrix4fv(FUniforms[1],4,GL_FALSE,@Projections[0].Data[0,0]);
-  glUniformMatrix4fv(FUniforms[2],4,GL_FALSE,@InverseProjections[0].Data[0,0]);
-  glUniformMatrix4fv(FUniforms[3],4,GL_FALSE,@ToCache[0].Data[0,0]);
-  glUniformMatrix4fv(FUniforms[4],4,GL_FALSE,@FromCache[0].Data[0,0]);
+  glUniformMatrix4fv(FUniforms[1],Length(FLayers),GL_FALSE,@Projections[0].Data[0,0]);
+  glUniformMatrix4fv(FUniforms[2],Length(FLayers),GL_FALSE,@InverseProjections[0].Data[0,0]);
+  glUniformMatrix4fv(FUniforms[3],Length(FLayers),GL_FALSE,@ToCache[0].Data[0,0]);
+  glUniformMatrix4fv(FUniforms[4],Length(FLayers),GL_FALSE,@FromCache[0].Data[0,0]);
   glUniformMatrix4fv(FUniforms[5],1,GL_FALSE,@AProjection.Data[0,0]);
-  glUniform1f(FUniforms[6],FNear*0.9);
+  glUniform1f(FUniforms[6],LiveDistance*0.9);
+  glUniform1i(FUniforms[7],Ord(FDetailLayer));
+  glUniform1i(FUniforms[8],Ord(ReusePass));
+  glUniform4i(FUniforms[9],Ord(FLayers[1].ShadowValid),Ord(FLayers[2].ShadowValid),
+    Ord(FLayers[3].ShadowValid),Ord(FLayers[4].ShadowValid));
   glDrawArrays(GL_TRIANGLES,0,3);
-  if FMeasuring then FStageTimers[4].EndSample;
+  if FMeasuring then FStageTimers[High(FStageTimers)].EndSample;
 end;
 
-procedure TOsmImpostorViewport.DrawCachedWorld(const Params:TRenderParams);
-var OldFbo,OldProgram,OldVAO,OldActive,OldFunc:GLint;
-    OldTextures:array[0..7]of GLint;
+procedure TOsmImpostorViewport.BakeShadow(const Params:TRenderParams);
+var OldFbo,OldProgram,OldVAO,OldActive,Ok:GLint;
+  OldView:array[0..3]of GLint;OldTextures:array[0..3]of GLint;
+  OldColor:array[0..3]of GLboolean;OldDepth,OldCull,OldBlend,OldScissor:GLboolean;
+  Vertex,Fragment:GLuint;I:Integer;ToScreen:TMatrix4;
+begin
+  if not FRtxCache or not FFrameCacheUsed or (FShadowCapture<1)or(FRtx=nil)or
+    not FRtx.ScreenReuseActive or (RtxScreenTexture=0) then Exit;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,@OldFbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
+  glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);glGetIntegerv(GL_VIEWPORT,@OldView[0]);
+  glGetBooleanv(GL_COLOR_WRITEMASK,@OldColor[0]);
+  OldDepth:=glIsEnabled(GL_DEPTH_TEST);OldCull:=glIsEnabled(GL_CULL_FACE);
+  OldBlend:=glIsEnabled(GL_BLEND);OldScissor:=glIsEnabled(GL_SCISSOR_TEST);
+  for I:=0 to 3 do begin glActiveTexture(GL_TEXTURE0+I);glGetIntegerv(GL_TEXTURE_BINDING_2D,@OldTextures[I])end;
+  try
+    if FShadowProgram=0 then begin
+      Vertex:=CompileShader(GL_VERTEX_SHADER,VS);
+      try
+        Fragment:=CompileShader(GL_FRAGMENT_SHADER,ShadowFS);
+        try
+          FShadowProgram:=glCreateProgram();glAttachShader(FShadowProgram,Vertex);glAttachShader(FShadowProgram,Fragment);
+          glLinkProgram(FShadowProgram);glGetProgramiv(FShadowProgram,GL_LINK_STATUS,@Ok);
+          if Ok=0 then raise Exception.Create('Cannot link cached RTX visibility shader');
+        finally glDeleteShader(Fragment)end;
+      finally glDeleteShader(Vertex)end;
+    end;
+    with FLayers[FShadowCapture] do begin
+      if Shadow=0 then begin
+        glGenTextures(1,@Shadow);glBindTexture(GL_TEXTURE_2D,Shadow);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RG16F,Width,Height,0,GL_RG,GL_FLOAT,nil);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+      end;
+      if FShadowFbo=0 then glGenFramebuffers(1,@FShadowFbo);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FShadowFbo);
+      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,Shadow,0);
+      if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then
+        raise Exception.Create('Incomplete cached RTX visibility framebuffer');
+      glViewport(0,0,Width,Height);
+      glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,Depth);
+      ToScreen:=Params.RenderingCamera.Projection*InverseProjection;
+    end;
+    glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,FRtx.ScreenImage(0));
+    glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,RtxScreenTexture);
+    glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,FRtx.ScreenImage(2));
+    glUseProgram(FShadowProgram);glBindVertexArray(FVAO);
+    glUniform1i(glGetUniformLocation(FShadowProgram,'layerDepth'),0);
+    glUniform1i(glGetUniformLocation(FShadowProgram,'screenDepth'),1);
+    glUniform1i(glGetUniformLocation(FShadowProgram,'screenShadow'),2);
+    glUniform1i(glGetUniformLocation(FShadowProgram,'screenReuse'),3);
+    glUniform2f(glGetUniformLocation(FShadowProgram,'overscan'),FOverscanX,FOverscanY);
+    glUniformMatrix4fv(glGetUniformLocation(FShadowProgram,'toScreen'),1,GL_FALSE,@ToScreen.Data[0,0]);
+    glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDrawArrays(GL_TRIANGLES,0,3);
+    FLayers[FShadowCapture].ShadowValid:=True;Inc(FShadowBakes);
+  finally
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldFbo);glViewport(OldView[0],OldView[1],OldView[2],OldView[3]);
+    glUseProgram(OldProgram);glBindVertexArray(OldVAO);
+    for I:=0 to 3 do begin glActiveTexture(GL_TEXTURE0+I);glBindTexture(GL_TEXTURE_2D,OldTextures[I])end;
+    glActiveTexture(OldActive);glColorMask(OldColor[0],OldColor[1],OldColor[2],OldColor[3]);
+    if OldDepth<>GL_FALSE then glEnable(GL_DEPTH_TEST);
+    if OldCull<>GL_FALSE then glEnable(GL_CULL_FACE);
+    if OldBlend<>GL_FALSE then glEnable(GL_BLEND);
+    if OldScissor<>GL_FALSE then glEnable(GL_SCISSOR_TEST);
+  end;
+end;
+
+procedure TOsmImpostorViewport.DrawCachedWorld(const Params:TRenderParams;UpdateLayers:Boolean);
+var OldFbo,OldReadFbo,OldProgram,OldVAO,OldActive,OldFunc:GLint;
+    OldTextures:array[0..13]of GLint;
+    OldColor:array[0..3]of GLboolean;
+    OldBlendState:array[0..5]of GLint;
     OldView:TRectangle;OldProjection:TMatrix4;OldRange:TDepthRange;
     OldBlend,OldDepth,OldCull,OldScissor,OldMask:GLboolean;
-    I,Best:Integer;W,H:Integer;Age,Score,BestScore:Double;NearM:Single;
-    Ready,OldVisible,OldOcclusion:Boolean;Now:TTimerResult;P,D,U:TVector3;
+    I,Best:Integer;W,H:Integer;Age,Score,BestScore:Double;NearM,FarM:Single;
+    Ready,OldVisible,OldOcclusion,ReusePass:Boolean;Now:TTimerResult;P,D,U:TVector3;
   procedure RestoreRasterState;
   begin
     { World rendering also touches CGE's logical GL state. Restore both the
@@ -429,26 +675,39 @@ var OldFbo,OldProgram,OldVAO,OldActive,OldFunc:GLint;
     RenderContext.DepthFunc:=TDepthFunction(OldFunc);
     RenderContext.CullFace:=OldCull<>GL_FALSE;
     glDepthFunc(OldFunc);glDepthMask(OldMask);
+    glBlendFuncSeparate(OldBlendState[0],OldBlendState[1],OldBlendState[2],OldBlendState[3]);
+    glBlendEquationSeparate(OldBlendState[4],OldBlendState[5]);
     if OldBlend<>GL_FALSE then glEnable(GL_BLEND)else glDisable(GL_BLEND);
     if OldCull<>GL_FALSE then glEnable(GL_CULL_FACE)else glDisable(GL_CULL_FACE);
     if OldDepth<>GL_FALSE then glEnable(GL_DEPTH_TEST)else glDisable(GL_DEPTH_TEST);
     if OldScissor<>GL_FALSE then glEnable(GL_SCISSOR_TEST)else glDisable(GL_SCISSOR_TEST);
+    glColorMask(OldColor[0],OldColor[1],OldColor[2],OldColor[3]);
   end;
 begin
   OldView:=RenderContext.Viewport;OldProjection:=RenderContext.ProjectionMatrix;
   OldRange:=RenderContext.DepthRange;
   W:=OldView.Width;H:=OldView.Height;
-  if (W<1)or(H<1)or(Abs(OldProjection.Data[2,3]+1)>0.001)then begin inherited RenderFromView3D(Params);Exit end;
+  if (W<1)or(H<1)or(Abs(OldProjection.Data[2,3]+1)>0.001)then begin
+    if UpdateLayers and(FRtx<>nil)then FRtx.RenderReflections(Params,@DrawReflectors);
+    inherited RenderFromView3D(Params);Exit
+  end;
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,@OldFbo);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,@OldReadFbo);
   glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
   glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);glGetIntegerv(GL_DEPTH_FUNC,@OldFunc);
-  for I:=0 to 7 do begin
+  glGetIntegerv(GL_BLEND_SRC_RGB,@OldBlendState[0]);glGetIntegerv(GL_BLEND_DST_RGB,@OldBlendState[1]);
+  glGetIntegerv(GL_BLEND_SRC_ALPHA,@OldBlendState[2]);glGetIntegerv(GL_BLEND_DST_ALPHA,@OldBlendState[3]);
+  glGetIntegerv(GL_BLEND_EQUATION_RGB,@OldBlendState[4]);glGetIntegerv(GL_BLEND_EQUATION_ALPHA,@OldBlendState[5]);
+  for I:=0 to High(OldTextures) do begin
     glActiveTexture(GL_TEXTURE0+I);glGetIntegerv(GL_TEXTURE_BINDING_2D,@OldTextures[I]);
   end;
   glActiveTexture(GL_TEXTURE0);
   OldBlend:=glIsEnabled(GL_BLEND);OldDepth:=glIsEnabled(GL_DEPTH_TEST);OldCull:=glIsEnabled(GL_CULL_FACE);
   OldScissor:=glIsEnabled(GL_SCISSOR_TEST);glGetBooleanv(GL_DEPTH_WRITEMASK,@OldMask);
+  glGetBooleanv(GL_COLOR_WRITEMASK,@OldColor[0]);
+  ReusePass:=not UpdateLayers and FRtxCache and (FRtx<>nil) and FRtx.ScreenReady;
   try
+    if UpdateLayers then begin
     EnsureResources(W,H);
     { Only the projection's stable X/Y terms are checked: near/far may follow scene bounds. }
     if (Abs(FBaseProjection.Data[0,0]-OldProjection.Data[0,0])>0.0001)or
@@ -456,56 +715,115 @@ begin
     FBaseProjection:=OldProjection;
     P:=Params.RenderingCamera.View.Translation;D:=Params.RenderingCamera.View.Direction;U:=Params.RenderingCamera.View.Up;
     Now:=Timer;Best:=-1;BestScore:=0;
-    for I:=1 to 3 do begin
-      case I of 1:NearM:=FNear;2:NearM:=FMiddle;else NearM:=FFar end;
-      if FLayers[I].Valid and (((P-FLayers[I].Position).Length>NearM*0.012)or
-         (TVector3.DotProduct(D,FLayers[I].Direction)<0.998)or
-         (TVector3.DotProduct(U,FLayers[I].Up)<0.998))then FLayers[I].Valid:=False;
+    for I:=FirstCachedLayer to High(FLayers) do begin
+      case I of 1:NearM:=FDetail;2:NearM:=FNear;3:NearM:=FMiddle;else NearM:=FFar end;
+      if FLayers[I].Valid then begin
+        if (P-FLayers[I].Position).Length>NearM*0.012 then begin
+          FLayers[I].Valid:=False;Inc(FLayers[I].TranslationInvalidations);
+        end else if (TVector3.DotProduct(D,FLayers[I].Direction)<0.998)or
+          (TVector3.DotProduct(U,FLayers[I].Up)<0.998)then begin
+          FLayers[I].Valid:=False;Inc(FLayers[I].RotationInvalidations);
+        end;
+      end;
       if not FLayers[I].Valid then Score:=1000-I
       else begin Age:=TimerSeconds(Now,FLayers[I].Captured);Score:=Age/FPeriods[I] end;
       if Score>Max(1,BestScore)then begin Best:=I;BestScore:=Score end;
     end;
+    { Reflections are already in cached colour. Trace the live range and the
+      selected update only. During warmup/fallback the full world is live. }
+    Ready:=True;for I:=FirstCachedLayer to High(FLayers) do
+      if (I<>Best)and not FLayers[I].Valid then Ready:=False;
+    if FRtx<>nil then begin
+      FRtx.ReflectionRanges:=TVector3.Zero;
+      if FRtxCache and Ready then begin
+        NearM:=1000001;FarM:=0;
+        if Best>=0 then LayerRange(Best,OldProjection,NearM,FarM);
+        FRtx.ReflectionRanges:=Vector3(LiveDistance*1.05,NearM,FarM);
+      end;
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldFbo);
+      FRtx.RenderReflections(Params,@DrawReflectors);
+    end;
     glDisable(GL_SCISSOR_TEST);
     { At most one expensive far update per frame, including initial warmup. }
-    if Best>=0 then CaptureLayer(Best,Params,OldProjection);
-    Ready:=True;for I:=1 to 3 do Ready:=Ready and FLayers[I].Valid;
-    if Ready then CaptureLayer(0,Params,OldProjection);
+    if Best>=0 then begin
+      if FLayers[Best].Valid then Inc(FLayers[Best].PeriodCaptures);
+      CaptureLayer(Best,Params,OldProjection);
+    end;
+    Ready:=True;for I:=FirstCachedLayer to High(FLayers) do Ready:=Ready and FLayers[I].Valid;
+    if Ready then begin CaptureLayer(0,Params,OldProjection);FShadowCapture:=Best end;
+    end else begin
+      { The RTX receiver pass must use the exact world depth displayed this
+        frame. Reproject the existing layers without capturing them twice. }
+      Ready:=FFrameCacheUsed;
+      glDisable(GL_SCISSOR_TEST);
+    end;
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldFbo);
     RenderContext.Viewport:=OldView;RenderContext.ProjectionMatrix:=OldProjection;
     RenderContext.DepthRange:=OldRange;
     if OldScissor<>GL_FALSE then glEnable(GL_SCISSOR_TEST);
     if Ready then begin
+      if UpdateLayers then FFrameCacheUsed:=True else Inc(FDepthReuseFrames);
       glUseProgram(FProgram);glBindVertexArray(FVAO);
-      glDisable(GL_BLEND);glDisable(GL_CULL_FACE);glEnable(GL_DEPTH_TEST);
+      { Resolved MSAA edges contain premultiplied coverage. Composite them
+        over the live sky instead of introducing a black outline. }
+      glEnable(GL_BLEND);glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
+      glBlendFuncSeparate(GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+      if ReusePass then begin
+        glDisable(GL_BLEND);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+        FRtx.ScreenReuseActive:=True;
+      end;
+      glDisable(GL_CULL_FACE);glEnable(GL_DEPTH_TEST);
       glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);
-      Composite(Params.RenderingCamera,OldProjection);
+      Composite(Params.RenderingCamera,OldProjection,ReusePass);
       { Restore raw bindings before CGE uses its own state cache. }
       glUseProgram(OldProgram);glBindVertexArray(OldVAO);
-      for I:=0 to 7 do begin glActiveTexture(GL_TEXTURE0+I);glBindTexture(GL_TEXTURE_2D,OldTextures[I])end;
+      for I:=0 to High(OldTextures) do begin glActiveTexture(GL_TEXTURE0+I);glBindTexture(GL_TEXTURE_2D,OldTextures[I])end;
       glActiveTexture(OldActive);
       RestoreRasterState;
       OldVisible:=FWorld.Visible;FWorld.Visible:=False;
       try inherited RenderFromView3D(Params);finally FWorld.Visible:=OldVisible end;
     end else begin
-      Inc(FFallbacks);
+      if UpdateLayers then Inc(FFallbacks);
       OldOcclusion:=OcclusionCulling;OcclusionCulling:=False;
       try inherited RenderFromView3D(Params);finally OcclusionCulling:=OldOcclusion end;
     end;
-    Inc(FFrames);
+    if UpdateLayers then Inc(FFrames);
   finally
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,OldReadFbo);
     RenderContext.Viewport:=OldView;RenderContext.ProjectionMatrix:=OldProjection;RenderContext.DepthRange:=OldRange;
     glUseProgram(OldProgram);glBindVertexArray(OldVAO);
-    for I:=0 to 7 do begin glActiveTexture(GL_TEXTURE0+I);glBindTexture(GL_TEXTURE_2D,OldTextures[I])end;
+    for I:=0 to High(OldTextures) do begin glActiveTexture(GL_TEXTURE0+I);glBindTexture(GL_TEXTURE_2D,OldTextures[I])end;
     glActiveTexture(OldActive);
     RestoreRasterState;
   end;
 end;
 
-procedure TOsmImpostorViewport.RenderFromView3D(const Params:TRenderParams);
-var Started,Finished:TTimerResult;Ns:QWord;Screen,SavedOcclusion:Boolean;I:Integer;
+procedure TOsmImpostorViewport.DrawScreenDepth(const Params:TRenderParams);
+var SavedOcclusion:Boolean;I:Integer;
 begin
+  if (FRtx<>nil)and(FShadowRevision<>FRtx.ScreenRevision)then begin
+    FShadowRevision:=FRtx.ScreenRevision;
+    for I:=1 to High(FLayers)do FLayers[I].ShadowValid:=False;
+  end;
+  { Never let the extra depth pass age/reuse visibility queries. }
+  SavedOcclusion:=OcclusionCulling;OcclusionCulling:=False;
+  SyncScreenShadowReceivers;
+  try
+    if FFrameCacheUsed then DrawCachedWorld(Params,False)
+    else inherited RenderFromView3D(Params);
+  finally OcclusionCulling:=SavedOcclusion;end;
+end;
+
+procedure TOsmImpostorViewport.RenderFromView3D(const Params:TRenderParams);
+var Started,Finished:TTimerResult;Ns:QWord;Screen,SavedOcclusion,DeferredShadow:Boolean;I,LightingMode:Integer;
+  SavedExclusive,SavedCache,SavedRequired,CachePath:Boolean;
+begin
+  SavedExclusive:=RtxScreenExclusive;SavedCache:=UseCachedRiderMeshes;
+  SavedRequired:=RequireDeformedMeshBuffers;
   Screen:=Params.RenderingCamera.Target=rtScreen;
+  CachePath:=FEnabled and not FFailed and Screen and(FWorld<>nil)and FWorld.ExistsInRoot;
+  DeferredShadow:=False;
   SavedOcclusion:=OcclusionCulling;
   if Screen and(FResetOcclusionFrames>0)then begin
     { Flush the age of shape queries from the clipped near view when returning
@@ -515,24 +833,55 @@ begin
   if Screen and not FEnabled and (FProgram<>0) then ContextClose(nil);
   if FMeasuring and Screen then begin
     while FGPUTimer.ReadSample(Ns)do FGPUSamples.Add(Ns/1000000);
-    for I:=0 to 4 do
+    for I:=0 to High(FStageTimers) do
       while FStageTimers[I].ReadSample(Ns)do FStageSamples[I].Add(Ns/1000000);
     FGPUTimer.BeginSample;Started:=Timer;
   end;
   try
     if Screen then begin
-      if (FRtx<>nil) and (FWorld<>nil) then FRtx.RenderReflections(Params,@DrawReflectors)
-      else SetRtxMaterialPass(False,0,Vector4(0,0,1,1));
+      FFrameCacheUsed:=False;
+      FShadowCapture:=-1;
+      RtxScreenExclusive:=(FRtx<>nil) and FRtx.ScreenShadows;
+      if RtxScreenExclusive then begin UseCachedRiderMeshes:=True;RequireDeformedMeshBuffers:=True;end;
+      ClearRtxScreenShadow;SyncScreenShadowReceivers;
+      if FRtx<>nil then FRtx.ReflectionRanges:=TVector3.Zero;
+      if not CachePath then begin
+        if (FRtx<>nil) and (FWorld<>nil) then FRtx.RenderReflections(Params,@DrawReflectors)
+        else SetRtxMaterialPass(False,0,Vector4(0,0,1,1));
+      end;
+      LightingMode:=Ord(RtxScreenExclusive) or (Ord((FRtx<>nil)and FRtx.ReflectionsReady) shl 1);
+      if LightingMode<>FLightingMode then begin Invalidate;FLightingMode:=LightingMode end;
+      { Screen shadows are composited once, after the colour image. With a
+        world cache, first prepare that image and its reprojected depth, then
+        trace from that same depth. Riders remain live in both passes. }
+      DeferredShadow:=RtxScreenExclusive and CachePath;
+      if (FRtx<>nil) and not DeferredShadow then FRtx.RenderScreenShadows(Params,@DrawScreenDepth);
+      SyncScreenShadowReceivers;
     end;
-    if not FEnabled or FFailed or not Screen or (FWorld=nil)or not FWorld.ExistsInRoot then
+    if not CachePath then
       inherited
     else try DrawCachedWorld(Params);
     except on E:Exception do begin
+      FFrameCacheUsed:=False;
       FFailed:=True;FLastError:=E.Message;
       WritelnWarning('World impostor cache',FLastError);
+      if FRtx<>nil then begin
+        FRtx.ReflectionRanges:=TVector3.Zero;FRtx.RenderReflections(Params,@DrawReflectors);
+      end;
       inherited RenderFromView3D(Params);
     end end;
+    if DeferredShadow then begin
+      FRtx.RenderScreenShadows(Params,@DrawScreenDepth);
+      try BakeShadow(Params);
+      except on E:Exception do begin
+        FRtxCache:=False;WritelnWarning('World RTX cache',E.Message);
+      end end;
+    end;
+    if Screen and RtxScreenExclusive then FRtx.CompositeScreenShadows;
   finally
+    RtxScreenExclusive:=SavedExclusive;UseCachedRiderMeshes:=SavedCache;
+    RequireDeformedMeshBuffers:=SavedRequired;
+    if Screen then begin ClearRtxScreenShadow;SyncScreenShadowReceivers;end;
     OcclusionCulling:=SavedOcclusion;
     if Screen and (FStabilityRemaining>0) then SampleStability;
     if FMeasuring and Screen then begin
@@ -607,23 +956,41 @@ begin
 end;
 
 procedure TOsmImpostorViewport.Snapshot(Dest:TJSONObject);
-var I:Integer;Layers:TJSONArray;L:TJSONObject;Bytes:Int64;
+var I:Integer;Layers:TJSONArray;L:TJSONObject;Bytes,ShadowBytes:Int64;
 begin
   Dest.Add('enabled',FEnabled);Dest.Add('failed',FFailed);Dest.Add('error',FLastError);
   Dest.Add('world_assigned',FWorld<>nil);Dest.Add('frames',Int64(FFrames));
+  Dest.Add('world_is_viewport_root',FWorld=Items);
+  Dest.Add('used_this_frame',FFrameCacheUsed);
+  Dest.Add('rtx_depth_reuse_frames',Int64(FDepthReuseFrames));
+  Dest.Add('rtx_screen', (FRtx<>nil) and FRtx.ScreenShadows);
+  Dest.Add('rtx_cache',FRtxCache);Dest.Add('rtx_shadow_bakes',Int64(FShadowBakes));
+  Dest.Add('near_msaa',FNearSamples);
+  Dest.Add('detail_layer',FDetailLayer);Dest.Add('detail_m',FDetail);Dest.Add('live_m',LiveDistance);
+  Dest.Add('detail_hz',1/FPeriods[1]);
+  Dest.Add('overscan_x',FOverscanX);Dest.Add('overscan_y',FOverscanY);
   Dest.Add('fallback_frames',Int64(FFallbacks));Dest.Add('near_m',FNear);
   Dest.Add('middle_m',FMiddle);Dest.Add('far_m',FFar);Dest.Add('resolution',FResolution);
-  Dest.Add('hz1',1/FPeriods[1]);Dest.Add('hz2',1/FPeriods[2]);Dest.Add('hz3',1/FPeriods[3]);
-  Bytes:=0;Layers:=TJSONArray.Create;Dest.Add('layers',Layers);
-  for I:=0 to 3 do begin
+  Dest.Add('hz1',1/FPeriods[2]);Dest.Add('hz2',1/FPeriods[3]);Dest.Add('hz3',1/FPeriods[4]);
+  Bytes:=0;ShadowBytes:=0;Layers:=TJSONArray.Create;Dest.Add('layers',Layers);
+  for I:=0 to High(FLayers) do begin
+    if (I=1)and not FDetailLayer then Continue;
     L:=TJSONObject.Create;Layers.Add(L);L.Add('level',I);L.Add('valid',FLayers[I].Valid);
+    L.Add('shadow_valid',FLayers[I].ShadowValid);
+    if FLayers[I].Shadow<>0 then ShadowBytes:=ShadowBytes+Int64(FLayers[I].Width)*FLayers[I].Height*4;
     L.Add('width',FLayers[I].Width);L.Add('height',FLayers[I].Height);
     L.Add('captures',Int64(FLayers[I].Captures));
+    L.Add('translation_invalidations',Int64(FLayers[I].TranslationInvalidations));
+    L.Add('rotation_invalidations',Int64(FLayers[I].RotationInvalidations));
+    L.Add('period_captures',Int64(FLayers[I].PeriodCaptures));
     if I>0 then L.Add('period_s',FPeriods[I]);
     if FLayers[I].Valid then L.Add('age_s',TimerSeconds(Timer,FLayers[I].Captured));
     Bytes:=Bytes+Int64(FLayers[I].Width)*FLayers[I].Height*8;
   end;
   Dest.Add('texture_bytes',Bytes);
+  Dest.Add('rtx_shadow_texture_bytes',ShadowBytes);
+  if FNearFbo<>0 then Dest.Add('near_msaa_bytes',Int64(FWidth)*FHeight*8*FNearSamples)
+  else Dest.Add('near_msaa_bytes',0);
 end;
 
 procedure TOsmImpostorViewport.Measure(Start:Boolean;Dest:TJSONObject);
@@ -638,16 +1005,16 @@ var Ns:QWord;I:Integer;
 begin
   if Start then begin
     FFrameSamples.Clear;FSubmitSamples.Clear;FGPUSamples.Clear;
-    for I:=0 to 4 do begin FStageTimers[I].Reset;FStageSamples[I].Clear end;
+    for I:=0 to High(FStageTimers) do begin FStageTimers[I].Reset;FStageSamples[I].Clear end;
     FGPUTimer.Reset;FMeasureStart:=Timer;FHaveLast:=False;FMeasuring:=True;
   end else begin
     while FGPUTimer.ReadSample(Ns)do FGPUSamples.Add(Ns/1000000);
-    for I:=0 to 4 do
+    for I:=0 to High(FStageTimers) do
       while FStageTimers[I].ReadSample(Ns)do FStageSamples[I].Add(Ns/1000000);
     FMeasuring:=False;
     Add('frame',FFrameSamples);Add('submit',FSubmitSamples);Add('gpu',FGPUSamples);
-    for I:=0 to 3 do Add('capture_gpu_'+IntToStr(I),FStageSamples[I]);
-    Add('composite_gpu',FStageSamples[4]);
+    for I:=0 to High(FLayers) do Add('capture_gpu_'+IntToStr(I),FStageSamples[I]);
+    Add('composite_gpu',FStageSamples[High(FStageSamples)]);
     Dest.Add('seconds',TimerSeconds(Timer,FMeasureStart));
   end;
 end;

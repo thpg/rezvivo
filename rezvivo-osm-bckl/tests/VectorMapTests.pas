@@ -1,6 +1,6 @@
 program VectorMapTests;
 {$mode objfpc}{$H+}
-uses Classes, SysUtils, Math, Osm3dGeoMath, Osm3dOsmData, Osm3dVectorMap;
+uses Classes, SysUtils, Math, Osm3dGeoMath, Osm3dOsmData, Osm3dVectorMap, Osm3dMapOverview;
 type TCancelledWorker=class(TThread)
   procedure Execute;override;
 end;
@@ -16,7 +16,25 @@ begin
   end;
   Result:=nil;
 end;
-var Data:TOSMDataset;Full,Coarse,Stopped:TMapVectorData;Tile:TTileXY;
+procedure CheckSimplification;
+var P,Q:TMapGeoPoints;I,J:Integer;Best,D,DX,DY,T,L:Double;
+begin
+  SetLength(P,1001);
+  for I:=0 to High(P)do P[I]:=TLatLon.Make(0.01*Sin(I*0.01),I*0.0001);
+  Q:=Copy(P);SimplifyMapLine(Q,11);
+  Check(Length(Q)<Length(P)div 5,'overview line was not simplified');
+  Check((Q[0].Lat=P[0].Lat)and(Q[High(Q)].Lon=P[High(P)].Lon),'road endpoints moved');
+  for I:=0 to High(P)do begin
+    Best:=1E30;
+    for J:=1 to High(Q)do begin
+      DX:=Q[J].Lon-Q[J-1].Lon;DY:=Q[J].Lat-Q[J-1].Lat;L:=Sqr(DX)+Sqr(DY);
+      T:=EnsureRange(((P[I].Lon-Q[J-1].Lon)*DX+(P[I].Lat-Q[J-1].Lat)*DY)/L,0.0,1.0);
+      D:=Sqrt(Sqr(P[I].Lon-Q[J-1].Lon-T*DX)+Sqr(P[I].Lat-Q[J-1].Lat-T*DY));Best:=Min(Best,D);
+    end;
+    Check(Best*256*(1 shl 11)/360<=0.401,'simplification exceeds 0.4 screen pixels');
+  end;
+end;
+var Data:TOSMDataset;Full,Coarse,Stopped,Regional:TMapVectorData;Tile:TTileXY;
   R:TOSMRelation;W:TOSMWay;N:TOSMNode;F:TMapVectorFeature;
   I:Integer;A,B,C:TLatLon;Area:Double;Worker:TCancelledWorker;
 procedure Node(Id:Int64;Lat,Lon:Double);
@@ -28,7 +46,8 @@ begin
   for J:=0 to High(Nodes)do W.NodeRefs[J]:=Nodes[J];Data.AddWay(W);
 end;
 begin
-  Data:=TOSMDataset.Create;Full:=nil;Coarse:=nil;Stopped:=nil;Worker:=nil;
+  CheckSimplification;
+  Data:=TOSMDataset.Create;Full:=nil;Coarse:=nil;Stopped:=nil;Worker:=nil;Regional:=nil;
   try
     Node(1,55,37);Node(2,55,37.002);Node(3,55.002,37.002);Node(4,55.002,37);
     Node(5,55.0007,37.0007);Node(6,55.0007,37.0013);
@@ -43,6 +62,7 @@ begin
     Way(300,[1,3]);W.Tags.Add('highway','primary');W.Tags.Add('bridge','yes');W.Tags.Add('name','Main Road');
     Way(301,[2,4]);W.Tags.Add('highway','service');
     Way(302,[1,9999]);W.Tags.Add('highway','primary');
+    Way(303,[1,4]);W.Tags.Add('highway','trunk');
     N:=Data.FindNode(1);N.Tags.Add('place','town');N.Tags.Add('name','Test Town');N.Tags.Add('population','50000');
     Tile:=TTileMath.LatLonToTile(TLatLon.Make(55,37),14);
     Full:=BuildMapVectors(Data,Tile);Coarse:=BuildMapVectors(Data,Tile,nil,13);
@@ -63,6 +83,13 @@ begin
     Worker:=TCancelledWorker.Create(True);Worker.Terminate;Worker.Start;Worker.WaitFor;
     Stopped:=BuildMapVectors(Data,Tile,Worker);Check(Stopped.Features.Count=0,'cancelled extraction continues');
     Check((Coarse.Bytes<Full.Bytes)and(Coarse.MaxZoom=13),'overview cache does not shrink');
+    Regional:=BuildMapVectors(Data,TTileMath.LatLonToTile(TLatLon.Make(55,37),7),nil,7);
+    Check(Find(Regional,'l303')<>nil,'regional map loses trunk roads');
+    Check(Find(Regional,'l300')=nil,'primary roads shown too early');
+    Check(Find(Regional,'n1')=nil,'small places clutter regional view');
+    Check(MapSourceZoom(7)=7,'overview enumerates detailed city tiles');
+    Check(MapSourceZoom(18)=MapSourceZoom(12),'city zoom no longer shares OSM sources');
+    Check(Pos('building',MapOverviewQuery(TTileXY.Make(0,0,7)))=0,'regional query loads buildings');
     WriteLn('PASS: polygon holes, deduplication, road layers, label priorities, overview memory and cancellation');
-  finally Worker.Free;Stopped.Free;Coarse.Free;Full.Free;Data.Free;end;
+  finally Regional.Free;Worker.Free;Stopped.Free;Coarse.Free;Full.Free;Data.Free;end;
 end.

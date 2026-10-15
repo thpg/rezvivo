@@ -1,0 +1,51 @@
+﻿[
+    {
+        "license":  "CC0-1.0",
+        "url":  "https://polyhaven.com/a/jolcham_oak_bark_01",
+        "dimensions_mm":  [
+                              1000,
+                              2000
+                          ],
+        "id":  "jolcham_oak_bark_01",
+        "authors":  {
+                        "Charlotte Baglioni":  "All"
+                    }
+    },
+    {
+        "license":  "CC0-1.0",
+        "url":  "https://polyhaven.com/a/pine_bark",
+        "dimensions_mm":  [
+                              1999.9996423721313,
+                              1999.9996423721313
+                          ],
+        "id":  "pine_bark",
+        "authors":  {
+                        "Dimitrios Savva":  "All"
+                    }
+    },
+    {
+        "license":  "CC0-1.0",
+        "url":  "https://polyhaven.com/a/bark_willow",
+        "dimensions_mm":  [
+                              1000,
+                              1000
+                          ],
+        "id":  "bark_willow",
+        "authors":  {
+                        "Dario Barresi":  "Processing",
+                        "Dimitrios Savva":  "Photography"
+                    }
+    },
+    {
+        "license":  "CC0-1.0",
+        "url":  "https://polyhaven.com/a/trident_maple_bark",
+        "dimensions_mm":  [
+                              1800.0000715255737,
+                              1800.0000715255737
+                          ],
+        "id":  "trident_maple_bark",
+        "authors":  {
+                        "Charlotte Baglioni":  "All"
+                    }
+    }
+]

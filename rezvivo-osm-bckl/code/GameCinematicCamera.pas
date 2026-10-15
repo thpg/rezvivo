@@ -10,6 +10,8 @@
                    the standing rider. Never picked while moving.
     cmStandShot  — STATIONARY-RIDER scenario: static camera at a random angle
                    watching the standing rider (no motion — the restful shot).
+    cmFrontQuarterLeft/Right — close tracking portraits ahead and to the side.
+    cmRiderPass  — short tracking episode of an actual nearby rider.
 
   Rules:
     - Moving shots alternate without immediate repeats or forced moto returns.
@@ -23,6 +25,8 @@
     - Prepare the new shot's terrain before displaying it. Pending surface
       data never falls back to scene props; physics rays are only for legacy
       maps without a surface provider.
+    - Change shots by cutting to a prepared view, including short moves from
+      a puddle or another rider. Travel belongs to the shot, not the edit.
     - Damp terrain-relative height, with solid ground clearance and without
       adding delay to the rider's forward motion.
     - When riders are nearby, frames the group }
@@ -35,11 +39,12 @@ interface
 uses
   Classes, SysUtils, Math,
   CastleVectors, CastleTransform, CastleViewport, CastleCameras, CastleLog,
-  GamePath, DebugLog, Osm3dRoadPuddles;
+  GamePath, DebugLog, Osm3dRoadPuddles, GameCameraEncounters;
 
 type
   TCameraMode = (cmMoto, cmHelicopter, cmRoadside, cmReverse, cmLowTrack,
-    cmOrbit, cmStandShot, cmPuddle);
+    cmOrbit, cmStandShot, cmPuddle, cmFrontQuarterLeft, cmFrontQuarterRight,
+    cmRiderPass);
 
   { Optional terrain-height provider. Filled AY with the world Y of the
     terrain mesh at (X, Z); returns True on success, False when the query
@@ -51,6 +56,7 @@ type
     to the physics units. }
   TCameraGroundQuery = function(WorldX, WorldZ, ReferenceY: Single;
     out AY: Single): Boolean of object;
+  TCameraClearPathQuery = function(const AFrom, ATo:TVector3):Boolean of object;
 
   TCameraGroundSample = record
     Valid: Boolean;
@@ -65,6 +71,9 @@ type
     Puddle: TRoadPuddleSite;
     PuddleEntryPosition: TVector3;
     PuddleDuration: Single;
+    Subject:TCameraRider;
+    EncounterKind:TCameraEncounterKind;
+    CloseSide:Single;
   end;
 
   TCameraReplayState = record
@@ -89,9 +98,10 @@ type
     StillTime: Single;
     Stationary: Boolean;
     PathPos: TPathPosition;
-    PuddleCooldown, PuddleScan, BlendAge: Single;
+    PuddleCooldown, PuddleScan: Single;
     LastPuddleGroup: QWord;
-    BlendPosition, BlendDirection: TVector3;
+    Encounters:TCameraEncounterTracker;
+    ShotAge:Single;
   end;
 
   {$M+}
@@ -112,9 +122,14 @@ type
     FHeightOffset, FFrameDT: Single;
     FModeTimer: Single;
     FPuddleReflections: Boolean;
-    FPuddleCooldown, FPuddleScan, FBlendAge: Single;
+    FPuddleCooldown, FPuddleScan: Single;
     FLastPuddleGroup: QWord;
-    FBlendPosition, FBlendDirection: TVector3;
+    FEncounters:TCameraEncounterTracker;
+    FShotAge:Single;
+    FRiderShotsEnabled:Boolean;
+    FClearPathQuery:TCameraClearPathQuery;
+    FRiders:array[0..31]of TCameraRider;
+    FRiderCount:Integer;
 
     FCamPos, FCamDir, FCamUp: TVector3;
 
@@ -179,6 +194,14 @@ type
     function PickStationary: TCameraMode;
     procedure PlaceStandShot;
     procedure TryPuddleShot;
+    procedure TryRiderShot(const Dt:Single);
+    procedure PrepareRiderShot(const Rider:TCameraRider;Kind:TCameraEncounterKind);
+    function RefreshSubject(var Shot:TCameraShotState):Boolean;
+    function SubjectPosition:TVector3;
+    function ClearShotPath(const AFrom,ATo:TVector3):Boolean;
+    function CloseShotSafe(const P:TVector3):Boolean;
+    function GetEncounterKind:TCameraEncounterKind;
+    function GetEncounterRider:Int64;
   public
     function CaptureReplay: TCameraReplayState;
     procedure RestoreReplay(const Saved: TCameraReplayState);
@@ -195,6 +218,8 @@ type
 
     procedure ClearNearby;
     procedure AddNearby(const APos: TVector3);
+    procedure AddNearbyRider(Id:Int64;const Position,Direction:TVector3;
+      Speed,Pitch:Single);
     procedure NextMode;
     procedure ForceMode(M: TCameraMode);
 
@@ -210,6 +235,7 @@ type
       Active flag and returns False until ready. Keep the recent ground
       sample while pending; nil enables the legacy physics-ray fallback. }
     property GroundQuery: TCameraGroundQuery read FGroundQuery write SetGroundQuery;
+    property ClearPathQuery:TCameraClearPathQuery read FClearPathQuery write FClearPathQuery;
   published
     property Enabled: Boolean read FEnabled write SetEnabled;
     property AutoSwitch: Boolean read FAutoSwitch write FAutoSwitch;
@@ -225,6 +251,9 @@ type
     property TargetSpeed: Single read FTargetSpeed write FTargetSpeed;
     property TargetPitchDeg: Single read FTargetPitchDeg write FTargetPitchDeg;
     property PuddleReflections: Boolean read FPuddleReflections write FPuddleReflections;
+    property RiderShotsEnabled:Boolean read FRiderShotsEnabled write FRiderShotsEnabled;
+    property EncounterKind:TCameraEncounterKind read GetEncounterKind;
+    property EncounterRider:Int64 read GetEncounterRider;
   end;
   {$M-}
 
@@ -308,6 +337,7 @@ const
     degenerates, and the frame shows only ground with the rider gone. Capping
     the pitch keeps the horizon in view and the up vector valid. ~58 deg. }
   MaxLookDownSin = 0.85;
+  DetailShotMinHold = 4.0; { Let the previous composition read before a detail cut. }
 
 function TCinematicCamera.CaptureReplay: TCameraReplayState;
 begin
@@ -333,8 +363,8 @@ begin
   Result.Stationary:=FStationary;
   Result.PathPos:=FPathPos;
   Result.PuddleCooldown:=FPuddleCooldown;Result.PuddleScan:=FPuddleScan;
-  Result.LastPuddleGroup:=FLastPuddleGroup;Result.BlendAge:=FBlendAge;
-  Result.BlendPosition:=FBlendPosition;Result.BlendDirection:=FBlendDirection;
+  Result.LastPuddleGroup:=FLastPuddleGroup;
+  Result.Encounters:=FEncounters;Result.ShotAge:=FShotAge;
 end;
 
 procedure TCinematicCamera.RestoreReplay(const Saved: TCameraReplayState);
@@ -361,8 +391,8 @@ begin
   FStationary:=Saved.Stationary;
   FPathPos:=Saved.PathPos;
   FPuddleCooldown:=Saved.PuddleCooldown;FPuddleScan:=Saved.PuddleScan;
-  FLastPuddleGroup:=Saved.LastPuddleGroup;FBlendAge:=Saved.BlendAge;
-  FBlendPosition:=Saved.BlendPosition;FBlendDirection:=Saved.BlendDirection;
+  FLastPuddleGroup:=Saved.LastPuddleGroup;
+  FEncounters:=Saved.Encounters;FShotAge:=Saved.ShotAge;
   if (FViewport<>nil) and (FViewport.Camera<>nil) then FViewport.Camera.SetView(FCamPos,FCamDir,FCamUp);
 end;
 
@@ -387,6 +417,7 @@ begin
   FCamDir := Vector3(0, 0, 1);
   FEnabled := False;
   FAutoSwitch := True;
+  FRiderShotsEnabled:=True;
   FGroundQuery := nil;
   FTargetSpeed := 0;
   FStillTime := 0;
@@ -411,6 +442,9 @@ begin
     cmOrbit:      Result := 'orbit';
     cmStandShot:  Result := 'standshot';
     cmPuddle:     Result := 'puddle';
+    cmFrontQuarterLeft:Result:='front-quarter-left';
+    cmFrontQuarterRight:Result:='front-quarter-right';
+    cmRiderPass:Result:='rider-pass';
   else
     Result := '?';
   end;
@@ -497,7 +531,9 @@ begin
   FHaveTargetPosition := False;
   FHeightReady := False;
   FModeTimer := ModeDuration(cmMoto);
-  FPuddleCooldown:=0;FPuddleScan:=0;FLastPuddleGroup:=0;FBlendAge:=2;
+  FPuddleCooldown:=0;FPuddleScan:=0;FLastPuddleGroup:=0;
+  FEncounters:=Default(TCameraEncounterTracker);FShotAge:=0;
+  FEncounters.Cooldown:=4;
 end;
 
 procedure TCinematicCamera.SetEnabled(const Value: Boolean);
@@ -544,20 +580,29 @@ begin
     cmOrbit:      Result := 6 + Random * 3;    { 6-9s — a SHORT arc, not a full circle }
     cmStandShot:  Result := 6 + Random * 4;    { 6-10s — restful static view }
     cmPuddle:     Result := FShot.PuddleDuration;
+    cmFrontQuarterLeft,cmFrontQuarterRight:Result:=4.5+Random*1.5;
+    cmRiderPass:if FShot.EncounterKind=ceOncoming then Result:=2.8 else Result:=3.6;
     else Result := 15;
   end;
 end;
 
 function TCinematicCamera.PickMovingShot: TCameraMode;
-const Weight:array[cmMoto..cmLowTrack]of Integer=(30,15,20,25,10);
+const Weight:array[TCameraMode]of Integer=(30,15,20,20,10,0,0,0,14,14,0);
 var R,Total: Integer;M:TCameraMode;
+  function Allowed(Mode:TCameraMode):Boolean;
+  begin
+    Result:=(Weight[Mode]>0)and(Mode<>FShot.Mode)and
+      (FRiderShotsEnabled or not(Mode in[cmFrontQuarterLeft,cmFrontQuarterRight]));
+    if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight])and
+      (Mode in[cmFrontQuarterLeft,cmFrontQuarterRight])then Result:=False;
+  end;
 begin
   { No mandatory return behind the rider. Exclude the current shot so every
     cut changes the view; stationary orbit modes remain a separate scenario. }
   Total:=0;
-  for M:=cmMoto to cmLowTrack do if M<>FShot.Mode then Inc(Total,Weight[M]);
+  for M:=Low(TCameraMode)to High(TCameraMode)do if Allowed(M)then Inc(Total,Weight[M]);
   R:=Random(Total);
-  for M:=cmMoto to cmLowTrack do if M<>FShot.Mode then begin
+  for M:=Low(TCameraMode)to High(TCameraMode)do if Allowed(M)then begin
     if R<Weight[M] then Exit(M);
     Dec(R,Weight[M]);
   end;
@@ -576,7 +621,7 @@ begin
        Returns False when (X,Z) is outside the loaded data. }
   if Assigned(FGroundQuery) then
   begin
-    if Assigned(FTarget) then OriginY:=FTarget.Translation.Y else OriginY:=0;
+    if Assigned(FTarget) then OriginY:=SubjectPosition.Y else OriginY:=0;
     Result := FGroundQuery(X, Z, OriginY, GY);
     if Result then Result := not IsNan(GY) and not IsInfinite(GY);
     { False also means GPU readback pending. The dedicated surface provider
@@ -691,7 +736,7 @@ begin
     case where neither the provider nor the raycast resolved). }
   if Assigned(FTarget) then
   begin
-    MinY := FTarget.Translation.Y + MinCameraY;
+    MinY := SubjectPosition.Y + MinCameraY;
     if P.Y < MinY then P.Y := MinY;
   end;
 end;
@@ -769,7 +814,7 @@ procedure TCinematicCamera.TryPuddleShot;
 var S:TRoadPuddleSite;Fwd,Side,Outward,Delta:TVector3;Ahead:Single;
 begin
   if not FPuddleReflections or not FAutoSwitch or FStationary or FPending or
-    (FTargetSpeed<1.5) or (FPuddleCooldown>0) or
+    (FTargetSpeed<1.5) or (FPuddleCooldown>0) or (FShotAge<DetailShotMinHold) or
     not(FShot.Mode in [cmMoto,cmReverse,cmLowTrack]) then Exit;
   if FPuddleScan>0 then Exit;
   FPuddleScan:=0.35;
@@ -792,6 +837,79 @@ begin
   { A failed terrain probe must not enqueue the same shot every frame. }
   FPuddleCooldown:=3;
   FPending:=True;FPendingAge:=0;TryPendingShot;
+end;
+
+function TCinematicCamera.SubjectPosition:TVector3;
+begin
+  if FShot.Mode=cmRiderPass then Result:=FShot.Subject.Position
+  else Result:=FTarget.Translation;
+end;
+
+function TCinematicCamera.GetEncounterKind:TCameraEncounterKind;
+begin
+  if FShot.Mode=cmRiderPass then Result:=FShot.EncounterKind else Result:=ceNone;
+end;
+
+function TCinematicCamera.GetEncounterRider:Int64;
+begin
+  if FShot.Mode=cmRiderPass then Result:=FShot.Subject.Id else Result:=0;
+end;
+
+function TCinematicCamera.RefreshSubject(var Shot:TCameraShotState):Boolean;
+var I:Integer;
+begin
+  if Shot.Mode<>cmRiderPass then Exit(True);
+  for I:=0 to FRiderCount-1 do if FRiders[I].Id=Shot.Subject.Id then begin
+    if(FRiders[I].Position-Shot.Subject.Position).Length>
+      Max(3,FFrameDT*Max(20,Shot.Subject.Speed)*3)then Exit(False);
+    Shot.Subject:=FRiders[I];Exit(True);
+  end;
+  Result:=False;
+end;
+
+function TCinematicCamera.ClearShotPath(const AFrom,ATo:TVector3):Boolean;
+var Delta:TVector3;Hit:TRayCastResult;Distance:Single;
+begin
+  if Assigned(FClearPathQuery)then Exit(FClearPathQuery(AFrom,ATo));
+  Result:=True;
+  if Assigned(FGroundQuery)then Exit; { streaming geometry uses the owner query }
+  Delta:=ATo-AFrom;Distance:=Delta.Length;
+  if Distance<0.01 then Exit;
+  { Legacy maps have colliders. The last metre belongs to the subject. }
+  Hit:=FViewport.Items.PhysicsRayCast(AFrom,Delta/Distance,Max(0.01,Distance-1));
+  Result:=not Hit.Hit;
+end;
+
+function TCinematicCamera.CloseShotSafe(const P:TVector3):Boolean;
+var Focus:TVector3;
+begin
+  Focus:=SubjectPosition+Vector3(0,0.95,0);
+  { The destination has already passed the terrain/clearance probes. A cut
+    needs a clear view of its subject, not a flyable path from the old lens. }
+  Result:=ClearShotPath(P,Focus);
+end;
+
+procedure TCinematicCamera.PrepareRiderShot(const Rider:TCameraRider;
+  Kind:TCameraEncounterKind);
+var Side:TVector3;
+begin
+  FPendingShot:=Default(TCameraShotState);FPendingShot.Mode:=cmRiderPass;
+  FPendingShot.Subject:=Rider;FPendingShot.EncounterKind:=Kind;
+  Side:=TVector3.CrossProduct(Rider.Direction,Vector3(0,1,0));
+  FPendingShot.CloseSide:=1;
+  if TVector3.DotProduct(FCamPos-Rider.Position,Side)<0 then FPendingShot.CloseSide:=-1;
+  FPending:=True;FPendingAge:=0;TryPendingShot;
+end;
+
+procedure TCinematicCamera.TryRiderShot(const Dt:Single);
+var Index:Integer;Kind:TCameraEncounterKind;
+begin
+  Index:=UpdateCameraEncounters(FEncounters,FRiders,FRiderCount,
+    FTarget.Translation,FTarget.Direction,FTargetSpeed,Dt,
+    FRiderShotsEnabled and FAutoSwitch and not FStationary and not FPending and
+    (FShotAge>=DetailShotMinHold)and
+    (FShot.Mode in[cmMoto,cmReverse,cmLowTrack,cmFrontQuarterLeft,cmFrontQuarterRight]),Kind);
+  if Index>=0 then PrepareRiderShot(FRiders[Index],Kind);
 end;
 
 procedure TCinematicCamera.ComputeMode(M: TCameraMode; out P, D, U: TVector3);
@@ -817,6 +935,17 @@ begin
   LookAt := TPos + Vector3(0, 1.2, 0);
 
   case M of
+    cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass:
+    begin
+      if M=cmRiderPass then begin
+        TPos:=FShot.Subject.Position;Fwd:=FShot.Subject.Direction;Fwd.Y:=0;
+        if Fwd.LengthSqr>0.001 then Fwd:=Fwd.Normalize else Fwd:=Vector3(0,0,1);
+        Side:=TVector3.CrossProduct(Fwd,Vector3(0,1,0));
+      end;
+      P:=TPos+Fwd*3.3+Side*(2.35*FShot.CloseSide)+Vector3(0,1.45,0);
+      LookAt:=TPos+Vector3(0,0.95,0);
+      LookSrc:='close:rider';
+    end;
     cmMoto:
     begin
       { Motorcycle following — behind + above, looking ahead on the rider route }
@@ -1019,13 +1148,24 @@ end;
 { ── Nearby riders ── }
 
 procedure TCinematicCamera.ClearNearby;
-begin FNearbyCount := 0; end;
+begin FNearbyCount := 0;FRiderCount:=0 end;
 
 procedure TCinematicCamera.AddNearby(const APos: TVector3);
 begin
   if FNearbyCount >= Length(FNearby) then SetLength(FNearby, FNearbyCount + 8);
   FNearby[FNearbyCount] := APos;
   Inc(FNearbyCount);
+end;
+
+procedure TCinematicCamera.AddNearbyRider(Id:Int64;const Position,Direction:TVector3;
+  Speed,Pitch:Single);
+begin
+  if(Id=0)or(FRiderCount>=Length(FRiders))or(FTarget=nil)or
+    ((Position-FTarget.Translation).Length>36)then Exit;
+  AddNearby(Position);
+  FRiders[FRiderCount].Id:=Id;FRiders[FRiderCount].Position:=Position;
+  FRiders[FRiderCount].Direction:=Direction;FRiders[FRiderCount].Speed:=Speed;
+  FRiders[FRiderCount].Pitch:=Pitch;Inc(FRiderCount);
 end;
 
 procedure TCinematicCamera.AdjustForGroup(var P, D: TVector3);
@@ -1117,13 +1257,15 @@ begin
   if FViewport.Camera.ProjectionType<>ptPerspective then Exit;
   { A stable envelope, in metres, for the bike and rider through a pedal
     cycle. Do not read rest-pose skin bounds or bounds of the shadow rig. }
-  Fwd:=FTarget.Direction; Fwd.Y:=0;
+  if FShot.Mode=cmRiderPass then Fwd:=FShot.Subject.Direction else Fwd:=FTarget.Direction;
+  Fwd.Y:=0;
   if Fwd.Length<0.001 then Fwd:=Vector3(0,0,1) else Fwd:=Fwd.Normalize;
   Side:=TVector3.CrossProduct(Fwd,Vector3(0,1,0));
-  Pitch:=DegToRad(FTargetPitchDeg);
+  if FShot.Mode=cmRiderPass then Pitch:=DegToRad(FShot.Subject.Pitch)
+  else Pitch:=DegToRad(FTargetPitchDeg);
   BodyUp:=Vector3(0,Cos(Pitch),0)-Fwd*Sin(Pitch);
   Fwd:=Fwd*Cos(Pitch)+Vector3(0,Sin(Pitch),0);
-  Center:=FTarget.Translation+BodyUp*0.95;
+  Center:=SubjectPosition+BodyUp*0.95;
   for I:=0 to High(Corners) do
     Corners[I]:=Center+Fwd*(1.15*(2*(I and 1)-1))+
       Side*(0.5*(2*((I shr 1) and 1)-1))+
@@ -1186,14 +1328,28 @@ procedure TCinematicCamera.ForceMode(M: TCameraMode);
 var
   Active: TCameraShotState;
   P: TVector3;
+  I,Best:Integer;Distance,Nearest:Single;
 begin
   if not Assigned(FTarget) or not Assigned(FViewport) then Exit;
   if M=cmPuddle then Exit; { requires a real, visible water-film landmark }
+  if(M in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and not FRiderShotsEnabled then Exit;
+  if M=cmRiderPass then begin
+    { MCP/manual preview selects an actual visible rider, never an invented
+      actor. Auto selection additionally requires a converging encounter. }
+    Best:=-1;Nearest:=18;
+    for I:=0 to FRiderCount-1 do begin
+      Distance:=(FRiders[I].Position-FTarget.Translation).Length;
+      if Distance<Nearest then begin Best:=I;Nearest:=Distance end;
+    end;
+    if Best>=0 then PrepareRiderShot(FRiders[Best],ceNone);
+    Exit;
+  end;
   SyncPathPosition;
   Active := FShot;
   try
     FShot := Default(TCameraShotState);
     FShot.Mode := M;
+    if M=cmFrontQuarterLeft then FShot.CloseSide:=-1 else FShot.CloseSide:=1;
     if M = cmRoadside then PlaceRoadsideCamera;
     if M = cmStandShot then PlaceStandShot;
     if M = cmOrbit then
@@ -1218,6 +1374,7 @@ var
   P, D, U: TVector3;
 begin
   if not FPending then Exit;
+  if not RefreshSubject(FPendingShot)then begin FPending:=False;Exit end;
   Active := FShot;
   FShot := FPendingShot;
   FPreparingShot := True;
@@ -1225,6 +1382,8 @@ begin
   try
     ComputeMode(FShot.Mode, P, D, U);
     FrameShot(P, D);
+    if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and
+      not CloseShotSafe(P)then FProbeReady:=False;
     FPendingShot := FShot;
   finally
     FShot := Active;
@@ -1232,18 +1391,19 @@ begin
   end;
   if FProbeReady then
   begin
-    if (FShot.Mode=cmPuddle)or(FPendingShot.Mode=cmPuddle)then begin
-      FBlendPosition:=FCamPos;FBlendDirection:=FCamDir;FBlendAge:=0;
-    end else FBlendAge:=2;
+    { Switch both position and framing in the same frame. Even a short
+      1.2-second flight around a nearby rider causes a fast screen-wide pan.
+      ShotSerial also marks a real cut in the simulation camera recording. }
     Inc(FShotSerial);
     FShot := FPendingShot;
+    FShotAge:=0;
     FPending := False;
     FHeightReady := False;
     FModeTimer := ModeDuration(FShot.Mode);
     if FShot.Mode=cmPuddle then begin
       FLastPuddleGroup:=FShot.Puddle.Group;FPuddleCooldown:=35;
     end;
-    if FBlendAge>=1.2 then begin FCamPos := P; FCamDir := D; FCamUp := U end;
+    FCamPos := P; FCamDir := D; FCamUp := U;
     if Assigned(Logger) then
       Logger.Info('[CineCam] cut=' + ModeName(FShot.Mode) + ' terrain=ready');
   end else if FPendingAge >= 2.0 then
@@ -1262,22 +1422,23 @@ begin
     motion lag; only the terrain-relative correction is damped. This absorbs
     short GPU holds followed by a fresh slope sample. }
   if FShot.Mode in [cmRoadside, cmStandShot,cmPuddle] then Exit;
-  Offset := P.Y - FTarget.Translation.Y;
+  Offset := P.Y - SubjectPosition.Y;
   if FHeightReady then
   begin
     Alpha := 1 - Exp(-8 * FFrameDT);
-    P.Y := FTarget.Translation.Y + FHeightOffset + (Offset-FHeightOffset)*Alpha;
+    P.Y := SubjectPosition.Y + FHeightOffset + (Offset-FHeightOffset)*Alpha;
     { A rising surface remains solid; smoothing may never bury the camera. }
     ClampAboveGround(P);
   end;
-  FHeightOffset := P.Y - FTarget.Translation.Y;
+  FHeightOffset := P.Y - SubjectPosition.Y;
   FHeightReady := True;
 end;
 
 procedure TCinematicCamera.FrameShot(var P, D: TVector3);
 begin
   if FShot.Mode=cmPuddle then Exit; { water and reflected scenery are the subject }
-  AdjustForGroup(P, D);
+  if not(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])then
+    AdjustForGroup(P, D);
   if FShot.Mode = cmHelicopter then ClampDownPitch(D, HeliMaxDownSin)
   else ClampDownPitch(D, MaxLookDownSin);
   KeepRiderInFrame(P, D);
@@ -1288,13 +1449,13 @@ end;
 procedure TCinematicCamera.Update(const DT: Single);
 var
   TP, TD, TU: TVector3;
-  Blend:Single;
   FirstFrame:Boolean;
 begin
   if not FEnabled then Exit;
   if not Assigned(FViewport) or not Assigned(FTarget) or (FViewport.Camera = nil) then Exit;
   if IsNan(DT) or IsInfinite(DT) or (DT < 0) then Exit;
   FFrameDT := DT;
+  FShotAge:=FShotAge+DT;
   FPuddleCooldown:=Max(0,FPuddleCooldown-DT);FPuddleScan:=Max(0,FPuddleScan-DT);
 
   { Scene preparation/teleport may move the rider onto a completely different
@@ -1336,6 +1497,15 @@ begin
 
   SyncPathPosition;
 
+  if not RefreshSubject(FShot)then begin
+    { A disappearing subject ends the shot with a prepared cut. Never
+      retain a pointer to a bot that may have despawned. }
+    ForceMode(cmMoto);
+  end;
+  if not FRiderShotsEnabled and(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])then
+    ForceMode(cmMoto);
+  if not FirstFrame and(DT>0)then TryRiderShot(DT);
+
   if(FShot.Mode=cmPuddle)and not FPuddleReflections then ForceMode(cmMoto);
   if FPending and(FPendingShot.Mode=cmPuddle)and not FPuddleReflections then FPending:=False;
   if not FirstFrame and(DT>0)then TryPuddleShot;
@@ -1348,7 +1518,7 @@ begin
     FModeTimer := FModeTimer - DT;
     if FModeTimer <= 0 then
     begin
-      if FShot.Mode=cmPuddle then
+      if FShot.Mode in[cmPuddle,cmRiderPass]then
         ForceMode(cmMoto)
       else if FStationary then
         ForceMode(PickStationary)
@@ -1367,15 +1537,15 @@ begin
   ComputeMode(FShot.Mode, TP, TD, TU);
   FrameShot(TP, TD);
 
-  { Only reflection cutaways blend. Other broadcast cuts retain their existing
-    behavior. The state is recorded so simulation rewind reproduces the view. }
-  if FBlendAge<1.2 then begin
-    FBlendAge:=Min(1.2,FBlendAge+DT);Blend:=FBlendAge/1.2;
-    Blend:=Blend*Blend*(3-2*Blend);
-    TP:=FBlendPosition+(TP-FBlendPosition)*Blend;
-    TD:=FBlendDirection+(TD-FBlendDirection)*Blend;
-    if TD.LengthSqr>0.000001 then TD:=TD.Normalize;
-    ClampAboveGround(TP);
+  if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and
+    not CloseShotSafe(TP)then begin
+    FModeTimer:=0;
+    { An obstruction invalidates even a manually selected close-up. Queue
+      the existing safe follow shot, including when AutoSwitch is disabled. }
+    if not FPending then ForceMode(cmMoto);
+    { ForceMode has either committed a safe view or retained the last one
+      while probing. Do not overwrite it with this frame's obstructed shot. }
+    TP:=FCamPos;TD:=FCamDir;TU:=FCamUp;
   end;
 
   { Rigid follow — instant, like broadcast }

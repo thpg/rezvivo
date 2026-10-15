@@ -66,7 +66,7 @@ begin
 end;
 
 function TViewPlay.GuideTravel(Dt,Steer:Single;Turn:Integer):Single;
-var Roads:TTravelRoads;I,N,Count:Integer;P,Q:TVector3;Guided,T:Single;
+var Roads:TTravelRoads;I,N,Count:Integer;P,Q:TVector3;Guided,T,AcquireDelay:Single;
   R:TTravelRoad;RoadPos:TPathPosition;
 begin
   Result:=Steer;
@@ -101,8 +101,9 @@ begin
     FRoadGuidance.SetRoads(Roads);
   end;
   P:=FActiveAvatarAgent.State.WorldPosition;
+  AcquireDelay:=0;if FFreeExplore then AcquireDelay:=RoadAcquireSeconds;
   Guided:=FRoadGuidance.Step(P,FActiveAvatarAgent.State.ForwardDir,
-    FActiveAvatarAgent.State.CurrentSpeed,Steer,Dt);
+    FActiveAvatarAgent.State.CurrentSpeed,Steer,Dt,AcquireDelay);
   if not FFreeExplore and FRoadGuidance.TurnTaken then begin
     if RouteTurnFollowsPath(FActiveAvatarAgent.Path,FActiveAvatarAgent.Path.Position,
       FRoadGuidance.SelectedTurnRoad,FRoadGuidance.SelectedTurnDirection)then
@@ -131,9 +132,10 @@ begin
     FLeftRouteCorridor:=True;
   Heading:=FActiveAvatarAgent.Path.FollowDirectionXZ(FRouteReturn.Target);
   if(FExcursionTime>4)and(FLeftRouteCorridor or(FExcursionTime>8))and
+    (FActiveAvatarAgent.State.CurrentSpeed>=0.2)and
     RouteReturnAligned(FRouteReturn.Distance,
       TVector3.DotProduct(Heading,FActiveAvatarAgent.State.ForwardDir),FManualSteerIntent,
       (FSteeringIntentHold>0)or(FRoadGuidance.PendingTurn<>0))then
-    FReturnDwell:=FReturnDwell+Dt else FReturnDwell:=0;
-  if FReturnDwell>1 then ResumeRoute;
+    FReturnDwell:=FReturnDwell+Math.Min(Dt,0.25) else FReturnDwell:=0;
+  if FReturnDwell>=RoadAcquireSeconds then ResumeRoute;
 end;

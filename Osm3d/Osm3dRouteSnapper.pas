@@ -615,25 +615,41 @@ begin
   Result := RadToDeg(ArcCos(Cos90));
 end;
 
-{ Tangent at point I in a route array. Falls back to neighbour-segment
-  direction at the ends. Returns False if the route is too short or
-  consecutive points are coincident. }
-function ComputeRouteTangent(const Route: TRouteVector3Array;
+{ Estimate each stationary run from its neighbouring moving samples. A FIT
+  may repeat the starting coordinate for minutes: using I-1/I+1 left those
+  points unsnapped, starting the rider across the roadway instead of along it.
+  Build once in O(N), retaining every record/index for the FIT load profile. }
+function BuildRouteTangents(const Route: TRouteVector3Array): TRouteVector3Array;
+var First, Last, I, A, B: Integer; V: TVector3;
+begin
+  Result:=nil; SetLength(Result,Length(Route));
+  if Length(Route)<2 then Exit;
+  First:=0;
+  while First<Length(Route) do begin
+    Last:=First;
+    while (Last<High(Route)) and
+      (Sqr(Route[Last+1].X-Route[First].X)+Sqr(Route[Last+1].Z-Route[First].Z)<=1e-8) do Inc(Last);
+    A:=Max(0,First-1); B:=Min(High(Route),Last+1);
+    V:=Route[B]-Route[A]; V.Y:=0;
+    { At an exact turnaround, prefer the outgoing direction over zero. }
+    if (Sqr(V.X)+Sqr(V.Z)<=1e-8) and (B>Last) then begin
+      V:=Route[B]-Route[First]; V.Y:=0;
+    end;
+    for I:=First to Last do Result[I]:=V;
+    First:=Last+1;
+  end;
+end;
+
+function ComputeRouteTangent(const Tangents: TRouteVector3Array;
                              I: Integer;
                              out TX, TZ: Single): Boolean;
-var IA, IB: Integer;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(737);{$ENDIF}
   TX := 0; TZ := 0;
   Result := False;
-  if Length(Route) < 2 then Exit;
-  if I <= 0 then begin IA := 0; IB := 1; end
-  else if I >= High(Route) then
-    begin IA := High(Route) - 1; IB := High(Route); end
-  else
-    begin IA := I - 1; IB := I + 1; end;
-  TX := Route[IB].X - Route[IA].X;
-  TZ := Route[IB].Z - Route[IA].Z;
+  if (I<0) or (I>=Length(Tangents)) then Exit;
+  TX := Tangents[I].X;
+  TZ := Tangents[I].Z;
   Result := (TX * TX + TZ * TZ) > 1.0e-8;
 end;
 
@@ -757,7 +773,7 @@ type
   end;
 var
   Grid:         TSnapGrid;
-  RouteLocal:   TRouteVector3Array;
+  RouteLocal, RouteTangents: TRouteVector3Array;
   CumLen:       array of Single;    { накопленная длина маршрута до точки, м }
   ChosenWay:    array of Int64;     { way, на которую снапнута точка; 0 = нет }
   ChosenSeg:    array of Integer;   { exact segment; -1 for an unmatched point }
@@ -925,13 +941,13 @@ var
       Segs[CandidateSeg].DZ)<=SNAP_PARALLEL_MAX_ANGLE_DEG;
   end;
 
-  { Do not extend an ordinary road's sticky hold beyond a proven turn onto
-    its connected outgoing road or path. Both the raw step and the close foot
+  { Do not extend an ordinary road's sticky hold beyond its endpoint or a
+    proven turn onto its connected outgoing road/path. Both the raw step and the close foot
     must identify that exit; a parallel road, crossing, structure or merely
     distant candidate does not qualify. Evaluate the current candidates,
     since follow/hold may have replaced them earlier in this iteration. }
-  function ConnectedRawTurn(Idx: Integer; const NewRoad, OldRoad: TCandidate): Boolean;
-  var SX,SZ: Single;
+  function ConnectedRawExit(Idx: Integer; const NewRoad, OldRoad: TCandidate): Boolean;
+  var SX,SZ,OldT: Single;
   begin
     Result := False;
     if (Idx<=0) or (NewRoad.WayId=OldRoad.WayId) or
@@ -942,18 +958,21 @@ var
        not SegmentsMeet(Segs[NewRoad.SegIdx],Segs[OldRoad.SegIdx]) then Exit;
     SX:=RouteLocal[Idx].X-RouteLocal[Idx-1].X;
     SZ:=RouteLocal[Idx].Z-RouteLocal[Idx-1].Z;
+    OldT:=((RouteLocal[Idx].X-Segs[OldRoad.SegIdx].X0)*Segs[OldRoad.SegIdx].DX+
+      (RouteLocal[Idx].Z-Segs[OldRoad.SegIdx].Z0)*Segs[OldRoad.SegIdx].DZ)/Segs[OldRoad.SegIdx].LenSq;
     Result := (UndirectedAngleDeg(SX,SZ,Segs[NewRoad.SegIdx].DX,
       Segs[NewRoad.SegIdx].DZ)<=SNAP_PARALLEL_MAX_ANGLE_DEG) and
-      (UndirectedAngleDeg(SX,SZ,Segs[OldRoad.SegIdx].DX,
-      Segs[OldRoad.SegIdx].DZ)>SNAP_PARALLEL_MAX_ANGLE_DEG);
+      ((OldT<0)or(OldT>1)or
+       (UndirectedAngleDeg(SX,SZ,Segs[OldRoad.SegIdx].DX,
+        Segs[OldRoad.SegIdx].DZ)>SNAP_PARALLEL_MAX_ANGLE_DEG));
   end;
 
   function PointCandBetter(const A, B: TCandidate): Boolean;
   begin
     { A recorded, connected turn can enter a cycleway/path too. Apply this
       before the broad roadway-over-footpath preference, not just in hold. }
-    if ConnectedRawTurn(I,A,B) then Exit(True);
-    if ConnectedRawTurn(I,B,A) then Exit(False);
+    if ConnectedRawExit(I,A,B) then Exit(True);
+    if ConnectedRawExit(I,B,A) then Exit(False);
     Result:=CandBetterThan(A,B);
   end;
 
@@ -1291,7 +1310,7 @@ var
     var V,R,M:Integer; S0:^TSnapSegment; NearPortal:Boolean;
     begin
       Result:=False; BestDist:=1e30;
-      if not ComputeRouteTangent(RouteLocal,Pt,RTx,RTz) then Exit;
+      if not ComputeRouteTangent(RouteTangents,Pt,RTx,RTz) then Exit;
       for V:=0 to High(Allowed) do
       begin
         R:=Allowed[V]; S0:=@Segs[R];
@@ -1401,6 +1420,8 @@ var
     finally ByWay.Free end;
   end;
 
+  {$I osm3d_route_chain.inc}
+
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1326);{$ENDIF}
   N := Length(Route);
@@ -1452,6 +1473,7 @@ begin
   { Pre-project the route once — used both for nearest-segment search
     and for tangent estimation. }
   RouteLocal := TRouteSrc.ProjectPolyline(Route, Projection);
+  RouteTangents := BuildRouteTangents(RouteLocal);
 
   { ChosenWay обнуляется самим SetLength; CumLen — накопленная длина
     маршрута (для памяти липкости и лимита длины островка). }
@@ -1477,7 +1499,7 @@ begin
   for FI := 0 to N - 1 do
   begin
     PtCands[FI] := nil;
-    if not ComputeRouteTangent(RouteLocal, FI, FTX, FTZ) then Continue;
+    if not ComputeRouteTangent(RouteTangents, FI, FTX, FTZ) then Continue;
     FCells := GridCellsAround(Grid, RouteLocal[FI].X, RouteLocal[FI].Z);
     for FC := 0 to High(FCells) do
     for FM := Grid.Starts[FCells[FC]] to Grid.Starts[FCells[FC] + 1] - 1 do
@@ -1583,7 +1605,7 @@ begin
     if GapSinceSnapM > SNAP_STICKY_FORGET_M then
       PrevWayId := 0;
 
-    HasTangent := ComputeRouteTangent(RouteLocal, I, TX, TZ);
+    HasTangent := ComputeRouteTangent(RouteTangents, I, TX, TZ);
     if not HasTangent then
     begin
       if DbgOn then Note[I] := 'нет касательной (крайняя/вырожденная точка)';
@@ -1710,7 +1732,8 @@ begin
         FMaxD := SNAP_FOLLOW_FAR_M
       else
         FMaxD := SNAP_FOLLOW_REJOIN_MAX_M;
-      if FindWayCand(I, FW, FMaxD, RC) then
+      if FindWayCand(I, FW, FMaxD, RC) and
+         not (HasBest and ConnectedRawExit(I,Best,RC)) then
       begin
         Best    := RC;
         HasBest := True;
@@ -1745,7 +1768,7 @@ begin
       end
       else if HasBest and (Best.WayId <> PrevWayId)
               and FindWayCand(I, PrevWayId, SNAP_FOLLOW_FAR_M, RC)
-              and not ConnectedRawTurn(I,Best,RC) then
+              and not ConnectedRawExit(I,Best,RC) then
       begin
         { Margin: bridge prefer, or full road-over-path when Prev is the
           vehicle exit and Best is a footway/sidewalk. }
@@ -1830,7 +1853,7 @@ begin
       HasBestPrev := True;
     end;
     if HasBestPrev and (Best.WayId <> PrevWayId) and
-       not ConnectedRawTurn(I,Best,BestPrev) then
+       not ConnectedRawExit(I,Best,BestPrev) then
     begin
       { Allow vehicle road to steal from sidewalk even if sticky would hold. }
       if CandIsRoadway(Best) and (not CandIsRoadway(BestPrev))
@@ -1955,6 +1978,7 @@ begin
   end;
 
   RepairStructureContinuity;
+  RepairRoadChain;
 
   if AProgress <> nil then AProgress^ := N;   { обработан весь маршрут }
 

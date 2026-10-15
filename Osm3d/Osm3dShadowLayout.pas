@@ -25,7 +25,7 @@ type
 procedure BuildShadowReceiverLayout(const Camera, Direction, FieldOfView,
   ReferencePoint, Sun: TVector3; const AvatarReceiver: Boolean;
   const WorldDistance: Single; const TileSize: Integer;
-  out Layout: TShadowReceiverLayout);
+  out Layout: TShadowReceiverLayout; const ForwardExtension: Single = 0);
 
 implementation
 
@@ -34,12 +34,12 @@ uses Math;
 procedure BuildShadowReceiverLayout(const Camera, Direction, FieldOfView,
   ReferencePoint, Sun: TVector3; const AvatarReceiver: Boolean;
   const WorldDistance: Single; const TileSize: Integer;
-  out Layout: TShadowReceiverLayout);
+  out Layout: TShadowReceiverLayout; const ForwardExtension: Single);
 const Fractions: array[0..3] of Single = (1/64, 1/16, 1/4, 1);
 var
   D, Hint, Centre: TVector3;
   K2, FarDepth, Along, Radius, Height, TargetDepth, Distance, Step: Double;
-  X, Y, Depth, H: Double;
+  X, Y, Depth, H, BaseViewDistance: Double;
   I: Integer;
 begin
   Layout := Default(TShadowReceiverLayout);
@@ -54,6 +54,8 @@ begin
   TargetDepth := Max(Height,TVector3.DotProduct(ReferencePoint-Camera,D));
   if D.Y < -0.25 then TargetDepth := Max(TargetDepth,Height/-D.Y);
   Layout.ViewDistance := Max(Distance*1.25,TargetDepth*1.25+Distance*0.25);
+  BaseViewDistance:=Layout.ViewDistance;
+  Layout.ViewDistance:=BaseViewDistance+EnsureRange(ForwardExtension,0.0,Distance*0.2);
   K2 := Sqr(Tan(EnsureRange(FieldOfView.X,0.05,3.0)*0.5)) +
         Sqr(Tan(EnsureRange(FieldOfView.Y,0.05,3.0)*0.5));
   Layout.MinX:=1e30; Layout.MinY:=1e30; Layout.MinDepth:=1e30;
@@ -66,7 +68,8 @@ begin
       H:=4;
       FarDepth:=0;
     end else begin
-      FarDepth:=Layout.ViewDistance*Fractions[I];
+      FarDepth:=BaseViewDistance*Fractions[I];
+      if I=3 then FarDepth:=Layout.ViewDistance;
       { Rotation-invariant sphere enclosing the complete truncated frustum,
         including the camera apex. Unlike a tight XY box it does not resize
         with each yaw/roll and make the shadow texels swim. }

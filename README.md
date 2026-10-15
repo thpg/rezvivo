@@ -184,6 +184,11 @@ Keep `data` beside it. Runtime DLLs are supplied separately;
 observed versions, hashes and upstream sources. Compilation does not require
 those DLLs, but running and packaging the client does.
 
+Offline voice input uses the optional Vosk runtime and small English/Russian models.
+Restore them with `powershell -File rezvivo-osm-bckl/tools/prepare-speech-assets.ps1`.
+The Windows installer includes them; Git contains the upstream URLs, checksums
+and license notices in [data/speech/assets.json](rezvivo-osm-bckl/data/speech/assets.json).
+
 The optional RTX backend has its source in [Osm3d/rtx](Osm3d/rtx). To build it,
 install the Visual C++ x64 build tools and a Vulkan SDK shader compiler, then add
 `-BuildRtx -Glslang "C:/VulkanSDK/<version>/Bin/glslangValidator.exe"` to the build

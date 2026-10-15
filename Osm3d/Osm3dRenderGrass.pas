@@ -3,7 +3,7 @@ unit Osm3dRenderGrass;
 {$mode objfpc}{$H+}{$Q-}{$R-}
 interface
 uses {$IFDEF MSWINDOWS}Windows,{$ENDIF}Classes,SysUtils,Math,SyncObjs,CastleVectors,CastleBoxes,CastleFrustum,
-  CastleTransform,CastleRenderContext,{$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},Osm3dGeomMesh,GrassModel,GrassRenderer,Osm3dRiderShadow;
+  CastleTransform,CastleRenderContext,{$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},Osm3dGeomMesh,GrassModel,GrassRenderer,Osm3dRiderShadow,Osm3dMotionPrefetch;
 type
   { Keep compact surfaces. Generate metre patches only around the camera. }
   TGrassRenderer=class(TCastleTransform)
@@ -21,6 +21,9 @@ type
     FCullDistance:Single;
     FError:string;
     FContextHooked:Boolean;
+    FMotion:TMotionPrefetch;
+    FPrefetchOffset:TVector3;
+    FGeneration:LongInt;
     procedure ContextClose(Sender:TObject);
     procedure AddSource(Mesh:TMesh;const TriMat:array of Integer;CX,CZ:Single);
     procedure RebuildBox;
@@ -94,12 +97,14 @@ type
     Source:TGrassSource;
     CameraX,CameraZ:Single;
     Radius:Integer;
+    Generation:LongInt;
     destructor Destroy;override;
   end;
   TGrassResult=class
     Id:Int64;
     CameraX,CameraZ:Single;
     Radius:Integer;
+    Generation:LongInt;
     VisitedTriangles:Integer;
     IndexBytes:Int64;
     Patches:TGrassPatches;
@@ -110,6 +115,7 @@ type
     Owner:TGrassRenderer;
     constructor Create(AOwner:TGrassRenderer);
     procedure Execute;override;
+    function Obsolete(Job:TGrassJob):Boolean;
   end;
 var SunDirection:TVector3;
 procedure SetGrassSunDir(const ADir:TVector3);
@@ -290,6 +296,7 @@ var I,Selected,X,Z,X0,X1,Z0,Z1,MinX,MinZ,N,K,C,Dest,Grid,BuildRadius:Integer;
     CandidateIds:TGrassTriangleIds;
 begin
   Result:=TGrassResult.Create;Result.Id:=Job.Source.Id;Result.CameraX:=Job.CameraX;Result.CameraZ:=Job.CameraZ;
+  Result.Generation:=Job.Generation;
   try
   BuildRadius:=Job.Radius;if BuildRadius<=0 then BuildRadius:=RADIUS;
   BuildRadius:=EnsureRange(Ceil(BuildRadius/CELL)*CELL,CELL,256);
@@ -307,7 +314,7 @@ begin
     Result.IndexBytes:=Int64(Length(Offsets)+Length(TriangleIds)+Length(LargeIds))*SizeOf(Integer);
   for Selected:=0 to High(CandidateIds)do begin
     I:=CandidateIds[Selected];
-    if (Worker<>nil) and Worker.Terminated then Exit;T:=Job.Source.Triangles[I];
+    if (Worker<>nil) and Worker.Obsolete(Job) then Exit;T:=Job.Source.Triangles[I];
     X0:=Max(MinX,Floor(Min(T.A.X,Min(T.B.X,T.C.X))));X1:=Min(MinX+GRID*CELL-1,Floor(Max(T.A.X,Max(T.B.X,T.C.X))));
     Z0:=Max(MinZ,Floor(Min(T.A.Z,Min(T.B.Z,T.C.Z))));Z1:=Min(MinZ+GRID*CELL-1,Floor(Max(T.A.Z,Max(T.B.Z,T.C.Z))));
     if(X0>X1)or(Z0>Z1)then Continue;
@@ -322,7 +329,7 @@ begin
     UpX:=((T.UpC-T.UpA)*(T.B.Z-T.A.Z)-(T.UpB-T.UpA)*(T.C.Z-T.A.Z))/CrossV.Y;
     UpZ:=((T.UpB-T.UpA)*(T.C.X-T.A.X)-(T.UpC-T.UpA)*(T.B.X-T.A.X))/CrossV.Y;
     for Z:=Z0 to Z1 do begin
-      if (Worker<>nil) and Worker.Terminated then Exit;
+      if (Worker<>nil) and Worker.Obsolete(Job) then Exit;
       for X:=X0 to X1 do begin
         if Sqr(X+0.5-Job.CameraX)+Sqr(Z+0.5-Job.CameraZ)>Sqr(BuildRadius-2)then Continue;
         P:=WholeGrassPatch(X,Z,PickKind(T.Material,GrassCellSeed(X,Z)));
@@ -352,6 +359,8 @@ begin
 end;
 constructor TGrassWorker.Create(AOwner:TGrassRenderer);
 begin Owner:=AOwner;FreeOnTerminate:=False;inherited Create(False);end;
+function TGrassWorker.Obsolete(Job:TGrassJob):Boolean;
+begin Result:=Terminated or (Job.Generation<>InterlockedCompareExchange(Owner.FGeneration,0,0));end;
 procedure TGrassWorker.Execute;
 var Job:TGrassJob;Res:TGrassResult;
 begin
@@ -361,7 +370,7 @@ begin
       Job:=TGrassJob(Owner.PopJob);if Job=nil then Break;Res:=nil;
       try
         try Res:=BuildPatches(Job,Self);
-        except on E:Exception do begin Res:=TGrassResult.Create;Res.Id:=Job.Source.Id;Res.CameraX:=Job.CameraX;Res.CameraZ:=Job.CameraZ;Res.Error:=E.Message;end;end;
+        except on E:Exception do begin Res:=TGrassResult.Create;Res.Id:=Job.Source.Id;Res.CameraX:=Job.CameraX;Res.CameraZ:=Job.CameraZ;Res.Generation:=Job.Generation;Res.Error:=E.Message;end;end;
         if Terminated then Res.Free else Owner.PushResult(Res);
       finally Job.Free;end;
     until Terminated;
@@ -455,26 +464,34 @@ end;
 function TGrassRenderer.LocalBoundingBox:TBox3D;
 begin Result:=FBox;end;
 procedure TGrassRenderer.Schedule(const Camera:TVector3);
-var I,TargetRadius:Integer;S:TGrassSource;Job:TGrassJob;
+var I,TargetRadius:Integer;S:TGrassSource;Job:TGrassJob;Centre:TVector3;
 begin
   TargetRadius:=Round(VegetationDetail.GrassCacheRadius);
+  { Shift the existing circle, retaining a complete visible disc plus the
+    refresh step and the grid's asymmetric cell rounding. No added patches. }
+  FPrefetchOffset:=FMotion.CacheOffset(TargetRadius,VegetationDetail.Grass.ViewEnd,
+    VegetationDetail.GrassRefreshStep+CELL+4,2);
+  Centre:=Camera+FPrefetchOffset;
   { Queued work follows the latest camera. An in-flight worker owns its
     snapshot and is never modified by the render thread. }
   FLock.Acquire;
   try
-    for I:=0 to FJobs.Count-1 do begin
-      Job:=TGrassJob(FJobs[I]);Job.CameraX:=Camera.X;Job.CameraZ:=Camera.Z;
-      Job.Radius:=TargetRadius;
+    for I:=FJobs.Count-1 downto 0 do begin
+      Job:=TGrassJob(FJobs[I]);Job.CameraX:=Centre.X;Job.CameraZ:=Centre.Z;
+      Job.Radius:=TargetRadius;Job.Generation:=FGeneration;
+      if DistanceSq(Job.Source.Box,Centre)>Sqr(TargetRadius+8) then begin
+        Job.Source.Pending:=False;FJobs.Delete(I);Job.Free;
+      end;
     end;
   finally FLock.Release end;
   for I:=0 to FSources.Count-1 do begin
     S:=TGrassSource(FSources[I]);
-    if DistanceSq(S.Box,Camera)>Sqr(TargetRadius+8)then begin if not S.Pending then begin S.FreeGPU;S.Valid:=False;end;Continue;end;
+    if DistanceSq(S.Box,Centre)>Sqr(TargetRadius+8)then begin if not S.Pending then begin S.FreeGPU;S.Valid:=False;end;Continue;end;
     if S.Pending then Continue;
     if S.Valid and (S.CacheRadius=TargetRadius) and
-       (Sqr(S.LastX-Camera.X)+Sqr(S.LastZ-Camera.Z)<Sqr(VegetationDetail.GrassRefreshStep)) then Continue;
-    Job:=TGrassJob.Create;Job.Source:=S;InterlockedIncrement(S.References);Job.CameraX:=Camera.X;Job.CameraZ:=Camera.Z;S.Pending:=True;
-    Job.Radius:=TargetRadius;
+       (Sqr(S.LastX-Centre.X)+Sqr(S.LastZ-Centre.Z)<Sqr(VegetationDetail.GrassRefreshStep)) then Continue;
+    Job:=TGrassJob.Create;Job.Source:=S;InterlockedIncrement(S.References);Job.CameraX:=Centre.X;Job.CameraZ:=Centre.Z;S.Pending:=True;
+    Job.Radius:=TargetRadius;Job.Generation:=FGeneration;
     FLock.Acquire;try FJobs.Add(Job);finally FLock.Release;end;RTLEventSetEvent(FEvent);
   end;
 end;
@@ -496,6 +513,7 @@ begin
     try
       for J:=0 to FSources.Count-1 do begin
         S:=TGrassSource(FSources[J]);if S.Id<>R.Id then Continue;S.Pending:=False;
+        if R.Generation<>FGeneration then Break;
         if R.Error<>'' then begin
           FError:=R.Error;WritelnLog('Grass',R.Error);S.Valid:=True;
           S.LastX:=R.CameraX;S.LastZ:=R.CameraZ;Break;
@@ -533,6 +551,7 @@ end;
 procedure TGrassRenderer.ClearTiles;
 var I:Integer;S:TGrassSource;
 begin
+  InterlockedIncrement(FGeneration);FMotion.Reset;FPrefetchOffset:=TVector3.Zero;
   for I:=0 to FSources.Count-1 do begin S:=TGrassSource(FSources[I]);S.FreeGPU;S.Release;end;FSources.Clear;FBox:=TBox3D.Empty;
   FLock.Acquire;try
     for I:=0 to FJobs.Count-1 do TObject(FJobs[I]).Free;FJobs.Clear;
@@ -548,7 +567,7 @@ function TGrassRenderer.DiagString:string;
 var I,N,T,Visited:Integer;Submitted,IndexBytes:Int64;
 begin N:=0;T:=0;Visited:=0;IndexBytes:=0;for I:=0 to FSources.Count-1 do begin Inc(N,TGrassSource(FSources[I]).PatchCount);Inc(T,Length(TGrassSource(FSources[I]).Triangles));Inc(Visited,TGrassSource(FSources[I]).VisitedTriangles);Inc(IndexBytes,TGrassSource(FSources[I]).IndexBytes);end;
   Submitted:=0;if (FRenderer<>nil) and (FDrawCalls>0) then Submitted:=FRenderer.Triangles;
-  Result:=Format('surfaces=%d triangles=%d patches=%d GPU=%.2f MiB drawn=%d calls=%d submitted_triangles=%d blades-to=%.0fm cache-radius=%.0fm indexed_triangles=%d index=%.2f MiB error=%s',[FSources.Count,T,N,MemoryBytesGPU/1048576,FDrawn,FDrawCalls,Submitted,VegetationDetail.Grass.BladeEnd,VegetationDetail.GrassCacheRadius,Visited,IndexBytes/1048576,FError]);end;
+  Result:=Format('surfaces=%d triangles=%d patches=%d GPU=%.2f MiB drawn=%d calls=%d submitted_triangles=%d blades-to=%.0fm cache-radius=%.0fm indexed_triangles=%d index=%.2f MiB prefetch_m=%.1f motion_mps=%.1f error=%s',[FSources.Count,T,N,MemoryBytesGPU/1048576,FDrawn,FDrawCalls,Submitted,VegetationDetail.Grass.BladeEnd,VegetationDetail.GrassCacheRadius,Visited,IndexBytes/1048576,FPrefetchOffset.Length,FMotion.Speed,FError]);end;
 function TGrassRenderer.OverlapReport:string;
 begin Result:='grass: global 1m cells, roots clipped to source triangles';end;
 procedure TGrassRenderer.LocalRender(const Params:TRenderParams);
@@ -589,6 +608,10 @@ begin
   FDrawn:=0;FDrawCalls:=0;if not CheckVisible or not RenderGrassActive then Exit;
   if Params.RenderingCamera.Target=rtShadowMap then Exit;
   View:=Params.RenderingCamera.Matrix;Camera:=WorldInverseTransform.MultPoint(CameraWorldPosFromView(View));
+  WindObserveCamera(CameraWorldPosFromView(View),PtrUInt(Params.RenderingCamera.Camera));
+  if FMotion.Observe(Camera,
+    WorldInverseTransform.MultDirection(Vector3(-View.Data[0,2],-View.Data[1,2],-View.Data[2,2])),
+    GetTickCount64,PtrUInt(Params.RenderingCamera.Camera)) then InterlockedIncrement(FGeneration);
   Schedule(Camera);if FSources.Count=0 then Exit;
   {$ifndef OpenGLES}if (FRenderer=nil) and not Load_GL_version_3_3_CORE then Exit;{$endif}
   if not FContextHooked then begin ApplicationProperties.OnGLContextCloseObject.Add(@ContextClose);FContextHooked:=True;end;
@@ -611,7 +634,7 @@ begin
   Projection:=RenderContext.ProjectionMatrix;Model:=WorldTransform;Frustum.Init(Projection*View*Model);
   ViewModel:=View*Model;FRenderer.AdaptiveDetail:=GrassBladeLodActive;
   System.Move(Projection,P,SizeOf(P));System.Move(View,V,SizeOf(V));System.Move(Model,M,SizeOf(M));Sun:=SunDirection;if FSun.Length>0.001 then Sun:=FSun;
-  FRenderer.BeginFrame(P,V,M,Vec(Camera.X,Camera.Y,Camera.Z),Vec(Sun.X,Sun.Y,Sun.Z),WindNow,WindCurrentBaseSpeed/3);
+  FRenderer.BeginFrame(P,V,M,Vec(Camera.X,Camera.Y,Camera.Z),Vec(Sun.X,Sun.Y,Sun.Z),VegetationWindNow,VegetationWindBaseSpeed/3);
   FShadowBinding.Bind(1);glActiveTexture(GL_TEXTURE0);
     for I:=0 to FSources.Count-1 do begin
       S:=TGrassSource(FSources[I]);if S.Buffer=0 then Continue;if not Frustum.Box3DCollisionPossibleSimple(S.Box)then Continue;

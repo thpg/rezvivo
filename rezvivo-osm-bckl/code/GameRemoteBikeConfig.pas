@@ -211,6 +211,8 @@ begin
           O.Add('helmetColor',Color);
         end;
       end;
+      S:=ObjectAt(Root,'hud');
+      if S<>nil then begin O:=TJSONObject.Create;Safe.Add('hud',O);Numbers(S,O,'ftp',0,2000) end;
       Output:=Safe.AsJSON;Result:=True;
     except
       ErrorText:='Invalid remote bike configuration';Output:='';

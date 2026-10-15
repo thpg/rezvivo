@@ -25,6 +25,16 @@ $reflectionCommand = '"' + $Glslang + '" -V --target-env vulkan1.2 -o build\refl
 & $env:ComSpec /d /s /c $reflectionCommand
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) { throw 'Reflection ray query shader failed' }
+$ErrorActionPreference = 'Continue'
+$screenCommand = '"' + $Glslang + '" -V --target-env vulkan1.2 -o build\screen_shadow.spv screen_shadow.comp 2>&1'
+& $env:ComSpec /d /s /c $screenCommand
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { throw 'Screen shadow shader failed' }
+$ErrorActionPreference = 'Continue'
+$filterCommand = '"' + $Glslang + '" -V --target-env vulkan1.2 -o build\screen_shadow_filter.spv screen_shadow_filter.comp 2>&1'
+& $env:ComSpec /d /s /c $filterCommand
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { throw 'Screen shadow reconstruction shader failed' }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vs = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
 if (-not $vs) { throw 'Visual C++ x64 build tools are required for the optional RTX bridge' }
@@ -39,3 +49,6 @@ Copy-Item -LiteralPath 'build\rezvivo_rtx.dll' -Destination '..\rezvivo_rtx.dll'
 New-Item -ItemType Directory -Force -Path '..\data\shaders\rtx' | Out-Null
 Copy-Item -LiteralPath 'build\shadow.spv' -Destination '..\data\shaders\rtx\shadow.spv' -Force
 Copy-Item -LiteralPath 'build\reflection.spv' -Destination '..\data\shaders\rtx\reflection.spv' -Force
+
+Copy-Item -LiteralPath 'build\screen_shadow.spv' -Destination '..\data\shaders\rtx\screen_shadow.spv' -Force
+Copy-Item -LiteralPath 'build\screen_shadow_filter.spv' -Destination '..\data\shaders\rtx\screen_shadow_filter.spv' -Force

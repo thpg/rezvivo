@@ -9,7 +9,7 @@ unit Osm3dSceneAssembler;
 
 interface
 
-uses
+uses Osm3dSceneLighting,
   Classes,
   SysUtils,
   CastleVectors, Osm3dShadowReceiver, Osm3dGpuGround, Osm3dSoundscape,
@@ -2265,6 +2265,7 @@ begin
   Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_ground_normal_strength', 2.0));
   Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_ground_spec_boost',      1.0));
   Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_ground_ambient',         0.18));
+  AttachSceneLighting(Effect,True,True);
   Effect.AddCustomField(TSFFloat.Create(Effect, True, 'u_ground_exposure',        1.0));
 
   { Per-material hash randomizer params (vec3: x=block-in-tiles, y=shift,
@@ -2617,6 +2618,7 @@ begin
   end;
 
   Result := TShapeNode.Create;
+  Result.X3DName := 'GroundComposite';
   Result.Geometry   := Geo;
   Result.Appearance := App;
   CompactTileGeometry(Result);
@@ -3265,11 +3267,11 @@ begin
   Result.SetParts([EffectVert, EffectFrag]);
   TRiderShadowGroundEffect(Result).SetGroundFragment(EffectFrag);
   Result.AddCustomField(TSFVec2f.Create(Result, True, 'uWindDir', GlobalWind.Direction));
-  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindTime', WindNow));
-  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindBase', WindCurrentBaseSpeed));
+  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindTime', VegetationWindNow));
+  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindBase', VegetationWindBaseSpeed));
   Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindGustMin', GlobalWind.GustSpeedMin));
   Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindGustMax', GlobalWind.GustSpeedMax));
-  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindGustSpeed', WindCurrentBaseSpeed));
+  Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindGustSpeed', VegetationWindBaseSpeed));
   Result.AddCustomField(TSFFloat.Create(Result, True, 'uWindRepeat', GlobalWind.RepeatLength));
 
 
@@ -3371,6 +3373,13 @@ begin
   Geo := BuildIndexedFaceSet(Composite, AttachMaterialIdAttribute, LogProc);
   if Geo = nil then Exit;
 
+  { Keep one immutable ground VBO and the original contact triangle IDs,
+    but let each render pass reject invisible index ranges before the VS.
+    The padding covers sub-metre compensated-origin differences and any
+    surface displacement; no terrain/detail is simplified or removed. }
+  Geo.MetadataBoolean['castle.staticIndexRangeCulling'] := True;
+  Geo.MetadataDouble['castle.staticIndexRangePadding'] := 4.0;
+
   App := TAppearanceNode.Create;
   { Ground receives the rider depth map, but must not enter that map itself.
     Scene.CastShadows only affects shadow volumes in this CGE version.
@@ -3414,6 +3423,7 @@ begin
   end;
 
   Result := TShapeNode.Create;
+  Result.X3DName := 'GroundComposite';
   Result.Geometry   := Geo;
   Result.Appearance := App;
   CompactTileGeometry(Result);
@@ -6307,6 +6317,7 @@ var
             ACache.BuildAtlas, -ASunDir, nil);
           if BldTunShape <> nil then
           begin
+            BldTunShape.X3DName := 'TunnelComposite';
             (BldTunShape.Geometry as TIndexedFaceSetNode).Solid:=False;
             (BldTunShape.Appearance as TAppearanceNode).ShadowCaster := False;
             Result.AddChildren(BldTunShape);

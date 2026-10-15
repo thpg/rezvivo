@@ -43,7 +43,7 @@ function WaterShaderClock: Single;
 implementation
 
 uses
-  Osm3dRtxMaterials, Osm3dSunSky, Osm3dStudioSettings            { WaterWaveSizeActive / WaterLevelLiftActive }
+  Osm3dRtxMaterials, Osm3dSunSky, Osm3dStudioSettings, Osm3dSceneLighting
 ;
 
 {
@@ -95,6 +95,7 @@ const
     '}' + #10;
 
   WATER_FRAGMENT_GLSL: AnsiString =
+    'uniform vec4 rz_surface;' + #10 +
     'varying float water_mat_id;' + #10 +
     'varying vec2 water_data;' + #10 +
     'flat varying float water_scale;' + #10 +
@@ -139,7 +140,7 @@ const
     '    vec4 random=waterPacketHash(cell+offset);' + #10 +
     '    vec2 r=f-offset-(random.xy-.5)*.6;' + #10 +
     '    float support=max(0.0,1.0-dot(r,r)/1.44);' + #10 +
-    '    vec2 direction=normalize(vec2(.8,.6)+(random.w-.5)*vec2(-.6,.8)*.85);' + #10 +
+    '    vec2 direction=normalize(vec2(.8,.6)+(random.w-.5)*vec2(-.6,.8)*(.85+rz_surface.y*2.2));' + #10 +
     '    float frequency=mix(1.65,2.85,random.z);' + #10 +
     '    vec2 k=6.28318530718*frequency*direction;' + #10 +
     '    float phase=dot(k,r)+random.w*6.28318530718-t*sqrt(frequency)*.63;' + #10 +
@@ -222,8 +223,12 @@ const
     '  float transmission=1.0-smoothstep(0.2,0.85,max(V.y,0.0));' + #10 +
     '  vec3 body=mix(deep,shallow,clamp(crest*0.35*mix(0.12,1.0,transmission)+0.45,0.0,1.0));' + #10 +
     '  body+=mix(shallow,sun,0.5)*pow(max(dot(V,L),0.0),3.0)*max(crest,0.0)*0.18*sunVisible*transmission;' + #10 +
-    '  vec3 R=reflect(-V,N); R.y=max(R.y,0.04); R=normalize(R);' + #10 +
-    '  vec3 sky=mix(horizon,zenith,pow(max(R.y,0.0),0.42));' + #10 +
+    '  vec3 rawR=reflect(-V,N);vec3 R=rawR; R.y=max(R.y,0.04); R=normalize(R);' + #10 +
+    '  float oldSky=pow(max(R.y,0.0),0.42);' + #10 +
+    '  // Filter the horizon angularly: an unresolved tilted normal must not' + #10 +
+    '  // turn the full horizon contrast into a broad opaque stripe.' + #10 +
+    '  float roughHorizon=smoothstep(-.08,.85,rawR.y);' + #10 +
+    '  vec3 sky=mix(horizon,zenith,mix(oldSky,roughHorizon,rz_surface.z));' + #10 +
     '  float sr=max(dot(R,L),0.0);' + #10 +
     '  sky+=sun*(pow(sr,180.0)*0.18+rzSunDisc(R,L)*30.0);' + #10 +
     '  float fresnel=0.02+0.98*pow(1.0-clamp(dot(N,V),0.0,1.0),5.0);' + #10 +
@@ -274,6 +279,7 @@ begin
   PartFrag.Contents   := RTX_MATERIAL_GLSL+SUN_DISC_GLSL+WATER_FRAGMENT_GLSL+#10+
     'void PLUG_fragment_end(inout vec4 color){if(rz_capture>.5 && abs(water_mat_id-20.0)<.5)color=rzWaterRequest;}';
   AttachRtxMaterial(Result);
+  AttachSceneLighting(Result,False,True);
 
   Result.SetParts([PartNoise, PartVertex, PartFrag]);
 

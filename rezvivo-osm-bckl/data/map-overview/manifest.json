@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "max_zoom": 6,
+  "tile_size": 256,
+  "tiles": 5461,
+  "labels": 3005,
+  "license": "Public domain - Natural Earth",
+  "sources": {
+    "NE1_LR_LC_SR_W_DR.zip": "https://naciscdn.org/naturalearth/10m/raster/NE1_LR_LC_SR_W_DR.zip",
+    "ne_110m_admin_0_countries.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_110m_admin_0_countries.geojson",
+    "ne_50m_populated_places.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_populated_places.geojson",
+    "ne_50m_geography_regions_points.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_geography_regions_points.geojson",
+    "ne_50m_geography_regions_polys.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_geography_regions_polys.geojson",
+    "ne_50m_geography_marine_polys.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_geography_marine_polys.geojson",
+    "ne_50m_land.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson",
+    "ne_50m_lakes.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_lakes.geojson",
+    "ne_50m_rivers_lake_centerlines.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_rivers_lake_centerlines.geojson"
+  },
+  "files": {
+    "world.rzmap": {
+      "size_bytes": 49650384,
+      "sha256": "c0ff589b0486c885a4cfca20863f5c5cf61d51714677ee60ce029a6a119fa320"
+    },
+    "labels.json": {
+      "size_bytes": 408261,
+      "sha256": "6dcbd38289fdf7a43552db1958f01690f5061122495fa43ee941286b3d6edbdf"
+    }
+  }
+}

@@ -169,20 +169,20 @@ function Mat4FromQuat(const Q: TTripoVec4): TTripoMat4;
 function Mat4FromTRS(const T: TTripoVec3; const R: TTripoVec4; const S: TTripoVec3): TTripoMat4;
 function Mat4MulPoint(const M: TTripoMat4; const P: TTripoVec3): TTripoVec3;
 function QuatFromAxisAngle(Ax, Ay, Az, AngleRad: Single): TTripoVec4;
-function QuatMul(const A, B: TTripoVec4): TTripoVec4;
+function QuatMul(const A, B: TTripoVec4): TTripoVec4; inline;
 
 { vector + quaternion + IK helpers (exposed for the integration / tests) }
-function V3(X, Y, Z: Single): TTripoVec3;
-function V3Sub(const A, B: TTripoVec3): TTripoVec3;
-function V3Add(const A, B: TTripoVec3): TTripoVec3;
-function V3Scale(const A: TTripoVec3; S: Single): TTripoVec3;
-function V3Dot(const A, B: TTripoVec3): Single;
-function V3Cross(const A, B: TTripoVec3): TTripoVec3;
-function V3Len(const A: TTripoVec3): Single;
-function V3Norm(const A: TTripoVec3): TTripoVec3;
-function QuatConj(const Q: TTripoVec4): TTripoVec4;
+function V3(X, Y, Z: Single): TTripoVec3; inline;
+function V3Sub(const A, B: TTripoVec3): TTripoVec3; inline;
+function V3Add(const A, B: TTripoVec3): TTripoVec3; inline;
+function V3Scale(const A: TTripoVec3; S: Single): TTripoVec3; inline;
+function V3Dot(const A, B: TTripoVec3): Single; inline;
+function V3Cross(const A, B: TTripoVec3): TTripoVec3; inline;
+function V3Len(const A: TTripoVec3): Single; inline;
+function V3Norm(const A: TTripoVec3): TTripoVec3; inline;
+function QuatConj(const Q: TTripoVec4): TTripoVec4; inline;
 function QuatNormalize(const Q: TTripoVec4): TTripoVec4;
-function QuatRotateV3(const Q: TTripoVec4; const V: TTripoVec3): TTripoVec3;
+function QuatRotateV3(const Q: TTripoVec4; const V: TTripoVec3): TTripoVec3; inline;
 function QuatFromTo(const AFrom, ATo: TTripoVec3): TTripoVec4;   { shortest arc }
 function Mat4ToQuat(const M: TTripoMat4): TTripoVec4;            { rotation part }
 function SolveJoint(const Root, Target: TTripoVec3; L1, L2: Single;
@@ -437,7 +437,7 @@ begin
   Result.X := Ax*s; Result.Y := Ay*s; Result.Z := Az*s; Result.W := Cos(h);
 end;
 
-function QuatMul(const A, B: TTripoVec4): TTripoVec4;
+function QuatMul(const A, B: TTripoVec4): TTripoVec4; inline;
 begin
   Result.W := A.W*B.W - A.X*B.X - A.Y*B.Y - A.Z*B.Z;
   Result.X := A.W*B.X + A.X*B.W + A.Y*B.Z - A.Z*B.Y;
@@ -1188,25 +1188,25 @@ end;
 function QIdent: TTripoVec4;
 begin Result.X:=0; Result.Y:=0; Result.Z:=0; Result.W:=1; end;
 
-function V3(X, Y, Z: Single): TTripoVec3;
+function V3(X, Y, Z: Single): TTripoVec3; inline;
 begin Result.X:=X; Result.Y:=Y; Result.Z:=Z; end;
-function V3Sub(const A, B: TTripoVec3): TTripoVec3;
+function V3Sub(const A, B: TTripoVec3): TTripoVec3; inline;
 begin Result.X:=A.X-B.X; Result.Y:=A.Y-B.Y; Result.Z:=A.Z-B.Z; end;
-function V3Add(const A, B: TTripoVec3): TTripoVec3;
+function V3Add(const A, B: TTripoVec3): TTripoVec3; inline;
 begin Result.X:=A.X+B.X; Result.Y:=A.Y+B.Y; Result.Z:=A.Z+B.Z; end;
-function V3Scale(const A: TTripoVec3; S: Single): TTripoVec3;
+function V3Scale(const A: TTripoVec3; S: Single): TTripoVec3; inline;
 begin Result.X:=A.X*S; Result.Y:=A.Y*S; Result.Z:=A.Z*S; end;
-function V3Dot(const A, B: TTripoVec3): Single;
+function V3Dot(const A, B: TTripoVec3): Single; inline;
 begin Result := A.X*B.X + A.Y*B.Y + A.Z*B.Z; end;
-function V3Cross(const A, B: TTripoVec3): TTripoVec3;
+function V3Cross(const A, B: TTripoVec3): TTripoVec3; inline;
 begin
   Result.X := A.Y*B.Z - A.Z*B.Y;
   Result.Y := A.Z*B.X - A.X*B.Z;
   Result.Z := A.X*B.Y - A.Y*B.X;
 end;
-function V3Len(const A: TTripoVec3): Single;
+function V3Len(const A: TTripoVec3): Single; inline;
 begin Result := Sqrt(A.X*A.X + A.Y*A.Y + A.Z*A.Z); end;
-function V3Norm(const A: TTripoVec3): TTripoVec3;
+function V3Norm(const A: TTripoVec3): TTripoVec3; inline;
 var L: Single;
 begin
   L := V3Len(A);
@@ -1214,7 +1214,7 @@ begin
   Result := V3Scale(A, 1.0/L);
 end;
 
-function QuatConj(const Q: TTripoVec4): TTripoVec4;
+function QuatConj(const Q: TTripoVec4): TTripoVec4; inline;
 begin Result.X:=-Q.X; Result.Y:=-Q.Y; Result.Z:=-Q.Z; Result.W:=Q.W; end;
 function QuatNormalize(const Q: TTripoVec4): TTripoVec4;
 var L: Single;
@@ -1223,7 +1223,7 @@ begin
   if L < 1e-12 then begin Result := QIdent; Exit; end;
   Result.X:=Q.X/L; Result.Y:=Q.Y/L; Result.Z:=Q.Z/L; Result.W:=Q.W/L;
 end;
-function QuatRotateV3(const Q: TTripoVec4; const V: TTripoVec3): TTripoVec3;
+function QuatRotateV3(const Q: TTripoVec4; const V: TTripoVec3): TTripoVec3; inline;
 var qv, t: TTripoVec3;
 begin
   qv := V3(Q.X, Q.Y, Q.Z);

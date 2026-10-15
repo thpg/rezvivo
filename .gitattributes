@@ -24,6 +24,9 @@
 *.otf filter=lfs diff=lfs merge=lfs -text
 *.ico filter=lfs diff=lfs merge=lfs -text
 *.o3db filter=lfs diff=lfs merge=lfs -text
+*.rzmap filter=lfs diff=lfs merge=lfs -text
 *.x3d filter=lfs diff=lfs merge=lfs -text
 # Preserve exact runtime bytes across operating systems for the asset manifest.
 rezvivo-osm-bckl/data/** -text
+# Preserve the upstream license notices byte for byte.
+rezvivo-osm-bckl/data/speech/licenses/*.txt -whitespace

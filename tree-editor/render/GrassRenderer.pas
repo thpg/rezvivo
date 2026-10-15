@@ -14,6 +14,7 @@ type
     FIndices:array[0..1,0..2,0..1]of GLuint;
     FIndexCounts:array[0..1,0..2,0..1]of Integer;
     FWeedIndices:array[0..1]of GLuint;
+    FVertexTemplates:array[0..1]of GLuint;
     FLastBuffer,FLastIndex:GLuint;
     FLastFirst,FLastGrid,FLastMode,FLastDetail:Integer;
     FPixelScale:Single;
@@ -25,6 +26,7 @@ type
     FLodSettings:TGrassLodSettings;
     FDensityDistances:GLint;
     FGeometryDetail,FComplexity:GLint;
+    FVertexCache,FViewModel:GLint;
     FFrameComplexity:Integer;
     FAtlasReady: Boolean;
   public
@@ -54,7 +56,13 @@ var GrassDrawBlades:Boolean=True;
     GrassDrawCards:Boolean=True;
     GrassDrawCarpet:Boolean=True;
     GrassBaseInstance:Boolean=True;
+    { Identical blade topology, shared by all patches. Retain the arithmetic
+      path for visual/performance A/B checks; neither density nor LOD changes. }
+    GrassVertexCache:Boolean=True;
     GrassRenderComplexity:Integer=3;
+    { Explicit GPU audit only, for entry points loaded directly from the driver. }
+    GrassDiagnosticRawDraw:procedure=nil;
+    GrassDiagnosticDrawMode:procedure(Mode:Integer)=nil;
 implementation
 uses fpjson, jsonparser, TreeShaderSource;
 const GrassReferenceLight:array[0..2]of Single=((0.55+2.55*0.68)*0.55,(0.64+0.96*2.55*0.68)*0.55,(0.50+0.9*2.55*0.68)*0.55);
@@ -98,6 +106,7 @@ begin
   if FVAO<>0 then glDeleteVertexArrays(1,@FVAO);
   glDeleteBuffers(12,@FIndices[0,0,0]);
   glDeleteBuffers(2,@FWeedIndices[0]);
+  glDeleteBuffers(2,@FVertexTemplates[0]);
   if FAtlas<>0 then glDeleteTextures(1,@FAtlas);
   inherited Destroy;
 end;
@@ -106,7 +115,8 @@ const Tri:array[0..14]of Word=(0,1,2,1,3,2,2,3,4,3,5,4,4,5,6);
       MediumTri:array[0..8]of Word=(0,1,4,1,5,4,4,5,6);
       SmallTri:array[0..2]of Word=(0,1,6);
 var VS,FS:GLuint;MajorVersion,MinorVersion,OK:GLint;Log:array[0..8191]of Char;
-    Indices:array of Word;L,Detail,Sparse,Grid,B,J,N,BladeIndices:Integer;FragmentSource:string;
+    Indices:array of Word;Templates:array of TGrassVertexTemplate;
+    L,Detail,Sparse,Grid,B,J,N,BladeIndices:Integer;FragmentSource:string;
 begin
   if FProgram<>0 then Exit;
   {$ifndef OpenGLES}
@@ -163,6 +173,17 @@ begin
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,FWeedIndices[L]);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,60*SizeOf(Word),@Indices[0],GL_STATIC_DRAW);
   end;
+  { Grid topology and thinning membership never depend on patch, species,
+    camera or wind. Reuse one integer attribute per vertex instead of doing
+    the same divisions and hash in every invocation of every grass patch. }
+  glGenBuffers(2,@FVertexTemplates[0]);
+  for L:=0 to 1 do begin
+    Grid:=16;if L=1 then Grid:=32;
+    SetLength(Templates,Grid*Grid*7+Grid*30);
+    for J:=0 to High(Templates)do Templates[J]:=GrassVertexTemplate(Grid,J);
+    glBindBuffer(GL_ARRAY_BUFFER,FVertexTemplates[L]);
+    glBufferData(GL_ARRAY_BUFFER,Length(Templates)*SizeOf(TGrassVertexTemplate),@Templates[0],GL_STATIC_DRAW);
+  end;
   glBindVertexArray(0);
   FComplexity:=glGetUniformLocation(FProgram,'uComplexity');
   FProj:=glGetUniformLocation(FProgram,'uProjection');FView:=glGetUniformLocation(FProgram,'uView');FModel:=glGetUniformLocation(FProgram,'uModel');
@@ -172,6 +193,8 @@ begin
   FLodDistances:=glGetUniformLocation(FProgram,'uLodDistances');
   FDensityDistances:=glGetUniformLocation(FProgram,'uDensityDistances');
   FGeometryDetail:=glGetUniformLocation(FProgram,'uGeometryDetail');
+  FVertexCache:=glGetUniformLocation(FProgram,'uVertexCache');
+  FViewModel:=glGetUniformLocation(FProgram,'uViewModel');
   FTopDistances:=glGetUniformLocation(FProgram,'uTopDistances');
   FBladeViewGain:=glGetUniformLocation(FProgram,'uBladeViewGain');
   FGrowth:=glGetUniformLocation(FProgram,'uGrowth');FVariation:=glGetUniformLocation(FProgram,'uVariation');
@@ -252,7 +275,7 @@ end;
 procedure TGrassPatchRenderer.BeginFrame(const Projection,View,Model:TTreeMat4;const Camera,Sun:TTreeVec3;Seconds,Wind:Single;Bake:Integer;DistanceOverride:Single);
 var K,J:Integer;P,Growth:array[0..31]of Single;Variation:array[0..7]of Single;Weeds:array[0..15]of Single;
     Colors:array[0..23]of Single;ViewGain:array[0..95]of Single;Viewport:array[0..3]of GLint;
-    VerticalX,VerticalY,UpLength:Single;
+    VerticalX,VerticalY,UpLength:Single;ViewModel:TTreeMat4;Row,Column:Integer;
 begin
   FFrameComplexity:=GrassRenderComplexity;if Bake<>0 then FFrameComplexity:=3;
   FTriangles:=0;glGetIntegerv(GL_VIEWPORT,@Viewport[0]);
@@ -266,8 +289,16 @@ begin
   FPerspective:=Abs(Projection[15])<0.5;
   glUseProgram(FProgram);glUniform1i(FComplexity,FFrameComplexity);glBindVertexArray(FVAO);
   for J:=0 to 3 do begin glEnableVertexAttribArray(J);glVertexAttribDivisor(J,1);end;
+  glEnableVertexAttribArray(4);glVertexAttribDivisor(4,0);
   FLastBuffer:=0;FLastIndex:=0;FLastFirst:=-1;FLastGrid:=-1;FLastMode:=-1;FLastDetail:=-1;
   glUniformMatrix4fv(FProj,1,GL_FALSE,@Projection);glUniformMatrix4fv(FView,1,GL_FALSE,@View);glUniformMatrix4fv(FModel,1,GL_FALSE,@Model);
+  { Keep projection separate: this is exactly the View*Model product used by
+    the original shader, without adding a new large-world cancellation. }
+  for Column:=0 to 3 do for Row:=0 to 3 do
+    ViewModel[Column*4+Row]:=View[Row]*Model[Column*4]+View[4+Row]*Model[Column*4+1]+
+      View[8+Row]*Model[Column*4+2]+View[12+Row]*Model[Column*4+3];
+  glUniformMatrix4fv(FViewModel,1,GL_FALSE,@ViewModel);
+  glUniform1i(FVertexCache,Ord(GrassVertexCache));
   glUniform3fv(FCamera,1,@Camera);glUniform3fv(FSun,1,@Sun);glUniform1f(FTime,Seconds);glUniform1f(FWind,Wind);glUniform1i(FBake,Bake);glUniform1f(FDistance,DistanceOverride);glUniform1i(FSlice,-1);
   glUniform4f(FLodDistances,FLodSettings.BladeStart,FLodSettings.BladeEnd,FLodSettings.ViewFade,FLodSettings.ViewEnd);
   glUniform2f(FTopDistances,FLodSettings.TopStart,FLodSettings.TopEnd);
@@ -330,6 +361,7 @@ procedure TGrassPatchRenderer.Draw(Buffer:GLuint;First,Count:Integer;Distant:Boo
 var I,Grid,Detail,Sparse,IndexCount,Signature,Mode,ShaderMode,AttributeFirst:Integer;Index:GLuint;UseBase:Boolean;
   procedure DrawCards(Start,Vertices:Integer);
   begin
+    if UseBase and Assigned(GrassDiagnosticRawDraw)then GrassDiagnosticRawDraw;
     if UseBase then FDrawArraysBase(GL_TRIANGLES,Start,Vertices,Count,First)
     else glDrawArraysInstanced(GL_TRIANGLES,Start,Vertices,Count);
   end;
@@ -339,7 +371,14 @@ begin
   if Signature<0 then Exit;
   Mode:=Signature mod 5;Detail:=(Signature div 5)mod 3;Sparse:=(Signature div 15)mod 2;
   Grid:=16;if Kind in [4,6]then Grid:=32;
-  if Grid<>FLastGrid then begin glUniform1i(FGrid,Grid);FLastGrid:=Grid end;
+  if Grid<>FLastGrid then begin
+    glUniform1i(FGrid,Grid);FLastGrid:=Grid;
+    glBindBuffer(GL_ARRAY_BUFFER,FVertexTemplates[Ord(Grid=32)]);
+    glVertexAttribIPointer(4,4,GL_INT,SizeOf(TGrassVertexTemplate),nil);
+    { Restore/rebind instance attributes below, including after a grid-only
+      change within one patch buffer. }
+    FLastBuffer:=0;
+  end;
   ShaderMode:=Ord(Distant)+Ord(GroundOnly);
   if ShaderMode<>FLastMode then begin glUniform1i(FMode,ShaderMode);FLastMode:=ShaderMode end;
   if Detail<>FLastDetail then begin glUniform1i(FGeometryDetail,Detail);FLastDetail:=Detail end;
@@ -350,6 +389,7 @@ begin
     for I:=0 to 3 do glVertexAttribPointer(I,4,GL_FLOAT,GL_FALSE,SizeOf(TGrassPatch),Pointer(PtrUInt(AttributeFirst*SizeOf(TGrassPatch)+I*16)));
     FLastBuffer:=Buffer;FLastFirst:=AttributeFirst;
   end;
+  if Assigned(GrassDiagnosticDrawMode)then GrassDiagnosticDrawMode(Mode);
   if Distant then begin
     if Mode in [3,4]then begin DrawCards(6*GRASS_CARDS,6);Inc(FTriangles,Int64(2)*Count);end
     else if not GrassDrawCarpet then begin DrawCards(0,6*GRASS_CARDS);Inc(FTriangles,Int64(2*GRASS_CARDS)*Count);end
@@ -367,6 +407,7 @@ begin
     end;
     end;
     if Index<>FLastIndex then begin glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,Index);FLastIndex:=Index end;
+    if UseBase and Assigned(GrassDiagnosticRawDraw)then GrassDiagnosticRawDraw;
     if UseBase then FDrawElementsBase(GL_TRIANGLES,IndexCount,GL_UNSIGNED_SHORT,nil,Count,First)
     else glDrawElementsInstanced(GL_TRIANGLES,IndexCount,GL_UNSIGNED_SHORT,nil,Count);
     Inc(FTriangles,Int64(IndexCount div 3)*Count);

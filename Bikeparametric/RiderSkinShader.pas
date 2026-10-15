@@ -108,7 +108,7 @@ const
     'varying vec3 rsPosition;varying float rsCavity;uniform float rsPortrait,rsFaceValid,rsGeometricEyes,rsCleanPortrait;uniform vec4 rsFace;'+#10+
     'uniform sampler2D rsDiffusion;vec3 rsSmoothNormal=vec3(0.0,1.0,0.0);float rsCurvature=0.0;'+#10+
     'uniform vec3 rsEyeL,rsEyeR,rsSkinL,rsSkinR,rsIrisL,rsIrisR,rsMouth;uniform float riderSurfaceAmount,rsHeadSurfaceOffset;'+#10+
-    'vec3 rsAlbedo=vec3(0.4);float rsPores=0.0,rsOil=0.0,rsThin=0.0,rsEye=0.0,rsCrease=0.0,rsLip=0.0,rsBodyTone=0.0,rsJointTone=0.0,rsInnerTone=0.0;'+#10+
+    'vec3 rsAlbedo=vec3(0.4);float rsPores=0.0,rsThin=0.0,rsEye=0.0,rsCrease=0.0,rsLip=0.0,rsBodyTone=0.0,rsJointTone=0.0,rsInnerTone=0.0;'+#10+
     'vec3 rsEyeOffset(){return rsPosition-(rsPosition.x<0.0?rsEyeL:rsEyeR);}'+#10+
     'float rsEyeArea(vec3 q){vec2 radius=mix(vec2(0.014,0.0070),vec2(0.018,0.010),rsFace.x);float e=length(q.xy/radius);return (1.0-smoothstep(mix(0.90,0.55,rsFace.x),1.04,e))*(1.0-smoothstep(0.008,0.016,abs(q.z)))*rsFaceValid*rsPortrait;}'+#10+
     'float rsBand(float x,float a,float b,float c,float d){return smoothstep(a,b,x)*(1.0-smoothstep(c,d,x));}'+#10+
@@ -149,8 +149,7 @@ const
     ' float arm=rsBand(abs(p.x),0.27,0.36,0.59,0.65);'+#10+
     ' float armAxis=1.43-(abs(p.x)-0.22)*0.105;'+#10+
     ' rsInnerTone=body*arm*(1.0-smoothstep(armAxis-0.022,armAxis+0.016,p.y));'+#10+
-    ' vec3 h=p-vec3(0.0,1.612+rsHeadSurfaceOffset,-0.040);float front=smoothstep(0.025,0.060,h.z);'+#10+
-    ' rsOil=rsPortrait*front*(1.0-smoothstep(0.016,0.040,abs(h.x)))*rsBand(h.y,-0.025,0.0,0.09,0.12);'+#10+
+    ' vec3 h=p-vec3(0.0,1.612+rsHeadSurfaceOffset,-0.040);'+#10+
     ' rsThin=rsPortrait*smoothstep(0.063,0.082,abs(h.x))*rsBand(h.y,-0.025,-0.005,0.050,0.075);'+#10+
     ' vec3 lip=p-rsMouth;float lipY=lip.y-0.0012*pow(lip.x/0.030,2.0);'+#10+
     ' rsLip=(1.0-smoothstep(0.75,1.1,length(vec2(lip.x/0.029,lipY/0.007))))*smoothstep(0.04,0.075,p.z)*rsPortrait*rsFaceValid;'+#10+
@@ -216,11 +215,12 @@ const
     ' float cavity=(1.0-smoothstep(gap-edge,gap+edge,abs(m.y+0.0005)))*smoothstep(0.035,0.065,rsPosition.z)*mw*rsFaceValid*rsPortrait;'+#10+
     ' cavity*=smoothstep(0.08,0.30,riderSurfaceAmount);c.rgb=mix(c.rgb,vec3(0.018,0.006,0.006),cavity); }rsAlbedo=c.rgb;'+#10+
     '}'+#10+
-    // Broad body highlights must not turn the whole forearm/knee into a
-    // polished strip. Retain the spatial variation and skin reflection;
-    // portrait oil, lip and eye responses keep their own existing values.
-    'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(mix(clamp(mix(0.54,mix(0.55,0.62,rsCleanPortrait),rsPortrait)-mix(0.16,0.09,rsCleanPortrait)*rsOil+0.035*rsPores+0.055*rsBodyTone-0.015*rsJointTone+0.040*rsInnerTone,0.35,mix(0.74,0.70,rsPortrait)),mix(0.33,0.40,rsCleanPortrait),rsLip),0.22,rsEye);}'+#10+
-    'void PLUG_physical_light_surface(inout vec3 diff,inout vec3 spec,const vec3 L,const vec3 N,const vec3 V){spec*=0.72;}'+#10+
+    // Skin receives diffuse light and shadows, with no specular sun or sky.
+    // rsEye only preserves the cornea of legacy portraits with painted eyes;
+    // current separate eye materials never receive this skin effect.
+    'void PLUG_material_metallic_roughness(inout float m,inout float r){m=0.0;r=mix(1.0,0.22,rsEye);}'+#10+
+    'void PLUG_physical_light_surface(inout vec3 diff,inout vec3 spec,const vec3 L,const vec3 N,const vec3 V){spec*=rsEye;}'+#10+
+    'void PLUG_rider_environment_specular(inout vec3 spec){spec*=rsEye;}'+#10+
     'void PLUG_material_occlusion(inout vec4 light){light.rgb*=mix(1.0,0.10,rsCavity);}'+#10+
     'void PLUG_physical_light_contribution(inout vec3 light,const vec3 L,const vec3 N,const vec3 V){'+#10+
     ' float nl=dot(rsSmoothNormal,L);vec2 uv=vec2(nl*0.5+0.5,rsCurvature/200.0);'+#10+
@@ -313,7 +313,7 @@ begin
     end;
     Geo.FdAttrib.Add(Attr);
   end;
-  Mat.Metallic:=0;Mat.Roughness:=0.58;Mat.MetallicRoughnessTexture:=nil;
+  Mat.Metallic:=0;Mat.Roughness:=1;Mat.MetallicRoughnessTexture:=nil;
   Morph:=AddRiderSurfaceAttribute(Geo);
   if Morph.FdValue.Count=0 then for I:=0 to Coord.FdPoint.Count-1 do begin
     P:=Coord.FdPoint.Items[I]*FScale;Delta:=TVector3.Zero;

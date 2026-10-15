@@ -84,6 +84,8 @@ type
     FFitUrl:         String;
     FFileNames:      TStringList;           { имена *.fit/*.gpx в routes }
     FReadyGeneration:Cardinal;
+    FPendingReadyRoute:String;
+    FReadyRoutePollAt:QWord;
     FCarousel:      TRideCarousel;
     FThumbQueue:     TStringList;           { файлы, ждущие генерации мини-карты }
     FOnLaunchRide:   TNotifyEvent;          { кнопка «Ехать» → меню }
@@ -178,6 +180,7 @@ type
     FChkWindAuto:  TCastleCheckbox;
 
     procedure BuildForm;
+    procedure PollReadyRoute;
     procedure RefreshFilesList;
     procedure SetProgress(const AText: String);
     procedure Resize; override;
@@ -479,6 +482,7 @@ begin
 end;
 
 procedure TRoutesPage.PageShown;
+var Kind:TRideMapKind;MapId:String;
 begin
   FLastUpdateTick := 0;   { первый кадр после показа не считаем фризом }
   LogOsm('страница показана');
@@ -489,6 +493,8 @@ begin
   if(FFitUrl='')or not FileExists(SelectedFitPath)then begin
     FFitUrl:='';FLoadedUrl:='';
     FHeader.SetSelection(UiText('Choose a route'),UiText('Click a card to select a ride'),False);
+    LastRideMap(Kind,MapId);
+    if Kind=rmkReal then OpenLibraryFile(MapId);
   end;
   if FGlobe <> nil then FGlobe.FitArea := FRouteArea;
   if (FFitUrl <> '') and (FLoadedUrl <> FFitUrl) then
@@ -505,6 +511,7 @@ begin
   FCarousel.CancelGesture;
   if FGlobe <> nil then FGlobe.FitArea := nil;
   FPendingFitUrl := '';
+  FPendingReadyRoute := '';
   FPendingMulti := False;
   StopWarmSession;
 end;
@@ -513,7 +520,7 @@ function TRoutesPage.ReadyToRide:Boolean;
 begin
   { Selection readiness only; never use this as an offline-coverage claim. }
   Result:=FHeader.StartButton.Enabled and(FFitUrl<>'')and
-    (FLoadedUrl=FFitUrl)and(FPendingFitUrl='');
+    (FLoadedUrl=FFitUrl)and(FPendingFitUrl='')and(FPendingReadyRoute='');
 end;
 
 function TRoutesPage.SelectedFitPath: String;
@@ -534,6 +541,7 @@ var
 begin
   inherited;
   if FReadyGeneration<>ReadyRoutes.Generation then RefreshFilesList;
+  if(FPendingReadyRoute<>'')and(GetTickCount64>=FReadyRoutePollAt)then PollReadyRoute;
   if FReviewTask<>nil then begin
     FReview:=FReviewTask.Snapshot;FReviewLabel.Caption:=FReview.Caption;
     if FReview.Done then begin
@@ -945,7 +953,9 @@ function TRoutesPage.Diagnostics: TJSONObject;
 begin
   Result := TJSONObject.Create(['selected', SelectedFitPath,
     'points', Length(FDemRoute), 'analyzed', (FFitUrl <> '') and (FAnalyzedUrl = FFitUrl),
-    'pending', FPendingFitUrl <> '', 'details', DetailsVisible, 'warm_session', FWarmSession <> nil,
+    'pending', (FPendingFitUrl <> '')or(FPendingReadyRoute<>''),
+    'pending_ready_route',FPendingReadyRoute,'ready_to_ride',ReadyToRide,
+    'progress',FLabelProgress.Caption,'details', DetailsVisible, 'warm_session', FWarmSession <> nil,
     'warming', FDemPending, 'full_stats_done', FFullStatsDone,
     'review_done',FReview.Done,'review_pending',FReviewTask<>nil,
     'review_warning_points',FReview.ConcernPoints,'review_tiles',FReview.CheckedTiles,
@@ -1241,7 +1251,7 @@ end;
 procedure TRoutesPage.RefreshFilesList;
 var
   SR: TSearchRec;
-  Dir, Mask, Png, TxtPath,ResolvedPath: String;
+  Dir, Mask, Png, TxtPath,ResolvedPath,CardTitle: String;
   I: Integer;
   SL: TStringList;
 begin
@@ -1274,7 +1284,10 @@ begin
     FReadyGeneration:=ReadyRoutes.Generation;
     for I := 0 to FFileNames.Count - 1 do
     begin
-      FCarousel.AddItem(ReadyRoutes.Title(FFileNames[I]),'','');
+      CardTitle:=ReadyRoutes.Title(FFileNames[I]);
+      if ReadyRoutes.Version(FFileNames[I])>0 then
+        CardTitle:='v'+IntToStr(ReadyRoutes.Version(FFileNames[I]))+' · '+CardTitle;
+      FCarousel.AddItem(CardTitle,'','');
       { Свежий кэш мини-карты — грузим сразу; иначе файл в очередь
         генерации (ProcessThumbQueue, один за тик Update). }
       Png := ThumbCachePath(FFileNames[I]);
@@ -1665,7 +1678,13 @@ begin ViewMenu.OpenTab('route-create');end;
 procedure TRoutesPage.OpenLibraryFile(const FileName:String);
 var I:Integer;ResolvedPath:string;
 begin
+  FPendingReadyRoute:='';
   ResolvedPath:=ReadyRoutes.ResolveFile(FileName);
+  if IsReadyRouteReference(FileName)and(ResolvedPath='')then begin
+    FFitUrl:='';FPendingFitUrl:='';FLoadedUrl:='';StopWarmSession;
+    DisplayRoute([],False);
+    FPendingReadyRoute:=FileName;PollReadyRoute;Exit;
+  end;
   if ResolvedPath<>FileName then begin OpenLibraryFile(ResolvedPath);Exit end;
   if not FileExists(FileName)then begin
     FFitUrl:='';FPendingFitUrl:='';FLoadedUrl:='';StopWarmSession;
@@ -1680,12 +1699,27 @@ begin
   SetProgress(UiText('Reading route…'));
 end;
 
+procedure TRoutesPage.PollReadyRoute;
+var ResolvedPath,Status:String;
+begin
+  FReadyRoutePollAt:=GetTickCount64+500;
+  ResolvedPath:=ReadyRoutes.ResolveFile(FPendingReadyRoute);
+  if ResolvedPath<>''then begin OpenLibraryFile(ResolvedPath);Exit end;
+  if ReadyRoutes.Busy then Status:=UiText('Downloading route…')
+  else if GetEnvironmentVariable('REZVIVO_OFFLINE')='1'then Status:=UiText('Connect to download this route.')
+  else if ReadyRoutes.ErrorText<>''then Status:=UiText('Waiting to retry')
+  else Status:=UiText('Route is unavailable. Choose another route or wait for the next update.');
+  FHeader.SetSelection(ReadyRoutes.Title(FPendingReadyRoute),Status,False);
+  SetProgress(Status);
+end;
+
 procedure TRoutesPage.ClickFileRow(Sender: TObject);
 var
   I: Integer;
 begin
   I := FCarousel.Selected;
   if (I < 0) or (I >= FFileNames.Count) then Exit;
+  FPendingReadyRoute:='';
   SelectCard(I);
   FFitUrl := FilenameToURISafe(FFileNames[I]);
   Settings.SetSelectedRoutePath(SelectedFitPath);

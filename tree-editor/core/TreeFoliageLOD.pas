@@ -10,6 +10,7 @@ const DISTANT_NEEDLE_TRIANGLES = 120000;
   retain the curved three-triangle ribbon. No per-needle CPU data is stored. }
 function NeedleVertices(Species:TTreeSpecies):Integer;
 function NearNeedleDetail(Distance:Single):Single;
+function NearLeafFraction(Species:TTreeSpecies;Distance,Minimum:Single):Single;
 function NeedleDensityGroup(const Shoot:TTreeNeedleShoot;const Params:TTreeParams):Integer;
 function DrawNeedlePairs(FullPairs,Shoots:Integer;Species:TTreeSpecies;
   LeafFraction,NearDetail:Single):Integer;
@@ -41,7 +42,21 @@ function NearNeedleDetail(Distance:Single):Single;
 var T:Single;
 begin
   T:=Max(0,Min(1,(16-Distance)/10));
-  Result:=T*T*(3-2*T); { individual needles within 6 m; integrated shoots after 16 m }
+  Result:=T*T*(3-2*T); { preserve needles within 6 m; integrated shoots after 16 m }
+end;
+function NearLeafFraction(Species:TTreeSpecies;Distance,Minimum:Single):Single;
+var T:Single;
+begin
+  Minimum:=Max(0.25,Min(1,Minimum));
+  if (LeafSprayIndex(Species)>=0) or (Species in [tsRowan,tsAcacia]) then begin
+    { Both representations carry physically sized blades. Expanding the full
+      random prefix at 12..24 m rearranged overlapping twigs and thinned the
+      silhouette. Retain the same groups throughout an ordinary ride; spend
+      extra planes only on close inspection, where their parallax is useful. }
+    T:=Max(0,Min(1,(4-Distance)/2));T:=T*T*(3-2*T);
+    Result:=Minimum+(1-Minimum)*T;
+  end else
+    Result:=Max(Minimum,Sqr(12/Max(12,Distance)));
 end;
 function DrawNeedlePairs(FullPairs,Shoots:Integer;Species:TTreeSpecies;
   LeafFraction,NearDetail:Single):Integer;

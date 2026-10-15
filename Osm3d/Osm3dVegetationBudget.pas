@@ -10,6 +10,7 @@ type
     procedure Observe(FrameSeconds, TargetFPS: Single);
     function PlanInterval: Single;
     function UploadInterval: Single;
+    function UploadBudgetMS: Single;
     function DetailFraction: Single;
     function ActiveFraction: Single;
   end;
@@ -85,6 +86,12 @@ function TTreeLoadControl.PlanInterval: Single;
 begin Result:=Max(0.08,(0.25+Level*0.125)/Sqrt(Max(0.1,VegetationDetail.TreeCacheRate)));end;
 function TTreeLoadControl.UploadInterval: Single;
 begin Result:=(0.028+0.03*Level)/Max(0.1,VegetationDetail.TreeCacheRate);end;
+function TTreeLoadControl.UploadBudgetMS: Single;
+begin
+  { Limit work inside a frame, not the CPU producer's throughput. Even under
+    persistent GPU load preparation continues in the bounded worker queue. }
+  Result:=Max(0.35,Min(1.5,VegetationDetail.TreeCacheRate/(1+0.15*Level)));
+end;
 function TTreeLoadControl.DetailFraction: Single;
 begin Result:=Max(0.35,1-Max(0,Level-1)*0.13);end;
 function TTreeLoadControl.ActiveFraction: Single;

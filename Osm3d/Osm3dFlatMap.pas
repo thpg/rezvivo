@@ -65,6 +65,7 @@ function FlatMapTileInfo(Http:THTTPFetcherWithCache;Z,X,Y:Integer;
 function FlatMapCancelled(Http: THTTPFetcherWithCache; Cancel: TThread): Boolean;
 function FlatMapShade(Dx,Dy: Double): Double;
 procedure FlatMapApplyTerrain(Base,Terrain:TCastleImage);
+procedure FlatMapComposeBackground(Relief,LandMask:TCastleImage;Zoom:Integer);
 function FlatMapWorkerLimit:Integer;
 function FlatMapWorkerStats:TFlatMapWorkerStats;
 
@@ -72,7 +73,7 @@ implementation
 uses Math, Types, Generics.Collections, FPImage, FPReadPNG, FPWritePNG,
   Osm3dCache, Osm3dOsmData, Osm3dOsmOverpass,
   Osm3dOsmDirectory, Osm3dGeomUtils, Osm3dHeightmap, Osm3dCoastline,
-  Osm3dOsmTagUtils, CastleVectors, fpjson, jsonparser
+  Osm3dOsmTagUtils, CastleVectors, fpjson, jsonparser, Osm3dMapOverview, Osm3dMapWorld, Osm3dMapSeed
   {$ifdef MSWINDOWS}, Windows{$endif};
 const SIDE=512;
 type
@@ -100,9 +101,15 @@ type
     procedure Labels(D:TOSMDataset);
     function Image:TCastleImage;
   end;
+  TWorldLandPart=record
+    Bounds:TLatLonBox;
+    Rings:array of TMapGeoPoints;
+  end;
 var Sources:Classes.TList;SourceLock:SyncObjs.TCriticalSection;
     WorkerLimit,ActiveBuilds,PeakBuilds:Integer;
     BuildCount,SourceLoadCount,SourceWaitCount:QWord;
+    WorldLand:array of TWorldLandPart;
+    WorldLandLock:SyncObjs.TCriticalSection;
 
 constructor TSource.Create;
 begin inherited;Ready:=TEvent.Create(nil,True,False,'');end;
@@ -180,19 +187,30 @@ begin
   FLock.Enter;try FImage.Free;FImage:=Img;FImagePartial:=Partial;finally FLock.Leave;end;
 end;
 procedure TFlatMapTask.Execute;
-var Img:TCastleImage;X,Y:Integer;P:PVector3Byte;
+var Img,Mask:TCastleImage;X,Y:Integer;P:PVector3Byte;
 begin
+  Img:=nil;Mask:=nil;
   try
     try
       if FBackgroundOnly then begin
-        { Cartographic geometry/text are drawn on the GPU. The bitmap below
-          supplies only ocean/land coverage, never enlarged baked labels. }
-        Img:=World(FHttp,FZ,FX,FY,Self,True,@FOverviewZoom);
+        { Keep the installed terrain through the regional/OSM transition.
+          Fetching a finer coastline refines it, never replaces it by white. }
+        Img:=BundledWorldMapTile(FZ,FX,FY,True,FOverviewZoom);
         FDetail:=False;
-        if Img<>nil then for Y:=0 to Img.Height-1 do for X:=0 to Img.Width-1 do begin
-          P:=PVector3Byte(Img.PixelPtr(X,Y));
-          if P^.X<128 then P^:=Vector3Byte(180,210,221)
-          else P^:=Vector3Byte(241,239,229);
+        if(Img<>nil)and(FZ>MAP_SEED_RELIEF_ZOOM)then begin
+          Publish(Img.MakeCopy,True);
+          try
+            try Mask:=World(FHttp,FZ,FX,FY,Self,True,@FOverviewZoom);except Mask:=nil end;
+            if not Terminated then FlatMapComposeBackground(Img,Mask,FZ);
+          finally FreeAndNil(Mask) end;
+        end;
+        if Img=nil then begin
+          Img:=World(FHttp,FZ,FX,FY,Self,True,@FOverviewZoom);
+          if Img<>nil then for Y:=0 to Img.Height-1 do for X:=0 to Img.Width-1 do begin
+            P:=PVector3Byte(Img.PixelPtr(X,Y));
+            if P^.X<128 then P^:=Vector3Byte(180,210,221)
+            else P^:=Vector3Byte(241,239,229);
+          end;
         end;
       end else
         Img:=FlatMapTileInfo(FHttp,FZ,FX,FY,FRequestedDetail,FCachedOnly,FDetail,Self);
@@ -200,9 +218,9 @@ begin
         waits on Overpass. Cached detail remains preferable to raster fallback. }
       if (Img=nil) and not FBackgroundOnly and FCachedOnly and FOverviewFallback and not Terminated then
         Img:=World(FHttp,FZ,FX,FY,Self,False,@FOverviewZoom);
-      Publish(Img,FRequestedDetail and not FDetail);
+      Publish(Img,FRequestedDetail and not FDetail);Img:=nil;
     except { Keep the last valid overview if an optional detail source fails. } end;
-  finally FLock.Enter;try FDone:=True;finally FLock.Leave;end;end;
+  finally Img.Free;Mask.Free;FLock.Enter;try FDone:=True;finally FLock.Leave;end;end;
 end;
 
 function FlatMapCancelled(Http:THTTPFetcherWithCache;Cancel:TThread):Boolean;
@@ -255,6 +273,33 @@ begin
   finally S.Free;W.Free;F.Free;end;
 end;
 
+procedure FlatMapComposeBackground(Relief,LandMask:TCastleImage;Zoom:Integer);
+const Land:TVector3Byte=(X:241;Y:239;Z:229);Sea:TVector3Byte=(X:180;Y:210;Z:221);
+var X,Y:Integer;P,M:PVector3Byte;Base:TVector3Byte;Strength:Double;Water:Boolean;
+begin
+  if Relief=nil then Exit;
+  { World tint is progressively subdued only at street scale. Detailed
+    OSM polygons and DEM shading are drawn over it, not awaited to fill it. }
+  Strength:=1-0.75*EnsureRange((Zoom-12)/4,0.0,1.0);
+  for Y:=0 to Relief.Height-1 do for X:=0 to Relief.Width-1 do begin
+    P:=PVector3Byte(Relief.PixelPtr(X,Y));
+    Water:=(P^.Z>P^.X+12)and(P^.Z>P^.Y+4);
+    if LandMask<>nil then begin
+      M:=PVector3Byte(LandMask.PixelPtr(X*LandMask.Width div Relief.Width,Y*LandMask.Height div Relief.Height));
+      if M^.X>=128 then begin
+        Base:=Land;
+        { Do not put the coarse ocean/lake tint on the dry side of the
+          detailed shoreline. Its finer water geometry is drawn by OSM. }
+        if Water then P^:=Land;
+      end else begin
+        Base:=Sea;if not Water then P^:=Sea;
+      end;
+    end else if Water then Base:=Sea else Base:=Land;
+    P^:=Vector3Byte(Round(Base.X+(P^.X-Base.X)*Strength),
+      Round(Base.Y+(P^.Y-Base.Y)*Strength),Round(Base.Z+(P^.Z-Base.Z)*Strength));
+  end;
+end;
+
 { Only the overview's exact neutral land fill is replaced. Vector water,
   roads, borders and text keep their original colours and pixel positions. }
 procedure FlatMapApplyTerrain(Base,Terrain:TCastleImage);
@@ -301,11 +346,82 @@ begin
   finally Img.Free;end;
 end;
 
+function FallbackLandMask(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread):TCastleImage;
+const URL='https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_land.geojson';
+var R:TFetchResult;Root,Features,Geometry,Coordinates,Ring,XY:TJSONData;
+  I,J,K,N:Integer;S:TBytesStream;Raster:TRaster;Box:TLatLonBox;Rings:TPixelRings;
+  procedure AddPolygon(A:TJSONData);
+  var B:TLatLonBox;P:TLatLon;U,V:Integer;
+  begin
+    N:=Length(WorldLand);SetLength(WorldLand,N+1);SetLength(WorldLand[N].Rings,A.Count);
+    B.MinLon:=180;B.MaxLon:=-180;B.MinLat:=90;B.MaxLat:=-90;
+    for U:=0 to A.Count-1 do begin
+      Ring:=A.Items[U];SetLength(WorldLand[N].Rings[U],Ring.Count);
+      for V:=0 to Ring.Count-1 do begin
+        XY:=Ring.Items[V];P:=TLatLon.Make(XY.Items[1].AsFloat,XY.Items[0].AsFloat);
+        WorldLand[N].Rings[U][V]:=P;
+        B.MinLon:=Math.Min(B.MinLon,P.Lon);B.MaxLon:=Math.Max(B.MaxLon,P.Lon);
+        B.MinLat:=Math.Min(B.MinLat,P.Lat);B.MaxLat:=Math.Max(B.MaxLat,P.Lat);
+      end;
+    end;
+    WorldLand[N].Bounds:=B;
+  end;
+begin
+  Result:=nil;
+  { Public-domain Natural Earth, same provenance as the server overview.
+    One immutable parsed dataset, fetched through the existing HTTP cache.
+    This fallback has no raster labels and works without an account. }
+  WorldLandLock.Enter;
+  try
+    if Length(WorldLand)=0 then begin
+      R:=Http.GetUrl(URL,3000,1);if not R.Success or FlatMapCancelled(Http,Cancel)then Exit;
+      Root:=nil;S:=TBytesStream.Create(R.Data);
+      try
+        try
+          Root:=GetJSON(S);Features:=Root.FindPath('features');
+          if not(Features is TJSONArray)then Exit;
+          for I:=0 to Features.Count-1 do begin
+            Geometry:=Features.Items[I].FindPath('geometry');Coordinates:=Geometry.FindPath('coordinates');
+            if Geometry.FindPath('type').AsString='Polygon'then AddPolygon(Coordinates)
+            else for J:=0 to Coordinates.Count-1 do AddPolygon(Coordinates.Items[J]);
+          end;
+        except WorldLand:=nil;Exit end;
+      finally Root.Free;S.Free end;
+    end;
+  finally WorldLandLock.Leave end;
+  if Length(WorldLand)=0 then Exit;
+  Box:=TTileMath.TileToLatLonBox(TTileXY.Make(X,Y,Z));Raster:=TRaster.Create(Z,X,Y);
+  try
+    for I:=0 to High(Raster.Pixels)do Raster.Pixels[I]:=0;
+    for I:=0 to High(WorldLand)do begin
+      if FlatMapCancelled(Http,Cancel)then Exit;
+      with WorldLand[I].Bounds do
+        if(MaxLon<Box.MinLon)or(MinLon>Box.MaxLon)or(MaxLat<Box.MinLat)or(MinLat>Box.MaxLat)then Continue;
+      SetLength(Rings,Length(WorldLand[I].Rings));
+      for J:=0 to High(Rings)do begin
+        SetLength(Rings[J],Length(WorldLand[I].Rings[J]));
+        for K:=0 to High(Rings[J])do begin
+          Rings[J][K]:=Raster.Point(WorldLand[I].Rings[J][K]);
+          { Global continental rings already end at the antimeridian. Do not
+            wrap their distant vertices through the middle of Eurasia. }
+          Rings[J][K].X:=((WorldLand[I].Rings[J][K].Lon+180)/360*(1 shl Z)-X)*SIDE;
+        end;
+      end;
+      Raster.Fill(Rings,$FFFFFF);
+    end;
+    Result:=Raster.Image;
+  finally Raster.Free end;
+end;
+
 function World(Http:THTTPFetcherWithCache;Z,X,Y:Integer;Cancel:TThread;LandOnly:Boolean;Quality:PInteger):TCastleImage;
-var SZ,D,I,PX,PY:Integer;URL:string;R:TFetchResult;Img:TFPMemoryImage;C:TFPColor;P:PVector3Byte;
+var SZ,D,I,PX,PY,SeedZoom:Integer;URL:string;R:TFetchResult;Img:TFPMemoryImage;C:TFPColor;P:PVector3Byte;
   Terrain:TCastleImage;HasLand:Boolean;
 begin
   Result:=nil;SZ:=Math.Min(Z,FLAT_MAP_WORLD_ZOOM);D:=1 shl(Z-SZ);Img:=nil;
+  if Z<=MAP_SEED_RELIEF_ZOOM then begin
+    Result:=BundledWorldMapTile(Z,X,Y,not LandOnly,SeedZoom);
+    if Result<>nil then begin if Quality<>nil then Quality^:=SeedZoom;Exit end;
+  end;
   for I:=0 to 1 do begin
     if FlatMapCancelled(Http,Cancel)then Exit;
     if I=0 then URL:='https://rezvivo.com' else URL:='https://rezvivo.ru';
@@ -319,6 +435,13 @@ begin
   { The overview must also work for a local/guest profile. Only request the
     visible overview tiles; keep the public response in the HTTP disk cache.
     A styled raster must never be used as the land-only coastline mask. }
+  if(Img=nil)and LandOnly and not FlatMapCancelled(Http,Cancel)then begin
+    Result:=BundledWorldMapTile(Z,X,Y,False,SeedZoom);
+    if Result<>nil then begin if Quality<>nil then Quality^:=SeedZoom;Exit end;
+    Result:=FallbackLandMask(Http,Z,X,Y,Cancel);
+    if Quality<>nil then Quality^:=Math.Min(Z,8);
+    Exit;
+  end;
   if (Img=nil) and not LandOnly and not FlatMapCancelled(Http,Cancel) then begin
     { Public raster tiles can show streets immediately while the shared OSM
       source is still downloading. Do not enlarge a z10 overview at z16. }
@@ -370,7 +493,8 @@ begin
     Box:=TTileMath.TileToLatLonBox(Tile).ExpandMeters(1000);
     Q:=Format('[bbox:%.7f,%.7f,%.7f,%.7f][out:json][timeout:25];way["natural"="coastline"];(._;>;);out body;',
       [Box.MinLat,Box.MinLon,Box.MaxLat,Box.MaxLon],InvariantFmt);
-  end else begin
+  end else if Tile.Zoom<OVERPASS_TILE_ZOOM_DEFAULT then Q:=MapOverviewQuery(Tile)
+  else begin
   Q:=TOverpassQueryExt.BuildCombinedFull(TTileMath.TileToLatLonBox(Tile),DefaultFlagsForFullScene,OVERPASS_TIMEOUT_DEFAULT);
   { Identical full-scene query, tile and timeout to 3D. Rendering selects
     features locally; the shared raw cache keeps buildings, trees and POIs. }
@@ -480,6 +604,43 @@ function TFlatMapVectorTask.TakeData:TMapVectorData;
 begin FLock.Enter;try Result:=FData;FData:=nil;finally FLock.Leave;end;end;
 procedure TFlatMapVectorTask.Execute;
 var Pins:Classes.TList;D:TOSMDataset;Built:TMapVectorData;
+  procedure BuildShade;
+  const N=MAP_SHADE_SIDE;
+  var TF:TTerrariumFetcher;HM:THeightmap;Box:TLatLonBox;P:TLatLon;
+    Row:array of Single;I,J,K:Integer;PX,PY:Single;Mpp:Double;
+  begin
+    if(Built=nil)or Terminated then Exit;
+    TF:=TTerrariumFetcher.Create(FHttp,'',12);HM:=nil;
+    try
+      Box:=TTileMath.TileToLatLonBox(FTile);
+      Box:=Box.ExpandMeters(40075016.686*Cos(Box.Center.Lat*Pi/180)/((N-1)*(1 shl FTile.Zoom))+1);
+      Box.MinLat:=Math.Max(-85.05112878,Box.MinLat);Box.MaxLat:=Math.Min(85.05112878,Box.MaxLat);
+      Box.MinLon:=Math.Max(-180.0,Box.MinLon);Box.MaxLon:=Math.Min(180.0,Box.MaxLon);
+      HM:=TF.GetRegionCachedOnly(Box,Min(FTile.Zoom,13));
+      if HM=nil then HM:=TF.GetRegion(Box,Min(FTile.Zoom,13));
+      if(HM=nil)or Terminated then Exit;
+      HM.BlurGaussian(0.8);SetLength(Row,(N+2)*(N+2));
+      for J:=-1 to N do begin
+        if Terminated then Exit;
+        P.Lat:=ArcTan(Sinh(Pi*(1-2*(FTile.Y+J/(N-1))/(1 shl FTile.Zoom))))*180/Pi;
+        for I:=-1 to N do begin
+          P.Lon:=(FTile.X+I/(N-1))/(1 shl FTile.Zoom)*360-180;
+          THeightmapSampler.LatLonToPixel(HM,P,PX,PY);
+          Row[(J+1)*(N+2)+I+1]:=THeightmapSampler.CubicSamplePx(HM,PX,PY);
+        end;
+      end;
+      SetLength(Built.Shade,N*N);
+      for J:=0 to N-1 do begin
+        Mpp:=40075016.686*Cos(ArcTan(Sinh(Pi*(1-2*(FTile.Y+J/(N-1))/(1 shl FTile.Zoom)))))/((N-1)*(1 shl FTile.Zoom));
+        for I:=0 to N-1 do begin
+          K:=(J+1)*(N+2)+I+1;
+          Built.Shade[J*N+I]:=FlatMapShade((Row[K+1]-Row[K-1])/(2*Mpp),
+            (Row[K+N+2]-Row[K-N-2])/(2*Mpp));
+        end;
+      end;
+      Inc(Built.Bytes,Length(Built.Shade)*SizeOf(Single));
+    finally HM.Free;TF.Free;end;
+  end;
 begin
   Built:=nil;
   try
@@ -487,8 +648,15 @@ begin
     Pins:=Classes.TList.Create;
     try
       try
-        D:=Source(FHttp,FTile,Self,Pins);
-        if (D<>nil)and not Terminated then Built:=BuildMapVectors(D,FTile,Self,FMaxZoom);
+        if FTile.Zoom<7 then Built:=BuildWorldMapVectors(FHttp,FTile,FMaxZoom)
+        else begin
+          D:=Source(FHttp,FTile,Self,Pins);
+          if (D<>nil)and not Terminated then Built:=BuildMapVectors(D,FTile,Self,FMaxZoom);
+        end;
+        { Optional elevation must never discard valid cartographic features. }
+        { The overview already has relief: no continent-scale DEM request. }
+        if FTile.Zoom>MAP_SEED_RELIEF_ZOOM then
+          try BuildShade;except if Built<>nil then Built.Shade:=nil;end;
         if Terminated then FreeAndNil(Built);
       except FreeAndNil(Built);end;
     finally ReleaseSources(Pins);EndBuild;end;
@@ -947,6 +1115,7 @@ end;
 initialization
   Sources:=Classes.TList.Create;
   SourceLock:=SyncObjs.TCriticalSection.Create;
+  WorldLandLock:=SyncObjs.TCriticalSection.Create;
   WorkerLimit:=Math.Min(4,Math.Max(1,TThread.ProcessorCount-1));
   { Diagnostic A/B override may reduce the budget, never exceed it. }
   WorkerLimit:=EnsureRange(StrToIntDef(SysUtils.GetEnvironmentVariable('REZVIVO_FLAT_MAP_WORKERS'),WorkerLimit),1,WorkerLimit);
@@ -954,4 +1123,5 @@ finalization
   while Sources.Count>0 do begin TObject(Sources[Sources.Count-1]).Free;Sources.Delete(Sources.Count-1);end;
   Sources.Free;
   SourceLock.Free;
+  WorldLand:=nil;WorldLandLock.Free;
 end.

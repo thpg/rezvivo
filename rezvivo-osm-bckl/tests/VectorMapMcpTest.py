@@ -61,7 +61,7 @@ def run():
                 app.call('menu.inspect', lat=55.761, lon=37.610, zoom=zoom)
                 time.sleep(2)
                 state = read()
-                assert state['vector']['enabled'] == (zoom >= 12), state
+                assert state['vector']['enabled'], state
                 if zoom >= 14:
                     assert state['vector']['labels'] > 0, state
                 app.call('app.screenshot', path=str(out/f'moscow-z{zoom}-return.png'), inline=False)

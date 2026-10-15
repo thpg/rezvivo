@@ -22,7 +22,7 @@ uses
   Osm3dGeomTerrain        { TTerrainSampler, TRouteCorridor }
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ,
-  Osm3dWorkerPool;   { ParallelForPool — шардированный BuildAllParallel }
+  Osm3dWorkerPool, Osm3dOsmIndex;   { shared read-only road adjacency }
 
 const
   { Ord(TFenceMaterial) is the material id used downstream; MUST stay parallel to FENCE_MAT_*
@@ -88,6 +88,10 @@ type
     class-function style of TBuildingBuilderExt). }
   TFenceBuilder = class
   public
+    { OSM often shares a portal node with its transverse retaining wall.
+      The tunnel builder already emits this headwall above the opening. }
+    class function IsTunnelHeadwall(Way:TOSMWay;Dataset:TOSMDataset;
+      Roads:TOsmRoadIndex):Boolean; static;
     { Map a way's tags to fence render parameters. Ok=False when the way is
       not an extrudable barrier (gates, bollards, kerbs, unknown values) —
       the caller skips it. }
@@ -136,7 +140,7 @@ type
       LogProc: TLogProc = nil;
       AShard: Integer = 0;
       AShardCount: Integer = 1;
-      Corridor: TRouteCorridor = nil): TFenceMeshes; static;
+      Corridor: TRouteCorridor = nil; Roads:TOsmRoadIndex=nil): TFenceMeshes; static;
 
     { Параллельная версия (тот же рецепт, что TBuildingBuilderExt): заборы —
       крупнейшая ОСТАВШАЯСЯ однопоточная категория ген-фазы (по [gen-cat]
@@ -149,10 +153,36 @@ type
       Sampler: TTerrainSampler = nil;
       LogProc: TLogProc = nil;
       AShards: Integer = 4;
-      Corridor: TRouteCorridor = nil): TFenceMeshes; static;
+      Corridor: TRouteCorridor = nil; Roads:TOsmRoadIndex=nil): TFenceMeshes; static;
   end;
 
 implementation
+
+class function TFenceBuilder.IsTunnelHeadwall(Way:TOSMWay;Dataset:TOSMDataset;
+  Roads:TOsmRoadIndex):Boolean;
+var I,J,K:Integer;A:TRoadAdjArray;W:TOSMWay;N,N0,N1:TOSMNode;
+  EX,NY,TX,TY,L,T,C:Double;
+begin
+  Result:=False;
+  if (Way=nil) or (Dataset=nil) or (Roads=nil) or (Length(Way.NodeRefs)<2) or
+    (Way.Tags.GetLower('barrier')<>'retaining_wall') then Exit;
+  N0:=Dataset.FindNode(Way.NodeRefs[0]);N1:=Dataset.FindNode(Way.NodeRefs[High(Way.NodeRefs)]);
+  if (N0=nil) or (N1=nil) then Exit;
+  C:=Cos(N0.Position.Lat*Pi/180);EX:=(N1.Position.Lon-N0.Position.Lon)*C;NY:=N1.Position.Lat-N0.Position.Lat;
+  L:=Hypot(EX,NY);if (L<1e-8) or (L*111195.08>40) then Exit;
+  for I:=0 to High(Way.NodeRefs) do if Roads.AdjOf(Way.NodeRefs[I],A) then
+    for J:=0 to High(A) do begin
+      W:=A[J].Way;K:=A[J].Pos;
+      if (W=nil) or (Length(W.NodeRefs)<2) or
+        not ((K=0) or (K=High(W.NodeRefs))) or
+        (W.Tags.GetLower('tunnel')<>'yes') then Continue;
+      if K=0 then K:=1 else Dec(K);
+      N:=Dataset.FindNode(W.NodeRefs[K]);N0:=Dataset.FindNode(Way.NodeRefs[I]);
+      if (N=nil) or (N0=nil) then Continue;
+      TX:=(N.Position.Lon-N0.Position.Lon)*C;TY:=N.Position.Lat-N0.Position.Lat;T:=Hypot(TX,TY);
+      if (T>1e-8) and (Abs(EX*TX+NY*TY)<L*T*0.45) then Exit(True);
+    end;
+end;
 
 { height sampling (same fallback chain buildings/vegetation use) }
 
@@ -597,7 +627,7 @@ end;
 class function TFenceBuilder.BuildAll(Dataset: TOSMDataset; HM: THeightmap;
   Projection: TLocalProjection; Sampler: TTerrainSampler;
   LogProc: TLogProc; AShard: Integer; AShardCount: Integer;
-  Corridor: TRouteCorridor): TFenceMeshes;
+  Corridor: TRouteCorridor; Roads:TOsmRoadIndex): TFenceMeshes;
 var
   M, Mat, GateMat: Integer;
   Way: TOSMWay;
@@ -676,6 +706,7 @@ begin
     Params := ParseFenceParams(Way.Tags, Way.Id, Ok);
     if not Ok then Continue;
     if Length(Way.NodeRefs) < 2 then Continue;
+    if IsTunnelHeadwall(Way,Dataset,Roads) then Continue;
     Inc(WaysSeen);
 
     Mat := Params.Material;
@@ -746,6 +777,7 @@ type
     Sampler:  TTerrainSampler;
     Shards:   Integer;
     Corridor: TRouteCorridor;
+    Roads:TOsmRoadIndex;
     Meshes:   array[0..15] of TFenceMeshes;
   end;
   PFenceShardCtx = ^TFenceShardCtx;
@@ -760,13 +792,13 @@ begin
     C^.Meshes[I] := TFenceBuilder.BuildAll(
       C^.Dataset, C^.HM, C^.Proj, C^.Sampler,
       nil,               { лог шардов отключён — сводку пишет вызывающий }
-      I, C^.Shards, C^.Corridor);
+      I, C^.Shards, C^.Corridor, C^.Roads);
 end;
 
 class function TFenceBuilder.BuildAllParallel(Dataset: TOSMDataset;
   HM: THeightmap; Projection: TLocalProjection;
   Sampler: TTerrainSampler; LogProc: TLogProc;
-  AShards: Integer; Corridor: TRouteCorridor): TFenceMeshes;
+  AShards: Integer; Corridor: TRouteCorridor; Roads:TOsmRoadIndex): TFenceMeshes;
 var
   Ctx: TFenceShardCtx;
   S, M, K, AOfs, TotA: Integer;
@@ -777,7 +809,7 @@ begin
   if AShards > 16 then AShards := 16;
   if AShards = 1 then
   begin
-    Result := BuildAll(Dataset, HM, Projection, Sampler, LogProc, 0, 1, Corridor);
+    Result := BuildAll(Dataset, HM, Projection, Sampler, LogProc, 0, 1, Corridor,Roads);
     Exit;
   end;
 
@@ -787,6 +819,7 @@ begin
   Ctx.Sampler  := Sampler;
   Ctx.Shards   := AShards;
   Ctx.Corridor := Corridor;
+  Ctx.Roads := Roads;
   ParallelForPool(AShards, @RunFenceShardRange, @Ctx, 1);
 
   { merge: базой служит шард 0, остальные дозаписываются с оффсетами }

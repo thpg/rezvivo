@@ -6,12 +6,15 @@ interface
 type
   TFitLoadValues = array of Double;
   { Immutable after construction; paths/bots share the reference-counted arrays.
-    Stations are ORIGINAL FIT distance, never render height or elapsed time. }
+    Stations use the FIT odometer, with GPS repair of frozen/missing spans;
+    never rendered height or elapsed simulation time. }
   TFitLoadProfile = record
     StationM: TFitLoadValues;
     HeightM, GradeSin: TFitLoadValues;
     StepM, LengthM, ClosingM, LoopDriftM: Double;
     RejectedSpikes, StationarySamples: Integer;
+    DistanceRepairSpans: Integer;
+    RecoveredDistanceM: Double;
     DatumCorrected: Boolean;
   end;
 

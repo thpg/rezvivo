@@ -1,0 +1,12 @@
+Natural Earth - public domain geographic data
+https://www.naturalearthdata.com/about/terms-of-use/
+
+The offline globe uses Natural Earth I (3.2.0), shaded relief, water and
+drainages, and the Natural Earth vector dataset (5.1.2): countries, populated
+places, physical regions, marine regions, lakes and rivers. Natural Earth
+raster and vector data are in the public domain.
+
+Runtime resources: data/map-overview/world.rzmap and labels.json.
+Exact source URLs and payload checksums: data/map-overview/manifest.json.
+Rebuild tool: tools/build-map-overview.py. The installer ships the baked
+resources, not the large source raster or GeoJSON files.

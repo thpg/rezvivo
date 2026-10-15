@@ -4,7 +4,7 @@ unit GameGraphicsBenchmarkScene;
 
 interface
 
-uses Classes, SysUtils, CastleViewport, CastleScene, CastleVectors,
+uses Classes, SysUtils, CastleViewport, CastleScene, CastleVectors, CastleTransform,
   Osm3dGroundComposite, Osm3dGeomMesh, Osm3dTileX3D, Osm3dRenderGrass,
   Osm3dProceduralVegetation, Osm3dStudioSettings, Osm3dRiderShadow,
   Osm3dGpuTimer, GameGraphicsOptions, GameScreenFX, Osm3dImpostorCache,
@@ -24,6 +24,7 @@ type
     FWorker: TGraphicsBenchmarkWorker;
     FData: TGraphicsBenchmarkData;
     FGround, FCasters: TCastleScene;
+    FScenery:TCastleTransform;
     FGrass: TGrassRenderer;
     FProcedural: TOsmProceduralVegetation;
     FShadow: TRiderShadowAtlas;
@@ -104,7 +105,7 @@ function ActiveGraphicsBenchmark:TGraphicsBenchmarkScene;
 
 implementation
 
-uses Math, CastleCameras, CastleTransform, CastleColors, CastleURIUtils,
+uses Math, CastleCameras, CastleColors, CastleURIUtils,
   X3DNodes, Osm3dSceneAssembler, Osm3dRoadSurfaceBinding, Osm3dRoadSurface,
   Osm3dRoadMaterial, Osm3dGeomRoads, Osm3dGeomVegetation, TreeModel,
   Osm3dGeomBuildings, Osm3dWind, X3DFields, CastleRenderOptions, UiTranslations;
@@ -312,6 +313,7 @@ begin
   Items.UseHeadlight := hlOff;
   Camera := TCastleCamera.Create(Self);
   Items.Add(Camera);
+  FScenery:=TCastleTransform.Create(Self);Items.Add(FScenery);
   Camera.Perspective.FieldOfView := Pi / 3;
   Camera.ProjectionNear := 0.15;
   Camera.ProjectionFar := 500;
@@ -321,16 +323,16 @@ begin
   FGround.Exists := False;
   FGround.CastShadows := False;
   FGround.ReceiveShadowVolumes := False;
-  Items.Add(FGround);
+  FScenery.Add(FGround);
   FCasters := TCastleScene.Create(Self);
   FCasters.Exists := False;
   FCasters.CastShadows := False;
   FCasters.ReceiveShadowVolumes := False;
-  Items.Add(FCasters);
+  FScenery.Add(FCasters);
   FGrass := TGrassRenderer.Create(Self); FGrass.Exists := False;
-  FGrass.SunRayDirection := -FSun; Items.Add(FGrass);
+  FGrass.SunRayDirection := -FSun; FScenery.Add(FGrass);
   FProcedural := TOsmProceduralVegetation.Create(Self); FProcedural.Exists := False;
-  FProcedural.SunRayDirection := -FSun; Items.Add(FProcedural);
+  FProcedural.SunRayDirection := -FSun; FScenery.Add(FProcedural);
   FShadow := TRiderShadowAtlas.Create;
   FShadow.WorldShadows := True;
   FShadow.WorldCasters.Add(FCasters);
@@ -445,6 +447,8 @@ end;
 procedure TGraphicsBenchmarkScene.ApplyProfile(const Values: TGraphicsValues);
 begin
   FValues := Values;
+  ImpostorCache:=EffectiveGraphicsValue(goWorldCache,Values[goWorldCache])<>0;
+  Invalidate;
   FScreenFX.SofteningLevel := Values[goSoftening];
   FShadow.Configure(Values[goShadowSize], Values[goShadowFilter], Values[goShadowDistance]);
   FGrass.Exists := (FStage >= 3) and (Values[goGrass] <> 0);
@@ -579,10 +583,11 @@ begin
       RoadMaterialRender(Camera.WorldTranslation);
       FShadow.Casters.Clear;
       FRiders.AddCasters(FShadow.Casters);
-      Rtx:=nil;WorldRoot:=Items;
+      Rtx:=nil;WorldRoot:=FScenery;
       FShadow.RtxRequested:=FValues[goWorldShadows]<>0;
       FShadow.RtxRasterComparison:=FValues[goWorldShadows]=1;
-      FShadow.RtxReflections:=(FValues[goWorldShadows]=2) and (FValues[goRtxReflections]<>0);
+      FShadow.RtxScreenShadows:=FValues[goWorldShadows]=3;
+      FShadow.RtxReflections:=(FValues[goWorldShadows] in [2,3]) and (FValues[goRtxReflections]<>0);
       if FValues[goShadowSize] > 0 then begin
         FShadow.Render(Self, Camera.WorldTranslation, -FSun, 0.85);
         Rtx:=FShadow.RtxBackend;

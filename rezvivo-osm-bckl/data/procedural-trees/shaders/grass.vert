@@ -3,7 +3,10 @@ layout(location=0) in vec4 aBase;
 layout(location=1) in vec4 aSurface;
 layout(location=2) in vec4 aAB;
 layout(location=3) in vec4 aC;
+layout(location=4) in ivec4 aVertexTemplate;
 uniform mat4 uProjection,uView,uModel;
+uniform mat4 uViewModel;
+uniform int uVertexCache;
 uniform vec3 uCamera,uSun;
 uniform vec4 uProfile[8];
 uniform vec4 uGrowth[8]; // broad leaves, rosettes, seed heads, dry blades
@@ -41,6 +44,14 @@ float edge(vec2 a,vec2 b,vec2 p){vec2 d=b-a;return d.x*(p.y-a.y)-d.y*(p.x-a.x);}
 bool inside(vec2 p){vec3 e=vec3(edge(aAB.xy,aAB.zw,p),edge(aAB.zw,aC.xy,p),edge(aC.xy,aAB.xy,p));return all(greaterThanEqual(e,vec3(0)))||all(lessThanEqual(e,vec3(0)));}
 const int tri[15]=int[15](0,1,2,1,3,2,2,3,4,3,5,4,4,5,6);
 const vec2 quad[6]=vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(1,0),vec2(1,1),vec2(0,1));
+vec3 canopyViewGain(){
+  vec3 groundNormal=normalize(vec3(-aSurface.x,1,-aSurface.y));
+  float e=dot(normalize(uCamera-aBase.xyz+vec3(0,0.0001,0)),groundNormal);
+  int band=e<0.25?0:(e<0.5?1:2);
+  float lo=band==0?0.125:(band==1?0.25:0.5);
+  float hi=band==0?0.25:(band==1?0.5:0.98);
+  return mix(uBladeViewGain[vKind*4+band],uBladeViewGain[vKind*4+band+1],clamp((e-lo)/(hi-lo),0.0,1.0));
+}
 void main(){
   vKind=int(aBase.w+0.5);vec4 profile=uProfile[vKind];
   float d=uDistanceOverride>=0.0?uDistanceOverride:distance(aBase.xyz,uCamera);
@@ -109,19 +120,9 @@ void main(){
     vRoot=off;normal=vec3(toward.x,0.5,toward.y);
     }
   } else {
-    // Normalize canopy shading by view angle. Different amounts of dark
-    // stems are visible from above and from the road; every LOD must retain
-    // the same average brightness. Gains are measured only when baking.
-    if(uBake!=2 && (uBake!=1 || aSurface.w<=0.0)){
-      vec3 groundNormal=normalize(vec3(-aSurface.x,1,-aSurface.y));
-      float e=dot(normalize(uCamera-aBase.xyz+vec3(0,0.0001,0)),groundNormal);
-      int band=e<0.25?0:(e<0.5?1:2);
-      float lo=band==0?0.125:(band==1?0.25:0.5);
-      float hi=band==0?0.25:(band==1?0.5:0.98);
-      vBladeGain=mix(uBladeViewGain[vKind*4+band],uBladeViewGain[vKind*4+band+1],clamp((e-lo)/(hi-lo),0.0,1.0));
-    }
+    if(uVertexCache==0 && uBake!=2 && (uBake!=1 || aSurface.w<=0.0))vBladeGain=canopyViewGain();
     int headStart=uGrid*uGrid*7;bool head=gl_VertexID>=headStart;
-    int row=head?(gl_VertexID-headStart)/30:(gl_VertexID/7)/uGrid;
+    int row=uVertexCache!=0?aVertexTemplate.y:(head?(gl_VertexID-headStart)/30:(gl_VertexID/7)/uGrid);
     // Reuse two existing flower slots for whole plants. Their descriptors,
     // density and silhouettes stay identical in the live and baked paths.
     // These sparse plants survive thinning of the ordinary fine grass.
@@ -166,22 +167,24 @@ void main(){
     }else{
     // One candidate per row, scattered across the patch. Using column zero
     // for every flower created metre-spaced stripes even in the live blades.
-    int flowerColumn=int(hash(uint(aSurface.z)^uint(row)*0x85ebca6bu^0xc2b2ae35u)%uint(uGrid));
-    int blade=head?row*uGrid+flowerColumn:gl_VertexID/7;
+    uint columnBits=hash(uint(aSurface.z)^uint(row)*0x85ebca6bu^0xc2b2ae35u);
+    int flowerColumn=int(uVertexCache!=0?(columnBits&uint(uGrid-1)):(columnBits%uint(uGrid)));
+    int blade=head?row*uGrid+flowerColumn:(uVertexCache!=0?aVertexTemplate.x:gl_VertexID/7);
+    ivec2 cell=uVertexCache!=0?ivec2(head?flowerColumn:aVertexTemplate.z,row):ivec2(blade%uGrid,blade/uGrid);
     int part=head?1+((gl_VertexID-headStart)%30)/15:0;int vertex=head?(gl_VertexID-headStart)%15:0;
     // One stable subset becomes the middle canopy. Its roots, tip and wind
     // never change; removed blades fade before the CPU skips their indices.
     float thinning=uBake==0?smoothstep(uDensityDistances.x,uDensityDistances.y,d):0.0;
-    if(part==0 && (hash(uint(blade)^0x68bc21ebu)&3u)!=0u){
+    if(part==0 && (uVertexCache!=0?aVertexTemplate.w!=0:(hash(uint(blade)^0x68bc21ebu)&3u)!=0u)){
       vPopulation=1.0-thinning;
       if(vPopulation<=0.0){gl_Position=vec4(2,2,2,1);return;}
     }
     uint bits=hash(uint(aSurface.z)+uint(blade)*0x9e3779b9u);
     vec4 rnd=vec4(bits&255u,(bits>>8u)&255u,(bits>>16u)&255u,bits>>24u)/255.0;
-    vec2 root=(vec2(blade%uGrid,blade/uGrid)+mix(vec2(0.12),vec2(0.88),rnd.xy))/float(uGrid)-0.5;
+    vec2 root=(vec2(cell)+mix(vec2(0.12),vec2(0.88),rnd.xy))/float(uGrid)-0.5;
     // Related leaves grow in small plants rather than unrelated random strips.
     // A group's identity remains identical in all geometry detail levels.
-    ivec2 group=ivec2(blade%uGrid,blade/uGrid)/3;
+    ivec2 group=cell/3;
     uint groupBits=hash(uint(aSurface.z)^uint(group.x+group.y*uGrid)*0x85ebca6bu);
     float plantChoice=float(groupBits&65535u)/65535.0;
     vec4 growth=uGrowth[vKind];
@@ -194,14 +197,14 @@ void main(){
     root=mix(root,plantRoot,(form==0?0.28:0.78)*variation);
     if(rnd.w>profile.z || !inside(root) || (uSlice>=0 && int(floor((root.y+0.5)*3.0))!=uSlice)){gl_Position=vec4(2,2,2,1);return;}
     // Extra canopy layers add leaves, not another full population of flowers.
-    bool candidate=blade%uGrid==flowerColumn && (uBake==0 || aSurface.w<=1.0);
+    bool candidate=cell.x==flowerColumn && (uBake==0 || aSurface.w<=1.0);
     bool flower=candidate && rnd.z<profile.w*float(uGrid);
     float headChoice=float(hash(bits^0xb5297a4du)&65535u)/65535.0;
     bool seedHead=candidate && !flower && headChoice<growth.z*mix(0.65,1.35,community);
     if(part>0 && !flower && !seedHead){gl_Position=vec4(2,2,2,1);return;}
     if(flower || seedHead)form=0;
     float yaw=rnd.z*6.2831853;
-    if(form!=0)yaw=float((blade%uGrid)%3+((blade/uGrid)%3)*3)*2.399963+float(groupBits&255u)*0.02464;
+    if(form!=0)yaw=float(cell.x%3+(cell.y%3)*3)*2.399963+float(groupBits&255u)*0.02464;
     vec2 bend=vec2(cos(yaw),sin(yaw));vec2 side=vec2(-bend.y,bend.x);
     float h=profile.x*mix(mix(0.72,0.42,variation),1.0,rnd.y);
     if(form==1)h*=0.66;else if(form==2)h*=0.38;else if(form==3)h*=0.80;
@@ -260,6 +263,10 @@ void main(){
     vRoot=root;vUV=vec2(0);
     }
   }
+  // Do this patch-constant work only for vertices that survived density,
+  // source-triangle, flower and bake-slice rejection. The gain is identical
+  // to the early calculation, including the editor's calibration captures.
+  if(uVertexCache!=0 && uMode==0 && uBake!=2 && (uBake!=1 || aSurface.w<=0.0))vBladeGain=canopyViewGain();
   vSurfaceXZ=mod(aBase.xz,256.0)+vRoot;
   // Live descriptors interpolate the source mesh normals. The editor and
   // atlas baker retain their flat default (Reserved=0 or a bake layer).
@@ -269,13 +276,13 @@ void main(){
   // Evaluate root shading after interpolation. Computing it at vertices made
   // the 1/3/5-triangle levels have different mean brightness.
   float sun=0.68;
-  if(uBake==0 && uMode==0) sun=mix(sun,abs(dot(normalize(mat3(uModel)*normal),normalize(-uSun))),0.25*(1.0-smoothstep(1.0,3.0,d)));
+  if(uBake==0 && uMode==0 && (uVertexCache==0 || d<3.0)) sun=mix(sun,abs(dot(normalize(mat3(uModel)*normal),normalize(-uSun))),0.25*(1.0-smoothstep(1.0,3.0,d)));
   vec3 light=(vec3(0.55,0.64,0.50)+vec3(1,0.96,0.9)*(2.55*sun))*0.55;
   vec3 lit=albedo*light;vColor=pow(lit/(lit+vec3(1)),vec3(1.0/2.2));
   // Use the real surface position, before the decal's depth-only bias.
   // Relative shadow matrices retain precision far from the map origin.
   vShadowRelative=mat3(uModel)*(p-uCamera);
-  vec4 eyePosition=uView*uModel*vec4(p,1);
+  vec4 eyePosition=uVertexCache!=0?uViewModel*vec4(p,1):uView*uModel*vec4(p,1);
   gl_Position=uProjection*eyePosition;
   if(uMode!=0 && vSlice==3){
     // Bias only depth by one centimetre in view space. Screen XY stays on

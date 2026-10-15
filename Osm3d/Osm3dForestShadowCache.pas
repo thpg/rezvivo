@@ -5,49 +5,71 @@ interface
 uses CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions,
   X3DNodes, fpjson;
 type
-  { One light-space depth image for the entire distant forest, not one
-    silhouette per tree. Only the outer receiver cascade uses this image. }
-  TForestShadowCache = class
-  private
+  { Reusable projected depth storage. Compositing writes nearest depth into
+    the existing atlas, so receivers still sample a single shadow texture. }
+  TShadowDepthCache = class
+  protected
     FMap:TGeneratedShadowMapNode;
     FLight:TDirectionalLightNode;
     FOptions:TCastleRenderOptions;
-    FViewport:TCastleViewport;
-    FCasters:TCastleTransformList;
     FValid:Boolean;
     FDirection:TVector3;
     FX,FY,FHalf,FNear,FFar:Single;
-    FRevision,FLastCapture,FCaptures,FReuses:QWord;
+    FCaptures:QWord;
     FProgram,FVAO:Cardinal;
-    procedure Capture(const Camera:TRenderingCamera);
+    FSampler,FRemap,FDepthRemap,FSourceCount:LongInt;
     procedure InitializeProgram;
+    procedure CaptureDepth(const Render:TRenderFromViewFunction;const Side,Up:TVector3);
   public
     constructor Create;
     destructor Destroy;override;
     procedure ContextClose;
+    procedure Invalidate;
+    function Covers(const Direction:TVector3;X,Y,Half,MinDepth,MaxDepth:Single):Boolean;
+    function SameTexelSize(Half:Single;TileSize:Integer):Boolean;
+    procedure CaptureRegion(const Render:TRenderFromViewFunction;
+      const Direction,Side,Up:TVector3;X,Y,Half,MinDepth,MaxDepth:Single;
+      TileSize:Integer);
+    procedure Draw(X,Y,Half,MinDepth,MaxDepth:Single);
+    procedure DrawSource(Source:TShadowDepthCache;X,Y,Half,MinDepth,MaxDepth:Single);
+    procedure DrawSources(const Sources:array of TShadowDepthCache;X,Y,Half,MinDepth,MaxDepth:Single);
+    function StorageBytes:Int64;
+    property Ready:Boolean read FValid;
+  end;
+  { One light-space depth image for the entire distant forest, not one
+    silhouette per tree. Only the outer receiver cascade uses this image. }
+  TForestShadowCache = class(TShadowDepthCache)
+  private
+    FViewport:TCastleViewport;
+    FCasters:TCastleTransformList;
+    FPrefetchOffset:TVector3;
+    FRevision,FLastCapture,FReuses:QWord;
+    procedure Capture(const Camera:TRenderingCamera);
+  public
+    constructor Create;
+    destructor Destroy;override;
     procedure Prepare(Viewport:TCastleViewport;Casters:TCastleTransformList;
       Revision:QWord;const Direction,Side,Up:TVector3;
       X,Y,Half,MinDepth,MaxDepth:Single;Size:Integer);
-    procedure Draw(X,Y,Half,MinDepth,MaxDepth:Single);
     procedure Snapshot(J:TJSONObject);
-    property Ready:Boolean read FValid;
+    property PrefetchOffset:TVector3 read FPrefetchOffset write FPrefetchOffset;
   end;
+function ShadowDepthFragmentSource(ForES:Boolean):AnsiString;
 implementation
 uses SysUtils,Math,CastleInternalRenderer,
   {$ifdef OpenGLES}CastleGLES,RenderGLES{$else}CastleGL{$endif};
 
-constructor TForestShadowCache.Create;
+constructor TShadowDepthCache.Create;
 begin
   inherited;
   FOptions:=TCastleRenderOptions.Create(nil);
-  FCasters:=TCastleTransformList.Create(False);
   FLight:=TDirectionalLightNode.Create;FLight.KeepExistingBegin;
   FMap:=TGeneratedShadowMapNode.Create;FMap.KeepExistingBegin;
-  FMap.X3DName:='DistantForestGroupDepth';FMap.Light:=FLight;
+  FMap.X3DName:='CachedWorldDepth';FMap.Light:=FLight;
   FMap.FdScale.Value:=1;FMap.FdBias.Value:=1;
 end;
 
-procedure TForestShadowCache.ContextClose;
+procedure TShadowDepthCache.ContextClose;
 begin
   FValid:=False;
   TTextureResources.Unprepare(FMap);
@@ -55,14 +77,74 @@ begin
   if FVAO<>0 then glDeleteVertexArrays(1,@FVAO);FVAO:=0;
 end;
 
-destructor TForestShadowCache.Destroy;
+destructor TShadowDepthCache.Destroy;
 begin
   ContextClose;
   FMap.KeepExistingEnd;FMap.FreeIfUnused;
   FLight.KeepExistingEnd;FLight.FreeIfUnused;
-  FCasters.Free;FOptions.Free;
+  FOptions.Free;
   inherited;
 end;
+
+procedure TShadowDepthCache.Invalidate;
+begin FValid:=False;end;
+
+function TShadowDepthCache.StorageBytes:Int64;
+begin
+  { D24 storage is normally aligned to 32 bits on desktop GPUs. }
+  if TTextureResources.Get(FMap)=nil then Exit(0);
+  Result:=Int64(FMap.Size)*FMap.Size*4;
+end;
+
+function TShadowDepthCache.Covers(const Direction:TVector3;
+  X,Y,Half,MinDepth,MaxDepth:Single):Boolean;
+begin
+  Result:=FValid and ((FDirection-Direction).Length<0.0001) and
+    (Abs(X-FX)+Half<FHalf-0.01) and (Abs(Y-FY)+Half<FHalf-0.01) and
+    (MinDepth>=FNear) and (MaxDepth<=FFar);
+end;
+
+function TShadowDepthCache.SameTexelSize(Half:Single;TileSize:Integer):Boolean;
+begin
+  Result:=Abs(FHalf/FMap.Size-Half/TileSize)<Max(0.000001,Half/TileSize*0.0001);
+end;
+
+procedure TShadowDepthCache.CaptureDepth(const Render:TRenderFromViewFunction;
+  const Side,Up:TVector3);
+var Hint:TVector3;
+begin
+  FValid:=False;
+  Hint:=Vector3(0,1,0);if Abs(FDirection.Y)>0.99 then Hint:=Vector3(0,0,1);
+  FLight.Direction:=FDirection;FLight.Up:=Hint;
+  FLight.FdProjectionLocation.Value:=Side*FX+Up*FY+FDirection*FNear;
+  FLight.FdProjectionRectangle.Value:=Vector4(-FHalf,-FHalf,FHalf,FHalf);
+  FLight.FdProjectionNear.Value:=0.1;FLight.FdProjectionFar.Value:=FFar-FNear;
+  TTextureResources.Prepare(FOptions,FMap);
+  TGeneratedShadowMapResource(TTextureResources.Get(FMap)).UpdateRegion(
+    Render,FLight,0,0,FMap.Size,FMap.Size);
+  FValid:=True;Inc(FCaptures);
+end;
+
+procedure TShadowDepthCache.CaptureRegion(const Render:TRenderFromViewFunction;
+  const Direction,Side,Up:TVector3;X,Y,Half,MinDepth,MaxDepth:Single;TileSize:Integer);
+var Size:Integer;Step:Single;
+begin
+  { Add a guard band WITHOUT enlarging the shadow texel. Exactly the same
+    light-space grid as the live cascade avoids spatial quality loss. }
+  Size:=TileSize+TileSize div 4;
+  if FMap.Size<>Size then begin TTextureResources.Unprepare(FMap);FMap.Size:=Size;end;
+  Step:=2*Half/TileSize;
+  FX:=Round(X/Step)*Step;FY:=Round(Y/Step)*Step;
+  FHalf:=Step*Size*0.5;FDirection:=Direction;
+  FNear:=Floor((MinDepth-16)/16)*16;FFar:=Ceil((MaxDepth+16)/16)*16;
+  CaptureDepth(Render,Side,Up);
+end;
+
+constructor TForestShadowCache.Create;
+begin inherited;FCasters:=TCastleTransformList.Create(False);end;
+
+destructor TForestShadowCache.Destroy;
+begin FCasters.Free;inherited;end;
 
 procedure TForestShadowCache.Capture(const Camera:TRenderingCamera);
 begin
@@ -72,39 +154,55 @@ end;
 procedure TForestShadowCache.Prepare(Viewport:TCastleViewport;Casters:TCastleTransformList;
   Revision:QWord;const Direction,Side,Up:TVector3;
   X,Y,Half,MinDepth,MaxDepth:Single;Size:Integer);
-var Padding,Grid:Single;Tick:QWord;I:Integer;Hint:TVector3;
+var Padding,Grid,LeadX,LeadY:Single;Tick:QWord;I:Integer;
 begin
   Tick:=GetTickCount64;
   { Guard band lets the camera move without resampling geometry. Reprojection
     below uses depth too, so slopes and overlapping crowns retain their height. }
   Padding:=Max(12,Half*0.125);Grid:=Padding*0.5;
+  { Spend existing guard space in the direction of travel. The footprint,
+    texture size and capture count per frame remain bounded as before. }
+  LeadX:=EnsureRange(TVector3.DotProduct(Side,FPrefetchOffset),-Padding*0.4,Padding*0.4);
+  LeadY:=EnsureRange(TVector3.DotProduct(Up,FPrefetchOffset),-Padding*0.4,Padding*0.4);
   if FValid and (FMap.Size=Size) and ((FDirection-Direction).Length<0.0001) and
+    (Abs(X+LeadX*0.5-FX)+Half<FHalf-1) and (Abs(Y+LeadY*0.5-FY)+Half<FHalf-1) and
     (Abs(X-FX)+Half<FHalf-1) and (Abs(Y-FY)+Half<FHalf-1) and
     (MinDepth>=FNear) and (MaxDepth<=FFar) and
     ((Revision=FRevision) or (Tick-FLastCapture<1000)) then
   begin Inc(FReuses);Exit end;
   if FMap.Size<>Size then begin TTextureResources.Unprepare(FMap);FMap.Size:=Size;end;
-  FValid:=False;FX:=Round(X/Grid)*Grid;FY:=Round(Y/Grid)*Grid;
+  FValid:=False;FX:=Round((X+LeadX)/Grid)*Grid;FY:=Round((Y+LeadY)/Grid)*Grid;
   FHalf:=Ceil((Half+Padding)/Grid)*Grid;
   FNear:=Floor((MinDepth-16)/16)*16;FFar:=Ceil((MaxDepth+16)/16)*16;
   FDirection:=Direction;
-  Hint:=Vector3(0,1,0);if Abs(Direction.Y)>0.99 then Hint:=Vector3(0,0,1);
-  FLight.Direction:=Direction;FLight.Up:=Hint;
-  FLight.FdProjectionLocation.Value:=Side*FX+Up*FY+Direction*FNear;
-  FLight.FdProjectionRectangle.Value:=Vector4(-FHalf,-FHalf,FHalf,FHalf);
-  FLight.FdProjectionNear.Value:=0.1;FLight.FdProjectionFar.Value:=FFar-FNear;
   FCasters.Clear;
   for I:=0 to Casters.Count-1 do FCasters.Add(Casters[I]);
   FViewport:=Viewport;
   try
-    TTextureResources.Prepare(FOptions,FMap);
-    TGeneratedShadowMapResource(TTextureResources.Get(FMap)).UpdateRegion(
-      @Capture,FLight,0,0,Size,Size);
-    FValid:=True;FRevision:=Revision;FLastCapture:=Tick;Inc(FCaptures);
+    CaptureDepth(@Capture,Side,Up);
+    FRevision:=Revision;FLastCapture:=Tick;
   finally FViewport:=nil;FCasters.Clear end;
 end;
 
-procedure TForestShadowCache.InitializeProgram;
+function ShadowDepthFragmentSource(ForES:Boolean):AnsiString;
+var I:Integer;
+begin
+  if ForES then Result:='#version 300 es'#10'precision highp float;precision highp int;precision highp sampler2D;'#10
+  else Result:='#version 330'#10;
+  Result:=Result+'in vec2 uv;uniform sampler2D depths[5];uniform vec4 remap[5];'+
+    'uniform vec2 depthRemap[5];uniform int sourceCount;'+
+    'float readDepth(sampler2D tex,vec4 r,vec2 dz){vec2 p=uv*r.xy+r.zw;'+
+    'if(any(lessThan(p,vec2(0)))||any(greaterThan(p,vec2(1))))return 1.;'+
+    'float d=texture(tex,p).r;if(d>=1.)return 1.;float z=d*dz.x+dz.y;'+
+    'return (z<0.||z>1.)?1.:z;}void main(){float z=1.;';
+  { Constant sampler indices also compile on GLES 3.0. Dynamic sampler-array
+    indexing would unnecessarily require a newer mobile shading language. }
+  for I:=0 to 4 do Result:=Result+'if(sourceCount>'+IntToStr(I)+')z=min(z,readDepth(depths['+
+    IntToStr(I)+'],remap['+IntToStr(I)+'],depthRemap['+IntToStr(I)+']));';
+  Result:=Result+'if(z>=1.)discard;gl_FragDepth=z;}';
+end;
+
+procedure TShadowDepthCache.InitializeProgram;
 const
   {$ifdef OpenGLES}Header='#version 300 es'#10'precision highp float;'#10;
   {$else}Header='#version 330'#10;{$endif}
@@ -125,11 +223,7 @@ begin
   VS:=Shader(GL_VERTEX_SHADER,Header+
     'out vec2 uv;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0.,1.);}');
   try
-    FS:=Shader(GL_FRAGMENT_SHADER,Header+
-      'in vec2 uv;uniform sampler2D forest;uniform vec4 remap;uniform vec2 depthRemap;'+
-      'void main(){vec2 p=uv*remap.xy+remap.zw;if(any(lessThan(p,vec2(0)))||any(greaterThan(p,vec2(1))))discard;'+
-      'float d=texture(forest,p).r;if(d>=1.)discard;float z=d*depthRemap.x+depthRemap.y;'+
-      'if(z<0.||z>1.)discard;gl_FragDepth=z;}');
+    FS:=Shader(GL_FRAGMENT_SHADER,ShadowDepthFragmentSource({$ifdef OpenGLES}True{$else}False{$endif}));
     try
       FProgram:=glCreateProgram();glAttachShader(FProgram,VS);glAttachShader(FProgram,FS);
       glLinkProgram(FProgram);glGetProgramiv(FProgram,GL_LINK_STATUS,@OK);
@@ -137,42 +231,71 @@ begin
     finally glDeleteShader(FS) end;
   finally glDeleteShader(VS) end;
   glGenVertexArrays(1,@FVAO);
+  FSampler:=glGetUniformLocation(FProgram,'depths[0]');
+  FRemap:=glGetUniformLocation(FProgram,'remap[0]');
+  FDepthRemap:=glGetUniformLocation(FProgram,'depthRemap[0]');
+  FSourceCount:=glGetUniformLocation(FProgram,'sourceCount');
 end;
 
-procedure TForestShadowCache.Draw(X,Y,Half,MinDepth,MaxDepth:Single);
-var OldProgram,OldVAO,OldActive,OldTexture,OldFunc,OldCompare,OldMinFilter,OldMagFilter:GLint;
+procedure TShadowDepthCache.Draw(X,Y,Half,MinDepth,MaxDepth:Single);
+begin DrawSource(Self,X,Y,Half,MinDepth,MaxDepth);end;
+
+procedure TShadowDepthCache.DrawSource(Source:TShadowDepthCache;X,Y,Half,MinDepth,MaxDepth:Single);
+begin DrawSources([Source],X,Y,Half,MinDepth,MaxDepth);end;
+
+procedure TShadowDepthCache.DrawSources(const Sources:array of TShadowDepthCache;X,Y,Half,MinDepth,MaxDepth:Single);
+var OldProgram,OldVAO,OldActive,OldFunc:GLint;
+    OldTexture,OldCompare,OldMinFilter,OldMagFilter,Units:array[0..4]of GLint;
+    Textures:array[0..4]of Cardinal;
+    Remaps:array[0..4,0..3]of Single;Depths:array[0..4,0..1]of Single;
     WasDepth,WasCull,WasBlend,OldWrite:GLBoolean;Mask:array[0..3]of GLBoolean;
-    Texture:Cardinal;Span:Single;
+    Source:TShadowDepthCache;Span:Single;I,N:Integer;
 begin
-  if not FValid then Exit;
+  N:=0;Span:=MaxDepth-MinDepth-0.1;
+  if Span<=0 then Exit;
+  for Source in Sources do if (Source<>nil) and Source.FValid then begin
+    if N=5 then raise EArgumentException.Create('At most five shadow depth sources');
+    Textures[N]:=TGeneratedShadowMapResource(TTextureResources.Get(Source.FMap)).GLName;
+    Remaps[N,0]:=Half/Source.FHalf;Remaps[N,1]:=Half/Source.FHalf;
+    Remaps[N,2]:=(X-Half-Source.FX+Source.FHalf)/(2*Source.FHalf);
+    Remaps[N,3]:=(Y-Half-Source.FY+Source.FHalf)/(2*Source.FHalf);
+    Depths[N,0]:=(Source.FFar-Source.FNear-0.1)/Span;
+    Depths[N,1]:=(Source.FNear-MinDepth)/Span;
+    Inc(N);
+  end;
+  if N=0 then Exit;
   InitializeProgram;
   glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
-  glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);glActiveTexture(GL_TEXTURE0);
-  glGetIntegerv(GL_TEXTURE_BINDING_2D,@OldTexture);glGetIntegerv(GL_DEPTH_FUNC,@OldFunc);
+  glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);glGetIntegerv(GL_DEPTH_FUNC,@OldFunc);
   glGetBooleanv(GL_DEPTH_WRITEMASK,@OldWrite);glGetBooleanv(GL_COLOR_WRITEMASK,@Mask[0]);
   WasDepth:=glIsEnabled(GL_DEPTH_TEST);WasCull:=glIsEnabled(GL_CULL_FACE);WasBlend:=glIsEnabled(GL_BLEND);
-  Texture:=TGeneratedShadowMapResource(TTextureResources.Get(FMap)).GLName;
-  glBindTexture(GL_TEXTURE_2D,Texture);glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_COMPARE_MODE,@OldCompare);
-  glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,@OldMinFilter);
-  glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,@OldMagFilter);
-  try
+  for I:=0 to 4 do Units[I]:=Min(I,N-1);
+  for I:=0 to N-1 do begin
+    glActiveTexture(GL_TEXTURE0+I);glGetIntegerv(GL_TEXTURE_BINDING_2D,@OldTexture[I]);
+    glBindTexture(GL_TEXTURE_2D,Textures[I]);
+    glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_COMPARE_MODE,@OldCompare[I]);
+    glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,@OldMinFilter[I]);
+    glGetTexParameteriv(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,@OldMagFilter[I]);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_COMPARE_MODE,GL_NONE);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+  end;
+  try
     glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glDepthMask(GL_TRUE);
     glDisable(GL_CULL_FACE);glDisable(GL_BLEND);glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
     glUseProgram(FProgram);glBindVertexArray(FVAO);
-    glUniform1i(glGetUniformLocation(FProgram,'forest'),0);
-    glUniform4f(glGetUniformLocation(FProgram,'remap'),Half/FHalf,Half/FHalf,
-      (X-Half-FX+FHalf)/(2*FHalf),(Y-Half-FY+FHalf)/(2*FHalf));
-    Span:=MaxDepth-MinDepth-0.1;
-    glUniform2f(glGetUniformLocation(FProgram,'depthRemap'),(FFar-FNear-0.1)/Span,(FNear-MinDepth)/Span);
+    glUniform1iv(FSampler,5,@Units[0]);glUniform1i(FSourceCount,N);
+    glUniform4fv(FRemap,N,@Remaps[0,0]);glUniform2fv(FDepthRemap,N,@Depths[0,0]);
     glDrawArrays(GL_TRIANGLES,0,3);
   finally
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_COMPARE_MODE,OldCompare);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,OldMinFilter);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,OldMagFilter);
-    glBindTexture(GL_TEXTURE_2D,OldTexture);glActiveTexture(OldActive);
+    for I:=N-1 downto 0 do begin
+      glActiveTexture(GL_TEXTURE0+I);
+      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_COMPARE_MODE,OldCompare[I]);
+      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,OldMinFilter[I]);
+      glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,OldMagFilter[I]);
+      glBindTexture(GL_TEXTURE_2D,OldTexture[I]);
+    end;
+    glActiveTexture(OldActive);
     glUseProgram(OldProgram);glBindVertexArray(OldVAO);glDepthFunc(OldFunc);glDepthMask(OldWrite);
     glColorMask(Mask[0],Mask[1],Mask[2],Mask[3]);
     if WasDepth=GL_TRUE then glEnable(GL_DEPTH_TEST) else glDisable(GL_DEPTH_TEST);

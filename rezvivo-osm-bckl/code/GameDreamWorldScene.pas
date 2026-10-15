@@ -41,7 +41,10 @@ type
     procedure Update(Seconds:Single);
     procedure AppendShadowCasters(List:TCastleTransformList);
     procedure AppendReflectionSurfaces(List:TCastleTransformList);
+    procedure RefreshRenderVisibility;
     function Diagnostics:TJSONObject;
+    property RenderRoot:TCastleScene read FScene;
+    property RenderRevision:Integer read FUploaded;
   end;
   { The loader hands over its prepared visual. Preview -> ride moves the same
     scene (including GPU resources), never reparses GLB or rebuilds the ground. }
@@ -60,7 +63,7 @@ implementation
 uses SysUtils,Math,Generics.Collections,CastleVectors,CastleRenderOptions,CastleURIUtils,CastleImages,X3DLoad,X3DFields,CastleInternalRenderer,
   Osm3dTileX3D,Osm3dSceneAssembler,Osm3dRiderShadow,Osm3dGeomMesh,
   Osm3dGroundComposite,Osm3dRoadSurfaceBinding,Osm3dGeomVegetation,Osm3dStudioSettings,Osm3dImageCodecLock,GameCoastalSky,
-  Osm3dBuildingComposite,Osm3dFenceComposite;
+  Osm3dBuildingComposite,Osm3dFenceComposite,Osm3dWorldVisibility;
 
 var NextVisualSerial:Integer;
 type
@@ -233,6 +236,19 @@ var Root,CasterRoot:TX3DRootNode;Group,CastGroup:TTransformNode;Shape:TShapeNode
   ModelGroups:specialize TDictionary<string,TTransformNode>;ModelGroup:TTransformNode;
   Instance:TTileModelInstance;Placement:TTransformNode;FileName:string;
   Tick:QWord;ProceduralTrees:TTileTreeRecArray;
+  function BuildingMesh(const Name:string):Boolean;
+  begin
+    { The baked worlds name architecture separately from roads, cliffs and
+      piers. Imported buildings receive the same tag below. }
+    Result:=(Pos('fortress_',Name)=1)or(Pos('ruins_',Name)=1)or
+      (Pos('arches_',Name)=1)or(Name='arch_keystones')or
+      (Name='houses')or(Name='foundations')or(Name='model_foundations')or
+      (Name='roofs')or(Name='windows')or(Name='timber')or
+      (Pos('observatory',Name)=1)or(Pos('lighthouse_',Name)=1)or
+      (Name='podiums')or(Name='glass_teal')or(Name='glass_blue')or
+      (Name='roof_terraces')or(Pos('facade_',Name)=1)or(Name='antennas')or
+      ((World.Id='castle-island')and((Name='stone_dark')or(Name='stone_light')));
+  end;
   procedure Mark(const Name:string);
   begin FTimings.Add(Name,GetTickCount64-Tick);Tick:=GetTickCount64;end;
   procedure AddGround(B:TGroundCompositeBuilder;Parent:TTransformNode;Casts:Boolean);
@@ -281,6 +297,9 @@ begin
           ModelRoot:=LoadNode(FilenameToURISafe(FileName));
           Placement.AddChildren(ModelRoot);ModelRoots.Add(FileName,ModelRoot);Inc(FModelFiles);
           ModelRoot.EnumerateNodes(TShapeNode,@PrepareModelShape,False);
+          if (Pos('chalet',FileName)>0)or(Pos('watchtower',FileName)>0)or
+             (Pos('lighthouse.glb',FileName)>0)or(Pos('pavilion',FileName)>0) then
+            MarkWorldBuilding(ModelRoot);
         end else begin Placement.AddChildren(ModelRoot);ModelGroup:=ModelGroups[FileName];end;
         ModelGroup.AddChildren(Placement);Inc(FModelInstances);
       end;
@@ -306,6 +325,7 @@ begin
             Continue;
           end;
           Shape:=TShapeNode.Create;
+          if BuildingMesh(R.Name) then MarkWorldBuilding(Shape);
           if M.CastShadow then begin
             Shape.X3DName:='DreamCaster_'+R.Name;CastGroup.AddChildren(Shape);
           end else begin Shape.X3DName:='DreamSurface_'+R.Name;Group.AddChildren(Shape);end;
@@ -427,6 +447,7 @@ begin
           Chunk.Collides:=False;Chunk.CastShadows:=False;Chunk.ReceiveShadowVolumes:=False;
           ChunkRoot:=TX3DRootNode(FChunkRoots[FUploaded]);FChunkRoots[FUploaded]:=nil;
           Chunk.Load(ChunkRoot,True);
+          if WorldGeometryHidden then ApplyWorldVisibility(Chunk.RootNode);
           FChunkTextures.Clear;FTextureStep:=0;
           Chunk.RootNode.EnumerateNodes(TAbstractTextureNode,@CollectChunkTexture,False);
           { Not mounted yet. Allow the main-thread atlas registry to bind the
@@ -462,6 +483,14 @@ begin
 end;
 procedure TDreamWorldVisual.Update(Seconds:Single);
 begin FWater.Tick(Seconds);end;
+procedure TDreamWorldVisual.RefreshRenderVisibility;
+var I:Integer;Chunk:TCastleScene;
+begin
+  for I:=0 to FChunks.Count-1 do begin
+    Chunk:=TCastleScene(FChunks[I]);
+    if Chunk<>nil then ApplyWorldVisibility(Chunk.RootNode);
+  end;
+end;
 procedure TDreamWorldVisual.AppendShadowCasters(List:TCastleTransformList);
 var I:Integer;
 begin

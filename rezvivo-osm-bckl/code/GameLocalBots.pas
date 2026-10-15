@@ -116,13 +116,14 @@ type
     procedure SetRouteExcursion(Active:Boolean;const Nearest:TPathPosition);
     function AnimationStep(Index:Integer;Dt:Single):Single;
     procedure InvalidateShadowPose(Index:Integer);
-    procedure AppendShadowCasters(List:TCastleTransformList);
+    procedure AppendShadowCasters(List:TCastleTransformList;UseRtx:Boolean=False);
     procedure SetRenderEnabled(Value:Boolean);
     procedure SetAnimationEnabled(Value:Boolean);
     procedure SetRenderLimit(Value:Integer);
     procedure SetPoseCachePolicy(Value:Integer);
     procedure SetCrossings(const Value:TBotCrossingArray);
     function RouteGap(Index:Integer):Single;
+    function ReferencePower(Index:Integer):Single;
     function CaptureReplay:TLocalBotsReplay;
     procedure RestoreReplay(const Value:TLocalBotsReplay);
     function Diagnostics:TJSONObject;
@@ -359,6 +360,13 @@ begin
     Result:=FDistances[P.Segment]+P.T*(FDistances[P.Segment+1]-FDistances[P.Segment]);
 end;
 
+function TLocalBots.ReferencePower(Index:Integer):Single;
+begin
+  Result:=0;
+  if(Index<0)or(Index>=LocalBotCount)or(FAvatar=nil)then Exit;
+  Result:=LocalBotSustainablePower(FProfiles[Index],FReferencePower,FAvatar.State.AvatarMass);
+end;
+
 function TLocalBots.RouteGap(Index:Integer):Single;
 var P:TPathPosition;
 begin
@@ -473,13 +481,23 @@ begin
   if(Visual>=0)and(Visual<LocalBotCount)then FShadowPoseDirty[Visual]:=True;
 end;
 
-procedure TLocalBots.AppendShadowCasters(List:TCastleTransformList);
+procedure TLocalBots.AppendShadowCasters(List:TCastleTransformList;UseRtx:Boolean);
 var I,Visual:Integer;B:TBikeInstance;Distance:Single;InCamera,Proxy:Boolean;
 begin
   for I:=0 to FAgents.Count-1 do begin
     if not GetAgent(I).Visible then Continue;
     B:=TBikeInstance(FBikes[I]);if(B=nil)or not B.Group.Exists then Continue;
     Visual:=I;if I=LocalBotCount then Visual:=FCrossVisual;
+    { Raster proxies are prepared only by the shadow-map pass. RTX must not
+      gather stale proxy buffers or omit a distant rider whose proxy has never
+      been drawn. Its posed mesh is shared with the receiver-depth pass. }
+    if FShadows[Visual]<>nil then FShadows[Visual].CastShadows:=not UseRtx;
+    if not B.Group.Visible then Continue;
+    if UseRtx then begin
+      if FShadows[Visual]<>nil then FShadows[Visual].Active:=False;
+      List.Add(B.Group);
+      Continue;
+    end;
     CameraRelation(GetAgent(I),Distance,InCamera);
     Proxy:=Distance>24;
     if FShadows[Visual]<>nil then begin

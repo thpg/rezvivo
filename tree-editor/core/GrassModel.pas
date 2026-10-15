@@ -32,6 +32,9 @@ type
     AX,AZ,BX,BZ,CX,CZ,Pad0,Pad1: Single;
   end;
   TGrassPatches = array of TGrassPatch;
+  TGrassVertexTemplate = packed record
+    Blade,Row,Column,Thinning:LongInt;
+  end;
   TGrassProfile = packed record
     Height,Width,Density,Flowers: Single;
     { A habitat contains several growth forms. Shared by live geometry and
@@ -51,6 +54,7 @@ function GrassBladeDistance(Height:Single):Single;
 function GrassLodHeightScale(Height:Single):Single;
 function DefaultGrassLod:TGrassLodSettings;
 function GrassHash(N: LongWord): LongWord;
+function GrassVertexTemplate(Grid,Vertex:Integer):TGrassVertexTemplate;
 function GrassCellSeed(X,Z: Integer): LongWord;
 function GrassHabitatAt(X,Z: Integer): Single;
 function WholeGrassPatch(X,Z,Kind: Integer): TGrassPatch;
@@ -139,6 +143,17 @@ begin
 end;
 function GrassHash(N: LongWord): LongWord;
 begin N:=N xor (N shr 16);N:=N*$7feb352d;N:=N xor (N shr 15);N:=N*$846ca68b;Result:=N xor (N shr 16);end;
+function GrassVertexTemplate(Grid,Vertex:Integer):TGrassVertexTemplate;
+begin
+  if Vertex>=Grid*Grid*7 then begin
+    Result.Blade:=-1;Result.Row:=(Vertex-Grid*Grid*7)div 30;
+    Result.Column:=0;Result.Thinning:=0;
+  end else begin
+    Result.Blade:=Vertex div 7;Result.Row:=Result.Blade div Grid;
+    Result.Column:=Result.Blade mod Grid;
+    Result.Thinning:=Ord((GrassHash(LongWord(Result.Blade) xor $68bc21eb)and 3)<>0);
+  end;
+end;
 function GrassCellSeed(X,Z: Integer): LongWord;
 begin Result:=GrassHash(LongWord(X) xor GrassHash(LongWord(Z)+$9e3779b9)) and $ffffff;end;
 function GrassHabitatAt(X,Z: Integer): Single;

@@ -4,10 +4,10 @@ interface
 uses Classes, SysUtils, fpjson, CastleUIControls, CastleVectors, CastleRectangles,
   CastleGLUtils, CastleFonts, CastleGLImages, CastleGLShaders, CastleRenderContext,
   Osm3dGeoMath, Osm3dVectorMap, Osm3dFlatMap, GameGlobeMath;
-const VECTOR_MAP_MIN_ZOOM = 12;
+const VECTOR_MAP_MIN_ZOOM = 0;
 type
   TVectorMapTile=class
-    Tile:TTileXY; Data:TMapVectorData; Task:TFlatMapVectorTask;
+    Tile:TTileXY; Data,SeedData:TMapVectorData; Task:TFlatMapVectorTask;
     Needed:Boolean; Used,RetryAt:QWord;
     destructor Destroy;override;
   end;
@@ -23,6 +23,7 @@ type
     FTiles,FSorted:TList; FView:TGlobeProjection; FRect:TFloatRectangle; FBounds,FGeometryBounds:TLatLonBox;
     FAnchor:TLatLon;
     FGeometryZoom:Integer;
+    FSourceZoom:Integer;
     FScale,FLayoutDelay,FGeometryDelay,FZoom:Single; FEnabled,FLoadingPaused,FDirty,FLabelDirty,FDataDirty,FUpload:Boolean;
     FVertices:array of TMapDrawVertex; FVertexCount:Integer;
     FLabels:array of TMapPlacedLabel; FLabelCount,FVisibleFeatures:Integer;
@@ -54,26 +55,26 @@ type
 implementation
 uses Math, Generics.Collections, CastleColors, CastleTextureFontData,
   CastleUnicode, CastleTimeUtils, CastleRenderOptions, CastleGL,
-  Osm3dStudioSettings, Osm3dOsmOverpass;
+  Osm3dStudioSettings, Osm3dOsmOverpass, Osm3dMapOverview, Osm3dMapWorld;
 
 const
   MapVS='attribute vec2 position; attribute vec2 endpoint; attribute vec4 vertex_color;'+LineEnding+
     'attribute vec2 local; attribute vec2 extent; uniform vec4 viewport;'+LineEnding+
     'uniform vec4 map_rect; uniform vec4 globe; uniform vec4 center; uniform vec3 style;'+LineEnding+
-    'varying vec4 tint; varying vec2 p; varying vec2 shape;'+LineEnding+
+    'varying vec4 tint; varying vec2 p; varying vec2 shape; varying float face;'+LineEnding+
     'vec2 project(vec2 ll){float a=ll.y+center.z; float d=ll.y-center.y; float l=ll.x-center.x;'+
     'float c=cos(a); float h=sin(l*0.5); float q=2.0*h*h; float v=sin(d*0.5);'+
     'float z=-2.0*v*v-globe.x*c*q; vec2 xy=vec2(c*sin(l),sin(d)+globe.y*c*q);'+
-    'return map_rect.xy+map_rect.zw*0.5+xy*(globe.w/(globe.z-z));}'+LineEnding+
+    'face=z+globe.z/(1.0+globe.z); return map_rect.xy+map_rect.zw*0.5+xy*(globe.w/(globe.z-z));}'+LineEnding+
     'void main(){vec2 a=project(position); shape=vec2(0.0,-1.0); p=vec2(0.0);'+
     'if(extent.y>=0.0){vec2 b=project(endpoint); vec2 d=b-a; float len=length(d);'+
     'vec2 u=d/max(len,0.001); float h=(extent.x*style.y+extent.y)*style.x*0.5;'+
     'p=local*vec2(len*0.5+h+1.0,h+1.0); shape=vec2(len*0.5,h);'+
     'a=(a+b)*0.5+u*p.x+vec2(-u.y,u.x)*p.y;}'+
     'gl_Position=vec4((a-viewport.xy)*2.0/viewport.zw-1.0,0.0,1.0);'+
-    'tint=vec4(vertex_color.rgb,clamp((style.z-vertex_color.a+0.25)*2.0,0.0,1.0));}';
-  MapFS='varying vec4 tint; varying vec2 p; varying vec2 shape;'+LineEnding+
-    'void main(){float a=1.0; if(shape.y>=0.0){'+
+    'tint=vec4(vertex_color.rgb,extent.y< -1.5?vertex_color.a:clamp((style.z-vertex_color.a+0.25)*2.0,0.0,1.0));}';
+  MapFS='varying vec4 tint; varying vec2 p; varying vec2 shape; varying float face;'+LineEnding+
+    'void main(){if(face<0.0)discard; float a=1.0; if(shape.y>=0.0){'+
     'float d=length(vec2(max(abs(p.x)-shape.x,0.0),p.y))-shape.y;'+
     'a=clamp(0.5-d,0.0,1.0);} gl_FragColor=vec4(tint.rgb,tint.a*a);}';
   FontFS='#ifdef GL_ES'+LineEnding+'#if __VERSION__ < 300'+LineEnding+
@@ -109,7 +110,7 @@ begin
 end;
 
 destructor TVectorMapTile.Destroy;
-begin Task.Free;Data.Free;inherited;end;
+begin Task.Free;Data.Free;SeedData.Free;inherited;end;
 constructor TVectorMap.Create(AOwner:TComponent);
 begin
   inherited;FTiles:=TList.Create;FSorted:=TList.Create;FullSize:=True;
@@ -144,12 +145,12 @@ end;
 procedure TVectorMap.Prepare(const View:TGlobeProjection;const Rect:TFloatRectangle;
   Scale,SecondsPassed:Single;Enabled,Paused:Boolean);
 var B:TLatLonBox;I,J,X,Y,X0,X1,Y0,Y1,N,Active,RequiredZoom:Integer;T,Best:TVectorMapTile;Built:TMapVectorData;
-    Changed:Boolean;NowTick:QWord;D,BestD:Double;CenterTile:TTileXY;Bytes:Int64;
+    Changed:Boolean;NowTick:QWord;D,BestD:Double;CenterTile:TTileXY;Bytes:Int64;DataZoom:Integer;
   function Find(AX,AY:Integer):TVectorMapTile;
   var K:Integer;
   begin
-    for K:=0 to FTiles.Count-1 do begin Result:=TVectorMapTile(FTiles[K]);if(Result.Tile.X=AX)and(Result.Tile.Y=AY)then Exit;end;
-    Result:=TVectorMapTile.Create;Result.Tile:=TTileXY.Make(AX,AY,OVERPASS_TILE_ZOOM_DEFAULT);FTiles.Add(Result);
+    for K:=0 to FTiles.Count-1 do begin Result:=TVectorMapTile(FTiles[K]);if(Result.Tile.X=AX)and(Result.Tile.Y=AY)and(Result.Tile.Zoom=DataZoom)then Exit;end;
+    Result:=TVectorMapTile.Create;Result.Tile:=TTileXY.Make(AX,AY,DataZoom);FTiles.Add(Result);
   end;
 begin
   FEnabled:=Enabled and(View.NominalZoom>=VECTOR_MAP_MIN_ZOOM-0.05);
@@ -162,7 +163,11 @@ begin
   if Floor(FZoom+0.25)<>FGeometryZoom then begin FDirty:=True;FGeometryDelay:=0;end;
   { Request the classes that can actually appear at this scale. Raw OSM stays
     in the common cache; zooming in refines these lightweight map features. }
-  RequiredZoom:=EnsureRange(Floor(FZoom+0.25),12,18);
+  RequiredZoom:=EnsureRange(Floor(FZoom+0.25),0,18);
+  DataZoom:=MapSourceZoom(RequiredZoom);
+  if DataZoom<>FSourceZoom then begin
+    FSourceZoom:=DataZoom;FDataDirty:=True;FDirty:=True;FLabelDirty:=True;
+  end;
   if Changed then FLabelDirty:=True;
   FBounds:=View.Bounds;
   if(FBounds.MinLat<FGeometryBounds.MinLat)or(FBounds.MaxLat>FGeometryBounds.MaxLat)or
@@ -173,12 +178,17 @@ begin
   NowTick:=GetTickCount64;
   for I:=0 to FTiles.Count-1 do TVectorMapTile(FTiles[I]).Needed:=False;
   if FEnabled then begin
-    B:=View.Bounds;N:=1 shl OVERPASS_TILE_ZOOM_DEFAULT;
+    B:=View.Bounds;N:=1 shl DataZoom;
     X0:=Floor((B.MinLon+180)/360*N);X1:=Floor((B.MaxLon+180)/360*N);
-    Y0:=TTileMath.LatLonToTile(TLatLon.Make(Min(85.0511,B.MaxLat),0),OVERPASS_TILE_ZOOM_DEFAULT).Y;
-    Y1:=TTileMath.LatLonToTile(TLatLon.Make(Max(-85.0511,B.MinLat),0),OVERPASS_TILE_ZOOM_DEFAULT).Y;
+    Y0:=TTileMath.LatLonToTile(TLatLon.Make(Min(85.0511,B.MaxLat),0),DataZoom).Y;
+    Y1:=TTileMath.LatLonToTile(TLatLon.Make(Max(-85.0511,B.MinLat),0),DataZoom).Y;
     for Y:=Max(0,Y0)to Min(N-1,Y1)do for X:=X0 to Min(X1,X0+N-1)do begin
       J:=((X mod N)+N)mod N;T:=Find(J,Y);T.Needed:=True;T.Used:=NowTick;
+      { Keep regional names visible while OSM roads are fetched. This tiny
+        read-only gazetteer is selected once per tile, never per frame. }
+      if(DataZoom>=7)and(DataZoom<12)and(T.SeedData=nil)then begin
+        T.SeedData:=BuildWorldMapVectors(nil,T.Tile,8);FDataDirty:=True;FDirty:=True;FLabelDirty:=True;
+      end;
     end;
   end;
   Active:=0;
@@ -194,13 +204,13 @@ begin
     end else Inc(Active);
   end;
   if FEnabled and not Paused then begin
-    CenterTile:=TTileMath.LatLonToTile(View.Center,OVERPASS_TILE_ZOOM_DEFAULT);
+    CenterTile:=TTileMath.LatLonToTile(View.Center,DataZoom);
     while Active<FlatMapWorkerLimit do begin
       Best:=nil;BestD:=1E30;
       for I:=0 to FTiles.Count-1 do begin
         T:=TVectorMapTile(FTiles[I]);
         if not T.Needed or(T.Task<>nil)or((T.Data<>nil)and(T.Data.MaxZoom>=RequiredZoom))or(T.RetryAt>NowTick)then Continue;
-        D:=Abs(T.Tile.X-CenterTile.X);D:=Min(D,(1 shl OVERPASS_TILE_ZOOM_DEFAULT)-D);
+        D:=Abs(T.Tile.X-CenterTile.X);D:=Min(D,(1 shl DataZoom)-D);
         D:=Sqr(D)+Sqr(T.Tile.Y-CenterTile.Y);
         if D<BestD then begin Best:=T;BestD:=D;end;
       end;
@@ -208,7 +218,10 @@ begin
       Best.Task:=TFlatMapVectorTask.Create(Best.Tile,DefaultCacheRoot,RequiredZoom);Best.Task.Start;Inc(Active);
     end;
   end;
-  Bytes:=0;for I:=0 to FTiles.Count-1 do begin T:=TVectorMapTile(FTiles[I]);if T.Data<>nil then Inc(Bytes,T.Data.Bytes);end;
+  Bytes:=0;for I:=0 to FTiles.Count-1 do begin T:=TVectorMapTile(FTiles[I]);
+    if T.Data<>nil then Inc(Bytes,T.Data.Bytes);
+    if T.SeedData<>nil then Inc(Bytes,T.SeedData.Bytes);
+  end;
   repeat
     Best:=nil;
     if (FTiles.Count<=512)and(Bytes<=96*1024*1024)then Break;
@@ -217,6 +230,7 @@ begin
     end;
     if Best=nil then Break;
     if Best.Data<>nil then Dec(Bytes,Best.Data.Bytes);
+    if Best.SeedData<>nil then Dec(Bytes,Best.SeedData.Bytes);
     FSorted.Clear;FTiles.Remove(Best);Best.Free;FDataDirty:=True;FDirty:=True;FLabelDirty:=True;
   until False;
   for I:=0 to High(FLabels)do begin
@@ -226,12 +240,14 @@ begin
 end;
 
 procedure TVectorMap.RebuildFeatures;
-var Seen:specialize TDictionary<string,Boolean>;I,J:Integer;T:TVectorMapTile;F:TMapVectorFeature;
+var Seen:specialize TDictionary<string,Boolean>;I,J:Integer;T:TVectorMapTile;F:TMapVectorFeature;Data:TMapVectorData;
 begin
   FSorted.Clear;Seen:=specialize TDictionary<string,Boolean>.Create;
   try
-    for I:=0 to FTiles.Count-1 do begin T:=TVectorMapTile(FTiles[I]);if T.Data=nil then Continue;
-      for J:=0 to T.Data.Features.Count-1 do begin F:=TMapVectorFeature(T.Data.Features[J]);
+    for I:=0 to FTiles.Count-1 do begin T:=TVectorMapTile(FTiles[I]);
+      Data:=T.Data;if Data=nil then Data:=T.SeedData;
+      if(Data=nil)or(T.Tile.Zoom<>FSourceZoom)then Continue;
+      for J:=0 to Data.Features.Count-1 do begin F:=TMapVectorFeature(Data.Features[J]);
         if Seen.ContainsKey(F.Key)then Continue;Seen.Add(F.Key,True);FSorted.Add(F);
       end;
     end;
@@ -275,6 +291,33 @@ procedure TVectorMap.BuildGeometry;
 var I,J,First,Last,Pass:Integer;F:TMapVectorFeature;P:array of TVector2;VisibleItems:TList;
     ClipMin,ClipMax:TVector2;
     C:TVector4;W,Extra:Single;Started:TTimerResult;
+  procedure DrawShade;
+  const N=MAP_SHADE_SIDE;
+  var TI,X,Y:Integer;T:TVectorMapTile;Q:TVector2;LL:TLatLon;G:Single;B:TLatLonBox;
+    procedure Corner(U,V:Integer);
+    begin
+      LL.Lon:=(T.Tile.X+U/(N-1))/(1 shl T.Tile.Zoom)*360-180;
+      LL.Lat:=ArcTan(Sinh(Pi*(1-2*(T.Tile.Y+V/(N-1))/(1 shl T.Tile.Zoom))))*180/Pi;
+      Q:=Vector2(GlobeWrapLon(LL.Lon-FAnchor.Lon)*Pi/180,(LL.Lat-FAnchor.Lat)*Pi/180);
+      G:=T.Data.Shade[V*N+U];
+      { A neutral transparent overlay preserves every map material and leaves
+        roads/labels crisp. It is built once with geometry, never per frame. }
+      Vertex(Q,Vector2(0,0),Vector4(0,0,0,EnsureRange(1-G,0.0,0.45)),Vector2(0,0),Vector2(0,-2));
+    end;
+  begin
+    for TI:=0 to FTiles.Count-1 do begin
+      T:=TVectorMapTile(FTiles[TI]);
+      if(T.Tile.Zoom<>FSourceZoom)or(T.Data=nil)or(Length(T.Data.Shade)<>N*N)then Continue;
+      B:=TTileMath.TileToLatLonBox(T.Tile);
+      if(B.MaxLat<FGeometryBounds.MinLat)or(B.MinLat>FGeometryBounds.MaxLat)then Continue;
+      if(FGeometryBounds.MinLon>=-180)and(FGeometryBounds.MaxLon<=180)and
+        ((B.MaxLon<FGeometryBounds.MinLon)or(B.MinLon>FGeometryBounds.MaxLon))then Continue;
+      for Y:=0 to N-2 do for X:=0 to N-2 do begin
+        Corner(X,Y);Corner(X+1,Y);Corner(X+1,Y+1);
+        Corner(X,Y);Corner(X+1,Y+1);Corner(X,Y+1);
+      end;
+    end;
+  end;
   procedure DrawFeature(Feature:TMapVectorFeature;Casing:Boolean);
   var Q,R:Integer;A,B,D:TVector2;
   begin
@@ -341,6 +384,7 @@ begin
     end;
     { Same-layer road casings precede all their fills: no seams at junctions. }
     for I:=0 to VisibleItems.Count-1 do begin F:=TMapVectorFeature(VisibleItems[I]);if F.Kind<=mfBuilding then DrawFeature(F,False);end;
+    DrawShade;
     I:=0;
     while I<VisibleItems.Count do begin
       F:=TMapVectorFeature(VisibleItems[I]);First:=I;Last:=I+1;
@@ -403,6 +447,7 @@ begin
       H:=12*FScale;
       if F.Kind=mfPlace then H:=EnsureRange(15+(F.LabelPriority-90)*0.12,14.0,19.0)*FScale;
       if F.Kind=mfHouseNumber then H:=10.5*FScale;
+      if F.Kind in [mfRegion,mfMarineLabel] then H:=13*FScale;
       FFont.Size:=H;W:=FFont.TextWidth(F.Caption);
       if W>Min(340*FScale,FRect.Width*0.65)then Continue;
       Angle:=0;Geo:=F.Bounds.Center;P:=Project(Geo);Fits:=False;
@@ -444,6 +489,8 @@ begin
       FLabels[Idx].Color:=MapColor($454C48);
       if(F.Kind=mfWater)or(F.Kind=mfWaterway)then FLabels[Idx].Color:=MapColor($467A94);
       if(F.Kind=mfForest)or(F.Kind=mfGrass)then FLabels[Idx].Color:=MapColor($50744B);
+      if F.Kind=mfRegion then FLabels[Idx].Color:=MapColor($776347);
+      if F.Kind=mfMarineLabel then FLabels[Idx].Color:=MapColor($34657F);
     end;
     K:=0;for I:=0 to High(FLabels)do if FLabels[I].Wanted or(FLabels[I].Alpha>0)then begin FLabels[K]:=FLabels[I];Inc(K);end;
     SetLength(FLabels,K);FLabelCount:=Used;FLayoutDelay:=0.1;
@@ -528,15 +575,22 @@ begin
   finally Clip.Free;end;
 end;
 function TVectorMap.Stats:TJSONObject;
-var I,Ready,Pending,Wanted:Integer;Bytes:Int64;T:TVectorMapTile;
+var I,Ready,Pending,Wanted,ReadyVisible,SeedVisible,Terrain:Integer;Bytes:Int64;T:TVectorMapTile;
 begin
-  Ready:=0;Pending:=0;Wanted:=0;Bytes:=0;
+  Ready:=0;Pending:=0;Wanted:=0;Bytes:=0;ReadyVisible:=0;SeedVisible:=0;Terrain:=0;
   for I:=0 to FTiles.Count-1 do begin T:=TVectorMapTile(FTiles[I]);
     if T.Data<>nil then begin Inc(Ready);Inc(Bytes,T.Data.Bytes);end;
+    if T.SeedData<>nil then begin
+      Inc(Bytes,T.SeedData.Bytes);
+      if T.Needed and(T.Data=nil)then Inc(SeedVisible);
+    end;
+    if T.Needed and(T.Data<>nil)then begin
+      Inc(ReadyVisible);if Length(T.Data.Shade)>0 then Inc(Terrain);
+    end;
     if T.Task<>nil then Inc(Pending);if T.Needed then Inc(Wanted);
   end;
-  Result:=TJSONObject.Create(['enabled',FEnabled,'source_zoom',OVERPASS_TILE_ZOOM_DEFAULT,
-    'ready',Ready,'pending',Pending,'wanted',Wanted,'features',FSorted.Count,
+  Result:=TJSONObject.Create(['enabled',FEnabled,'source_zoom',FSourceZoom,
+    'ready',Ready,'ready_visible',ReadyVisible,'seed_ready_visible',SeedVisible,'terrain',Terrain,'pending',Pending,'wanted',Wanted,'features',FSorted.Count,
     'visible_features',FVisibleFeatures,'labels',FLabelCount,'vertices',FVertexCount,
     'cpu_bytes',Bytes+Int64(Length(FVertices))*SizeOf(TMapDrawVertex),
     'geometry_builds',Int64(FBuilds),'gpu_uploads',Int64(FUploads),'build_ms',FBuildMs]);

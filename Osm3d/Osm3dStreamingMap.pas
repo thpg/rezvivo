@@ -144,6 +144,7 @@ type
       same is skipped — it would rasterise an identical mask. 0 = none yet. }
     ShadowHash: QWord;
     CenterX, CenterZ: Single;
+    GeoMinX,GeoMaxX,GeoMinZ,GeoMaxZ:Single; { exact tile-grid bounds, world frame }
     HasMarineWater: Boolean; { captured before the source model is released }
     Soundscape: TSoundscapeField;
     TravelRoads:TTravelRoadIndex;
@@ -815,6 +816,7 @@ type
     { Borrowed, fully mounted sources. The atlas filters building shapes and
       light-space bounds; no terrain or grass is a caster in this experiment. }
     procedure AppendWorldShadowCasters(const AList: TCastleTransformList);
+    procedure RefreshRenderVisibility;
 
     { Hand the streaming map the FIT route to overlay. Call once before
       streaming begins; tiles mounted afterwards pick up their slice of
@@ -1125,7 +1127,7 @@ type
 
 implementation
 
-uses Osm3dRouteSnapCache,Osm3dCoastline,Osm3dWaterProfile;
+uses Osm3dRouteSnapCache,Osm3dCoastline,Osm3dWaterProfile,Osm3dWorldVisibility;
 
 { Off by default: per-frame diagnostics (DIAG ~1 s, FRAME GAP, the SH drn /
   SH drn2 shadow traces, WATER DIAG) are render-loop chatter — thousands of
@@ -1563,6 +1565,7 @@ begin
   FFarHasCenter := False;
   FTreeWantBase := specialize TDictionary<string, Boolean>.Create;
   FLoadOwner := TCastleTransform.Create(Self);
+  FLoadOwner.Visible := WorldLayerVisible(wrlGround);
   Add(FLoadOwner);
   FLoadTiles := specialize TDictionary<string, TLoadTile>.Create;
   MemBudgetInit;
@@ -1924,6 +1927,18 @@ begin
     FLog.Write(llInfo, AMsg)
   else if FMainLog <> nil then
     FMainLog.Write(llInfo, AMsg);
+end;
+
+procedure TOsm3dStreamingMap.RefreshRenderVisibility;
+var Tile: TCacheTile;
+begin
+  if FLoadOwner <> nil then FLoadOwner.Visible := WorldLayerVisible(wrlGround);
+  if FFarGround <> nil then FFarGround.Scene.Visible := WorldLayerVisible(wrlGround);
+  for Tile in FTileIndex.Values do
+    if (Tile.Scene <> nil) and
+       (InterlockedCompareExchange(Tile.Scene.MountFinished, 0, 0) <> 0) and
+       Tile.Scene.MountLoaded then
+      ApplyWorldVisibility(Tile.Scene.RootNode);
 end;
 
 procedure TOsm3dStreamingMap.AppendWorldShadowCasters(const AList: TCastleTransformList);
@@ -2681,7 +2696,8 @@ var
   Bi:          Integer;
   TileLL:    TLatLon;
   SumX, SumZ: Double;
-  Centre:    TVector3;
+  Centre,EdgeA,EdgeB:TVector3;
+  GeoBox:TLatLonBox;
   PackTX, PackTY: array of Integer;
   nPk:       Integer;
   ShAffected: Boolean;
@@ -2836,6 +2852,11 @@ begin
     CT.MountGen := FShadowGen;
     CT.CenterX := Assembled.Tiles[I].CenterX;
     CT.CenterZ := Assembled.Tiles[I].CenterZ;
+    GeoBox:=FCache.Grid.TileBox(CT.Tile);
+    EdgeA:=FProj.Project(TLatLon.Make(GeoBox.MinLat,GeoBox.MaxLon));
+    EdgeB:=FProj.Project(TLatLon.Make(GeoBox.MaxLat,GeoBox.MinLon));
+    CT.GeoMinX:=EdgeA.X;CT.GeoMaxX:=EdgeB.X;
+    CT.GeoMinZ:=EdgeA.Z;CT.GeoMaxZ:=EdgeB.Z;
     { Мировые границы этого тайла (после сварки) — чтобы соседи,
       смонтированные позже, приварились к нам. }
     if (BatchBorder <> nil) and BatchBorder.TryGetValue(Key, BWArr) then
@@ -3147,7 +3168,8 @@ procedure TOsm3dStreamingMap.MountTileTrees(const ACenter: TVector3;
   const ATrees: TTileTreeRecArray);
 var MountProfile: Boolean; ProfileStarted: QWord;
 begin
-  if not Osm3dStudioSettings.RenderTreesActive then Exit;
+  { Keep source instances for live visibility switches, including tiles
+    streamed while trees are hidden. The renderer skips their draw/update. }
   if not FGenerateTrees or (Length(ATrees)=0) or (FProceduralRenderer=nil) then Exit;
   MountProfile := GetEnvironmentVariable('REZVIVO_TILE_MOUNT_PROFILE')='1';
   if MountProfile then ProfileStarted:=GetTickCount64;
@@ -3467,7 +3489,8 @@ var
 begin
   if FGrassRenderer = nil then Exit;
   if (ACT = nil) or (AModel = nil) then Exit;
-  if not Osm3dStudioSettings.RenderGrassActive then Exit;   { свой тумблер травы }
+  { Visibility is a live render switch. Keep the tile's grass data while
+    hidden, so re-enabling it also restores tiles loaded in the meantime. }
 
   { идемпотентность ре-монтажа: сначала снять прежние записи этого центра }
   FGrassRenderer.RemoveTile(ACT.CenterX, ACT.CenterZ);
@@ -3812,13 +3835,44 @@ end;
 
 function TOsm3dStreamingMap.GroundNearYAt(WorldX,WorldZ,ReferenceY:Single;
   out AY:Single):Boolean;
-var TileId:TGeoTileId; CT:TCacheTile; GY:Single; GHit:Boolean;
+var TileId,OtherId:TGeoTileId; CT,Other:TCacheTile; GY,Low,HighY:Single; GHit,AnyHit:Boolean;
+  DX,DZ,I,J:Integer;TX,TY:Int64;
 begin
   Result:=False; AY:=0;
   if (FProj=nil) or (FCache=nil) or (FCache.Grid=nil) or (FTileIndex=nil) then Exit;
   TileId:=FCache.Grid.TileAt(FProj.Unproject(WorldX,WorldZ));
   if not FTileIndex.TryGetValue(TileId.ToKey,CT) then Exit;
   if (CT=nil) or not CT.GroundHasField then Exit;
+  { Baked/clipped edges are quantized and welded; their owning shape can
+    extend slightly beyond its nominal geographic tile. Selecting only the
+    nominal tile can see ground UNDER a bridge whose final strip belongs to
+    its neighbour. Near a seam query the existing indexed geometry on both
+    sides (at most four tiles). The normal GPU path is unchanged elsewhere. }
+  DX:=0;DZ:=0;
+  if WorldX<CT.GeoMinX+1 then DX:=1 else if WorldX>CT.GeoMaxX-1 then DX:=-1;
+  if WorldZ<CT.GeoMinZ+1 then DZ:=1 else if WorldZ>CT.GeoMaxZ-1 then DZ:=-1;
+  if(DX<>0)or(DZ<>0)then begin
+    Low:=1e30;HighY:=-1e30;AnyHit:=False;
+    for J:=0 to Ord(DZ<>0)do for I:=0 to Ord(DX<>0)do begin
+      TX:=Int64(TileId.TX)+I*DX;TY:=Int64(TileId.TY)+J*DZ;
+      if(TX<0)or(TY<0)then Continue;
+      OtherId:=TGeoTileId.Make(0,True,TX,TY);
+      if not FTileIndex.TryGetValue(OtherId.ToKey,Other)then Continue;
+      if not Other.GroundHasField then Continue;
+      if Other.GpuGround<>nil then
+        GHit:=Other.GpuGround.SampleGeometry(WorldX-Other.CenterX,WorldZ-Other.CenterZ,ReferenceY,CurbContactsEnabled,GY)
+      else GHit:=Other.SampleGround(WorldX-Other.CenterX,WorldZ-Other.CenterZ,ReferenceY,GY);
+      if not GHit then Continue;
+      AnyHit:=True;Low:=Min(Low,GY);
+      if GY<=ReferenceY+0.75 then HighY:=Max(HighY,GY);
+    end;
+    if AnyHit then begin
+      if HighY> -1e19 then AY:=HighY else AY:=Low;
+      Exit(True);
+    end;
+    Exit(False);
+  end;
+
   if (FGpuGround<>nil) and (CT.GpuGround<>nil) then begin
     GHit:=FGpuGround.Sample(CT.GpuGround,WorldX-CT.CenterX,WorldZ-CT.CenterZ,
       ReferenceY,CurbContactsEnabled,GY,GpuGroundMode=ggGpu);
@@ -5592,6 +5646,7 @@ begin
         передаём превью-зелень MAT_RGB[0] вместо прежней литеральной копии }
       MAT_RGB[0][0], MAT_RGB[0][1], MAT_RGB[0][2], @FarHeights);
     Add(FFarGround.Scene);
+    FFarGround.Scene.Visible := WorldLayerVisible(wrlGround);
   end
   else
     FFarGround.Retarget(CamGeo, @FarHeights);   { анимированный морф высот, без пересбора }
@@ -7296,13 +7351,14 @@ begin
 
       { Wind uniforms track WindNow every frame -> push un-rate-limited to
         every resident tile's shadow effect, in phase with the 3D canopy. }
-      WTimeNow := WindNow;
-      WBaseNow := WindCurrentBaseSpeed;
+      WindObserveCamera(Cam.WorldTranslation,PtrUInt(Cam));
+      WTimeNow := VegetationWindNow;
+      WBaseNow := VegetationWindBaseSpeed;
       for I := 0 to High(FWindTimeFields) do
       begin
-        if FWindTimeFields[I] <> nil then FWindTimeFields[I].Send(WTimeNow);
-        if FWindBaseFields[I] <> nil then FWindBaseFields[I].Send(WBaseNow);
-        if FWindGustFields[I] <> nil then FWindGustFields[I].Send(WBaseNow);
+        if (FWindTimeFields[I] <> nil) and (FWindTimeFields[I].Value<>WTimeNow) then FWindTimeFields[I].Send(WTimeNow);
+        if (FWindBaseFields[I] <> nil) and (FWindBaseFields[I].Value<>WBaseNow) then FWindBaseFields[I].Send(WBaseNow);
+        if (FWindGustFields[I] <> nil) and (FWindGustFields[I].Value<>WBaseNow) then FWindGustFields[I].Send(WBaseNow);
       end;
 
       { Off-thread shadows: apply at most ONE finished mask this frame. The
@@ -8461,6 +8517,7 @@ begin
       end;
       if Sc.MountLoaded and not Sc.MountActivated then
       begin
+        if WorldGeometryHidden then ApplyWorldVisibility(Sc.RootNode);
         Sc.MountActivated := True;
         SwapGreenToDetail(CT.Tile);
       end;

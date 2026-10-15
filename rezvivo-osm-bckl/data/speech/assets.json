@@ -1,0 +1,189 @@
+{
+    "schema_version":  1,
+    "engine":  "Vosk",
+    "engine_version":  "0.3.45",
+    "source":  "https://github.com/alphacep/vosk-api/tree/v0.3.45",
+    "models_source":  "https://alphacephei.com/vosk/models",
+    "packages":  [
+                     {
+                         "name":  "vosk-win64-0.3.45",
+                         "destination":  "vosk-win64",
+                         "url":  "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip",
+                         "sha256":  "f1dcc9cca460630f81ea8f71794f69c80bed6556d2a4e6237b5785e1d2dff34b"
+                     },
+                     {
+                         "name":  "vosk-model-small-ru-0.22",
+                         "destination":  "models/ru",
+                         "url":  "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+                         "sha256":  "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4"
+                     },
+                     {
+                         "name":  "vosk-model-small-en-us-0.15",
+                         "destination":  "models/en",
+                         "url":  "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+                         "sha256":  "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
+                     }
+                 ],
+    "files":  [
+                  {
+                      "path":  "vosk-win64/libvosk.dll",
+                      "bytes":  26447872,
+                      "sha256":  "9331c2f6a32cf77141af27c9750e79532718f51bbc2e3cea3c60f14ca4251e4e"
+                  },
+                  {
+                      "path":  "vosk-win64/libstdc++-6.dll",
+                      "bytes":  26619146,
+                      "sha256":  "a1d96a848a567d7657e152cfe92e2fd62da412968cc11ec8bdb04bf20ebc5747"
+                  },
+                  {
+                      "path":  "vosk-win64/libwinpthread-1.dll",
+                      "bytes":  366907,
+                      "sha256":  "92caeb8a4ea281c674003462a233f3b445b685b0a6f93eb11254feda2dda9cde"
+                  },
+                  {
+                      "path":  "vosk-win64/libgcc_s_seh-1.dll",
+                      "bytes":  606425,
+                      "sha256":  "201bf8a54ebb490f93ea4beb20740a483bf67036b90b5720f32d0c746a72d1e9"
+                  },
+                  {
+                      "path":  "models/ru/graph/phones/word_boundary.int",
+                      "bytes":  2166,
+                      "sha256":  "23081404fe1cc7338c013a4beec133637147d60472c06ab64ff88ee3d028a7b5"
+                  },
+                  {
+                      "path":  "models/ru/graph/Gr.fst",
+                      "bytes":  32288259,
+                      "sha256":  "189b4f67c69eb34b9d8b47b12f184665e5445667ca5264579b61c6b9eb2cef1e"
+                  },
+                  {
+                      "path":  "models/ru/graph/HCLr.fst",
+                      "bytes":  32993810,
+                      "sha256":  "0b096f4676f306aa3e60d2244ef1e24c5c699b8794acf3c3946b59bcc9dca831"
+                  },
+                  {
+                      "path":  "models/ru/graph/disambig_tid.int",
+                      "bytes":  25,
+                      "sha256":  "c3af3dbc5eb301c4b282480d785c04b1642a8db83210a12332e9790e50146fd2"
+                  },
+                  {
+                      "path":  "models/ru/am/final.mdl",
+                      "bytes":  15862383,
+                      "sha256":  "36d67b53dc90d96ea48097f9e17e7c5937689ad76cb8bed25091317bbaf25919"
+                  },
+                  {
+                      "path":  "models/ru/README",
+                      "bytes":  660,
+                      "sha256":  "b662517cacda14945e159538d6dd8faff23bd706e024c4fb338b6013c9939b9e"
+                  },
+                  {
+                      "path":  "models/ru/conf/model.conf",
+                      "bytes":  289,
+                      "sha256":  "dd7178da0e99fdbe489816c1e9702c3daa28e02accacc2993e0becb7af33b80c"
+                  },
+                  {
+                      "path":  "models/ru/conf/mfcc.conf",
+                      "bytes":  131,
+                      "sha256":  "1e2228006d01d805ad1c267fee9f79709ca87ac51bd82b0e3f5c69ba543f0fc4"
+                  },
+                  {
+                      "path":  "models/ru/ivector/final.dubm",
+                      "bytes":  168048,
+                      "sha256":  "7dffe22bd992d7274fba925632bded4756d82dfd9b962d3c703110251fdf35b8"
+                  },
+                  {
+                      "path":  "models/ru/ivector/global_cmvn.stats",
+                      "bytes":  1077,
+                      "sha256":  "c600cbf4acfbfac99d587040d48dc31129cd635b112ff15bfa2e9d3b0cece1f8"
+                  },
+                  {
+                      "path":  "models/ru/ivector/final.ie",
+                      "bytes":  9927287,
+                      "sha256":  "94f2558d00fe199ac01409281352eb16707ec075baaf9cc0d7b53011583cfa0e"
+                  },
+                  {
+                      "path":  "models/ru/ivector/final.mat",
+                      "bytes":  44975,
+                      "sha256":  "956577d396b636fe359b4321f10df5ed6a76bdfdec366b4a2b7d3242e524f04f"
+                  },
+                  {
+                      "path":  "models/ru/ivector/splice.conf",
+                      "bytes":  35,
+                      "sha256":  "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756"
+                  },
+                  {
+                      "path":  "models/ru/ivector/online_cmvn.conf",
+                      "bytes":  95,
+                      "sha256":  "a2f3571754b64297cb7efb2e7ca3df61995c5a45fcbb97188f90613552bb2dfe"
+                  },
+                  {
+                      "path":  "models/en/am/final.mdl",
+                      "bytes":  15962575,
+                      "sha256":  "75370a0137f9daf8f469dedd7daa4513ae7a621f03240c6e512e2b50b656a7b6"
+                  },
+                  {
+                      "path":  "models/en/graph/disambig_tid.int",
+                      "bytes":  102,
+                      "sha256":  "9ad87cc166d0998f08f758f47a6223a120dfffcbee805c4849c3aa5e6bb3c0fc"
+                  },
+                  {
+                      "path":  "models/en/graph/HCLr.fst",
+                      "bytes":  22416994,
+                      "sha256":  "5caafba3081e1646545ac6bff0dd7a318e53dcbdc86f237909ce1d2ac1293d34"
+                  },
+                  {
+                      "path":  "models/en/graph/Gr.fst",
+                      "bytes":  24013795,
+                      "sha256":  "023c8b7e30704a9e37765c635c252e608a02f361235bf94abdcf2a5225d85b20"
+                  },
+                  {
+                      "path":  "models/en/graph/phones/word_boundary.int",
+                      "bytes":  1761,
+                      "sha256":  "da199d9c991e0e84681ddbb34627b915b26302d50a8fdaa23c51e2bc3a50b5c3"
+                  },
+                  {
+                      "path":  "models/en/conf/model.conf",
+                      "bytes":  290,
+                      "sha256":  "8f14cb1eeb07c762c371db648c6be688d347236155ca0f64fb13b6567a8ce81f"
+                  },
+                  {
+                      "path":  "models/en/conf/mfcc.conf",
+                      "bytes":  131,
+                      "sha256":  "1e2228006d01d805ad1c267fee9f79709ca87ac51bd82b0e3f5c69ba543f0fc4"
+                  },
+                  {
+                      "path":  "models/en/ivector/splice.conf",
+                      "bytes":  35,
+                      "sha256":  "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756"
+                  },
+                  {
+                      "path":  "models/en/ivector/final.dubm",
+                      "bytes":  168048,
+                      "sha256":  "8c5d7dd69d2122313baaf19f61f35dd3fa18b70c62ac0687e311e1c46e6daca7"
+                  },
+                  {
+                      "path":  "models/en/ivector/global_cmvn.stats",
+                      "bytes":  1080,
+                      "sha256":  "33be09afcc80059847a275c3d043b51f1ab954c7c2438ddbbf4745e8ba144ff9"
+                  },
+                  {
+                      "path":  "models/en/ivector/final.ie",
+                      "bytes":  8288887,
+                      "sha256":  "3f37faf90c375b9e4740b569398b5829ed9cc07d19be6d441f72c3b71d7efcc6"
+                  },
+                  {
+                      "path":  "models/en/ivector/online_cmvn.conf",
+                      "bytes":  95,
+                      "sha256":  "a2f3571754b64297cb7efb2e7ca3df61995c5a45fcbb97188f90613552bb2dfe"
+                  },
+                  {
+                      "path":  "models/en/ivector/final.mat",
+                      "bytes":  44975,
+                      "sha256":  "ddd83586dc5f928cda8738b922c85ffe38fc789cb5f9151a712ca12f37265382"
+                  },
+                  {
+                      "path":  "models/en/README",
+                      "bytes":  199,
+                      "sha256":  "c0cf286e4f7783306c5f6469b37db69228fb16803b03cae661edb2d7bba64ebb"
+                  }
+              ]
+}

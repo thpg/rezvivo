@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/thpg/castle-engine.git",
   "branch": "rezvivo",
-  "commit": "74dcf081f7aa237aedd1871b09d3af9e981ff246",
+  "commit": "320ea079ed30effe5f036357470ed1000abdb1db",
   "upstream_repository": "https://github.com/castle-engine/castle-engine.git",
   "upstream_commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "modified_files": [
@@ -15,7 +15,7 @@
     },
     {
       "path": "src/base_rendering/castleglshaders.pas",
-      "sha256_lf": "04b146776fb5c261d8b2cd92fb0e306dececfd5b02ddcd76c9c051a082a783b0"
+      "sha256_lf": "9d2b3237fa11c4e7698a23dd0128f1457979eedeb27cb902372bf3bb6ca340ed"
     },
     {
       "path": "src/base_rendering/castlerendercontext.pas",
@@ -38,12 +38,16 @@
       "sha256_lf": "253ec2bfccbb93fd5398fe297b1aec8de0edc3775274e0e1263256af83be4da7"
     },
     {
+      "path": "src/scene/castleinternalmeshindexranges.pas",
+      "sha256_lf": "63adf907492cf7b4fb1ced122e870d53e7e0adb5c30892bec162b8fa808ea48c"
+    },
+    {
       "path": "src/scene/castleinternalocclusionculling.pas",
       "sha256_lf": "e2238980820a93d21f9d14753b71c224a255fedfcbda98730220bbaa146fd043"
     },
     {
       "path": "src/scene/castleinternalrenderer.pas",
-      "sha256_lf": "f6569710783d97ec72488c11af76e2d85463f1da2bdd2729a412bef5332466a5"
+      "sha256_lf": "c3ddf9351ba8cbf30f109be408f4e305bb08c9f2068e1af8eb14d4b335b1f18e"
     },
     {
       "path": "src/scene/castleinternalrenderer_cache.inc",
@@ -51,7 +55,11 @@
     },
     {
       "path": "src/scene/castleinternalrenderer_cache_types.inc",
-      "sha256_lf": "28cda54cf429128c679b4760561d2f8595a106b0dc74e7676003644200b8c30f"
+      "sha256_lf": "4db3f76fbc1abd4474e6f3aef90de3c476f353e2ae80beb624db186d7c17b539"
+    },
+    {
+      "path": "src/scene/castleinternalrenderer_final_globals.inc",
+      "sha256_lf": "2edaba0fd899114ea5c91c6c02e68d7b92809a2678b3879bc6047e77cd6bf306"
     },
     {
       "path": "src/scene/castleinternalrenderer_glsl.inc",
@@ -59,7 +67,7 @@
     },
     {
       "path": "src/scene/castleinternalrenderer_meshrenderer.inc",
-      "sha256_lf": "53d94c0d0fd0f0b054938b8bb7d0df455607e4c34315d783420b74959e2c0f12"
+      "sha256_lf": "089f35963746bff22dde3b0326684cc0be633c17f562f7b9103ecd3f06898cba"
     },
     {
       "path": "src/scene/castleinternalrenderer_pass.inc",
@@ -71,7 +79,7 @@
     },
     {
       "path": "src/scene/castleinternalrenderer_shape.inc",
-      "sha256_lf": "e56613a38e6caecd873282ba870045e6cb56952ce96faed74335650588c06782"
+      "sha256_lf": "9a69e6310718bbb03fc2a9dc94afd008704d1b432827e2f9ca2f539df0e20e07"
     },
     {
       "path": "src/scene/castleinternalrenderer_texture.inc",
@@ -87,7 +95,7 @@
     },
     {
       "path": "src/scene/castlerendererinternalshader.pas",
-      "sha256_lf": "463eb4dc5b71e251c9dec42ec0c2dc5da0b942db6a86a787204280158c4a34b1"
+      "sha256_lf": "76158d247dbd8c1c73f167805cd4082eb0f0d69ca64e9cd5f731386bdf3fa81c"
     },
     {
       "path": "src/scene/castlerendererinternalshader_hash.inc",
@@ -122,12 +130,24 @@
       "sha256_lf": "c1c23f1cd2c23b8de7c22b5134f8354f423308ea1b643ca8d3b7e7fdd44d2b94"
     },
     {
+      "path": "src/scene/glsl/generated-pascal/main_shading_gouraud.fs.inc",
+      "sha256_lf": "bc4f530a2129e030db1829bfe1c3edf66aa528bdc3daa08ad895dd5ab1a3a33e"
+    },
+    {
       "path": "src/scene/glsl/generated-pascal/main_shading_gouraud.vs.inc",
       "sha256_lf": "bc161e6699b6fb0f8d2ae71961c8722f2e1e60f346b0b7e0a57e2edafd9b63c7"
     },
     {
+      "path": "src/scene/glsl/generated-pascal/main_shading_phong.fs.inc",
+      "sha256_lf": "56cc0f7eac942b9aa9e2af60390f5af8a2af8ad75c50a665bfbcad0cc0f9d915"
+    },
+    {
       "path": "src/scene/glsl/generated-pascal/main_shading_phong.vs.inc",
       "sha256_lf": "22672e1a7dbed3f0d872bb59624f2f2ba1811ecffd5fa675ecda9030568f28de"
+    },
+    {
+      "path": "src/scene/glsl/generated-pascal/tone_mapping.fs.inc",
+      "sha256_lf": "be756b59726eb318acb966d6023f2253308349bc65f30564bbf85a16729c230f"
     },
     {
       "path": "src/scene/glsl/source/lighting_model_physical/add_light.glsl",

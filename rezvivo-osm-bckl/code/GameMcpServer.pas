@@ -46,18 +46,18 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
-  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe,
+uses GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+  GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe, GameRiderPoseProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
   CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages,
   CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog, CastleRendererInternalShader,
-  CastleScene, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions,
+  CastleScene, CastleShapes, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions, CastleInternalRenderer, Osm3dRtxScreenState,
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameDeviceTypes, GameDeviceSensor, TrainerData,
   GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
   BikeParametric, RiderPoseCatalog, RiderAttention, RiderLod, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
-  Osm3dProceduralVegetation, TreeSeason, TreeRenderer, GrassRenderer,
+  Osm3dProceduralVegetation, Osm3dWorldVisibility, TreeSeason, TreeRenderer, TreeGPUData, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
   GameWorld, GamePhysicalAgent, GameBikeShaderDiagnostics,
@@ -207,6 +207,32 @@ begin
     if ViewRegs[I].View = Cur then
       Exit(ViewRegs[I].ShortName);
   Result := Cur.Name;  { активный view не из зарегистрированных }
+end;
+
+procedure CmdSceneLighting(const AParams: TJSONObject; AResult: TJSONObject);
+var S:TSceneLighting;
+begin
+  S:=SceneLighting;
+  S.Enabled:=AParams.Get('enabled',S.Enabled);
+  S.Tone:=AParams.Get('tone',S.Tone);
+  S.Exposure:=AParams.Get('exposure',Double(S.Exposure));
+  S.Sun:=AParams.Get('sun',Double(S.Sun));
+  S.Sky:=AParams.Get('sky',Double(S.Sky));
+  S.Ground:=AParams.Get('ground',Double(S.Ground));
+  S.RoadDetail:=AParams.Get('road_detail',Double(S.RoadDetail));
+  S.WaterSpread:=AParams.Get('water_spread',Double(S.WaterSpread));
+  S.WaterReflection:=AParams.Get('water_reflection',Double(S.WaterReflection));
+  SetSceneLighting(S);S:=SceneLighting;
+  if (ViewPlay<>nil) and (ViewPlay.MainViewport<>nil) then begin
+    if AParams.Find('ssao')<>nil then
+      ViewPlay.MainViewport.ScreenSpaceAmbientOcclusion:=AParams.Get('ssao',False);
+    AResult.Add('ssao',ViewPlay.MainViewport.ScreenSpaceAmbientOcclusion);
+  end;
+  AResult.Add('enabled',S.Enabled);AResult.Add('tone',S.Tone);
+  AResult.Add('exposure',S.Exposure);AResult.Add('sun',S.Sun);
+  AResult.Add('sky',S.Sky);AResult.Add('ground',S.Ground);
+  AResult.Add('road_detail',S.RoadDetail);AResult.Add('water_spread',S.WaterSpread);
+  AResult.Add('water_reflection',S.WaterReflection);
 end;
 
 procedure CmdViewsList(const AParams: TJSONObject; AResult: TJSONObject);
@@ -823,11 +849,19 @@ begin
     AResult.Add('cinematic_mode', Ord(ViewPlay.CinematicCam.Mode));
     AResult.Add('cinematic_pending', ViewPlay.CinematicCam.PendingMode);
     Cine:=ViewPlay.CinematicCam.CaptureReplay;
+    AResult.Add('encounter_kind',Ord(ViewPlay.CinematicCam.EncounterKind));
+    AResult.Add('encounter_rider',ViewPlay.CinematicCam.EncounterRider);
+    AResult.Add('encounter_cooldown',Cine.Encounters.Cooldown);
+    AResult.Add('camera_shot_age',Cine.ShotAge);
+    AResult.Add('camera_shot_serial',Int64(Cine.ShotSerial));
+    AResult.Add('camera_transition','cut');
+    if Cine.Shot.Mode=cmRiderPass then
+      AResult.Add('encounter_position',TJSONArray.Create([Cine.Shot.Subject.Position.X,
+        Cine.Shot.Subject.Position.Y,Cine.Shot.Subject.Position.Z]));
     AResult.Add('puddle_active',Cine.Shot.Mode=cmPuddle);
     AResult.Add('puddle_sites',RoadPuddleSiteCount);
     AResult.Add('puddle_reflections',ViewPlay.CinematicCam.PuddleReflections);
     AResult.Add('puddle_cooldown',Cine.PuddleCooldown);
-    AResult.Add('puddle_blend_sec',Cine.BlendAge);
     if Cine.Shot.Mode=cmPuddle then
       AResult.Add('puddle_position',TJSONArray.Create([Cine.Shot.Puddle.Position.X,
         Cine.Shot.Puddle.Position.Y,Cine.Shot.Puddle.Position.Z]));
@@ -1861,7 +1895,7 @@ end;
 
 procedure CmdPerfObjects(const AParams:TJSONObject; AResult:TJSONObject);
 var Target:TCastleTransform;Node:TX3DNode;Parts:TStringList;I,N:Integer;
-  Path,NodePath:string;Rows:TJSONArray;WithNodes:Boolean;
+  Path,NodePath:string;Rows:TJSONArray;WithNodes,WithGeometry,WithShapes:Boolean;
   procedure ListNode(A:TX3DNode;const TP,NP:string;Depth:Integer);
   var J:Integer;Row:TJSONObject;V:TX3DField;
   begin
@@ -1874,12 +1908,35 @@ var Target:TCastleTransform;Node:TX3DNode;Parts:TStringList;I,N:Integer;
         ListNode(TAbstractGroupingNode(A).FdChildren[J],TP,NP+'/'+IntToStr(J),Depth+1);
   end;
   procedure ListTransform(T:TCastleTransform;const TP:string;Depth:Integer);
-  var J:Integer;Row:TJSONObject;
+  var J,K,L:Integer;Row,SR:TJSONObject;AllShapes,ActiveShapes:TShapeList;ShapeRows:TJSONArray;S:TShape;IsActive:Boolean;
   begin
     if (T=nil)or(Depth>64)or(Rows.Count>=8192)then Exit;
     Row:=TJSONObject.Create(['transform',TP,'class',T.ClassName,'name',T.Name,
       'exists',T.Exists,'visible',T.Visible]);Rows.Add(Row);
     if T is TCastleScene then begin
+      if WithGeometry then begin
+        Row.Add('scene_vertices',TCastleScene(T).VerticesCount);
+        Row.Add('scene_triangles',TCastleScene(T).TrianglesCount);
+        Row.Add('geometry_scope','CGE scene count; use shapes and geometry_id to inventory every LOD without duplicate geometry');
+      end;
+      if WithShapes and (TCastleScene(T).Shapes<>nil) then begin
+        ShapeRows:=TJSONArray.Create;Row.Add('shapes',ShapeRows);
+        AllShapes:=TCastleScene(T).Shapes.TraverseList(False,False);
+        ActiveShapes:=TCastleScene(T).Shapes.TraverseList(True,True);
+        for K:=0 to AllShapes.Count-1 do begin
+          S:=AllShapes[K];
+          IsActive:=False;
+          for L:=0 to ActiveShapes.Count-1 do if ActiveShapes[L]=S then begin IsActive:=True;Break end;
+          SR:=TJSONObject.Create(['vertices',Int64(S.VerticesCount),
+            'triangles',Int64(S.TrianglesCount),'active_lod',IsActive]);
+          if S.Node<>nil then begin SR.Add('name',S.Node.X3DName);SR.Add('visible',S.Node.Visible) end;
+          if S.Geometry<>nil then begin
+            SR.Add('geometry',S.Geometry.ClassName);
+            SR.Add('geometry_id',IntToHex(PtrUInt(S.Geometry),16));
+          end;
+          ShapeRows.Add(SR);
+        end;
+      end;
       if TCastleScene(T).RootNode<>nil then begin
         Row.Add('root',TCastleScene(T).RootNode.X3DName);
         if WithNodes then ListNode(TCastleScene(T).RootNode,TP,'',0);
@@ -1929,18 +1986,42 @@ begin
       end;
     end;
     Rows:=TJSONArray.Create;AResult.Add('objects',Rows);WithNodes:=AParams.Get('nodes',False);
+    WithGeometry:=AParams.Get('geometry',False);
+    WithShapes:=AParams.Get('shapes',False);
     if Node<>nil then ListNode(Node,Path,NodePath,0) else ListTransform(Target,Path,0);
     AResult.Add('truncated',Rows.Count>=8192);
   finally Parts.Free end;
 end;
 
+procedure CmdPerfWorldPasses(const AParams:TJSONObject;AResult:TJSONObject);
+begin
+  if (ViewPlay=nil) or not ViewPlay.SessionAlive then raise Exception.Create('Active ride required');
+  TOsmImpostorViewport(ViewPlay.MainViewport).Measure(AParams.Get('start',False),AResult);
+end;
+
+procedure CmdPerfWorldCache(const AParams:TJSONObject;AResult:TJSONObject);
+begin
+  if (ViewPlay=nil) or not ViewPlay.SessionAlive then raise Exception.Create('Active ride required');
+  TOsmImpostorViewport(ViewPlay.MainViewport).ConfigureOptions(AParams);
+  TOsmImpostorViewport(ViewPlay.MainViewport).Snapshot(AResult);
+end;
+
 procedure CmdPerfSet(const AParams: TJSONObject; AResult: TJSONObject);
 var RoadMode: string;
 begin
+  if AParams.Find('shadow_partitions')<>nil then SetTemporalShadowPartitions(AParams.Get('shadow_partitions',0));
+  if AParams.Find('shadow_live_near')<>nil then TemporalShadowLiveNear:=AParams.Get('shadow_live_near',True);
+  if AParams.Find('shadow_measure')<>nil then TemporalShadowMeasure:=AParams.Get('shadow_measure',False);
+  if AParams.Find('shadow_static')<>nil then TemporalShadowStatic:=AParams.Get('shadow_static',True);
+  if AParams.Find('shadow_single_pass')<>nil then TemporalShadowSinglePass:=AParams.Get('shadow_single_pass',True);
+  if AParams.Find('shadow_freeze_reuse')<>nil then TemporalShadowFreezeReuse:=AParams.Get('shadow_freeze_reuse',True);
+  if AParams.Find('wind_speed_control')<>nil then VegetationWindSpeedControl:=AParams.Get('wind_speed_control',True);
+  if AParams.Find('moving_tree_distance')<>nil then VegetationMotionAtlasDistance:=EnsureRange(AParams.Get('moving_tree_distance',0.0),0,300);
   { Global renderer options are useful before a ride. Session options touch
     FreeAtStop components, so reject them before applying any mutation. }
   if (AParams.Find('anim') <> nil) or
      (AParams.Find('riders') <> nil) or
+     (AParams.Find('wheel_probes') <> nil) or
      (AParams.Find('terrain') <> nil) or
      (AParams.Find('shadows') <> nil) or
      (AParams.Find('world_shadows') <> nil) or
@@ -1953,8 +2034,11 @@ begin
     ProceduralVegetationActive:=AParams.Get('procedural_trees',True);
   if AParams.Find('tree_season')<>nil then
     ProceduralVegetationSeason:=WrapTreeSeason(AParams.Get('tree_season',0.25));
-  if AParams.Find('vegetation')<>nil then RenderTreesActive:=AParams.Get('vegetation',True);
-  if AParams.Find('grass')<>nil then RenderGrassActive:=AParams.Get('grass',True);
+  if AParams.Find('vegetation')<>nil then ViewPlay.SetPerfWorldLayer(wrlTrees,AParams.Get('vegetation',True));
+  if AParams.Find('grass')<>nil then ViewPlay.SetPerfWorldLayer(wrlGrass,AParams.Get('grass',True));
+  if AParams.Find('buildings')<>nil then ViewPlay.SetPerfWorldLayer(wrlBuildings,AParams.Get('buildings',True));
+  if AParams.Find('other')<>nil then ViewPlay.SetPerfWorldLayer(wrlOther,AParams.Get('other',True));
+  if AParams.Find('ground')<>nil then ViewPlay.SetPerfWorldLayer(wrlGround,AParams.Get('ground',True));
   if AParams.Find('grass_blades')<>nil then GrassDrawBlades:=AParams.Get('grass_blades',True);
   if AParams.Find('grass_cards')<>nil then GrassDrawCards:=AParams.Get('grass_cards',True);
   if AParams.Find('grass_carpet')<>nil then GrassDrawCarpet:=AParams.Get('grass_carpet',True);
@@ -1984,6 +2068,10 @@ begin
     ViewPlay.SetPerfAnim(AParams.Get('anim', True));
   if AParams.Find('riders') <> nil then
     ViewPlay.SetPerfRiders(AParams.Get('riders', True));
+  if AParams.Find('rider_visibility')<>nil then
+    RiderVisibilityEnabled:=AParams.Get('rider_visibility',True);
+  if AParams.Find('wheel_probes')<>nil then
+    AgentCliNoGround:=not AParams.Get('wheel_probes',True);
   if AParams.Find('terrain') <> nil then
     ViewPlay.SetPerfTerrain(AParams.Get('terrain', True));
   if AParams.Find('shadows') <> nil then
@@ -2001,7 +2089,17 @@ begin
   if AParams.Find('dynamic_batching') <> nil then
     ViewPlay.MainViewport.DynamicBatching := AParams.Get('dynamic_batching', False);
   if AParams.Find('tree_pass_batching')<>nil then TreePassBatching:=AParams.Get('tree_pass_batching',True);
+  if AParams.Find('tree_draw_mask')<>nil then TreeDiagnosticDrawMask:=Cardinal(AParams.Get('tree_draw_mask',-1));
   if AParams.Find('grass_base_instance')<>nil then GrassBaseInstance:=AParams.Get('grass_base_instance',True);
+  if AParams.Find('tree_prepared_frames')<>nil then
+    TreePreparedFrames:=AParams.Get('tree_prepared_frames',False) and TreePreparedFramesExperimentEnabled;
+  if AParams.Find('tree_fragment_reuse')<>nil then TreeFragmentWorkReuse:=AParams.Get('tree_fragment_reuse',True);
+  if AParams.Find('grass_vertex_cache')<>nil then GrassVertexCache:=AParams.Get('grass_vertex_cache',True);
+  if AParams.Find('ground_index_culling')<>nil then UseStaticIndexRangeCulling:=AParams.Get('ground_index_culling',True);
+  if AParams.Find('ground_merge_gap')<>nil then StaticIndexCullMergeGapTriangles:=EnsureRange(AParams.Get('ground_merge_gap',0),0,65536);
+  if AParams.Find('ground_max_ranges')<>nil then StaticIndexCullMultiDrawMaxRanges:=EnsureRange(AParams.Get('ground_max_ranges',1024),1,8192);
+  if AParams.Find('rtx_receiver_bounds')<>nil then RtxScreenReceiverBounds:=AParams.Get('rtx_receiver_bounds',True);
+  if AParams.Find('wind_time')<>nil then WindSetPlaybackTime(AParams.Get('wind_time',-1.0));
   if AParams.Find('shared_uniform_arrays')<>nil then
     UseSharedUniformArrayCache:=AParams.Get('shared_uniform_arrays',True);
   if AParams.Find('shared_effect_revisions')<>nil then
@@ -2010,6 +2108,24 @@ begin
     UseSharedEffectBindings:=AParams.Get('shared_effect_bindings',True);
   if AParams.Find('binary_shader_names')<>nil then
     UseBinaryShaderNames:=AParams.Get('binary_shader_names',True);
+  if AParams.Find('program_uniform_cache')<>nil then
+    UseProgramUniformCache:=AParams.Get('program_uniform_cache',True);
+  if AParams.Find('cached_mesh_bindings')<>nil then
+    UseCachedMeshBindings:=AParams.Get('cached_mesh_bindings',True);
+  if AParams.Find('tree_parameter_cache')<>nil then
+    TreeParameterCache:=AParams.Get('tree_parameter_cache',True);
+  if AParams.Find('stack_mesh_attributes')<>nil then
+    UseStackMeshAttributes:=AParams.Get('stack_mesh_attributes',True);
+  AResult.Add('program_uniform_cache',UseProgramUniformCache);
+  AResult.Add('cached_mesh_bindings',UseCachedMeshBindings);
+  AResult.Add('tree_parameter_cache',TreeParameterCache);
+  AResult.Add('tree_parameter_calculations',Int64(TreeParameterCalculations));
+  AResult.Add('tree_parameter_reuses',Int64(TreeParameterReuses));
+  AResult.Add('normal_matrix_calculations',Int64(NormalMatrixCalculations));
+  AResult.Add('normal_matrix_reuses',Int64(NormalMatrixReuses));
+  AResult.Add('stack_mesh_attributes',UseStackMeshAttributes);
+  AResult.Add('program_uniform_uploads',Int64(ProgramUniformUploads));
+  AResult.Add('program_uniform_skips',Int64(ProgramUniformSkips));
   if AParams.Find('pose_cache')<>nil then
     UseCachedRiderMeshes:=AParams.Get('pose_cache',True);
   if AParams.Find('delayed_pose')<>nil then
@@ -2017,6 +2133,20 @@ begin
   AResult.Add('ok', True);
   AResult.Add('tree_pass_batching',TreePassBatching);
   AResult.Add('grass_base_instance',GrassBaseInstance);
+  AResult.Add('tree_prepared_frames',TreePreparedFrames);
+  AResult.Add('tree_prepared_experiment',TreePreparedFramesExperimentEnabled);
+  AResult.Add('tree_fragment_reuse',TreeFragmentWorkReuse);
+  AResult.Add('tree_prepared_bytes',TreePreparedFrameBytes);
+  AResult.Add('grass_vertex_cache',GrassVertexCache);
+  AResult.Add('ground_index_culling',UseStaticIndexRangeCulling);
+  AResult.Add('ground_merge_gap',StaticIndexCullMergeGapTriangles);
+  AResult.Add('ground_max_ranges',StaticIndexCullMultiDrawMaxRanges);
+  AResult.Add('rtx_receiver_bounds',RtxScreenReceiverBounds);
+  AResult.Add('ground_cull_passes',Int64(StaticIndexCullPasses));
+  AResult.Add('ground_candidate_indices',Int64(StaticIndexCullCandidateIndices));
+  AResult.Add('ground_submitted_indices',Int64(StaticIndexCullSubmittedIndices));
+  AResult.Add('ground_range_draws',Int64(StaticIndexCullDrawCalls));
+  AResult.Add('ground_tested_nodes',Int64(StaticIndexCullTestedNodes));
   AResult.Add('shared_uniform_arrays',UseSharedUniformArrayCache);
   AResult.Add('shared_effect_revisions',UseSharedEffectRevisionCache);
   AResult.Add('shared_effect_bindings',UseSharedEffectBindings);
@@ -2025,6 +2155,8 @@ begin
   AResult.Add('delayed_pose',UseDelayedRiderMeshes);
   AResult.Add('anim', ViewPlay.PerfAnim);
   AResult.Add('riders', ViewPlay.PerfRiders);
+  AResult.Add('rider_visibility',RiderVisibilityEnabled);
+  AResult.Add('wheel_probes',not AgentCliNoGround);
   AResult.Add('terrain', ViewPlay.PerfTerrain);
   AResult.Add('shadows', ViewPlay.PerfShadows);
 end;
@@ -2085,6 +2217,10 @@ begin
      (ViewPlay.Bike.TripoRider = nil) then
     raise Exception.Create('Active rider required');
   S := ViewPlay.Bike.TripoRider.Scene;
+  if AParams.Find('pose_capture')<>nil then
+    RequireDeformedMeshBuffers:=AParams.Get('pose_capture',False);
+  if AParams.Find('pose_dump') <> nil then
+    AResult.Add('pose_dump',DumpRiderPose(S,AParams.Get('pose_dump','')));
   N := S.RootNode.FindNode(TEffectNode, 'TripoGpuSkin', [fnNilOnMissing]);
   if (N <> nil) and (N.Field('uMuscleResponse', False) is TMFVec4f) then
   begin
@@ -2236,8 +2372,13 @@ begin
   if not (Action='start') and not (Action='read') and not (Action='stop') then
     raise Exception.Create('action must be start, read or stop');
   if Action='start' then begin
+    if AParams.Get('pipeline',False)and AParams.Get('shaders',False)then
+      raise Exception.Create('pipeline and shaders are separate diagnostic captures');
     FreeAndNil(PerformanceProbe);
     PerformanceProbe:=TGamePerformanceProbe.Create(nil);
+    if AParams.Get('pipeline',False) then PerformanceProbe.EnablePipelineCounters;
+    if AParams.Get('shaders',False) then PerformanceProbe.EnableShaderCounters(
+      AParams.Get('shader_frames',48),AParams.Get('shader_stride',8));
     Application.MainWindow.Controls.InsertFront(PerformanceProbe);
   end else if PerformanceProbe<>nil then
     PerformanceProbe.Snapshot(AResult,AParams.Get('reset',False));
@@ -2277,6 +2418,7 @@ end;
 procedure CmdPerfState(const AParams: TJSONObject; AResult: TJSONObject);
 var
   Stats: TRenderStatistics;
+  WorldCache:TJSONObject;
   B: TCacheBatch;
   T: TCacheTile;
   TileCount: Integer;
@@ -2304,6 +2446,12 @@ begin
   if not ViewPlay.SessionAlive then Exit;
   AResult.Add('anim', ViewPlay.PerfAnim);
   AResult.Add('riders', ViewPlay.PerfRiders);
+  AResult.Add('rider_visibility',RiderVisibilityEnabled);
+  AResult.Add('wheel_probes',not AgentCliNoGround);
+  if Assigned(ViewPlay.Bike) then begin
+    AResult.Add('rider_detail_required',ViewPlay.Bike.VisualDetailRequired);
+    AResult.Add('rider_render_visible',ViewPlay.Bike.Group.Visible);
+  end;
   AResult.Add('terrain', ViewPlay.PerfTerrain);
   AResult.Add('shadows', ViewPlay.PerfShadows);
   AResult.Add('fps_mode', GameFpsModeStr);
@@ -2327,6 +2475,8 @@ begin
   AResult.Add('occlusion_boxes', Stats.BoxesOcclusionQueriedCount);
   AResult.Add('rider_shadow', ViewPlay.RiderShadowInfo);
   AResult.Add('rtx',ViewPlay.RtxShadowInfo(AParams.Get('reflection_diagnostics',False)));
+  WorldCache:=TJSONObject.Create;AResult.Add('world_cache',WorldCache);
+  (ViewPlay.MainViewport as TOsmImpostorViewport).Snapshot(WorldCache);
   AResult.Add('world_shadows', ViewPlay.AtlasWorldShadows);
   AResult.Add('road_material', RoadMaterialModeName);
   AResult.Add('curb_contacts',CurbContactsEnabled);
@@ -2361,6 +2511,9 @@ begin
   AResult.Add('tree_season',ProceduralVegetationSeason);
   AResult.Add('vegetation',RenderTreesActive);
   AResult.Add('grass',RenderGrassActive);
+  AResult.Add('buildings',WorldLayerVisible(wrlBuildings));
+  AResult.Add('other',WorldLayerVisible(wrlOther));
+  AResult.Add('ground',WorldLayerVisible(wrlGround));
   AResult.Add('grass_blades',GrassDrawBlades);
   AResult.Add('grass_cards',GrassDrawCards);
   AResult.Add('grass_carpet',GrassDrawCarpet);
@@ -2595,6 +2748,8 @@ begin
   RegisterPhotoViewRenderTools(@PhotoViewContext,@PhotoViewMode);
   RegisterAssistantMcpTools;
 
+  RegisterMcpCommand('render.scene_lighting', 'Compare scene lighting on a fixed view; nonpersistent.',
+    '{"type":"object","properties":{"enabled":{"type":"boolean"},"tone":{"type":"integer"},"exposure":{"type":"number"},"sun":{"type":"number"},"sky":{"type":"number"},"ground":{"type":"number"},"road_detail":{"type":"number"},"water_spread":{"type":"number"},"water_reflection":{"type":"number"},"ssao":{"type":"boolean"}}}', @CmdSceneLighting);
   RegisterMcpCommand('app.version', 'Client version and update policy.',
     '{"type":"object","properties":{}}', @CmdClientVersion);
   RegisterMcpCommand('app.views_list',
@@ -2864,21 +3019,32 @@ begin
   RegisterMcpCommand('perf.objects',
     'List live transform paths and optional X3D group/shape paths. Temporarily set visible for object-isolation measurements. '+
     'Keeps lights and physics; paths must be obtained again after scene changes. Not persisted.',
-    '{"type":"object","properties":{"transform":{"type":"string"},"node":{"type":"string"},"nodes":{"type":"boolean"},"visible":{"type":"boolean"},"brief":{"type":"boolean"}}}',@CmdPerfObjects);
+    '{"type":"object","properties":{"transform":{"type":"string"},"node":{"type":"string"},"nodes":{"type":"boolean"},"geometry":{"type":"boolean"},"shapes":{"type":"boolean"},"visible":{"type":"boolean"},"brief":{"type":"boolean"}}}',@CmdPerfObjects);
+  RegisterMcpCommand('perf.world_cache',
+    'Process-local world cache tuning for comparisons; persistent graphics settings are unchanged.',
+    '{"type":"object","properties":{"detail_layer":{"type":"boolean"},"detail_m":{"type":"number"},"detail_hz":{"type":"number"},"overscan_x":{"type":"number"},"overscan_y":{"type":"number"},"rtx_cache":{"type":"boolean"},"invalidate":{"type":"boolean"}}}',@CmdPerfWorldCache);
+  RegisterMcpCommand('perf.world_passes',
+    'Explicit asynchronous GPU timing of world cache captures 0..4 and composition. Start then stop. Capture means are per refresh, not per displayed frame.',
+    '{"type":"object","properties":{"start":{"type":"boolean"}}}',@CmdPerfWorldPasses);
   RegisterMcpCommand('perf.set',
     'Toggle frame-cost components for isolated perf measurements: ' +
-    'anim (all bike AnimateFrame), riders (Tripo rider meshes), ' +
-    'terrain (streamed map / level ground), shadows (all riders), ' +
+    'anim (all bike AnimateFrame), riders (actors only; world shadows stay active), rider_visibility (conservative actor culling), wheel_probes (diagnostic physics probes), ' +
+    'terrain (entire streamed map / level), shadows (all riders), ' +
     'occlusion (hidden-object culling; persist=true saves it), dynamic_batching (merge meshes each frame), log_shaders (diagnostic GLSL log), ' +
     'world_shadows (buildings/trees in the shared atlas; false leaves rider shadows only), ' +
     'road_material (legacy/direct/cached), procedural_trees (new/legacy trees), tree_season (0 spring, .25 summer, .5 autumn, .75 winter), vegetation (all trees), grass (all grass), grass_lod (adapt blade tessellation to projected size), vegetation_branches (legacy vertex detail), curb_contacts (wheel height only), ' +
-    'grass_blades/grass_cards/grass_carpet (diagnostic grass layers), ' +
+    'ground (surface composite), buildings/other (POI and remaining geometry); live visibility preserves collisions, ' +
+    'grass_blades/grass_cards/grass_carpet (diagnostic grass layers), tree_draw_mask (shader-kind bitmask; -1 restores all; 0 wood, 1 leaves, 3 distant cards, 5 needles, 6 shoots, 7 fruit), ' +
     'binary_shader_names (diagnostic comparison with legacy locale-dependent lookups), ' +
     'discard_shadow_shader (diagnostic: remove the disabled ground-shadow shader). Each key optional.',
-    '{"type":"object","properties":{"anim":{"type":"boolean"},' +
-    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"tree_pass_batching":{"type":"boolean"},"grass_base_instance":{"type":"boolean"},"shared_effect_revisions":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
+    '{"type":"object","properties":{"anim":{"type":"boolean"},"tree_draw_mask":{"type":"integer"},' +
+    '"tree_prepared_frames":{"type":"boolean"},"tree_fragment_reuse":{"type":"boolean"},"grass_vertex_cache":{"type":"boolean"},"ground_index_culling":{"type":"boolean"},"rtx_receiver_bounds":{"type":"boolean"},"rider_visibility":{"type":"boolean"},"wheel_probes":{"type":"boolean"},' +
+    '"ground_merge_gap":{"type":"integer"},"ground_max_ranges":{"type":"integer"},"wind_time":{"type":"number"},' +
+    '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"tree_pass_batching":{"type":"boolean"},"grass_base_instance":{"type":"boolean"},"shared_effect_revisions":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"cached_mesh_bindings":{"type":"boolean"},"tree_parameter_cache":{"type":"boolean"},"program_uniform_cache":{"type":"boolean"},"stack_mesh_attributes":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
     '"occlusion":{"type":"boolean"},"persist":{"type":"boolean"},"world_shadows":{"type":"boolean"},"dynamic_batching":{"type":"boolean"},"log_shaders":{"type":"boolean"},' +
+    '"shadow_partitions":{"type":"integer","enum":[0,1,2,4]},"shadow_live_near":{"type":"boolean"},"shadow_measure":{"type":"boolean"},"shadow_static":{"type":"boolean"},"shadow_single_pass":{"type":"boolean"},"shadow_freeze_reuse":{"type":"boolean"},"wind_speed_control":{"type":"boolean"},"moving_tree_distance":{"type":"number","minimum":0,"maximum":300},' +
     '"vegetation_branches":{"type":"boolean"},"procedural_trees":{"type":"boolean"},"tree_season":{"type":"number","minimum":0,"maximum":1},"vegetation":{"type":"boolean"},"grass":{"type":"boolean"},"grass_lod":{"type":"boolean"},"curb_contacts":{"type":"boolean"},"road_material":{"type":"string","enum":["legacy","direct","cached"]},' +
+    '"buildings":{"type":"boolean"},"other":{"type":"boolean"},"ground":{"type":"boolean"},' +
     '"grass_blades":{"type":"boolean"},"grass_cards":{"type":"boolean"},"grass_carpet":{"type":"boolean"},' +
     '"discard_shadow_shader":{"type":"boolean"}}}',
     @CmdPerfSet);
@@ -2903,8 +3069,10 @@ begin
     'Explicit bounded frame-time capture. start/read/stop; read reset=true drains a window. ' +
     'Reports frame median/p95/p99/1% low, raw update, render submission, asynchronous GPU timestamps and VRAM. ' +
     '8192 samples/channel maximum, no per-frame log or GPU wait; overwritten count makes truncation explicit. ' +
-    'GPU covers drawing, not swap/pacing; CPU submit may include driver stalls. No overhead while stopped.',
-    '{"type":"object","properties":{"action":{"type":"string","enum":["start","read","stop"]},"reset":{"type":"boolean"}}}',
+    'GPU covers drawing, not swap/pacing; CPU submit may include driver stalls. No overhead while stopped. ' +
+    'pipeline=true adds whole-frame hardware counters. shaders=true instead samples exclusive GL program/selector counters and draw calls ' +
+    '(shader_frames=48, max 64; shader_stride=8). Measure FPS separately. Shader counters exclude Vulkan compute.',
+    '{"type":"object","properties":{"action":{"type":"string","enum":["start","read","stop"]},"reset":{"type":"boolean"},"pipeline":{"type":"boolean"},"shaders":{"type":"boolean"},"shader_frames":{"type":"integer"},"shader_stride":{"type":"integer"}}}',
     @CmdPerfCapture);
   RegisterMcpCommand('perf.poi_models',
     'Diagnostic OSM POI switches. Stop the ride before setting enabled, batched or traffic_signals. animate_signals can change during a ride. Not persisted.',
@@ -2918,7 +3086,7 @@ begin
     '"ground_shade":{"type":"boolean"},' +
     '"self_occlusion":{"type":"number","minimum":0,"maximum":1},' +
     '"muscle_responses":{"type":"array","items":{"type":"array","items":{"type":"number"}}},' +
-    '"shader_file":{"type":"string"},"save_shader_file":{"type":"string"},' +
+    '"shader_file":{"type":"string"},"save_shader_file":{"type":"string"},"pose_dump":{"type":"string"},"pose_capture":{"type":"boolean"},' +
     '"shader_effect":{"type":"string"},"shader_stage":{"type":"string","enum":["vertex","fragment"]}}}',
     @CmdRiderRender);
   RegisterMcpCommand('perf.rider_model',

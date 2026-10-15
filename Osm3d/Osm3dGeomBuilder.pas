@@ -143,6 +143,13 @@ const
 procedure BuildBuildingPassagePaving(const Casters:TBuildingShadowCasters;
   out Bag:TLatRingBag);
 
+function LevelRoadsInComposite(Composite: TGroundCompositeMesh;
+  const ARoadSegs: TRoadCenterlineSegArray;
+  const ARamps: TTunnelApproachSegArray; const AFences: TFenceMeshes;
+  Sampler: TTerrainSampler; Projection: TLocalProjection;
+  AFitLayer: TFitHeightLayer; const AJoints: TDeckJointArray;
+  LogProc: TLogProc): Boolean;
+
 implementation
 
 uses
@@ -310,13 +317,20 @@ type
   TLvlSglArr = array of Single;
   TLvlGrid   = array of TLvlIntArr;
 
+  TJunctionBlend = record X,Z,Radius:Single end;
+  TJunctionBlends = array of TJunctionBlend;
+
   TLevelCtx = record
     Comp:         TGroundCompositeMesh;
     Sampler:      TTerrainSampler;
     Projection:   TLocalProjection;
     FitLayer:     TFitHeightLayer;            { ref — read-only; nil/inactive → чистая сетка }
     Segs:         TRoadCenterlineSegArray;   { ref — read-only in workers }
+    WayBefore,WayAfter:TLvlSglArr;
     JoinedEnds:   TLvlIntArr;                { bit 0: A shared; bit 1: B shared by ground segments }
+    Junctions: TJunctionBlends;
+    JunctionGrid: TLvlGrid;
+    RoadOwner:    array of Int64;            { per welded vertex; same owner for geometry and normals }
     BridgeSegs:   TRoadCenterlineSegArray;   { только IsBridge-сегменты — «есть ли настил над точкой» }
     { Остаточный FIT-офсет узловой сети дорог в концах A/B каждого сегмента
       (знак в значении) и «запас коридора» R концов: внутри R от узла офсет —
@@ -406,7 +420,7 @@ end;
   НОРМАЛЕЙ градиентом этой же функции (гладкая земля без фасеток); False —
   билинейные, бит-в-бит прежнее выравнивание геометрии. }
 function RoadLeveledHeightAt(c: PLevelCtx; PX, PZ: Single;
-  ACubic: Boolean; out AApplied: Boolean): Single;
+  ACubic: Boolean; out AApplied: Boolean; AOwner: Int64): Single;
 var
   cx, cz, cidx, k, S, bestSeg: Integer;
   dx, dz, len2, t, tR, fx, fz, d, half, edgeY, natY, f: Single;
@@ -417,6 +431,26 @@ var
   HaveFit, anyInterior: Boolean;
   fitY: Double;
   authoredY, authoredWeight: Single;
+  anchorSeg, pass, masterSeg: Integer;
+  QX, QZ, anchorD, anchorHalf, score, bestScore: Single;
+  AX, AZ, masterX, masterZ, masterHalf, masterD, dot: Single;
+  masterBlend, endDistance, overlapBlend, angleBlend:Single;
+  junctionWeight,junctionD,junctionF:Single; j:Integer;
+
+  function OnRamp(X,Z:Single):Boolean;
+  var K0,S0:Integer;DX0,DZ0,L0,T0,H0:Single;
+  begin
+    Result:=False;
+    for K0:=0 to c^.GridN[cidx]-1 do begin
+      S0:=c^.Grid[cidx][K0];if S0<c^.RampStart then Continue;
+      DX0:=c^.Segs[S0].X1-c^.Segs[S0].X0;DZ0:=c^.Segs[S0].Z1-c^.Segs[S0].Z0;
+      L0:=Sqr(DX0)+Sqr(DZ0);if L0<1e-9 then Continue;
+      T0:=((X-c^.Segs[S0].X0)*DX0+(Z-c^.Segs[S0].Z0)*DZ0)/L0;
+      if (T0<0) or (T0>1) then Continue;
+      H0:=c^.Segs[S0].Width*0.5;
+      if Sqr(X-c^.Segs[S0].X0-T0*DX0)+Sqr(Z-c^.Segs[S0].Z0-T0*DZ0)<=Sqr(H0+0.05) then Exit(True);
+    end;
+  end;
 
   function TerrAt(AX, AZ: Single): Single; inline;
   begin
@@ -494,6 +528,108 @@ begin
     Exit;
   end;
 
+  { Height is a longitudinal road profile, not an average that changes
+    across every lane. First project onto the owning centreline. Evaluate
+    the network profile THERE, then extend it across the entire pavement.
+    Ownership comes from the carved composite; a narrow neighbouring way
+    must not take over the outside lanes of a wide road. Unowned ground
+    uses distance relative to width, followed by the existing bank blend. }
+  anchorSeg := -1; bestScore := 1e30;
+  QX := PX; QZ := PZ; anchorD := 0; anchorHalf := 0;
+  for pass := 0 to 1 do
+  begin
+    for k := 0 to c^.GridN[cidx] - 1 do
+    begin
+      S := c^.Grid[cidx][k];
+      if S >= c^.RampStart then Continue;
+      if (pass = 0) and ((AOwner = 0) or (c^.Segs[S].WayId <> AOwner)) then Continue;
+      dx := c^.Segs[S].X1 - c^.Segs[S].X0;
+      dz := c^.Segs[S].Z1 - c^.Segs[S].Z0;
+      len2 := dx*dx + dz*dz;
+      if len2 < 1e-9 then Continue;
+      t := EnsureRange(((PX-c^.Segs[S].X0)*dx + (PZ-c^.Segs[S].Z0)*dz)/len2,0.0,1.0);
+      fx := c^.Segs[S].X0 + t*dx; fz := c^.Segs[S].Z0 + t*dz;
+      d := Sqrt(Sqr(PX-fx)+Sqr(PZ-fz));
+      half := RoadWidthAt(c^.Segs[S].Surface,c^.Segs[S].Width,t)*0.5;
+      if (half <= 0) or (d > half+c^.BLEND) then Continue;
+      score := d / half;
+      if (score < bestScore) or ((score = bestScore) and
+         ((anchorSeg < 0) or (c^.Segs[S].WayId < c^.Segs[anchorSeg].WayId))) then
+      begin
+        anchorSeg := S; bestScore := score; anchorD := d; anchorHalf := half;
+        QX := fx; QZ := fz;
+      end;
+    end;
+    if anchorSeg >= 0 then Break;
+  end;
+
+  { Overlapping parallel carriageways are one paved cross section. Their
+    shared carved edge cannot have two independently sampled DEM heights.
+    Use the wider carriageway as the common profile (stable way-id tie).
+    Separate roads, including tunnel-side service roads, do not overlap
+    their paved cores and retain independent levels. }
+  if (anchorSeg >= 0) and not OnRamp(QX,QZ) then
+  begin
+    AX := c^.Segs[anchorSeg].X1-c^.Segs[anchorSeg].X0;
+    AZ := c^.Segs[anchorSeg].Z1-c^.Segs[anchorSeg].Z0;
+    segL := Sqrt(AX*AX+AZ*AZ);AX := AX/segL;AZ := AZ/segL;
+    masterSeg := anchorSeg;masterHalf := anchorHalf;masterD := 1e30;
+    masterX := QX;masterZ := QZ;masterBlend:=0;
+    for k := 0 to c^.GridN[cidx]-1 do
+    begin
+      S := c^.Grid[cidx][k];
+      if (S>=c^.RampStart) or (c^.Segs[S].WayId=c^.Segs[anchorSeg].WayId) then Continue;
+      dx := c^.Segs[S].X1-c^.Segs[S].X0;dz := c^.Segs[S].Z1-c^.Segs[S].Z0;
+      len2 := dx*dx+dz*dz;if len2<1e-9 then Continue;
+      dot := Abs(AX*dx+AZ*dz)/Sqrt(len2);if dot<0.985 then Continue;
+      t := ((QX-c^.Segs[S].X0)*dx+(QZ-c^.Segs[S].Z0)*dz)/len2;
+      if (t<0) or (t>1) then Continue;
+      fx := c^.Segs[S].X0+t*dx;fz := c^.Segs[S].Z0+t*dz;
+      if OnRamp(fx,fz) then Continue;
+      d := Sqrt(Sqr(QX-fx)+Sqr(QZ-fz));
+      half := RoadWidthAt(c^.Segs[S].Surface,c^.Segs[S].Width,t)*0.5;
+      if d>anchorHalf+half-0.05 then Continue;
+      if (half<masterHalf-0.01) then Continue;
+      if (Abs(half-masterHalf)<=0.01) and
+         (c^.Segs[S].WayId>c^.Segs[masterSeg].WayId) then Continue;
+      if (c^.Segs[S].WayId=c^.Segs[masterSeg].WayId) and (d>=masterD) then Continue;
+      masterSeg := S;masterX := fx;masterZ := fz;masterHalf := half;masterD := d;
+      { A neighbouring carriageway may end or split while this one continues.
+        Ease its profile out along the whole way, not at every tessellation
+        segment, to avoid a metre-high step when the master disappears. }
+      segL:=Sqrt(len2);
+      endDistance:=Min(c^.WayBefore[S]+t*segL,c^.WayAfter[S]+(1-t)*segL);
+      masterBlend:=EnsureRange(endDistance/Max(12.0,half*4.0),0.0,1.0);
+      masterBlend:=masterBlend*masterBlend*(3-2*masterBlend);
+      { A continuing neighbour may diverge sideways or turn away. Ending
+        the shared profile at a hard overlap/heading threshold makes a
+        vertical step, just like ending the way itself. Fade these two
+        boundaries as well; retain the flat core of parallel overlaps. }
+      overlapBlend:=EnsureRange((anchorHalf+half-0.05-d)/Min(1.9,anchorHalf*0.4),0.0,1.0);
+      angleBlend:=EnsureRange((dot-0.985)/0.01,0.0,1.0);
+      masterBlend:=masterBlend*overlapBlend*overlapBlend*(3-2*overlapBlend)*
+        angleBlend*angleBlend*(3-2*angleBlend);
+    end;
+    QX:=QX+(masterX-QX)*masterBlend;QZ:=QZ+(masterZ-QZ)*masterBlend;
+  end;
+
+  { A junction is a continuous patch shared by all of its streets. There
+    is no unique transverse axis at a turn or lane merge. Fade back to the
+    original local network field there, rather than assigning the shared
+    vertices two different projected heights or pinning a flat plateau.
+    A trench keeps its explicit longitudinal profile. }
+  if (anchorSeg>=0) and not OnRamp(QX,QZ) then
+  begin
+    junctionWeight:=1;
+    for k:=0 to High(c^.JunctionGrid[cidx]) do begin
+      j:=c^.JunctionGrid[cidx][k];
+      junctionD:=Sqrt(Sqr(PX-c^.Junctions[j].X)+Sqr(PZ-c^.Junctions[j].Z));
+      junctionF:=EnsureRange(junctionD/c^.Junctions[j].Radius-1.0,0.0,1.0);
+      junctionWeight:=Min(junctionWeight,junctionF*junctionF*(3-2*junctionF));
+    end;
+    QX:=PX+(QX-PX)*junctionWeight;QZ:=PZ+(QZ-PZ)*junctionWeight;
+  end;
+
   HaveFit := (c^.FitLayer <> nil) and c^.FitLayer.Active;
   anyInterior := False;
   bestD := 1e30; bestSeg := -1; bestHalf := 0;
@@ -507,12 +643,12 @@ begin
     dz := c^.Segs[S].Z1 - c^.Segs[S].Z0;
     len2 := dx*dx + dz*dz;
     if len2 < 1e-9 then tR := 0
-    else tR := ((PX - c^.Segs[S].X0)*dx + (PZ - c^.Segs[S].Z0)*dz) / len2;
+    else tR := ((QX - c^.Segs[S].X0)*dx + (QZ - c^.Segs[S].Z0)*dz) / len2;
     t := tR;
     if t < 0 then t := 0 else if t > 1 then t := 1;
     fx := c^.Segs[S].X0 + t*dx;
     fz := c^.Segs[S].Z0 + t*dz;
-    d  := Sqrt((PX - fx)*(PX - fx) + (PZ - fz)*(PZ - fz));
+    d  := Sqrt(Sqr(QX-fx) + Sqr(QZ-fz));
     half := RoadWidthAt(c^.Segs[S].Surface,c^.Segs[S].Width,t) * 0.5;
     if S >= c^.RampStart then
     begin
@@ -522,6 +658,11 @@ begin
         отдельно от дорожных сегментов (см. выбор результата ниже). }
       if (tR < -1e-4) or (tR > 1.0 + 1e-4) then Continue;
       if d > half + c^.BLEND then Continue;
+      { A ramp excavates the road leading into its portal. Its bank must
+        never lower a separate surface road beside that trench. Test the
+        owner axis, not the road edge which may lie inside the bank band. }
+      if (anchorSeg >= 0) and (anchorD <= anchorHalf+0.05) and
+         (d > half+0.05) then Continue;
       rFound := True;
       if tR < 1.0 - 1e-4 then rAnyInt := True;
       wseg  := 1.0 / (d*d + 0.25);
@@ -648,6 +789,12 @@ begin
       natY := TerrAt(PX, PZ);
       if Result > natY then Result := natY;
     end;
+    if (anchorSeg >= 0) and (anchorD > anchorHalf) then
+    begin
+      f := EnsureRange((anchorD-anchorHalf)/c^.BLEND,0.0,1.0);
+      f := f*f*(3.0-2.0*f);
+      Result := Result + f*(TerrAt(PX,PZ)-Result);
+    end;
     ApplyJoints;
     AApplied := True;
     Exit;
@@ -660,6 +807,10 @@ begin
   end;
 
   edgeY := eySum / eyW;     { eyW > 0 whenever bestSeg >= 0 }
+  if anchorSeg >= 0 then
+  begin
+    bestD := anchorD; bestHalf := anchorHalf;
+  end;
   if bestD <= bestHalf then
     Result := edgeY                              { on the road: flat cross section }
   else
@@ -693,10 +844,14 @@ begin
 end;
 
 function LeveledHeightAt(c: PLevelCtx; PX, PZ: Single;
-  ACubic: Boolean; out AApplied: Boolean): Single;
+  ACubic: Boolean; out AApplied: Boolean; AOwner: Int64 = 0): Single;
 var WaterH, Weight, Base: Single;
 begin
-  Result := RoadLeveledHeightAt(c, PX, PZ, ACubic, AApplied);
+  Result := RoadLeveledHeightAt(c, PX, PZ, ACubic, AApplied, AOwner);
+  { The road core was already sampled against the water-aware terrain.
+    Blending its outer lanes back toward a river bank undoes the flat
+    pavement and creates lateral metre-high humps on embankment roads. }
+  if (AOwner<>0) and AApplied then Exit;
   if (c^.Sampler.WaterLevels <> nil) and
      c^.Sampler.WaterLevels.TargetAt(PX, PZ, WaterH, Weight) then
   begin
@@ -724,7 +879,7 @@ begin
   for p := AStartIdx to AEndExcl - 1 do
   begin
     Pos := c^.Comp.Pool.PositionOf(p);
-    newY := LeveledHeightAt(c, Pos.X, Pos.Z, False, applied);
+    newY := LeveledHeightAt(c, Pos.X, Pos.Z, False, applied, c^.RoadOwner[p]);
     if not applied then Continue;
     c^.Comp.Pool.SetPosition(p, Vector3(Pos.X, newY, Pos.Z));
     Inc(localMoved);
@@ -755,10 +910,10 @@ begin
   for p := AStartIdx to AEndExcl - 1 do
   begin
     Pos := c^.Comp.Pool.PositionOf(p);
-    hL := LeveledHeightAt(c, Pos.X - EPS, Pos.Z, True, dummy);
-    hR := LeveledHeightAt(c, Pos.X + EPS, Pos.Z, True, dummy);
-    hD := LeveledHeightAt(c, Pos.X, Pos.Z - EPS, True, dummy);
-    hU := LeveledHeightAt(c, Pos.X, Pos.Z + EPS, True, dummy);
+    hL := LeveledHeightAt(c, Pos.X - EPS, Pos.Z, True, dummy, c^.RoadOwner[p]);
+    hR := LeveledHeightAt(c, Pos.X + EPS, Pos.Z, True, dummy, c^.RoadOwner[p]);
+    hD := LeveledHeightAt(c, Pos.X, Pos.Z - EPS, True, dummy, c^.RoadOwner[p]);
+    hU := LeveledHeightAt(c, Pos.X, Pos.Z + EPS, True, dummy, c^.RoadOwner[p]);
     dHdx := (hR - hL) * (1.0 / (2.0 * EPS));
     dHdz := (hU - hD) * (1.0 / (2.0 * EPS));
     nx := -dHdx;
@@ -812,6 +967,12 @@ var
   FenceMat,FenceV,FenceMoved:Integer;
   FenceMesh:TMesh; FenceVerts:TMeshVertexArray; FencePos:TVector3;
   FenceGround,FenceOffset:Single; FenceApplied:Boolean;
+  RoadIds: specialize TDictionary<Int64,Single>;
+  Owner: Int64; PoolIndex: Integer;
+  OwnerWidth, PreviousWidth:Single;
+  NodeWay:array of Int64;NodeMultiple:array of Boolean;
+  NodeRoadDegree:TLvlIntArr;NodeMinWidth,NodeMaxWidth:TLvlSglArr;
+  JIndex,JCount,Endpoint,NodeIdx:Integer;
 
   { Узел по концу сегмента: слить совпадающие концы (квант 0.125 м — смежные
     OSM-way делят узел, координаты совпадают до эпсилона). }
@@ -1004,6 +1165,41 @@ begin
         Inc(NodeDegree[SegNA[I]]);
         Inc(NodeDegree[SegNB[I]]);
       end;
+      { Count actual road junctions, ignoring pedestrian crossings and
+        duplicate tunnel-ramp segments. Simple way splits stay flat. }
+      SetLength(NodeWay,NN);SetLength(NodeMultiple,NN);SetLength(NodeRoadDegree,NN);
+      SetLength(NodeMinWidth,NN);SetLength(NodeMaxWidth,NN);
+      for I:=0 to High(ARoadSegs) do begin
+        if (SegNA[I]<0) or Segs[I].IsBridge or (Segs[I].Width<3) then Continue;
+        for Endpoint:=0 to 1 do begin
+          if Endpoint=0 then NodeIdx:=SegNA[I] else NodeIdx:=SegNB[I];
+          Inc(NodeRoadDegree[NodeIdx]);
+          if NodeWay[NodeIdx]=0 then begin
+            NodeWay[NodeIdx]:=Segs[I].WayId;NodeMinWidth[NodeIdx]:=Segs[I].Width;
+          end else if NodeWay[NodeIdx]<>Segs[I].WayId then NodeMultiple[NodeIdx]:=True;
+          NodeMinWidth[NodeIdx]:=Min(NodeMinWidth[NodeIdx],Segs[I].Width);
+          NodeMaxWidth[NodeIdx]:=Max(NodeMaxWidth[NodeIdx],Segs[I].Width);
+        end;
+      end;
+      SetLength(ctx.Junctions,NN);JCount:=0;
+      for NodeIdx:=0 to NN-1 do
+        if NodeMultiple[NodeIdx] and ((NodeRoadDegree[NodeIdx]>2) or
+           (NodeMaxWidth[NodeIdx]-NodeMinWidth[NodeIdx]>0.25)) then begin
+          ctx.Junctions[JCount].X:=NodeX[NodeIdx];ctx.Junctions[JCount].Z:=NodeZ[NodeIdx];
+          ctx.Junctions[JCount].Radius:=Max(6.0,NodeMaxWidth[NodeIdx]*0.50);Inc(JCount);
+        end;
+      SetLength(ctx.Junctions,JCount);SetLength(ctx.JunctionGrid,NC);
+      for JIndex:=0 to JCount-1 do begin
+        reach:=ctx.Junctions[JIndex].Radius*2;
+        cx0:=Max(0,Floor((ctx.Junctions[JIndex].X-reach-GMinX)/CellSize));
+        cx1:=Min(GW-1,Floor((ctx.Junctions[JIndex].X+reach-GMinX)/CellSize));
+        cz0:=Max(0,Floor((ctx.Junctions[JIndex].Z-reach-GMinZ)/CellSize));
+        cz1:=Min(GH-1,Floor((ctx.Junctions[JIndex].Z+reach-GMinZ)/CellSize));
+        for cz:=cz0 to cz1 do for cx:=cx0 to cx1 do begin
+          cidx:=cz*GW+cx;n:=Length(ctx.JunctionGrid[cidx]);
+          SetLength(ctx.JunctionGrid[cidx],n+1);ctx.JunctionGrid[cidx][n]:=JIndex;
+        end;
+      end;
       SetLength(ctx.JoinedEnds, Length(Segs));
       for I := 0 to High(Segs) do
       begin
@@ -1133,6 +1329,17 @@ begin
 
   { 3. level each pool entry against the nearest centerline within reach —
        PARALLEL: pure per-vertex, disjoint SetPosition, read-only grid/segs. }
+  SetLength(ctx.WayBefore,Length(Segs));SetLength(ctx.WayAfter,Length(Segs));
+  for I:=1 to High(ARoadSegs) do
+    if (Segs[I].WayId=Segs[I-1].WayId) and
+       (Sqr(Segs[I].X0-Segs[I-1].X1)+Sqr(Segs[I].Z0-Segs[I-1].Z1)<0.01) then
+      ctx.WayBefore[I]:=ctx.WayBefore[I-1]+
+        Sqrt(Sqr(Segs[I-1].X1-Segs[I-1].X0)+Sqr(Segs[I-1].Z1-Segs[I-1].Z0));
+  for I:=High(ARoadSegs)-1 downto 0 do
+    if (Segs[I].WayId=Segs[I+1].WayId) and
+       (Sqr(Segs[I].X1-Segs[I+1].X0)+Sqr(Segs[I].Z1-Segs[I+1].Z0)<0.01) then
+      ctx.WayAfter[I]:=ctx.WayAfter[I+1]+
+        Sqrt(Sqr(Segs[I+1].X1-Segs[I+1].X0)+Sqr(Segs[I+1].Z1-Segs[I+1].Z0));
   PoolN := Composite.Pool.Count;
   ctx.Comp := Composite; ctx.Sampler := Sampler; ctx.Projection := Projection;
   ctx.FitLayer := AFitLayer;
@@ -1151,6 +1358,26 @@ begin
   ctx.GMinX := GMinX; ctx.GMinZ := GMinZ;
   ctx.CELL := CellSize; ctx.BLEND := BLEND;
   ctx.Moved := 0;
+  SetLength(ctx.RoadOwner,PoolN);
+  RoadIds := specialize TDictionary<Int64,Single>.Create;
+  try
+    for I := 0 to High(ARoadSegs) do
+      if not ARoadSegs[I].IsBridge then
+        RoadIds.AddOrSetValue(ARoadSegs[I].WayId,ARoadSegs[I].Width);
+    for I := 0 to Composite.VertexCount-1 do
+    begin
+      Owner := Composite.OsmIdOf(I);
+      if not RoadIds.TryGetValue(Owner,OwnerWidth) then Continue;
+      PoolIndex := Composite.Verts[I].PoolIdx;
+      PreviousWidth:=0;RoadIds.TryGetValue(ctx.RoadOwner[PoolIndex],PreviousWidth);
+      { At a carved junction the major pavement keeps its full cross
+        section; the smaller branch meets that edge. An arbitrary low
+        OSM id must not pull a lane of the wider road onto the branch. }
+      if (ctx.RoadOwner[PoolIndex]=0) or (OwnerWidth>PreviousWidth) or
+         ((OwnerWidth=PreviousWidth) and (Owner<ctx.RoadOwner[PoolIndex])) then
+        ctx.RoadOwner[PoolIndex] := Owner;
+    end;
+  finally RoadIds.Free end;
   GenerationParallelFor('Road leveling', PoolN, @LevelRange, @ctx);
 
   { OSM barriers were extruded against the sampler before road leveling and
@@ -2862,7 +3089,7 @@ begin
           { шардированный параллельный билд: заборы были крупнейшей
             оставшейся однопоточной категорией ген-фазы (см. [gen-cat]) }
           C^.PFences^ := TFenceBuilder.BuildAllParallel(
-            C^.Dataset, C^.HM, C^.Proj, C^.Sampler, C^.Log, 4, C^.Corridor);
+            C^.Dataset, C^.HM, C^.Proj, C^.Sampler, C^.Log, 4, C^.Corridor,C^.RoadIdx);
         except
           on E: Exception do
             C^.Log(Format('Fences build FAILED: %s: %s',

@@ -1663,5 +1663,15 @@
   "This version requires an update to use online services.": "This version requires an update to use online services.",
   "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.": "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.",
   "Add to steering pair": "Add to steering pair",
-  "Remove from steering pair": "Remove from steering pair"
+  "Remove from steering pair": "Remove from steering pair",
+  "World image cache": "World image cache",
+  "Reuses distant scenery between frames. Nearby scenery and riders stay live. Works with RTX screen shadows. Uses additional GPU memory.": "Reuses distant scenery between frames. Nearby scenery and riders stay live. Works with RTX screen shadows. Uses additional GPU memory.",
+  "Trees": "Trees",
+  "Buildings": "Houses",
+  "Other": "Other",
+  "Ready route": "Ready route",
+  "Connect to download this route.": "Connect to download this route.",
+  "Route is unavailable. Choose another route or wait for the next update.": "Route is unavailable. Choose another route or wait for the next update.",
+  "RTX screen (experimental)": "RTX screen (experimental)",
+  "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.": "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU."
 }

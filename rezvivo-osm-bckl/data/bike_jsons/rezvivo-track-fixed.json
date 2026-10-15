@@ -1,0 +1,161 @@
+{
+  "props": {
+    "apolloState": {
+      "Brand:rezvivo": {
+        "name": "REZVIVO"
+      },
+      "Bike:track-fixed": {
+        "name": "Track Fixed"
+      },
+      "BikeBuild:track-fixed": {
+        "name": "Track Fixed",
+        "bar_type": "drop",
+        "suspension_type": "rigid",
+        "fork_travel": 0,
+        "rear_travel": 0,
+        "drivetrain_type": "fixed",
+        "chainring_teeth": 50,
+        "sprocket_teeth": 18
+      },
+      "BikeCategory:track-fixed": {
+        "name": "Track",
+        "level": 3
+      },
+      "BikeGeometry:track-fixed-48": {
+        "size": "48",
+        "frame": {
+          "head_tube_angle": 73.5,
+          "seat_tube_angle": 74,
+          "chainstay_length": 405,
+          "wheelbase": 938.533,
+          "bottom_bracket_drop": 55,
+          "stack": 500,
+          "reach": 360,
+          "head_tube_length": 105.961,
+          "seat_tube_length_center_st_top": 480,
+          "seat_tube_length_center_tt_top": 465
+        },
+        "fork": {
+          "offset": 40,
+          "axle_to_crown_distance": 370
+        },
+        "base_build": {
+          "wheel_bsd": 622,
+          "tire_width": 25,
+          "crank_length": 165.0,
+          "handlebar_width": 380,
+          "stem_length": 80,
+          "stem_angle": -6
+        }
+      },
+      "BikeGeometry:track-fixed-51": {
+        "size": "51",
+        "frame": {
+          "head_tube_angle": 73.5,
+          "seat_tube_angle": 74,
+          "chainstay_length": 405,
+          "wheelbase": 958.827,
+          "bottom_bracket_drop": 55,
+          "stack": 528,
+          "reach": 372,
+          "head_tube_length": 135.163,
+          "seat_tube_length_center_st_top": 510,
+          "seat_tube_length_center_tt_top": 495
+        },
+        "fork": {
+          "offset": 40,
+          "axle_to_crown_distance": 370
+        },
+        "base_build": {
+          "wheel_bsd": 622,
+          "tire_width": 25,
+          "crank_length": 167.5,
+          "handlebar_width": 390,
+          "stem_length": 90,
+          "stem_angle": -6
+        }
+      },
+      "BikeGeometry:track-fixed-54": {
+        "size": "54",
+        "frame": {
+          "head_tube_angle": 73.5,
+          "seat_tube_angle": 74,
+          "chainstay_length": 405,
+          "wheelbase": 979.121,
+          "bottom_bracket_drop": 55,
+          "stack": 556,
+          "reach": 384,
+          "head_tube_length": 164.366,
+          "seat_tube_length_center_st_top": 540,
+          "seat_tube_length_center_tt_top": 525
+        },
+        "fork": {
+          "offset": 40,
+          "axle_to_crown_distance": 370
+        },
+        "base_build": {
+          "wheel_bsd": 622,
+          "tire_width": 25,
+          "crank_length": 170.0,
+          "handlebar_width": 400,
+          "stem_length": 100,
+          "stem_angle": -6
+        }
+      },
+      "BikeGeometry:track-fixed-57": {
+        "size": "57",
+        "frame": {
+          "head_tube_angle": 73.5,
+          "seat_tube_angle": 74,
+          "chainstay_length": 405,
+          "wheelbase": 999.415,
+          "bottom_bracket_drop": 55,
+          "stack": 584,
+          "reach": 396,
+          "head_tube_length": 193.569,
+          "seat_tube_length_center_st_top": 570,
+          "seat_tube_length_center_tt_top": 555
+        },
+        "fork": {
+          "offset": 40,
+          "axle_to_crown_distance": 370
+        },
+        "base_build": {
+          "wheel_bsd": 622,
+          "tire_width": 25,
+          "crank_length": 172.5,
+          "handlebar_width": 410,
+          "stem_length": 110,
+          "stem_angle": -6
+        }
+      },
+      "BikeGeometry:track-fixed-60": {
+        "size": "60",
+        "frame": {
+          "head_tube_angle": 73.5,
+          "seat_tube_angle": 74,
+          "chainstay_length": 405,
+          "wheelbase": 1019.709,
+          "bottom_bracket_drop": 55,
+          "stack": 612,
+          "reach": 408,
+          "head_tube_length": 222.771,
+          "seat_tube_length_center_st_top": 600,
+          "seat_tube_length_center_tt_top": 585
+        },
+        "fork": {
+          "offset": 40,
+          "axle_to_crown_distance": 370
+        },
+        "base_build": {
+          "wheel_bsd": 622,
+          "tire_width": 25,
+          "crank_length": 175.0,
+          "handlebar_width": 420,
+          "stem_length": 120,
+          "stem_angle": -6
+        }
+      }
+    }
+  }
+}

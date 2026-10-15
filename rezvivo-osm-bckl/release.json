@@ -1,7 +1,7 @@
 {
-  "version": "0.3.7-alpha.1",
-  "build": 14,
-  "file_version": "0.3.7.14",
+  "version": "0.4.0-alpha.1",
+  "build": 15,
+  "file_version": "0.4.0.15",
   "channel": "alpha",
-  "notes": "Fix Real World startup on clean installations and restore bundled ready routes. Recover missing or damaged route catalogs safely. Add detailed vector maps with outlined roads and labels, rider model LODs, and measured level terrain areas."
+  "notes": "Start new installations on the Krylatskoye circuit with downloadable ready-made world tiles. Improve tree foliage, bark, background preparation and rendering performance. Add screen-space RTX shadows and layered world rendering caches. Reduce unnecessary work for distant riders and correct FIT slope estimation when recorded distance stalls. Preserve the last selected real or Dream World route."
 }

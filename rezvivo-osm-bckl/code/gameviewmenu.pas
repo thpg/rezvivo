@@ -250,7 +250,7 @@ implementation
 uses AppRuntimePaths, GameTravelUI, UiTranslations, GameBuildInfo, GameClientUpdate,GameAccountChange,CastleMessages,
   Math, GameDeviceSensor, GameDeviceTypes, CastleApplicationProperties, CastleWindow, CastleLog, CastleURIUtils,
   GameViewPlay,GameViewTrainingOnly,GameAssistantUI,
-  GameViewLogin,
+  GameViewLogin,GameReadyRoutes,
   GameDreamWorldScene, AppSettings, VeloSiteAPI, GameDeviceService, GameUserData, GameWorkoutPlayer, GameRideHistory, DebugLog, GameLocalization, GameRouteLibraryData, Osm3dDreamWorld,GameRideCommands,GameRideRooms;
 
 const
@@ -740,11 +740,11 @@ begin
     else begin FRoomView.SourceKind:='real';FRoomView.SourceFile:=ViewPlay.CurrentFitPath end;
   end else begin
     LastRideMap(Kind,Id);
-    if Kind=rmkReal then begin FRoomView.SourceKind:='real';FRoomView.SourceFile:=Id end
+    if Kind=rmkReal then begin FRoomView.SourceKind:='real';FRoomView.SourceFile:=ReadyRoutes.ResolveFile(Id) end
     else FRoomView.SourceFile:=URIToFilenameSafe('castle-data:/dream-worlds/'+Id+'/world.json');
   end;
   if FRoomView.SourceKind='dream'then FRoomView.SourceTitle:=ExtractFileName(ExtractFileDir(FRoomView.SourceFile))
-  else FRoomView.SourceTitle:=ChangeFileExt(ExtractFileName(FRoomView.SourceFile),'');
+  else FRoomView.SourceTitle:=ReadyRoutes.Title(FRoomView.SourceFile);
   Container.PushView(FRoomView);
 end;
 procedure TViewMenu.RoomSignIn(Sender:TObject);
@@ -1025,7 +1025,8 @@ procedure TViewMenu.OpenCloudRoute(const FileName:String;AutoRide:Boolean);
 begin
   SelectTravelMode(travelBicycle);Settings.ExploreBicycle:=False;
   ShowRoutesPage;FRoutesPage.OpenLibraryFile(FileName);
-  FAutoRoute:=AutoRide and FileExists(FileName);
+  { Keep the user's start request while an absent public route downloads. }
+  FAutoRoute:=AutoRide and(IsReadyRouteReference(FileName)or FileExists(FRoutesPage.SelectedFitPath));
 end;
 
 function TViewMenu.SessionUnderneath:Boolean;

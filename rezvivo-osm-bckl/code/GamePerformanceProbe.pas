@@ -6,7 +6,7 @@ unit GamePerformanceProbe;
 interface
 
 uses Classes, fpjson, CastleUIControls, CastleTimeUtils, CastleGLUtils,
-  Osm3dGpuTimer, GameFrameStatistics;
+  Osm3dGpuTimer, Osm3dGpuPipelineStats, GameFrameStatistics, GameShaderInvocationAudit;
 
 type
   { Explicit MCP measurement only. No file IO, waits or GPU readbacks that
@@ -18,6 +18,8 @@ type
   TGamePerformanceProbe = class(TCastleUserInterface)
   private
     FTimer: TAsyncGpuTimer;
+    FPipeline:TAsyncPipelineStats;
+    FShaders:TShaderInvocationAudit;
     FMemory: TGLMemoryInfo;
     FWall, FCPU, FCore, FSubmit, FGPU: TFrameSamples;
     FLast, FBegin: TTimerResult;
@@ -32,6 +34,8 @@ type
     procedure BeforeRender;override;
     procedure Render;override;
     procedure Snapshot(Dest:TJSONObject; Reset:Boolean);
+    procedure EnablePipelineCounters;
+    procedure EnableShaderCounters(Frames,Stride:Integer);
   end;
 
 implementation
@@ -63,9 +67,21 @@ destructor TGamePerformanceProbe.Destroy;
 begin
   RiderRuntimeAuditActive:=False;
   ProfileSharedEffects:=False;
-  FTimer.Free;FMemory.Free;
+  FShaders.Free;FPipeline.Free;FTimer.Free;FMemory.Free;
   FWall.Free;FCPU.Free;FCore.Free;FSubmit.Free;FGPU.Free;
   inherited;
+end;
+
+procedure TGamePerformanceProbe.EnablePipelineCounters;
+begin
+  if FShaders<>nil then raise Exception.Create('Choose pipeline or shader counters, not both');
+  if FPipeline=nil then FPipeline:=TAsyncPipelineStats.Create;
+end;
+
+procedure TGamePerformanceProbe.EnableShaderCounters(Frames,Stride:Integer);
+begin
+  if FPipeline<>nil then raise Exception.Create('Choose pipeline or shader counters, not both');
+  if FShaders=nil then FShaders:=TShaderInvocationAudit.Create(Frames,Stride);
 end;
 
 procedure TGamePerformanceProbe.ReadMemory;
@@ -90,12 +106,16 @@ begin
   while FTimer.ReadSample(Ns) do FGPU.Add(Ns/1000000.0);
   ReadMemory;
   FBegin:=Timer;FTimer.BeginSample;
+  if FPipeline<>nil then FPipeline.BeginFrame;
+  if FShaders<>nil then FShaders.BeginFrame;
 end;
 
 procedure TGamePerformanceProbe.Render;
 var Now:TTimerResult;
 begin
   inherited;
+  if FShaders<>nil then FShaders.EndFrame;
+  if FPipeline<>nil then FPipeline.EndFrame;
   FTimer.EndSample;Now:=Timer;
   FSubmit.Add(TimerSeconds(Now,FBegin)*1000);
   if FHaveLast then FWall.Add(TimerSeconds(Now,FLast)*1000);
@@ -121,8 +141,15 @@ begin
 end;
 
 procedure TGamePerformanceProbe.Snapshot(Dest:TJSONObject;Reset:Boolean);
-var Work:TJSONObject;
+var Work,Pipeline:TJSONObject;
 begin
+  if FShaders<>nil then begin
+    Pipeline:=TJSONObject.Create;Dest.Add('shaders',Pipeline);FShaders.Snapshot(Pipeline);
+  end;
+  if FPipeline<>nil then begin
+    Pipeline:=TJSONObject.Create;Dest.Add('pipeline',Pipeline);
+    FPipeline.Snapshot(Pipeline,Reset);
+  end;
   Work:=TJSONObject.Create;Dest.Add('runtime_work',Work);
   SnapshotRiderRuntimeAudit(Work,Reset);
   Work.Add('shared_effect_calls',Int64(SharedEffectCalls));

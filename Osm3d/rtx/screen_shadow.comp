@@ -1,0 +1,141 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : require
+#include "screen_shadow_common.glsl"
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform accelerationStructureEXT world;
+layout(set=0,binding=2) uniform sampler2DArray silhouettes;
+struct Card { vec4 origin;vec4 u;vec4 v;vec4 spare; };
+layout(std430,set=0,binding=3) readonly buffer Cards { Card cards[]; };
+layout(set=0,binding=1,rg16f) uniform writeonly image2D shadowSamples;
+layout(std430,set=0,binding=8) readonly buffer PosedVertices { uvec4 posed[]; };
+
+vec3 unpackNormal(uint packed) {
+    vec2 e=unpackSnorm2x16(packed);
+    vec3 n=vec3(e,1.-abs(e.x)-abs(e.y));
+    n.xy+=mix(vec2(-1),vec2(1),lessThan(n.xy,vec2(0)))*max(-n.z,0.);
+    return normalize(n);
+}
+bool smoothReceiver(inout vec3 pos,inout vec3 normal,float tolerance) {
+    if(options.w<.5)return false;
+    if(depthRange.z>.5) {
+        // Bounds come from this frame's posed vertices, not a rest-pose box.
+        // The complete query segment lies inside pos +/- tolerance, so a
+        // disjoint box cannot contain a hit. Keep a roundoff margin as well.
+        uvec3 lo=posed[0].xyz,hi=posed[1].xyz;
+        vec3 minimum=uintBitsToFloat(mix(~lo,lo^uvec3(0x80000000u),greaterThanEqual(lo,uvec3(0x80000000u))));
+        vec3 maximum=uintBitsToFloat(mix(~hi,hi^uvec3(0x80000000u),greaterThanEqual(hi,uvec3(0x80000000u))));
+        vec3 margin=vec3(tolerance)+max(vec3(.00001),max(abs(minimum),abs(maximum))*1e-6);
+        if(any(lessThan(pos,minimum-margin))||any(greaterThan(pos,maximum+margin)))return false;
+    }
+    // Short camera-aligned query against rendered dynamic meshes (including
+    // rigid accessories). The match to the
+    // visible depth prevents correcting ground or a different surface behind it.
+    vec3 view=normalize(pos-invView[3].xyz);
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q,world,gl_RayFlagsOpaqueEXT,4,pos-view*tolerance,
+        0.,view,2.*tolerance);
+    while(rayQueryProceedEXT(q)){}
+    if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return false;
+    uint i=2u+rayQueryGetIntersectionPrimitiveIndexEXT(q,true)*3u;
+    uvec4 a=posed[i],b=posed[i+1u],c=posed[i+2u];
+    if(a.w==0u||b.w==0u||c.w==0u)return false;
+    vec3 A=uintBitsToFloat(a.xyz),B=uintBitsToFloat(b.xyz),C=uintBitsToFloat(c.xyz);
+    vec2 uv=rayQueryGetIntersectionBarycentricsEXT(q,true);
+    vec3 w=vec3(1.-uv.x-uv.y,uv);
+    vec3 P=A*w.x+B*w.y+C*w.z;
+    vec3 na=unpackNormal(a.w),nb=unpackNormal(b.w),nc=unpackNormal(c.w);
+    normal=normalize(na*w.x+nb*w.y+nc*w.z);
+    if(dot(normal,view)>0.){normal=-normal;na=-na;nb=-nb;nc=-nc;}
+    // Tangent-plane projection (Hanika, Ray Tracing Gems II, ch.4): trace from
+    // the smooth surface implied by the vertex normals, not the flat triangle.
+    vec3 offset=-(w.x*min(0.,dot(P-A,na))*na+w.y*min(0.,dot(P-B,nb))*nb+
+                  w.z*min(0.,dot(P-C,nc))*nc);
+    float cap=min(.03,.25*min(length(B-A),min(length(C-B),length(A-C))));
+    offset*=min(1.,cap/max(length(offset),1e-8));
+    pos=P+offset;return true;
+}
+
+bool receiverIsTreeCard(Card c,vec3 receiver,vec3 normal,float tolerance) {
+    // Colour uses a camera-facing card; the BVH uses a sun-facing card.
+    // Their intersection used to shadow exactly half of a distant crown.
+    // Match the receiver to THIS tree's colour plane, not to a large radius:
+    // ground, other trees, riders and nearby buildings still receive its shadow.
+    vec3 right=normalize(vec3(invView[0].x,0,invView[0].z));
+    vec3 facing=vec3(-right.z,0,right.x);
+    if(abs(dot(normal,facing))<.97)return false;
+    vec3 delta=receiver-(c.origin.xyz+.5*c.u.xyz);
+    if(abs(dot(delta,facing))>tolerance)return false;
+    return abs(dot(delta,right))<=.5*length(c.u.xyz)+tolerance &&
+        delta.y>=-tolerance && delta.y<=length(c.v.xyz)+tolerance;
+}
+float shadowRay(vec3 pos,vec3 direction,vec3 receiver,vec3 normal,float cardTolerance,out float blocker) {
+    rayQueryEXT q;float foliage=0.;blocker=options.y;
+    // Contact hardening needs the nearest blocker, not any-hit traversal order.
+    rayQueryInitializeEXT(q,world,gl_RayFlagsNoneEXT,7,pos,.001,direction,options.y);
+    while(rayQueryProceedEXT(q)) {
+        if(rayQueryGetIntersectionTypeEXT(q,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
+            uint t=rayQueryGetIntersectionPrimitiveIndexEXT(q,false);
+            Card c=cards[t/2u];
+            if(cardTolerance>0. && receiverIsTreeCard(c,receiver,normal,cardTolerance))continue;
+            vec2 b=rayQueryGetIntersectionBarycentricsEXT(q,false);
+            vec2 st=(t&1u)==0u?vec2(b.x+b.y,b.y):vec2(b.x,b.x+b.y);
+            float a=textureLod(silhouettes,vec3(st,c.origin.w),0.).r;
+            float distanceToCard=rayQueryGetIntersectionTEXT(q,false);
+            // A crown occupies a volume. Two neighbouring proxy planes can
+            // also intersect; opacity must build up over a crown-sized path,
+            // instead of appearing at full strength one millimetre behind it.
+            // Ground below the crown and distant receivers retain full shade.
+            a*=smoothstep(0.,max(.1,.3*length(c.u.xyz)),distanceToCard);
+            foliage=1.-(1.-foliage)*(1.-a);
+            if(a>.05)blocker=min(blocker,distanceToCard);
+        }
+    }
+    if(rayQueryGetIntersectionTypeEXT(q,true)!=gl_RayQueryCommittedIntersectionNoneEXT) {
+        blocker=min(blocker,rayQueryGetIntersectionTEXT(q,true));return 1.;
+    }
+    return foliage;
+}
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(shadowSamples);
+    if(any(greaterThanEqual(p,size)))return;
+    imageStore(shadowSamples,p,vec4(0));
+    float z=texelFetch(cameraDepth,p,0).r;if(z>=1.)return;
+    float cached;
+    if(reuseVisibility(p,z,cached)){imageStore(shadowSamples,p,vec4(cached,0,0,0));return;}
+    vec4 eh=eyeHomogeneous(p,size);
+    vec3 eye=eh.xyz/eh.w,pos=(invView*vec4(eye,1)).xyz;
+    vec3 eyeNormal=receiverNormal(p,size,eye);
+    vec3 n=normalize(mat3(invView)*eyeNormal),light=normalize(sun.xyz);
+    // Offset towards the visible exterior, never into the body towards the sun.
+    if(dot(eyeNormal,eye)>0.) { eyeNormal=-eyeNormal; n=-n; }
+    float depthError=4.*(uintBitsToFloat(floatBitsToUint(z)+1u)-z);
+    vec3 eyeError=(abs(invProjection[2].xyz)+abs(eye)*abs(invProjection[2].w))
+        *(depthError/max(abs(eh.w),1e-12));
+    bool smoothSurface=smoothReceiver(pos,n,max(.008,2.*length(eyeError)));
+    vec3 receiver=pos;
+    float cardTolerance=smoothSurface?0.:max(.02,2.*length(eyeError)+.35*pixelWorldSize(eye,size));
+    float bias=max(.003,min(.10,length(eye)*.00008))+
+        dot(abs(eyeNormal),eyeError)+dot(abs(n),abs(pos))*2e-7;
+    pos+=n*bias+light*.002;
+    vec3 u=normalize(cross(light,abs(light.y)<.95?vec3(0,1,0):vec3(1,0,0)));
+    vec3 v=cross(light,u);
+    int count=options.x>0.?clamp(int(options.z),2,8):1;
+    // Fixed stratified disk samples, interleaved across neighbouring pixels.
+    // No frame counter or history: moving riders never leave shadow trails.
+    float rotation=6.28318530718*fract(52.9829189*fract(dot(vec2(p),vec2(.06711056,.00583715))));
+    float coverage=0.,nearest=options.y;
+    for(int i=0;i<count;++i) {
+        float angle=rotation+float(i)*2.39996322973;
+        float radius=options.x*sqrt((float(i)+.5)/float(count));
+        vec3 direction=normalize(light+radius*(u*cos(angle)+v*sin(angle)));
+        float hit,c=shadowRay(pos,direction,receiver,n,cardTolerance,hit);coverage+=c;
+        if(c>.05)nearest=min(nearest,hit);
+    }
+    float penumbra=nearest<options.y?min(48.,nearest*options.x/pixelWorldSize(eye,size)):0.;
+    // The material already shades the side turned away from the sun. The
+    // screen overlay must not blacken its ambient light a second time, or the
+    // geometric terminator becomes a sharp patch on smoothly shaded skin/cloth.
+    float direct=smoothSurface?smoothstep(0.,.45,dot(n,light)):1.;
+    imageStore(shadowSamples,p,vec4(coverage/float(count)*direct,penumbra,0,0));
+}

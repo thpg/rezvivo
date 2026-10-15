@@ -10,6 +10,27 @@ from pathlib import Path
 SURFACES = 'data/Osm3d/resources/textures/surfaces/'
 
 
+def overview_assets(root):
+    """The empty-cache globe must work immediately after a fresh installation."""
+    folder = Path(root)/'data/map-overview'
+    manifest = folder/'manifest.json'
+    doc = json.loads(manifest.read_text(encoding='utf-8-sig'))
+    if doc.get('schema') != 1 or set(doc.get('files', {})) != {'world.rzmap', 'labels.json'}:
+        raise ValueError('Invalid bundled globe manifest')
+    result = [manifest]
+    for name, info in doc['files'].items():
+        path = folder/name
+        raw = path.read_bytes()
+        if len(raw) != info['size_bytes'] or hashlib.sha256(raw).hexdigest() != info['sha256']:
+            raise ValueError('Bundled globe checksum mismatch: '+str(path))
+        if name == 'world.rzmap':
+            magic, zoom, side, count = struct.unpack('<8sIII', raw[:20])
+            if (magic, zoom, side, count) != (b'RZWMAP1\0', doc['max_zoom'], 256, doc['tiles']):
+                raise ValueError('Invalid bundled globe index')
+        result.append(path)
+    return result
+
+
 def ready_route_assets(root):
     """Public seed only; never include a user's imported FIT/GPX library."""
     root = Path(root)
@@ -71,11 +92,18 @@ def redundant_assets(root):
     # TreeRenderer.PrepareLODAtlas reads the separate seasonal layers whenever
     # seasonal_version=1. Keep all layers and metadata; omit the merged preview.
     for meta in (root/'data/procedural-trees/lod-atlases').glob('*.json'):
-        if json.loads(meta.read_text(encoding='utf-8')).get('seasonal_version') == 1:
-            for part in ('wood', 'foliage'):
+        atlas = json.loads(meta.read_text(encoding='utf-8'))
+        if atlas.get('seasonal_version') == 1:
+            parts = ['wood', 'foliage'] + (['fruit'] if atlas.get('fruit_layer') else [])
+            for part in parts:
                 if not meta.with_name(meta.stem+'-'+part+'.png').is_file():
                     raise ValueError('Missing seasonal tree layer: '+str(meta))
+                if atlas.get('relight_version') == 1 and not meta.with_name(meta.stem+'-'+part+'-normal.png').is_file():
+                    raise ValueError('Missing relightable tree normal layer: '+str(meta))
             omit(meta.with_suffix('.png'), 'Merged tree preview; seasonal layers are used')
+            omit(meta.with_name(meta.stem+'-normal.png'), 'Merged normal preview; seasonal normal layers are used')
+            if not atlas.get('fruit_layer'):
+                omit(meta.with_name(meta.stem+'-fruit.png'), 'Empty fruit layer for non-fruiting species')
 
     # GrassRenderer.LoadAtlas prefers this ready-to-upload cache. Do not silently
     # strip the PNG fallback if its layout/version no longer matches the engine.
@@ -102,6 +130,7 @@ def runtime_assets(root, excluded=None):
     import xml.etree.ElementTree as ET
     root = Path(root)
     seed_files = {p.resolve() for p in ready_route_assets(root)}
+    overview_files = {p.resolve() for p in overview_assets(root)}
     if excluded is None:
         excluded = redundant_assets(root)
     for path in sorted((root/'data').rglob('*')):
@@ -121,6 +150,8 @@ def runtime_assets(root, excluded=None):
                 raise ValueError(f'Non-original workout: {path}')
         if relative.parts[1] == 'ready-routes' and path.resolve() not in seed_files:
             continue
+        if relative.parts[1] == 'map-overview' and path.resolve() not in overview_files:
+            continue
         if path.is_symlink():
             raise ValueError(f'Unexpected asset symlink: {path}')
         yield path, relative
@@ -130,7 +161,7 @@ def validate_asset_links(stage, paths):
     """Check explicit UI/world/model dependencies against the packaged files."""
     available = {Path(p).as_posix().lower() for p in paths}
     checked = 0
-    for path in ready_route_assets(stage):
+    for path in ready_route_assets(stage) + overview_assets(stage):
         if path.relative_to(stage).as_posix().lower() not in available:
             raise ValueError('Ready-route seed missing from installer manifest: '+str(path))
         checked += 1

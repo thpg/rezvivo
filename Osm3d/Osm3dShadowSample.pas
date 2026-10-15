@@ -79,7 +79,7 @@ begin
       use the session frame, matching rendered ground vertices/vSMPos. }
     D := GlobalWind.Direction;
     if D.Length>1e-5 then D := D.Normalize else D := Vector2(1,0);
-    TimeNow := WindNow; Base := WindCurrentBaseSpeed;
+    TimeNow := VegetationWindNow; Base := VegetationWindBaseSpeed;
     Cell := Max(GlobalWind.RepeatLength/4,0.001);
     G := (Point-D*(Base*TimeNow))/Cell; GI := Vector2(Floor(G.X),Floor(G.Y));
     FX := Smooth(G.X-GI.X); FY := Smooth(G.Y-GI.Y);

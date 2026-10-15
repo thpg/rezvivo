@@ -100,6 +100,7 @@ type
       const ARoutesFolder: string = '';
       const ASelectedFit: string = ''): Boolean;
     function StartAtLocation(const Geo: TLatLon; AViewport: TCastleViewport): Boolean;
+    procedure BeginExploreTeleport(const Geo:TLatLon);
     procedure SetFitLoadReference(Fit: TFitFile);
 
     { Запустить асинхронную привязку маршрута к дорожной сети OSM.
@@ -223,7 +224,7 @@ type
 implementation
 
 uses
-  Math, CastleLog, DebugLog,
+  Math, CastleLog, DebugLog, GameFitLoadReference,
   Osm3dStreamingMap, Osm3dRouteBuildings, Osm3dFitHeightLayer;
 
 constructor TGameOsmStreaming.Create;
@@ -425,6 +426,13 @@ begin
   FActive:=True;Result:=True;
 end;
 
+procedure TGameOsmStreaming.BeginExploreTeleport(const Geo:TLatLon);
+begin
+  if not FActive or(FSession=nil)then Exit;
+  FPointStart:=True;SetLength(FRoute,1);FRoute[0]:=Geo;
+  FSession.Map.BeginPointWarmup(Geo);
+end;
+
 procedure TGameOsmStreaming.BeginRouteSnap;
 begin
   if not FActive then Exit;
@@ -450,7 +458,7 @@ end;
 
 function TGameOsmStreaming.SnapReady: Boolean;
 begin
-  Result := FActive and (FSession <> nil) and FSession.Map.SnappedReady
+  Result := not FPointStart and FActive and (FSession <> nil) and FSession.Map.SnappedReady
             and (Length(FSession.Map.RideRoute) >= 2);
 end;
 
@@ -460,7 +468,7 @@ begin
   Result := FActive and (FSession <> nil);
   if not Result then Exit;
   if FPointStart then begin
-    P:=FSession.GeoToLocal(FOrigin);
+    P:=FSession.GeoToLocal(FRoute[0]);
     Result:=FSession.Map.GroundSceneReadyAt(P.X,P.Z);
   end else Result:=FSession.Map.RoutePrepDone;
 end;
@@ -715,7 +723,7 @@ begin
   if FSession = nil then Exit;
   if FPointStart then begin
     SetLength(LocalPts,2);SetLength(LocalWidths,2);
-    LocalPts[0]:=Vector3(0,0,0);LocalPts[1]:=Vector3(0,0,-10);
+    LocalPts[0]:=FSession.GeoToLocal(FRoute[0]);LocalPts[1]:=LocalPts[0]+Vector3(0,0,-10);
     LocalWidths[0]:=0;LocalWidths[1]:=0;
     APath.SetLevelScene(nil);APath.LoadFromMemory(LocalPts,LocalWidths);
     Exit(2);
@@ -769,32 +777,22 @@ begin
 end;
 
 procedure TGameOsmStreaming.SetFitLoadReference(Fit: TFitFile);
-var Points:TFitGeoAltArray; D,H:TFitLoadValues; I:Integer;
-  HasDistance,Calibrated:Boolean;Closing:Double;Layer:TFitHeightLayer;
+var Points:TFitGeoAltArray; Closing:Double;Layer:TFitHeightLayer;
 begin
   FFitLoad:=Default(TFitLoadProfile);
   if (Fit=nil) or not Fit.HasAltitude then Exit;
   Points:=Fit.ToGeoAltPoints;
   if (Length(Points)<2) or (Length(Points)<>Length(FRoute)) then Exit;
-  SetLength(D,Length(Points));SetLength(H,Length(Points));
   Layer:=nil;
   if (FSession<>nil) and (FSession.Map<>nil) then Layer:=FSession.Map.FitPhysLayer;
-  Calibrated:=(Layer<>nil) and Layer.HasSelectedDatum;
-  HasDistance:=Points[High(Points)].DistanceM-Points[0].DistanceM>20;
-  for I:=0 to High(Points) do begin
-    if HasDistance then D[I]:=Points[I].DistanceM
-    else if I>0 then D[I]:=D[I-1]+FRoute[I-1].DistanceTo(FRoute[I]);
-    if Points[I].HasAltitude then H[I]:=Points[I].AltM else H[I]:=NaN;
-    if Calibrated and Points[I].HasAltitude then
-      Layer.CorrectSelectedAltitude(Points[I].TimeSec,Points[I].AltM,H[I]);
-  end;
   Closing:=0;
   if not RouteNeedsTurnarounds(FRoute) then Closing:=Max(2.0,FRoute[0].DistanceTo(FRoute[High(FRoute)]));
-  FFitLoad:=BuildFitLoadProfile(D,H,Closing);
-  FFitLoad.DatumCorrected:=Calibrated;
-  WritelnLog('FIT load',Format('distance profile: %d samples, %.1f km, step %.2f m; datum=%s stationary=%d spikes=%d residual_loop_drift=%.2f m',
+  FFitLoad:=BuildFitLoadReference(Points,Layer,Closing);
+  WritelnLog('FIT load',Format('distance profile: %d samples, %.1f km, step %.2f m; datum=%s stationary=%d spikes=%d residual_loop_drift=%.2f m gps_repaired_spans=%d recovered_distance=%.1f m',
     [Length(FFitLoad.HeightM),FFitLoad.LengthM/1000,FFitLoad.StepM,
-     BoolToStr(Calibrated,True),FFitLoad.StationarySamples,FFitLoad.RejectedSpikes,FFitLoad.LoopDriftM]));
+     BoolToStr(FFitLoad.DatumCorrected,True),FFitLoad.StationarySamples,
+     FFitLoad.RejectedSpikes,FFitLoad.LoopDriftM,
+     FFitLoad.DistanceRepairSpans,FFitLoad.RecoveredDistanceM]));
 end;
 
 procedure TGameOsmStreaming.ApplyFitLoad(APath:TGamePath;Snapped:Boolean);

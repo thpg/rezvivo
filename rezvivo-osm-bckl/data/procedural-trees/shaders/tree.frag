@@ -1,7 +1,16 @@
 #version 330 core
+#if !defined(GL_ES) && defined(GL_ARB_sample_shading)
+#extension GL_ARB_sample_shading : enable
+#define TREE_SAMPLE_MASK 1
+#elif defined(GL_ES) && defined(GL_OES_sample_variables)
+#define TREE_SAMPLE_MASK 1 // enabled before precision declarations by TreeShaderSource
+#endif
 uniform int uKind, uSpecies, uDebug;
 uniform float uOpacity, uQuality, uDensity;
+uniform int uCoverageSamples;
+uniform int uFragmentWorkReuse;
 uniform vec3 uBark, uLeaf, uEye;
+uniform vec3 uBarkTint;
 uniform vec3 uSunDirection, uFogColor;
 uniform float uFogDensity, uOutputGamma;
 uniform int uDepthOnly, uDirectBranches;
@@ -14,12 +23,18 @@ uniform int uFruitMembers;
 uniform float uSeasonLeaf;
 uniform float uNeedleDetail;
 uniform vec3 uLeafRatio;
-uniform sampler2DArray uLODTexture;
+uniform sampler2DArray uLODTexture, uLODNormal, uLeafSprays;
+uniform int uLODRelight;
 flat in float vLODLayer;
+flat in vec2 vLODViewBlend;
+flat in float vLODRotation;
 in vec3 vWorld, vNormal;
+in vec3 vTransitionCoord;
+flat in float vTransitionFootprint;
 in vec3 vObject;
 in vec3 vNeedleAxis;
 in vec2 vUV;
+
 flat in vec4 vProfile;
 flat in float vPhase;
 flat in int vSpecies;
@@ -29,9 +44,11 @@ flat in float vIrregularity;
 flat in float vSeasonVisible;
 flat in float vNeedleCoverage;
 flat in vec4 vShoot;
+flat in vec2 vSprayCrop;
 flat in vec4 vFruit;
 in vec2 vShadowMask;
 out vec4 fragColor;
+vec2 foliageDx,foliageDy;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 float noise(vec2 p) {
     vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -53,15 +70,141 @@ bool mapleBlade(vec2 p) {
     }
     return inside;
 }
+// The length of the mean normal records orientation dispersion. Retain it:
+// normalizing the average would invent a flat, shiny leaf at large distances.
+vec4 lodTexel(sampler2DArray atlas,float layer) {
+    float other=vLODViewBlend.x+layer-vLODLayer;
+    if(uDepthOnly==1 || vLODViewBlend.y<=0.0)return textureGrad(atlas,vec3(vUV,layer),foliageDx,foliageDy);
+    if(vLODViewBlend.y>=1.0)return textureGrad(atlas,vec3(vUV,other),foliageDx,foliageDy);
+    return mix(textureGrad(atlas,vec3(vUV,layer),foliageDx,foliageDy),textureGrad(atlas,vec3(vUV,other),foliageDx,foliageDy),vLODViewBlend.y);
+}
+vec4 rotatedMoment(float layer,float rotation) {
+    vec4 texel=textureGrad(uLODNormal,vec3(vUV,layer),foliageDx,foliageDy);
+    vec3 moment=2.0*texel.rgb-vec3(texel.a);
+    float c=cos(rotation),s=sin(rotation);
+    moment.xz=mat2(c,-s,s,c)*moment.xz;
+    return vec4(moment,texel.a);
+}
+// Thin-leaf transmission is strongest with the sun behind the leaf. Share the
+// same angular response with the prefiltered normal moments of the far atlas.
+// Replaces the old half-vector/pow highlight; no extra texture or render pass.
+vec3 foliageLighting(vec3 albedo,vec3 normal,float spread) {
+    vec3 sun=normalize(uSunDirection),eye=normalize(uEye-vWorld);
+    float projected=dot(normal,sun);
+    float front=max(0.0,projected)+.25*spread;
+    float back=max(0.0,-projected)+.25*spread;
+    float forward=clamp(-dot(eye,sun),0.0,1.0);
+    forward*=forward;forward*=forward;
+    bool conifer=vSpecies==2 || vSpecies==4 || vSpecies==5 || vSpecies==7 || vSpecies==12;
+    float transmission=conifer?.20:.95;
+    vec3 lit=albedo*(.33+.06*clamp(normal.y*.5+.5,0.0,1.0)+.61*front+.16*back);
+    lit+=albedo*vec3(.82,1.13,.46)*(transmission*back*forward);
+    float glint=max(0.0,dot(reflect(-sun,normal),eye));
+    glint*=glint;glint*=glint;glint*=glint;glint*=glint;
+    return lit+vec3(.038,.044,.025)*glint*(1.0-spread);
+}
+vec3 relightLOD(vec3 albedo,float layer,bool leaf){
+    float other=vLODViewBlend.x+layer-vLODLayer;
+    vec4 sampleN;
+    if(vLODViewBlend.y<=0.0)sampleN=rotatedMoment(layer,vLODRotation);
+    else if(vLODViewBlend.y>=1.0)sampleN=rotatedMoment(other,vLODRotation-1.570796327);
+    else sampleN=mix(rotatedMoment(layer,vLODRotation),
+        rotatedMoment(other,vLODRotation-1.570796327),vLODViewBlend.y);
+    vec3 moment=sampleN.rgb/max(sampleN.a,.0001);
+    moment/=max(1.0,length(moment));
+    float spread=max(0.0,1.0-min(1.0,length(moment)));
+    if(leaf)return foliageLighting(albedo,moment,spread);
+    float projected=dot(moment,normalize(uSunDirection));
+    float front=max(0.0,projected)+.25*spread;
+    float back=max(0.0,-projected)+.25*spread;
+    return albedo*(.38+.58*front+(leaf?.22*back:0.0));
+}
+// Object-space hashed alpha testing (Wyman/McGuire, I3D 2017).
+// Interpolate adjacent power-of-two grids and correct the distribution: a
+// changing footprint must not reseed the whole crown or change mean opacity.
+float coverageHash(vec3 cell,uint seed) {
+    uvec3 q=uvec3(ivec3(cell));
+    uint h=q.x*1664525u+q.y*1013904223u+q.z*374761393u+seed*668265263u;
+    h^=h>>16u;h*=2246822519u;h^=h>>13u;h*=3266489917u;h^=h>>16u;
+    return (float(h>>8u)+.5)*(1.0/16777216.0);
+}
+float surfaceThreshold(vec3 position,float footprint,uint seed) {
+    float level=log2(1.0/max(1e-6,1.5*footprint));
+    float grid=exp2(floor(level)),blend=fract(level);
+    float lo=coverageHash(floor(position*grid),seed);
+    float hi=coverageHash(floor(position*(grid*2.0)),seed);
+    float value=mix(lo,hi,blend),a=min(blend,1.0-blend);
+    float shoulder=2.0*a*(1.0-a);
+    if(a<1e-5)return clamp(value,1e-6,1.0);
+    if(value<a)value=value*value/shoulder;
+    else if(value>1.0-a)value=1.0-(1.0-value)*(1.0-value)/shoulder;
+    else value=(value-.5*a)/(1.0-a);
+    return clamp(value,1e-6,1.0);
+}
+// Many independent twig phases already provide stratification under MSAA.
+// Keep the spatial two-scale hash for large far cards and single-sample targets.
+float leafThreshold(vec3 position,float footprint,uint seed) {
+#ifdef TREE_SAMPLE_MASK
+    if(uCoverageSamples>1 && uKind!=3)return clamp(vPhase,.000001,.999999);
+#endif
+    return surfaceThreshold(position,footprint,seed);
+}
+// Stratified coverage uses the existing MSAA samples, without another pass
+// or supersampling. An odd permutation per surface avoids correlated holes
+// through overlapping leaves. Single-sample / ES 3.0 targets keep the same
+// object-space hashed alpha path.
+void foliageCoverage(float coverage,float threshold,uint seed,bool invertMask) {
+#ifdef TREE_SAMPLE_MASK
+    if(uCoverageSamples>1) {
+        uint count=uint(clamp(ceil(clamp(coverage,0.0,1.0)*float(uCoverageSamples)-threshold),0.0,float(uCoverageSamples)));
+        if(count==0u){if(invertMask)return;else discard;}
+        if(count==uint(uCoverageSamples)){if(invertMask)discard;else return;}
+        uint wrap=uint(uCoverageSamples-1);
+        seed^=seed>>16u;seed*=2246822519u;seed^=seed>>13u;
+        uint first=seed&wrap,stepSize=((seed>>8u)|1u)&wrap;
+        uint mask=0u;
+        for(uint i=0u;i<count;i++)mask|=1u<<((first+i*stepSize)&wrap);
+        if(invertMask)mask=~mask;
+        gl_SampleMask[0]&=int(mask);
+        uint activeSamples=0xffffffffu>>(32u-uint(uCoverageSamples));
+        if((uint(gl_SampleMask[0])&activeSamples)==0u)discard;
+        return;
+    }
+#endif
+    if(invertMask ? threshold<coverage : threshold>=coverage)discard;
+}
 void main() {
+#ifdef TREE_SAMPLE_MASK
+    for(int word=0;word<gl_SampleMask.length();word++)gl_SampleMask[word]=-1;
+#endif
+    // All texture gradients precede any per-fragment discard. Otherwise LOD
+    // crossfades can remove quad neighbours before implicit mip selection.
+    foliageDx=dFdx(vUV);foliageDy=dFdy(vUV);
+    // A draw-uniform branch keeps derivatives valid across the whole quad.
+    // MSAA twig coverage uses its fixed phase, never this spatial footprint;
+    // opaque wood/fruit do not call leafThreshold at all.
+    bool needsFootprint=uKind==1 || uKind==3 || uKind==5 || uKind==6;
+#ifdef TREE_SAMPLE_MASK
+    needsFootprint=needsFootprint && (uCoverageSamples<=1 || uKind==3);
+#endif
+    float footprint=0.0;
+    if(uFragmentWorkReuse==0 || needsFootprint)
+        footprint=max(length(dFdx(vObject)),length(dFdy(vObject)));
+    vec3 transitionPosition=vec3(vTransitionCoord.xy/vTransitionCoord.z,0);
+    float transitionFootprint=vTransitionFootprint;
+    float transitionThreshold=0.0;
+    if(uDepthOnly==0 && ((uQuality>.35 && uQuality<.95) ||
+       ((uKind==5 || uKind==6) && uNeedleDetail>0.0 && uNeedleDetail<1.0) ||
+       (uDirectBranches==0 && uQuality>3.4 && uQuality<4.0)))
+        transitionThreshold=surfaceThreshold(transitionPosition,transitionFootprint,vTreeCode+173u);
+
     if((uKind==1 || uKind==5 || uKind==6) && vSeasonVisible<=0.0) discard;
     if((uKind==5 || uKind==6) && uNeedleDetail>0.0 && uNeedleDetail<1.0) {
         // Complementary masks: a pixel sees either the real needles or their
         // integrated shoot. Tree-local shadow coordinates do not crawl as the
         // receiver moves; both representations share the original shoot phase.
-        float choice=hash((uDepthOnly==1 ? floor(vShadowMask*64.0) : floor(gl_FragCoord.xy))+
-            vec2(23,71)+vShoot.w*vec2(197,317));
-        if(uKind==5 ? choice>=uNeedleDetail : choice<uNeedleDetail) discard;
+        float choice=uDepthOnly==1 ? hash(floor(vShadowMask*64.0)+vec2(23,71)+vShoot.w*vec2(197,317)) : transitionThreshold;
+        foliageCoverage(uNeedleDetail,choice,vTreeCode+173u,uKind==6);
     }
     if(uKind==6) {
         float x=abs(vUV.x*2.0-1.0);
@@ -72,18 +215,19 @@ void main() {
             // One stable threshold per shoot preserves mean foliage coverage
             // without tiny UV noise cells flashing as the shadow raster moves.
             float density=vShoot.y*vSeasonVisible*vNeedleCoverage;
-            if(x>edge*.92 || vPhase>=density) discard;
+            if(x>edge*.75 || vPhase>=density) discard;
         } else {
         // Fine serrations describe the needle fringe. Integrate them once they
         // become subpixel rather than drawing oversized individual needles.
         float rows=vUV.y*vShoot.z-x*2.3+vPhase*71.0;
-        float resolved=1.0-smoothstep(.3,1.0,fwidth(rows));
+        float rowWidth=abs(foliageDx.y*vShoot.z-sign(vUV.x-.5)*foliageDx.x*4.6)+
+            abs(foliageDy.y*vShoot.z-sign(vUV.x-.5)*foliageDy.x*4.6);
+        float resolved=1.0-smoothstep(.3,1.0,rowWidth);
         float tooth=mix(.5,abs(fract(rows)-.5)*2.0,resolved);
-        edge*=.84+.16*tooth;
-        float aa=max(.001,fwidth(x));
+        edge*=.50+.50*tooth;
+        float aa=max(.001,2.0*(abs(foliageDx.x)+abs(foliageDy.x)));
         float coverage=(1.0-smoothstep(edge-aa,edge+aa,x))*vShoot.y*vSeasonVisible*vNeedleCoverage;
-        vec2 coverageCell=floor(gl_FragCoord.xy);
-        if(hash(coverageCell+vec2(79,151)+vPhase*vec2(971,613))>=coverage) discard;
+        foliageCoverage(coverage,leafThreshold(vObject,footprint,uint(vPhase*65535.0)),uint(vPhase*65535.0),false);
         }
     }
     if(uKind==5 && vNeedleCoverage<.9999) {
@@ -91,35 +235,31 @@ void main() {
         // a stable per-needle choice in depth maps. Screen-space random holes
         // were reseeded whenever the shadow atlas snapped by one texel.
         float coverageNoise=uDepthOnly==1 ? vPhase :
-            hash(floor(gl_FragCoord.xy)+vec2(197,83)+vPhase*vec2(971,613));
-        if(coverageNoise>=vNeedleCoverage) discard;
+            leafThreshold(vObject,footprint,uint(vPhase*65535.0));
+        foliageCoverage(vNeedleCoverage,coverageNoise,uint(vPhase*65535.0),false);
     }
     if(uKind==2 && uSeasonLeaf<1.0 && hash(floor(vUV*vec2(137,91))+vPhase*317.0)>=uSeasonLeaf) discard;
-    // Complementary screen-door thresholds keep depth writes and avoid sorting.
+    // Complementary tree-anchored thresholds keep depth writes and avoid sorting.
     if(uQuality>.35 && uQuality<.95 && uKind!=4) {
-        float screen=hash(uDepthOnly==1 ? floor(vShadowMask*16.0) : floor(gl_FragCoord.xy));
+        float screen=uDepthOnly==1 ? hash(floor(vShadowMask*16.0)) : transitionThreshold;
         float farMix=smoothstep(.35,.95,uQuality);
-        if(uKind==3) { if(screen<farMix) discard; }
-        else { if(screen>=farMix) discard; }
+        foliageCoverage(farMix,screen,vTreeCode+173u,uKind==3);
     }
     if(uDirectBranches==0 && uQuality>3.4 && uQuality<4.0 && (uKind==1 || uKind==2 || uKind==5)) {
         float detail=smoothstep(3.4,4.0,uQuality);
-        float detailNoise=hash((uDepthOnly==1 ? floor(vShadowMask*16.0) : floor(gl_FragCoord.xy))+vec2(73,29));
-        if((uKind==1 || uKind==5) && detailNoise>=detail) discard;
-        if(uKind==2 && detailNoise<detail) discard;
+        float detailNoise=uDepthOnly==1 ? hash(floor(vShadowMask*16.0)+vec2(73,29)) : transitionThreshold;
+        foliageCoverage(detail,detailNoise,vTreeCode+173u,uKind==2);
     }
     // Solid wood and needle triangles need only the coverage masks above in
     // a shadow pass. Do not evaluate bark noise, normals or material colours.
     if(uDepthOnly==1 && (uKind==0 || uKind==5 || uKind==6 || uKind==7 || uKind==8)) { fragColor=vec4(1); return; }
     if(uKind==3 && uUseBakedLOD==1) {
-        // Stored and mip-filtered in premultiplied linear space. Coverage uses
-        // depth-writing screen door, so 10,000 trees need no alpha sorting.
-        vec4 texel=texture(uLODTexture,vec3(vUV,vLODLayer));
-        // The mean alpha is the frequency of foliage at this location across
-        // different specimens. Reconstruct a crown from that density field:
-        // suppress rare outliers and retain opaque interiors. The saved atlas
-        // remains the exact arithmetic mean, without this display remapping.
-        float coverage=smoothstep(.04,.44,texel.a);
+        // Premultiplied linear mips retain subpixel foliage density. Object-space
+        // coverage keeps depth writes and needs no per-tree alpha sorting.
+        vec4 texel=lodTexel(uLODTexture,vLODLayer);
+        // Atlas alpha already measures subpixel wood/foliage coverage. Raising
+        // it again made conifers much denser than their actual nearby needles.
+        float coverage=texel.a;
         vec4 foliage=vec4(0);
         vec4 fruit=vec4(0);
         float fruitCoverage=0.0;
@@ -127,12 +267,12 @@ void main() {
         if(uLODSeasonParts==1) {
             // First 12 layers: real bare wood; next 12: real foliage only.
             // Recolour foliage before compositing. Bark never receives leaf tint.
-            if(uSeasonLeaf>0.0001) foliage=texture(uLODTexture,vec3(vUV,vLODLayer+12.0));
-            woodCoverage=smoothstep(.008,.22,texel.a);
-            leafCoverage=smoothstep(.04,.44,foliage.a)*uSeasonLeaf;
+            if(uSeasonLeaf>0.0001) foliage=lodTexel(uLODTexture,vLODLayer+12.0);
+            woodCoverage=texel.a;
+            leafCoverage=foliage.a*uSeasonLeaf;
             coverage=leafCoverage+woodCoverage*(1.0-leafCoverage);
             if(uLODFruitLayer==1 && uFruitAmount>0.0) {
-                fruit=texture(uLODTexture,vec3(vUV,vLODLayer+24.0));
+                fruit=lodTexel(uLODTexture,vLODLayer+24.0);
                 fruitCoverage=clamp(fruit.a*uFruitAmount,0.0,1.0);
                 coverage=fruitCoverage+coverage*(1.0-fruitCoverage);
             }
@@ -140,16 +280,28 @@ void main() {
             // Legacy atlas support; newly baked banks use the wood/foliage path.
             coverage*=uSeasonLeaf;
         }
-        // Independent instance masks are essential: shared screen thresholds
+        // Independent instance masks are essential: shared thresholds
         // leave the same holes through every tree in a dense forest.
-        vec2 coverageCell=uDepthOnly==1 ? floor(vUV*512.0) : floor(gl_FragCoord.xy);
-        if(coverage<=max(.003,hash(coverageCell+vec2(197,83)+vPhase*vec2(971,613)))) discard;
+        vec2 coverageCell=floor(vUV*512.0);
+        if(coverage<=.003)discard;
+        foliageCoverage(coverage,uDepthOnly==1 ? hash(coverageCell+vec2(197,83)+vPhase*vec2(971,613)) :
+            leafThreshold(vObject,footprint,uint(vPhase*65535.0)),uint(vPhase*65535.0),false);
         if(uDepthOnly==1) { fragColor=vec4(1); return; }
         vec3 baked=texel.rgb/max(texel.a,.0001);
+        // Explicit gradients were captured before any discard. A transparent
+        // component contributes exactly zero, so skip its normal-map samples
+        // and lighting; keep the other component and all alpha decisions.
+        if(uLODRelight==1 && (uFragmentWorkReuse==0 || uLODSeasonParts==0 || woodCoverage>0.0))
+            baked=relightLOD(baked,vLODLayer,false);
         if(uLODSeasonParts==1) {
             vec3 leafRGB=foliage.rgb/max(foliage.a,.0001)*uLeafRatio;
+            vec3 fruitRGB=fruit.rgb/max(fruit.a,.0001);
+            if(uLODRelight==1){
+                if(uFragmentWorkReuse==0 || leafCoverage>0.0)
+                    leafRGB=relightLOD(leafRGB,vLODLayer+12.,true);
+                if(fruitCoverage>0.)fruitRGB=relightLOD(fruitRGB,vLODLayer+24.,false); }
             baked=((leafRGB*leafCoverage+baked*woodCoverage*(1.0-leafCoverage))*(1.0-fruitCoverage)+
-                fruit.rgb/max(fruit.a,.0001)*fruitCoverage)/max(coverage,.0001);
+                fruitRGB*fruitCoverage)/max(coverage,.0001);
         } else baked*=uLeafRatio;
         float variant=float((vTreeCode>>20u)&255u)/255.0;
         baked*=mix(vec3(1),vec3(.90+variant*.19,1.0,.90+variant*.16),step(.001,variant));
@@ -165,16 +317,52 @@ void main() {
     vec3 n=normalize(vNormal);
     float ao=1.0;
     if(uKind==0) {
-        float ridges=noise(vec2(vUV.x*52.0,vUV.y*3.0));
-        color=uBark*(.67+.45*ridges);
-        if(vSpecies==0) {
-            float furrow=pow(noise(vec2(vUV.x*37.0+noise(vec2(vUV.y*.8,9.0))*2.0,vUV.y*.8)),2.0);
-            color*=mix(.88, .49+furrow*1.20, clamp(vMaturity,0.0,1.0));
-        }
-        if(vSpecies==8) color=uBark*(.78+.27*noise(vec2(vUV.x*90.0,vUV.y*1.8)));
-        if(vSpecies==1) {
-            float mark=step(.68,noise(vec2(vUV.x*11.0,floor(vUV.y*18.0))));
-            color=mix(color,vec3(.12,.14,.13),mark*.88);
+        // Wood is opaque: shadow passes need neither colour nor normal maps.
+        if(uDepthOnly==1){fragColor=vec4(1);return;}
+        color=uBark;
+        if((vSpecies<14 || vSpecies>=19) && vObject.x<.012 && vSpecies!=1 && vSpecies!=13 && vSpecies!=19)color=uBark*.42;
+        else if(vSpecies<14 || vSpecies>=19) {
+            int family=0;vec2 metres=vec2(1,2);
+            if(vSpecies==2 || vSpecies==4 || vSpecies==5 || vSpecies==7 || vSpecies==12){family=1;metres=vec2(2);}
+            else if(vSpecies==3){family=2;metres=vec2(1);}
+            else if(vSpecies==6 || vSpecies>=8){family=3;metres=vec2(1.8);}
+            float circumference=6.2831853*vObject.y;
+            // Integer wraps close the seam. Small twigs smoothly lose old bark,
+            // so large trunk cracks never get squeezed onto a 2 mm shoot.
+            vec2 barkUV=vec2(vUV.x*max(1.0,floor(circumference/metres.x+.5)),vUV.y/metres.y);
+            barkUV+=vec2(vPhase,vPhase*.731);
+            vec3 scan=texture(uLeafSprays,vec3(barkUV,float(family))).rgb;
+            vec3 detail=texture(uLeafSprays,vec3(barkUV,float(family+4))).rgb*2.0-1.0;
+            float aged=smoothstep(.012,.095,vObject.x);
+            color=mix(uBark*.42,scan*uBarkTint,aged);
+            float strength=aged*.85;
+            if(vSpecies==1) {
+                // White papery bark with narrow horizontal lenticels, not
+                // rectangular black camouflage. Mature bases become fissured.
+                vec2 markUV=vec2(vUV.x*max(1.0,floor(circumference/.28+.5)),vUV.y*22.0);
+                float row=floor(markUV.y);
+                float markID=floor(markUV.x+hash(vec2(row,vPhase)));
+                float variation=hash(vec2(row+7.0,markID)+vPhase*151.0);
+                vec2 q=vec2(fract(markUV.x+hash(vec2(row,vPhase)))-.5,
+                    fract(markUV.y)-.25-.5*hash(vec2(row,markID)+vPhase*17.0));
+                q.y+=sin(q.x*13.0+row)*.035;
+                float halfLength=.04+.30*variation*variation;
+                float lenticel=(1.0-smoothstep(halfLength,halfLength+.03,abs(q.x)))*
+                    (1.0-smoothstep(.025,.065,abs(q.y)));
+                float base=smoothstep(.06,.20,vObject.x)*(1.0-smoothstep(.1,1.7,vUV.y))*(1.0-step(.5,vObject.z));
+                vec3 white=uBark*(.73+.55*scan.r);
+                white=mix(white,vec3(.09,.085,.075)*uBarkTint,lenticel*.85);
+                color=mix(mix(vec3(.13,.085,.05)*uBarkTint,white,smoothstep(.012,.04,vObject.x)),scan*uBarkTint,base*.9);
+                strength=mix(.08,.8,base);
+            }
+            if(vSpecies==13 || vSpecies==19) {
+                // Rowan and eucalyptus have much smoother, lighter young bark.
+                color=mix(uBark*(.85+scan.r*.6),color,.22*aged);
+                strength*=.25;
+            }
+            vec3 along=normalize(vNeedleAxis-n*dot(vNeedleAxis,n));
+            vec3 across=normalize(cross(along,n));
+            n=normalize(n*max(.25,detail.z)+across*detail.x*strength+along*detail.y*strength);
         }
         if(vSpecies==14) {
             float node=1.0-smoothstep(.025,.07,abs(fract(vUV.y*2.7)-.5));
@@ -192,13 +380,94 @@ void main() {
             float spot=1.0-smoothstep(.06,.13,length(dots));
             color=mix(color,vec3(.25,.27,.16),spot*.7);
         }
-        if(vSpecies==19) color=uBark*(.78+.32*noise(vec2(vUV.x*5.0,vUV.y*.7)));
     } else if(uKind==8) {
         vec2 cell=fract(vUV*vec2(14,9))-.5;
         float areole=1.0-smoothstep(.035,.085,length(cell));
         color*=.85+vPhase*.23;color=mix(color,vec3(.27,.25,.12),areole*.65);
-    } else if(uKind==1) {
-        vec2 p=vUV*2.0-1.0;
+    } else if(uKind==1 && vShoot.x>1.0) {
+        vec2 tiledUV=vUV;
+        // Stagger both axes deterministically. Regular rows of repeated sprays
+        // become visible stripes on a large grouped twig, even when each tile
+        // uses a different leaf variant. Keep the physical tile size intact.
+        float grouped=step(1.001,vShoot.w);
+        tiledUV.x+=fract(floor(tiledUV.y)*.754877666+vPhase)*grouped;
+        tiledUV.y+=fract(floor(tiledUV.x)*.569840291+vPhase*.618033989)*grouped;
+        vec2 cellID=floor(tiledUV);
+        float tilePhase=fract(vPhase+dot(cellID,vec2(.618033989,.381966011)));
+        vec2 sprayUV=.5+(fract(tiledUV)-.5)*vSprayCrop;
+        // Derivatives before wrapping avoid false coarse mips on group seams.
+        vec4 spray=textureGrad(uLeafSprays,vec3(sprayUV,vShoot.z+floor(tilePhase*8.0)),
+            foliageDx*vSprayCrop,foliageDy*vSprayCrop);
+        float alpha=spray.a*vNeedleCoverage;
+        // A group represents neighbouring twigs, not a rectangular fabric of
+        // repeated leaves. A soft elliptical boundary keeps its silhouette
+        // coherent when a memory-limited card covers more than one sprig.
+        vec2 groupUV=(vUV-.5)*2.0/max(1.0,vShoot.w);
+        float edge=1.0-smoothstep(.35,1.0,dot(groupUV,groupUV));
+        alpha*=mix(1.0,edge,smoothstep(2.0,4.0,vShoot.w));
+        if(alpha<=.003)discard;
+        if(alpha<.999) {
+            vec2 cell=floor(vUV*128.0)+vPhase*vec2(971,613);
+            uvec2 pixel=uvec2(ivec2(floor(cell)));
+            uint bits=pixel.x*1664525u+pixel.y*1013904223u;
+            bits^=bits>>16u;bits*=2246822519u;bits^=bits>>13u;bits*=3266489917u;bits^=bits>>16u;
+            float threshold=float(bits>>8u)*(1.0/16777216.0);
+            foliageCoverage(alpha,uDepthOnly==1 ? threshold : leafThreshold(vObject,footprint,uint(vPhase*65535.0)),uint(vPhase*65535.0),false);
+        }
+        if(uDepthOnly==1){fragColor=vec4(1);return;}
+        vec2 tilt=spray.gb/max(spray.a,.0001)*2.0-1.0;
+        vec3 along=normalize(vNeedleAxis),across=normalize(cross(along,n));
+        n=normalize(n*sqrt(max(.05,1.0-dot(tilt,tilt)))+across*tilt.x+along*tilt.y);
+        float shade=spray.r/max(spray.a,.0001);
+        color=shade<.48 ? uBark*.72 : color*shade;
+        if(!gl_FrontFacing) {
+            if(vSpecies==3){float gray=dot(color,vec3(.2126,.7152,.0722));color=mix(color,vec3(gray)*1.22,.34);}
+            else if(vSpecies==0)color*=vec3(.92,1.04,1.25);
+        }
+        n=gl_FrontFacing?n:-n;ao=.87;
+    } else if(uKind==1 || uKind==9) {
+        float bladeCoverage=vNeedleCoverage;
+        if(uKind==1 && vShoot.w>1.0) {
+            vec2 groupUV=(vUV-.5)*2.0/vShoot.w;
+            float edge=1.0-smoothstep(.35,1.0,dot(groupUV,groupUV));
+            bladeCoverage*=mix(1.0,edge,smoothstep(2.0,4.0,vShoot.w));
+        }
+        if(uKind==1 && bladeCoverage<1.0)
+            foliageCoverage(bladeCoverage,leafThreshold(vObject,footprint,uint(vPhase*65535.0)),uint(vPhase*65535.0),false);
+        vec2 p=(uKind==1?fract(vUV):vUV)*2.0-1.0;
+        float leafPhase=vPhase;
+        float rows=vShoot.x;
+#ifdef LEAF_SPRAY_BAKE
+        if(rows>1.0) {
+            // Alternate blades on a short twig. Dimensions are in twig-space
+            // metres, not screen pixels; no distance-dependent leaf growth.
+            vec2 point=vec2(p.x*vShoot.y,p.y)*1.7;
+            float stemX=.025*sin(point.y*4.0+vPhase*6.28);
+            if(uKind==9 && abs(point.x-stemX)<.006 && abs(point.y)<.98) {
+                fragColor=vec4(.33,.5,.5,1);return;
+            }
+            float side=point.x<0.0 ? -1.0 : 1.0;
+            float row=floor((point.y+1.0)*rows);
+            float best=1e9;
+            for(int neighbor=-1;neighbor<=1;neighbor++) {
+                float slot=clamp(row+float(neighbor),0.0,rows*2.0-1.0);
+                float r=hash(vec2(slot,side)+vPhase*317.0);
+                float r2=hash(vec2(slot+37.0,side*3.0)+vPhase*113.0);
+                float y=-1.0+(slot+.5+(r-.5)*.35)/rows;
+                float angle=side*(.78+r2*.60);
+                vec2 along=vec2(sin(angle),cos(angle));
+                vec2 across=vec2(along.y,-along.x);
+                float size=(.84+.24*r)/rows;
+                vec2 center=vec2(.025*sin(y*4.0+vPhase*6.28),y)+along*size*.82;
+                vec2 delta=point-center;
+                vec2 blade=vec2(dot(delta,across)/vShoot.y,dot(delta,along))/size;
+                float score=dot(blade,blade);
+                if(score<best){best=score;p=blade;leafPhase=r;}
+            }
+            vec3 along=normalize(vNeedleAxis), across=normalize(cross(along,n));
+            n=normalize(n+across*((leafPhase-.5)*.75+p.x*.16)+along*(p.y*.10));
+        }
+#endif
         float edge=1.0-p.y*p.y;
         float vein=1.0-smoothstep(.015,.055,abs(p.x));
         if(vSpecies==0) {
@@ -207,6 +476,13 @@ void main() {
             if(abs(p.x)>edge || p.y<-.90) discard;
             float lateral=abs(fract((p.y-abs(p.x)*.32)*2.5+.5)-.5);
             vein=max(vein,(1.0-smoothstep(.015,.05,lateral))*.5);
+        } else if(vSpecies==1) {
+            // Rhombic birch blade: pointed apex and doubly serrated margins.
+            float width=p.y>-.30 ? (1.0-p.y)/1.30 : (p.y+1.0)/.70;
+            width*=.87+.07*cos(p.y*65.0)+.03*cos(p.y*135.0);
+            if(abs(p.x)>width) discard;
+            float lateral=abs(fract((p.y-abs(p.x)*.52)*3.5+.5)-.5);
+            vein=max(vein,(1.0-smoothstep(.012,.045,lateral))*.4);
         } else if(vSpecies==8) {
             // Five palmate pointed lobes, with deep sinuses and radial veins.
             if(!mapleBlade(p)) discard;
@@ -230,8 +506,14 @@ void main() {
             if(!leaflet && !terminal && !rachis) discard;
             vein=max(vein,(1.0-smoothstep(.018,.06,abs(q.y)))*.45);
         } else if(abs(p.x)>edge*(.84+.08*cos(p.y*22.0))) discard;
+        if(uKind==9) {
+            // Packed linear albedo multiplier and tangent-space normal XY.
+            // Alpha remains coverage through ordinary mip filtering.
+            float shade=(.80+leafPhase*.16)*(1.0+vein*.08);
+            fragColor=vec4(shade,n.xy*.5+.5,1);return;
+        }
         if(uDepthOnly==1) { fragColor=vec4(1); return; }
-        color*=.74+vPhase*.49;
+        color*=.80+leafPhase*.36;
         color=mix(color,color*1.22,vein*.5);
         if(!gl_FrontFacing) {
             // White willow has a pale, silky underside; oak is cooler below.
@@ -364,17 +646,14 @@ void main() {
         fragColor=vec4(pow(color,vec3(1.0/2.2)),1); return;
     }
     if(uDepthOnly==1) { fragColor=vec4(1); return; }
+    if(uBakeMode==2){fragColor=vec4(color*ao,1);return;}
+    if(uBakeMode==3){fragColor=vec4(n*.5+.5,1);return;}
     vec3 sun=normalize(uSunDirection);
-    float light=.38+.58*max(0.0,dot(n,sun));
-    if(uKind==1 || uKind==5 || uKind==6) light+=.22*max(0.0,dot(-n,sun));
-    color*=light*ao;
+    if(uKind==1 || uKind==5 || uKind==6)color=foliageLighting(color,n,0.0)*ao;
+    else color*=(.38+.58*max(0.0,dot(n,sun)))*ao;
     if(uKind==7 && vFruit.w>=0.0 && vFruit.w!=12.0 && uBakeMode==0) {
         vec3 halfDirection=normalize(sun+normalize(uEye-vWorld));
         color+=vec3(.7,.65,.5)*pow(max(0.0,dot(n,halfDirection)),30.0)*.16;
-    }
-    if(uKind==5 && uBakeMode==0) {
-        vec3 halfDirection=normalize(sun+normalize(uEye-vWorld));
-        color+=vec3(.30,.34,.19)*pow(max(0.0,dot(n,halfDirection)),36.0)*.22;
     }
     // Baking retains diffuse lighting, but excludes fog, wind and highlights.
     // The transparent FBO contains linear premultiplied RGB/coverage.

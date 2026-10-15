@@ -230,7 +230,7 @@ begin
     end;
     { Direct connection matches the existing OSM fetcher; endpoint failover
       tests reachability from this machine, independently of browser proxies. }
-    Session := WinHttpOpen('REZVIVO/1.0', 1, nil, nil, WH_ASYNC);
+    Session := WinHttpOpen('REZVIVO/1.0 (+https://rezvivo.com)', 1, nil, nil, WH_ASYNC);
     Checked(Session <> nil);
     Checked(WinHttpSetTimeouts(Session, ConnectMs, ConnectMs, ReadMs, ReadMs));
     Connection := WinHttpConnect(Session, PWideChar(Host), 443, 0);

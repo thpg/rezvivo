@@ -1852,5 +1852,19 @@
   "This version requires an update to use online services.": "Для сетевых функций необходимо обновить игру.",
   "Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.": "Ближние тени деревьев остаются анимированными. Общий кэш глубины ускоряет тени дальнего леса. RTX требует видеокарту с трассировкой лучей.",
   "Add to steering pair": "Добавить в пару руления",
-  "Remove from steering pair": "Убрать из пары руления"
+  "Remove from steering pair": "Убрать из пары руления",
+  "World image cache": "Кэш изображения мира",
+  "Reuses distant scenery between frames. Nearby scenery and riders stay live. Works with RTX screen shadows. Uses additional GPU memory.": "Переиспользует изображение дальнего мира между кадрами. Ближний мир и райдеры обновляются каждый кадр. Совместим с экранными тенями RTX. Требует дополнительной видеопамяти.",
+  "Trees": "Деревья",
+  "Buildings": "Дома",
+  "Other": "Прочее",
+  "Ready route": "Готовый маршрут",
+  "Connect to download this route.": "Подключитесь к интернету для скачивания маршрута.",
+  "Route is unavailable. Choose another route or wait for the next update.": "Маршрут недоступен. Выберите другой или дождитесь обновления списка.",
+  "RTX screen (experimental)": "RTX экран (эксперимент)",
+  "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.": "Кэш деревьев повторно использует дальние тени. Экранный RTX считает единую тень для всех видимых поверхностей, включая райдеров и дальний пейзаж. Другие способы теней отключены. RTX требует видеокарту с трассировкой лучей.",
+  "Me": "Я",
+  "Teleport": "Переместить",
+  "%.2f / %.2f km": "%.2f / %.2f км",
+  "Lap %d": "Круг %d"
 }

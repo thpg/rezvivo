@@ -152,6 +152,7 @@ type
     procedure ClothColorChanged(Slot:TClothSlot;const Color:TVector3;Enabled:Boolean);override;
     procedure HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);override;
     procedure ColorState(O:TJSONObject);
+    function DisplayTopColor(out Color:TVector3):Boolean;override;
     destructor Destroy;override;
     procedure Update(Dt,Speed:Single);override;
   end;
@@ -234,6 +235,18 @@ begin
 end;
 procedure TWardrobeAppearance.HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);
 begin ApplyColor(4,Color,Enabled) end;
+function TWardrobeAppearance.DisplayTopColor(out Color:TVector3):Boolean;
+var I,Slot:Integer;
+begin
+  { Enabled outer clothing covers the top. Read the actual live material,
+    including an undyed preset's native colour. No mesh/texture rebuilding. }
+  for Slot:=2 downto 0 do if Slot<>1 then
+    for I:=0 to High(Tints)do if Tints[I].Slot=Slot then begin
+      Color:=Tints[I].Material.BaseColor;Exit(True);
+    end;
+  Color:=TVector3.Zero;Result:=False;
+end;
+
 procedure TWardrobeAppearance.ColorState(O:TJSONObject);
 var A:TJSONArray;I:Integer;C:TVector3;
 begin

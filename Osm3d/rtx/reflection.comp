@@ -22,7 +22,11 @@ void main() {
     if(nm.a<.005 || depth>=.9999999)return;
     vec2 uv=(vec2(p)+.5)/vec2(size);
     vec4 eye=invProjection*vec4(uv*2.-1.,((depth-depthRange.x)/depthRange.y)*2.-1.,1.);
-    eye/=eye.w;vec3 pos=(invView*eye).xyz;
+    eye/=eye.w;
+    // Cached colour already contains its reflection. Only receivers in the
+    // live slab and the one slab being refreshed need another ray query.
+    if(depthRange.w>.5 && -eye.z>horizon.w && (-eye.z<zenith.w || -eye.z>sun.w))return;
+    vec3 pos=(invView*eye).xyz;
     vec3 N=normalize(nm.xyz*2.-1.),V=normalize(invView[3].xyz-pos);
     if(dot(N,V)<0.)N=-N;
     vec3 ray=reflect(-V,N),origin=pos+N*.07;

@@ -5,11 +5,12 @@ unit Osm3dVectorMap;
   sources as 3D, independent of viewport zoom. No GL, fonts or raster labels. }
 interface
 uses Classes, SysUtils, Osm3dGeoMath, Osm3dOsmData, Osm3dGeomUtils;
+const MAP_SHADE_SIDE=33;
 type
   TMapFeatureKind = (mfResidential, mfIndustrial, mfFarmland, mfGrass,
     mfForest, mfSand, mfWater, mfBuilding, mfWaterway, mfRail,
     mfPath, mfService, mfStreet, mfTertiary, mfSecondary, mfPrimary,
-    mfTrunk, mfMotorway, mfPlace, mfPoi, mfHouseNumber);
+    mfTrunk, mfMotorway, mfPlace, mfPoi, mfHouseNumber, mfRegion, mfMarineLabel);
   TMapGeoPoints = array of TLatLon;
   TMapVectorFeature = class
     Key, Caption: string;
@@ -25,11 +26,13 @@ type
     MaxZoom: Integer;
     Features: TList;
     Bytes: Int64;
+    Shade:array of Single; { row-major Mercator grid, north to south }
     constructor Create(const ATile: TTileXY);
     destructor Destroy; override;
   end;
 function BuildMapVectors(Data: TOSMDataset; const Tile: TTileXY;
   Cancel: TThread = nil; MaxZoom: Integer = 18): TMapVectorData;
+procedure SimplifyMapLine(var Points:TMapGeoPoints;Zoom:Integer);
 
 implementation
 uses Math, Generics.Collections;
@@ -65,6 +68,35 @@ begin
   else if (L='industrial') or (L='commercial') or (L='retail') then Kind:=mfIndustrial
   else if (N='sand') or (N='beach') then Kind:=mfSand
   else Result:=False;
+end;
+
+procedure SimplifyMapLine(var Points:TMapGeoPoints;Zoom:Integer);
+var X,Y:array of Double;Keep:array of Boolean;Stack:array of Integer;
+  I,A,B,Best,Top,Count:Integer;DX,DY,Length2,D,T,Limit,MaxD:Double;
+begin
+  if(Zoom>=13)or(Length(Points)<3)then Exit;
+  SetLength(X,Length(Points));SetLength(Y,Length(Points));SetLength(Keep,Length(Points));
+  SetLength(Stack,Length(Points)*2);Limit:=Sqr(0.4*360/(256*(1 shl Zoom)));
+  for I:=0 to High(Points)do begin
+    X[I]:=Points[I].Lon;
+    Y[I]:=Ln(Tan(Pi/4+EnsureRange(Points[I].Lat,-85.05112878,85.05112878)*Pi/360))*180/Pi;
+  end;
+  Keep[0]:=True;Keep[High(Points)]:=True;Stack[0]:=0;Stack[1]:=High(Points);Top:=2;
+  while Top>0 do begin
+    Dec(Top);B:=Stack[Top];Dec(Top);A:=Stack[Top];
+    DX:=X[B]-X[A];DY:=Y[B]-Y[A];Length2:=DX*DX+DY*DY;MaxD:=Limit;Best:=-1;
+    for I:=A+1 to B-1 do begin
+      T:=0;if Length2>1e-20 then T:=EnsureRange(((X[I]-X[A])*DX+(Y[I]-Y[A])*DY)/Length2,0.0,1.0);
+      D:=Sqr(X[I]-X[A]-T*DX)+Sqr(Y[I]-Y[A]-T*DY);
+      if D>MaxD then begin MaxD:=D;Best:=I end;
+    end;
+    if Best>=0 then begin
+      Keep[Best]:=True;Stack[Top]:=A;Stack[Top+1]:=Best;
+      Stack[Top+2]:=Best;Stack[Top+3]:=B;Inc(Top,4);
+    end;
+  end;
+  Count:=0;for I:=0 to High(Points)do if Keep[I]then begin Points[Count]:=Points[I];Inc(Count)end;
+  SetLength(Points,Count);
 end;
 
 function BuildMapVectors(Data: TOSMDataset; const Tile: TTileXY; Cancel: TThread; MaxZoom: Integer): TMapVectorData;
@@ -117,7 +149,7 @@ var
       SetLength(A.Points,C); SetLength(Coords,C*2); SetLength(Holes,H);
       A.Triangles:=TEarcutTriangulator.Triangulate(Coords,Holes,2);
       if Length(A.Triangles)=0 then Exit;
-      A.Key:=Id; A.Caption:=Title; A.Kind:=Kind; A.MinZoom:=11;
+      A.Key:=Id; A.Caption:=Title; A.Kind:=Kind; A.MinZoom:=10;
       if Kind=mfBuilding then A.MinZoom:=15;
       A.LabelZoom:=14; A.LabelPriority:=30;
       if Kind=mfWater then begin A.LabelZoom:=12; A.LabelPriority:=48; end;
@@ -148,11 +180,11 @@ begin
         Polygon(BuildMultipolygonFromWay(W,Data,Projection),'w'+IntToStr(W.Id),W.Tags.Get('name'),K);
       S:=W.Tags.GetLower('highway'); Z:=13; Priority:=60;
       if S<>'' then begin
-        if Pos('motorway',S)=1 then begin K:=mfMotorway; Z:=11; Priority:=78; end
-        else if Pos('trunk',S)=1 then begin K:=mfTrunk; Z:=11; Priority:=76; end
-        else if Pos('primary',S)=1 then begin K:=mfPrimary; Z:=11; Priority:=74; end
-        else if Pos('secondary',S)=1 then begin K:=mfSecondary; Z:=11; Priority:=72; end
-        else if Pos('tertiary',S)=1 then begin K:=mfTertiary; Z:=12; Priority:=68; end
+        if Pos('motorway',S)=1 then begin K:=mfMotorway; Z:=7; Priority:=78; end
+        else if Pos('trunk',S)=1 then begin K:=mfTrunk; Z:=7; Priority:=76; end
+        else if Pos('primary',S)=1 then begin K:=mfPrimary; Z:=9; Priority:=74; end
+        else if Pos('secondary',S)=1 then begin K:=mfSecondary; Z:=9; Priority:=72; end
+        else if Pos('tertiary',S)=1 then begin K:=mfTertiary; Z:=11; Priority:=68; end
         else if (S='residential') or (S='unclassified') or (S='living_street') or (S='pedestrian') then K:=mfStreet
         else if S='service' then begin K:=mfService; Z:=15; Priority:=44; end
         else if (S='path') or (S='footway') or (S='cycleway') or (S='track') or (S='steps') then begin K:=mfPath; Z:=15; Priority:=40; end
@@ -173,15 +205,17 @@ begin
         N:=Data.FindNode(W.NodeRefs[I]); if N=nil then begin J:=0; Break; end;
         F.Points[J]:=N.Position; Inc(J);
       end;
-      if J<2 then F.Free else begin SetLength(F.Points,J); Add(F); end;
+      if J<2 then F.Free else begin SetLength(F.Points,J);SimplifyMapLine(F.Points,MaxZoom);Add(F);end;
     end;
     for N in Data.Nodes.Values do begin
       if Stopped then Exit;
       S:=N.Tags.GetLower('place'); Name:=N.Tags.Get('name'); K:=mfPlace;
       Z:=16; Priority:=20;
-      if S='city' then begin Z:=6; Priority:=120; end
-      else if S='town' then begin Z:=9; Priority:=110; end
-      else if S='village' then begin Z:=11; Priority:=100; end
+      if S='continent' then begin Z:=0; Priority:=150; end
+      else if S='country' then begin Z:=2; Priority:=140; end
+      else if S='city' then begin Z:=5; Priority:=120; end
+      else if S='town' then begin Z:=8; Priority:=110; end
+      else if S='village' then begin Z:=10; Priority:=100; end
       else if (S='suburb') or (S='quarter') then begin Z:=13; Priority:=90; end
       else if (S='hamlet') or (S='neighbourhood') then begin Z:=14; Priority:=85; end
       else if (N.Tags.GetLower('railway')='station') or (N.Tags.GetLower('natural')='peak') then begin K:=mfPoi; Z:=13; Priority:=55; end

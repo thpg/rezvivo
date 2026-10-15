@@ -5,7 +5,7 @@ unit Osm3dRiderShadow;
 
 interface
 
-uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, Osm3dForestShadowCache, fpjson;
+uses Generics.Collections, X3DNodes, X3DFields, CastleVectors, CastleTransform, CastleViewport, CastleRenderOptions, CastleShapes, Osm3dShadowProbe, Osm3dRtxShadow, Osm3dShadowLayout, Osm3dForestShadowCache, Osm3dMotionPrefetch, Osm3dTemporalShadow, Osm3dGpuTimer, Osm3dShadowSchedule, fpjson;
 
 type
   TRiderShadowMatrices = array[0..3] of TMatrix4;
@@ -26,6 +26,7 @@ type
   TGroundShadowGLBinding = class
   private
     FSampler,FStrength,FAtlas,FWorldShadows,FTexel,FBias,FFilter: LongInt;
+    FScreenActive:LongInt;
     FZones: array[0..3] of LongInt;
   public
     constructor Create(const ProgramHandle: Cardinal);
@@ -60,13 +61,23 @@ type
     FWorldDistance: Single;
     FAvatarReceiver: Boolean;
     FLayout: TShadowReceiverLayout;
+    FMotion:TMotionPrefetch;
+    FForwardExtension:Single;
     FRtx:TRtxShadow;
     FForest:TForestShadowCache;
+    FTemporal:TTemporalWorldShadow;
+    FPartitionCasters:TCastleTransformList;
+    FMembershipRevision:QWord;
+    FShadowTimer:TAsyncGpuTimer;
+    FShadowGpuMS,FShadowGpuSumMS:Double;
+    FShadowGpuSamples:QWord;
     FTreeCasters,FTreesSelected:TCastleTransformList;
     FShadowMinDepth,FShadowMaxDepth:Single;
-    FRtxRequested,FFrameRtx,FRtxRasterComparison,FRtxReflections:Boolean;
+    FRtxRequested,FFrameRtx,FRtxRasterComparison,FRtxReflections,FRtxScreenShadows,FFrameScreen:Boolean;
     FRtxRevision:QWord;
     procedure RenderSelected(const Camera: TRenderingCamera);
+    procedure RenderPartition(const Camera: TRenderingCamera);
+    procedure RenderStatic(const Camera: TRenderingCamera);
     procedure ContextClose(Sender: TObject);
     function AcceptShadowShape(const Shape: TShape): Boolean;
   public
@@ -85,11 +96,14 @@ type
     function TryGroundCoverage(const Point: TVector3; out Value: Single): Boolean;
     function DebugInfo: String;
     procedure RtxSnapshot(const J:TJSONObject);
+    function TryGetScreenCasterRay(out ToSun:TVector3;
+      out MaxRayDistance,ConeTangent:Single):Boolean;
     property RtxRequested:Boolean read FRtxRequested write FRtxRequested;
     property RtxBackend:TRtxShadow read FRtx;
     property RtxRevision:QWord read FRtxRevision write FRtxRevision;
     property RtxRasterComparison:Boolean read FRtxRasterComparison write FRtxRasterComparison;
     property RtxReflections:Boolean read FRtxReflections write FRtxReflections;
+    property RtxScreenShadows:Boolean read FRtxScreenShadows write FRtxScreenShadows;
     property Casters: TCastleTransformList read FCasters;
     property WorldCasters: TCastleTransformList read FWorldCasters;
     property WorldShadows: Boolean read FWorldShadows write FWorldShadows;
@@ -105,6 +119,7 @@ type
     FNext: TRiderShadowGroundEffect;
     FMap: TSFNode;
     FProxy: TShaderTextureNode;
+    FScreenActive:TSFFloat;
     FMatrix: TSFMatrix4f;
     FMatrices: array[0..3] of TSFMatrix4f;
     FAtlas, FWorldShadowsUniform: TSFFloat;
@@ -130,6 +145,7 @@ procedure SetGroundRiderShadow(const Map: TGeneratedShadowMapNode;
 procedure HideGroundRiderShadow;
 procedure ClearGroundRiderShadow;
 procedure SetGroundRiderShadowCamera(const Position: TVector3);
+procedure SyncScreenShadowReceivers;
 { Explicit frame-capture diagnostics only; no readback or normal-frame cost. }
 procedure GroundShadowDiagnosticSnapshot(const Dest:TJSONObject);
 procedure MarkWorldShadowCaster(const Shape: TShapeNode);
@@ -146,6 +162,7 @@ function GroundRiderShadowGLSL: String;
 
 const
   RIDER_SHADOW_GLSL =
+    'uniform float gc_screen_active;' + #10 +
     '#ifdef GC_RIDER_SHADOW' + #10 +
     '#ifdef GC_RIDER_ATLAS' + #10 +
     'uniform sampler2D gc_rider_map;' + #10 +
@@ -231,6 +248,7 @@ const
     '#endif' + #10 +
     'vec3 gc_riderRelativePosition;' + #10 +
     'float gc_staticShadowWeight() {' + #10 +
+    '  if (gc_screen_active > 0.5) return 0.0;' + #10 +
     '#ifdef GC_RIDER_SHADOW' + #10 +
     '  if (gc_rider_world_shadows > 0.5 && gc_rider_atlas > 0.5 && gc_rider_strength > 0.0) {' + #10 +
     '    float remaining = 1.0;' + #10 +
@@ -289,14 +307,18 @@ const
     'void gc_setStaticShadow(float coverage) {' + #10 +
     '  gc_staticCoverage = max(gc_staticCoverage, coverage);' + #10 +
     '}' + #10 +
-    'void PLUG_fragment_modify(inout vec4 fragment_color) {' + #10 +
+    'float gc_shadowCoverage() {' + #10 +
+    '  if (gc_screen_active > 0.5) return 0.0;' + #10 +
     '  float dynamicShadow = gc_sampleRiderShadow();' + #10 +
     '  float s = max(gc_staticCoverage, dynamicShadow);' + #10 +
     '#ifdef GC_RIDER_SHADOW' + #10 +
     '  if (gc_rider_world_shadows > 0.5 && gc_rider_atlas > 0.5)' + #10 +
     '    s = gc_staticCoverage * gc_staticShadowWeight() + dynamicShadow;' + #10 +
     '#endif' + #10 +
-    '  s = clamp(s, 0.0, 1.0);' + #10 +
+    '  return clamp(s, 0.0, 1.0);' + #10 +
+    '}' + #10 +
+    'void PLUG_fragment_modify(inout vec4 fragment_color) {' + #10 +
+    '  float s = gc_shadowCoverage();' + #10 +
     '  if (s <= 0.001) return;' + #10 +
     '  vec3 base = fragment_color.rgb;' + #10 +
     '  float l = dot(base, vec3(0.2126, 0.7152, 0.0722));' + #10 +
@@ -306,9 +328,9 @@ const
 
 implementation
 
-uses SysUtils, Math, CastleBoxes, CastleRectangles, CastleTimeUtils, CastleApplicationProperties,
+uses Osm3dWind, SysUtils, Math, CastleBoxes, CastleRectangles, CastleTimeUtils, CastleApplicationProperties,
   CastleSceneCore, CastleInternalRenderer, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}CastleGL{$endif}, Osm3dRenderInstanced, Osm3dStudioSettings,
-  CastleRendererInternalShader, CastleRendererInternalTextureEnv, Osm3dProceduralVegetation;
+  CastleRendererInternalShader, CastleRendererInternalTextureEnv, Osm3dProceduralVegetation, Osm3dRtxScreenState;
 
 type
   { Each ground scene owns its own X3D node. Only the GPU resource is borrowed. }
@@ -365,6 +387,7 @@ begin
   FTexel := glGetUniformLocation(ProgramHandle, 'gc_rider_texel');
   FBias := glGetUniformLocation(ProgramHandle, 'gc_rider_bias');
   FFilter := glGetUniformLocation(ProgramHandle, 'gc_rider_filter');
+  FScreenActive:=glGetUniformLocation(ProgramHandle,'gc_screen_active');
   for Zone := 0 to 3 do
     FZones[Zone] := glGetUniformLocation(ProgramHandle, PChar('gc_rider_zone'+IntToStr(Zone)));
 end;
@@ -377,6 +400,7 @@ begin
     shadow active, and a missing map must not alias the grass atlas on unit 0. }
   glUniform1i(FSampler, TextureUnit);
   glUniform1f(FStrength, 0);
+  glUniform1f(FScreenActive,Ord(RtxScreenExclusive));
   if (CurrentMap = nil) or not CurrentAtlas or (CurrentStrength <= 0) then Exit;
   if not TTextureResources.Bind(CurrentMap, TextureUnit) then Exit;
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
@@ -388,6 +412,7 @@ begin
   glUniform1f(FStrength, CurrentStrength);
   glUniform1f(FFilter, CurrentFilter);
 end;
+
 
 class function TRiderShadowTextureResource.IsClassForTextureNode(ANode: TAbstractTextureNode): Boolean;
 begin Result := ANode is TRiderShadowTextureNode end;
@@ -427,6 +452,7 @@ begin
   AddCustomField(FMap);
   FProxy := TRiderShadowTextureNode.Create;
   FProxy.KeepExistingBegin;
+  FScreenActive:=TSFFloat.Create(Self,True,'gc_screen_active',0);AddCustomField(FScreenActive);
   FMatrix := TSFMatrix4f.Create(Self, True, 'gc_rider_world_to_clip', TMatrix4.Identity);
   AddCustomField(FMatrix);
   for I := 0 to 3 do
@@ -487,7 +513,7 @@ begin
 end;
 
 procedure TRiderShadowGroundEffect.Sync(const AllowBindingChanges: Boolean);
-var HasMap: Boolean; M: TMatrix4; I: Integer;
+var HasMap: Boolean; M: TMatrix4; I: Integer;ScreenActive:Single;
 begin
   HasMap := CurrentMap <> nil;
   if AllowBindingChanges then
@@ -495,8 +521,12 @@ begin
     if HasMap then
     begin
       if FMap.Value <> FProxy then FMap.Send(FProxy);
-    end else if FMap.Value <> nil then FMap.Send(nil);
+    end else begin
+      if FMap.Value <> nil then FMap.Send(nil);
+    end;
   end;
+  ScreenActive:=Ord(RtxScreenExclusive);
+  if FScreenActive.Value<>ScreenActive then FScreenActive.Send(ScreenActive);
   if HasMap then
   begin
     M := FMatrix.Value;
@@ -551,6 +581,13 @@ begin
       E.Sync(AllowBindingChanges);
     E := E.FNext;
   end;
+end;
+
+procedure SyncScreenShadowReceivers;
+begin
+  EnterCriticalSection(RegistryLock);
+  try SyncGroundRiderShadowEffects(False);
+  finally LeaveCriticalSection(RegistryLock);end;
 end;
 
 procedure SetGroundRiderShadow(const Map: TGeneratedShadowMapNode;
@@ -626,15 +663,20 @@ begin
 end;
 
 procedure TRiderShadowViewport.RenderWithoutScreenEffects;
-var Previous, P, D, U: TVector3;
+var Previous, P, D, U: TVector3;ScreenTexture:Cardinal;ScreenView,ScreenFocus:TVector4;
 begin
   if (Camera = nil) or (CurrentMap = nil) then
   begin inherited; Exit end;
   Previous := CurrentReceiverCamera;
+  ScreenTexture:=RtxScreenTexture;ScreenView:=RtxScreenView;ScreenFocus:=RtxScreenFocus;
+  ClearRtxScreenShadow;
   Camera.GetWorldView(P, D, U);
   SetGroundRiderShadowCamera(P);
   try inherited;
-  finally SetGroundRiderShadowCamera(Previous) end;
+  finally
+    RtxScreenTexture:=ScreenTexture;RtxScreenView:=ScreenView;RtxScreenFocus:=ScreenFocus;
+    SetGroundRiderShadowCamera(Previous);
+  end;
 end;
 
 procedure MarkWorldShadowCaster(const Shape: TShapeNode);
@@ -657,6 +699,9 @@ begin
   Configure(AtlasSize, 16, 160);
   FProbe := TShadowGroundProbe.Create;
   FForest:=TForestShadowCache.Create;
+  FTemporal:=TTemporalWorldShadow.Create;
+  FPartitionCasters:=TCastleTransformList.Create(False);
+  FShadowTimer:=TAsyncGpuTimer.Create;
   FTreeCasters:=TCastleTransformList.Create(False);
   FTreesSelected:=TCastleTransformList.Create(False);
   FWorldSelected := TCastleTransformList.Create(False);
@@ -697,6 +742,7 @@ procedure TRiderShadowAtlas.ContextClose(Sender: TObject);
 begin
   FreeAndNil(FRtx);
   FForest.ContextClose;
+  FTemporal.ContextClose;
   FProbe.ContextClose;
   { Release before the engine renderer cache. Recreated lazily next Render. }
   TTextureResources.Unprepare(FMap);
@@ -706,6 +752,7 @@ destructor TRiderShadowAtlas.Destroy;
 begin
   FreeAndNil(FRtx);
   FForest.Free;FTreeCasters.Free;FTreesSelected.Free;
+  FTemporal.Free;FPartitionCasters.Free;FShadowTimer.Free;
   ApplicationProperties.OnGLContextCloseObject.Remove(@ContextClose);
   if CurrentMap = FMap then ClearGroundRiderShadow;
   TTextureResources.Unprepare(FMap);
@@ -733,6 +780,8 @@ begin
      FWorldSet.ContainsKey(TCastleTransform(Shape.ParentScene)) then
   begin
     Result := IsWorldShadowCaster(Shape.Node);
+    if Result and (ShadowCapturePartitions>1) then
+      Result:=ShadowPartitionAccept(PtrUInt(Shape.Node) shr 4);
     if Result then Inc(FWorldShapeCount);
   end;
 end;
@@ -752,7 +801,30 @@ end;
 
 function TRiderShadowAtlas.TryGroundCoverage(const Point: TVector3; out Value: Single): Boolean;
 begin
-  Result := FProbeEnabled and FWorldShadows and FProbe.TryCoverage(Point, Value);
+  Result := not FFrameScreen and FProbeEnabled and FWorldShadows and FProbe.TryCoverage(Point, Value);
+end;
+
+procedure TRiderShadowAtlas.RenderPartition(const Camera:TRenderingCamera);
+var I:Integer;
+begin
+  FPartitionCasters.Clear;
+  for I:=0 to FWorldCasters.Count-1 do
+    if (not (FFrameRtx or FTemporal.SeparateStatic) or (FWorldCasters[I] is TOsmProceduralVegetation)) and
+      not ((FRenderingZone=3) and FRtxRequested and FForest.Ready and
+      (FWorldCasters[I] is TOsmProceduralVegetation)) then
+      FPartitionCasters.Add(FWorldCasters[I]);
+  { This capture contains the entire guarded footprint. Do not reuse the
+    live cascade's inner-hole culling: the camera may move before reuse. }
+  FViewport.InternalRenderShadowCasters(Camera,FPartitionCasters,@AcceptShadowShape);
+end;
+
+procedure TRiderShadowAtlas.RenderStatic(const Camera:TRenderingCamera);
+var I:Integer;
+begin
+  FPartitionCasters.Clear;
+  for I:=0 to FWorldCasters.Count-1 do
+    if not (FWorldCasters[I] is TOsmProceduralVegetation) then FPartitionCasters.Add(FWorldCasters[I]);
+  FViewport.InternalRenderShadowCasters(Camera,FPartitionCasters,@AcceptShadowShape);
 end;
 
 procedure TRiderShadowAtlas.RenderSelected(const Camera: TRenderingCamera);
@@ -768,12 +840,20 @@ begin
   end;
   { RTX supplies static buildings only. Vegetation stays on the same path
     before/after BVH readiness, so warming a cache cannot freeze nearby leaves. }
-  if FFrameRtx then FRtx.CopyDepth
+  if FTemporal.Ready(FRenderingZone) or FTemporal.StaticReady(FRenderingZone) then begin
+    if FFrameRtx then FRtx.CopyDepth else begin
+      FWorldSelected.Clear;
+      FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,nil);
+    end;
+    FTemporal.Draw(FRenderingZone,FLayout.Zones[FRenderingZone].X,
+      FLayout.Zones[FRenderingZone].Y,FZoneHalfExtent[FRenderingZone],
+      FShadowMinDepth,FShadowMaxDepth);
+  end else if FFrameRtx then FRtx.CopyDepth
   else FViewport.InternalRenderShadowCasters(Camera,FWorldSelected,@AcceptShadowShape);
   if UseForest then
     FForest.Draw(FLayout.Zones[FRenderingZone].X,FLayout.Zones[FRenderingZone].Y,
       FZoneHalfExtent[FRenderingZone],FShadowMinDepth,FShadowMaxDepth)
-  else if FTreesSelected.Count>0 then
+  else if not FTemporal.Ready(FRenderingZone) and (FTreesSelected.Count>0) then
     FViewport.InternalRenderShadowCasters(Camera,FTreesSelected,nil,False);
   if FWorldShadows and FProbeEnabled and (FRenderingZone=FProbeZone) and
     FProbe.SampleDue(FProbePoint) then
@@ -788,7 +868,7 @@ var
   Box: TBox3D;
   D, Side, Up, UpHint, P, Q, Eye, CameraPosition, CameraDirection, CameraUp: TVector3;
   Angles: TVector2;
-  I, J, Zone, N: Integer;
+  I, J, Zone, N, Partitions,MapSize,RenderTileSize: Integer;
   X, Y, Z, CenterX, CenterY, Step, H, Inner: Single;
   MinDepth, MaxDepth, DepthSpan: Single;
   PreviousX, PreviousY: Single;
@@ -803,8 +883,11 @@ var
   RayEnd,RayRow:TVector3;
   MembershipChanged: Boolean;
   ForestRevision:QWord;
+  GpuNs:QWord;
+  MotionPosition,ShadowAhead:TVector3;
 begin
   FWorldShapeCount := 0;
+  ClearRtxScreenShadow;FFrameScreen:=False;
   { Callers refill the list every frame, but the resident world usually
     stays the same. Compare borrowed pointers without dereferencing them;
     rebuild membership only when the list changes. }
@@ -815,6 +898,7 @@ begin
       begin MembershipChanged := True; Break end;
   if MembershipChanged then
   begin
+    Inc(FMembershipRevision);
     FWorldSet.Clear;
     SetLength(FWorldMembership, FWorldCasters.Count);
     for I := 0 to FWorldCasters.Count - 1 do
@@ -822,6 +906,25 @@ begin
       FWorldMembership[I] := FWorldCasters[I];
       FWorldSet.AddOrSetValue(FWorldCasters[I], True);
     end;
+  end;
+  if FRtxScreenShadows and FRtxRequested and FWorldShadows then begin
+    { One screen-space solution, including its warm-up. Never generate a
+      raster map or compose baked/temporal shadows in this mode. }
+    HideGroundRiderShadow;
+    TTextureResources.Unprepare(FMap);FProbe.Reset;
+    FForest.ContextClose;FTemporal.ContextClose;
+    FFrameRtx:=False;FFrameScreen:=True;
+    FillChar(FZoneCasterCount,SizeOf(FZoneCasterCount),0);
+    FVisibleCasterCount:=0;FSubmitMilliseconds:=0;FShadowGpuMS:=0;
+    if (Viewport=nil) or (Viewport.Camera=nil) or (SunDirection.Length<1e-6) then Exit;
+    if FRtx=nil then FRtx:=TRtxShadow.Create;
+    FRtx.ScreenShadows:=True;FRtx.Reflections:=FRtxReflections;FRtx.ScreenStrength:=1;
+    FRtx.ScreenFilter:=FFilter;
+    FRtx.SetDynamicCasters(FCasters);
+    Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
+    WindObserveCamera(CameraPosition,PtrUInt(Viewport.Camera));
+    FRtx.Prepare(FWorldCasters,FRtxRevision,CameraPosition,SunDirection,FAtlasSize,FWorldDistance,@AcceptShadowShape);
+    Exit;
   end;
   if FWorldShadows then
     for I := 0 to FWorldCasters.Count - 1 do FCasters.Add(FWorldCasters[I]);
@@ -832,16 +935,30 @@ begin
     Exit;
   end;
   StartTime := Timer;
+  if TemporalShadowMeasure then begin
+    while FShadowTimer.ReadSample(GpuNs) do begin
+      FShadowGpuMS:=GpuNs/1000000;
+      FShadowGpuSumMS:=FShadowGpuSumMS+FShadowGpuMS;Inc(FShadowGpuSamples);
+    end;
+    FShadowTimer.BeginSample;
+  end;
   StartCaptures := CachedMeshCaptures;
   StartDraws := CachedMeshDraws;
   Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
+  WindObserveCamera(CameraPosition,PtrUInt(Viewport.Camera));
+  MotionPosition:=CameraPosition;
+  if FAvatarReceiver then MotionPosition:=Focus;
+  FMotion.Observe(MotionPosition,CameraDirection,GetTickCount64,PtrUInt(Viewport.Camera));
+  ShadowAhead:=FMotion.Offset(1.5,16);
+  FForwardExtension:=ShadowForwardExtension(FMotion,CameraDirection,FWorldDistance,
+    Max(0,CameraPosition.Y-Focus.Y),FTileSize);
   { Use the engine's aspect/FOV conversion, including a just-resized viewport;
     the cached effective FOV still describes the previous render at this point. }
   Angles:=TViewpointNode.InternalFieldOfView(Viewport.Camera.Perspective.FieldOfView,
     Viewport.Camera.Perspective.FieldOfViewAxis,
     Max(1,Viewport.EffectiveWidthForChildren),Max(1,Viewport.EffectiveHeightForChildren));
   BuildShadowReceiverLayout(CameraPosition,CameraDirection,Vector3(Angles.X,Angles.Y,0),
-    Focus,SunDirection,FAvatarReceiver,FWorldDistance,FTileSize,FLayout);
+    Focus,SunDirection,FAvatarReceiver,FWorldDistance,FTileSize,FLayout,FForwardExtension);
   { One identical light basis for fitting, caster culling and both renderers.
     Even another normalization can lose centimetres at distant OSM origins. }
   D:=FLayout.Direction; Side:=FLayout.Side; Up:=FLayout.Up;
@@ -888,14 +1005,16 @@ begin
   FLight.Up := UpHint;
   FLight.FdProjectionNear.Value := 0.1;
   FLight.FdProjectionFar.Value := DepthSpan;
-  if FMap.Size <> FAtlasSize then
+  MapSize:=FAtlasSize;
+  if FMap.Size <> MapSize then
   begin
     FProbe.ContextClose;
     TTextureResources.Unprepare(FMap);
-    FMap.Size := FAtlasSize;
+    FMap.Size := MapSize;
   end;
   TTextureResources.Prepare(FOptions, FMap);
   Resource := TGeneratedShadowMapResource(TTextureResources.Get(FMap));
+  RenderTileSize:=FMap.Size div 2;
   { A newly mounted tile has not connected its receiver effect yet. Do this
     before shadow collection prepares ALL scene shapes (including ground).
     EffectPart.Contents changes call ChangedAll and discard native VBOs.
@@ -918,8 +1037,11 @@ begin
     if FRtx=nil then FRtx:=TRtxShadow.Create;
     FRtx.RasterComparison:=FRtxRasterComparison;
     FRtx.Reflections:=FRtxReflections;
+    FRtx.ScreenShadows:=FRtxScreenShadows;
+    FRtx.PrefetchOffset:=ShadowAhead;
     FRtx.Prepare(FWorldCasters,FRtxRevision,FLayout.CacheFocus,D,FAtlasSize,FLayout.CacheHalfExtent,@AcceptShadowShape);
-    if FRtx.Ready then begin
+    FFrameScreen:=FRtx.ScreenReady;
+    if FRtx.Ready and not FFrameScreen then begin
       for Zone:=0 to 3 do begin
         H:=FZoneHalfExtent[Zone];Step:=2*H/FTileSize;
         CenterX:=FLayout.Zones[Zone].X;CenterY:=FLayout.Zones[Zone].Y;
@@ -949,9 +1071,24 @@ begin
     end;
   end;
   FShadowMinDepth:=MinDepth;FShadowMaxDepth:=MaxDepth;
+  if FFrameScreen and FForest.Ready then FForest.ContextClose;
+  Partitions:=TemporalShadowPartitions;
+  { RTX supplies buildings directly; only vegetation is bucketed then.
+    Include backend readiness in invalidation, so an old raster building
+    silhouette can never survive a transition to hardware tracing. }
+  if not FWorldShadows or FFrameScreen then Partitions:=0;
+  ForestRevision:=FRtxRevision;
+  for I:=0 to FWorldCasters.Count-1 do
+    if FWorldCasters[I] is TOsmProceduralVegetation then
+      ForestRevision:=ForestRevision xor TOsmProceduralVegetation(FWorldCasters[I]).ShadowCacheRevision;
+  FTemporal.BeginFrame(Partitions,FTileSize,TemporalShadowLiveNear,
+    TemporalShadowStatic and not (FFrameRtx or FFrameScreen),
+    (FMembershipRevision shl 32) xor FRtxRevision xor
+    (QWord(Ord(RenderTreesActive)) shl 63) xor (QWord(Ord(FRtxRequested)) shl 62) xor
+    (QWord(Ord(FFrameRtx)) shl 61),ForestRevision,D);
   BeginVegetationShadowPass(CameraPosition);
   try
-    if FRtxRequested and FWorldShadows then begin
+    if FRtxRequested and FWorldShadows and not FFrameScreen then begin
       FTreeCasters.Clear;ForestRevision:=FRtxRevision;
       for I:=0 to FWorldCasters.Count-1 do
         if FWorldCasters[I] is TOsmProceduralVegetation then begin
@@ -959,6 +1096,7 @@ begin
           ForestRevision:=(ForestRevision xor QWord(PtrUInt(FWorldCasters[I])))*16777619;
           ForestRevision:=ForestRevision xor TOsmProceduralVegetation(FWorldCasters[I]).ShadowCacheRevision;
         end;
+      FForest.PrefetchOffset:=ShadowAhead;
       FForest.Prepare(Viewport,FTreeCasters,ForestRevision,D,Side,Up,
         FLayout.Zones[3].X,FLayout.Zones[3].Y,FZoneHalfExtent[3],
         MinDepth,MaxDepth,FTileSize);
@@ -970,6 +1108,10 @@ begin
       Step := 2 * H / FTileSize;
       CenterX := FLayout.Zones[Zone].X;
       CenterY := FLayout.Zones[Zone].Y;
+      FTemporal.PrepareStatic(Zone,@RenderStatic,Side,Up,CenterX,CenterY,H,MinDepth,MaxDepth);
+      if not (FFrameRtx and (Zone=3) and FForest.Ready) then
+        FTemporal.PrepareZone(Zone,@RenderPartition,Side,Up,CenterX,CenterY,H,MinDepth,MaxDepth)
+      else FTemporal.SkipZone(Zone);
       Q := Side * CenterX + Up * CenterY;
       Eye := Q + D * MinDepth;
       FLight.FdProjectionLocation.Value := Eye;
@@ -1012,7 +1154,7 @@ begin
       FZoneCasterCount[Zone] := FSelected.Count;
       { Clear even an empty tile, otherwise old silhouettes survive motion. }
       Resource.UpdateRegion(@RenderSelected, FLight,
-        (Zone and 1) * FTileSize, (Zone shr 1) * FTileSize, FTileSize, FTileSize);
+        (Zone and 1) * RenderTileSize, (Zone shr 1) * RenderTileSize, RenderTileSize, RenderTileSize);
       PreviousX := CenterX; PreviousY := CenterY;
     end;
   finally
@@ -1020,7 +1162,7 @@ begin
     FViewport := nil;
     FSelected.Clear;
   end;
-  if FProbeEnabled and (FProbeZone < 0) then FProbe.Reset;
+  if FFrameScreen or (FProbeEnabled and (FProbeZone < 0)) then FProbe.Reset;
   Viewport.Camera.GetWorldView(CameraPosition,CameraDirection,CameraUp);
   CurrentWorldMatrices := Matrices;
   CurrentReceiverCamera := CameraPosition;
@@ -1034,16 +1176,28 @@ begin
   try SyncGroundRiderShadowEffects(False);
   finally LeaveCriticalSection(RegistryLock) end;
   FSubmitMilliseconds := TimerSeconds(Timer, StartTime) * 1000;
+  if TemporalShadowMeasure then FShadowTimer.EndSample;
   Inc(FRenderSerial);
   FCaptures := CachedMeshCaptures - StartCaptures;
   FCacheDraws := CachedMeshDraws - StartDraws;
 end;
 
+function TRiderShadowAtlas.TryGetScreenCasterRay(out ToSun:TVector3;
+  out MaxRayDistance,ConeTangent:Single):Boolean;
+begin
+  ToSun:=TVector3.Zero;MaxRayDistance:=0;ConeTangent:=0;
+  Result:=FRtxRequested and FRtxScreenShadows and FWorldShadows and (FRtx<>nil);
+  if Result then Result:=FRtx.TryGetScreenCasterRay(ToSun,MaxRayDistance,ConeTangent);
+end;
 procedure TRiderShadowAtlas.RtxSnapshot(const J:TJSONObject);
-var Zones:TJSONArray; Row:TJSONObject; I:Integer;
+var Zones:TJSONArray; Row,Temporal:TJSONObject; I:Integer;
 begin
   J.Add('enabled',FRtxRequested);
-  J.Add('used_this_frame',FWorldShadows and (FFrameRtx or
+  J.Add('screen_world_pass',FFrameScreen);
+  if FFrameScreen then J.Add('raster_depth_bytes',0)
+  else J.Add('raster_depth_bytes',Int64(FMap.Size)*FMap.Size*4);
+  J.Add('raster_passes',Ord(not FFrameScreen)*4);
+  J.Add('used_this_frame',FWorldShadows and (FFrameRtx or FFrameScreen or
     (FRtxRequested and FRtxRasterComparison and FForest.Ready)));
   if FRtx<>nil then FRtx.Snapshot(J) else begin
     J.Add('active',FRtxRequested and FRtxRasterComparison and FForest.Ready);
@@ -1052,8 +1206,17 @@ begin
     J.Add('individual_tree_bakes',0);J.Add('tree_cards',0);
   end;
   FForest.Snapshot(J);
+  Temporal:=TJSONObject.Create;FTemporal.Snapshot(Temporal);
+  Temporal.Add('requested_partitions',TemporalShadowPartitions);
+  Temporal.Add('trees_only',FFrameRtx);
+  Temporal.Add('gpu_last_ms',FShadowGpuMS);
+  Temporal.Add('gpu_sum_ms',FShadowGpuSumMS);
+  Temporal.Add('gpu_samples',Int64(FShadowGpuSamples));
+  Temporal.Add('cpu_submit_ms',FSubmitMilliseconds);
+  J.Add('temporal',Temporal);
   J.Add('avatar_receiver',FAvatarReceiver);
   J.Add('view_distance',FLayout.ViewDistance);
+  J.Add('forward_extension',FForwardExtension);J.Add('motion_mps',FMotion.Speed);
   J.Add('atlas_size',FAtlasSize);
   J.Add('probe_zone',FProbeZone);
   Zones:=TJSONArray.Create;

@@ -2,53 +2,21 @@ unit BikeGpuSkin;
 
 {$mode objfpc}{$H+}
 
-{ ── GPU-скин Tripo-райдера (GPU_ANIM_DESIGN.md, этап 2) ────────────────────
+{ Procedural rider pose shared by all vertices and all render passes.
 
-  TEffectNode с PLUG_vertex_object_space навешивается на шейпы Tripo-скина.
-  Вершинный шейдер сам считает процедурную позу из uPhase:
-    - педальный круг (те же формулы, что UpdateTripoRider на CPU);
-    - анклинг — порт BicycleAnkleFlexCurve;
-    - ноги — closed-form two-bone IK (порт SolveJoint/SolveTwoBone из
-      TripoRig) с 4 фиксированными проходами уточнения контакта (клеят на
-      педали), как CPU-SolveLimb, но без бисекции toe-down и без
-      PinBlendedContact (см. ограничения ниже);
-    - движение таза — scene-level трансформом вокруг контакта с седлом;
-      спина — порт PoseSpine, кватернионы наклона/поворота/крена
-      приходят как uSpineQ0..6;
-    - руки — two-bone IK к resolved-хватам + пронация с фейдом у вертикали
-      + wrist-leveling (uHandLevel) + shoulder-twist из асимметрии хватов
-      (этап 3-хвост);
-    - free-ноги: uLegFreeR/L блендят цель ноги педаль↔uLegFreePosR/L и
-      гасят анклинг (этап 3-хвост); free-руки работают с этапа 2 — хваты
-      резолвятся на CPU и приходят в uGripR/uGripL;
-    - суставы вне процедурного набора (пальцы, дополнительные twist-кости)
-      жёстко следуют ближайшему процедурному предку: их дельта-матрица
-      равна дельте предка (D_j = D_anc — следует из rigid-follow).
+  Default: SendFrame computes the 22 bind-relative limb/spine transforms
+  once, using the same IK equations as the original GLSL. The existing CPU
+  contact/AO/helmet queries reuse that pose. Skinning, shape correctives,
+  muscles, soft contacts, face and cloth still deform on the GPU; CGE caches
+  their final vertices for the depth/colour/RTX passes.
 
-  Скиннинг — LBS по 4 влияниям из castle_SkinJoints0/castle_SkinWeights0
-  (атрибуты объявляет движковый skin-шейдер, который работает первым; его
-  joint-матрицы тождественны, т.к. Rotation суставов больше не пишется,
-  или содержат константный stretch S_j = W_bind*IBM при limb-scaling —
-  в обоих случаях наш plug домножает вершину на D_j = W_proc * W_bind^-1,
-  что в сумме даёт корректный M_j = W_proc * IBM).
+  REZVIVO_RIDER_POSE_PALETTE=0 retains the original per-vertex GPU solver for
+  regression comparisons. #if GSK_POSE_PALETTE removes the unused solver
+  from the production vertex program (no per-vertex dispatch branch).
 
-  CPU на кадр: SendFrame — ~40 float (этап 3 переведёт позу на событийные
-  пакеты uPoseA/uPoseB + GPU-лерп). Bind-статика запекается в GLSL
-  константами при Build (эффект пересоздаётся при смене райдера).
-
-  ОГРАНИЧЕНИЯ этапа 2+3 (GpuAnim=False по умолчанию не затронут):
-    - нет toe-down свипа/бисекции (нога в пределах досягаемости — норма);
-    - нет PinBlendedContact (клеят садится на педаль по жёсткой кости,
-      не по блендированной поверхности);
-    - нет hand-freeze: шейдер stateless, ориентация кисти на неподвижном
-      хвате пересчитывается каждый кадр и может чуть дышать в такт бобу
-      (на CPU FHandFreeze* держит её зафиксированной);
-    - нет пакетов поз uPoseA/uPoseB (покадровая отправка ~50 float). }
-
-  { Этап 5: капсульная тень райдера под GpuAnim. SendFrame попутно считает
-    позиции 21 сустава ТОЙ ЖЕ математикой, что шейдер (closed-form IK ног/рук,
-    FK спины и шеи из uSpineQ*), и отдаёт их в кадре
-    байка через ShadowJoint — UpdateShadowDynamic строит капсулы без posed-рига. }
+  Both paths keep the existing four-influence skinning, pedal/contact IK,
+  free-limb targets and wrist twist distribution. The native rig animation
+  selected by GpuAnim=False is independent and is not changed here. }
 
 interface
 
@@ -81,6 +49,9 @@ type
 
 const
   GPU_SHJ_COUNT = 21;   { суставов в капсульной тени райдера }
+  GPU_SKIN_SCALAR_COUNT = 61;
+  GPU_POSE_MATRIX_COUNT = 22;
+  GPU_POSE_UPLOAD_COUNT = GPU_POSE_MATRIX_COUNT+2; { forearm roll/pivot packed in columns }
 
 type
   TGpuRiderSkin = class
@@ -98,6 +69,9 @@ type
     FUBindT: TMFVec3f;     { NJ: BindWorld translations; live after HeightK }
     FUHandRest: TMFMatrix4f;
     FUHandForward: array[0..1] of TSFVec3f;
+    FUsePosePalette: Boolean;
+    FUPose: TMFMatrix4f;
+    FPoseList: TMatrix4List;
     FHandJointIndices: array of Integer;
     FScalarsList: TSingleList;
     FVecsList: TVector3List;
@@ -140,7 +114,7 @@ type
     FShInFootYaw: TTripoVec4;                          { right-foot yaw; conjugate for left }
     { кэш последних отправленных uniform'ов — Send только при изменении;
       первый кадр после Build/включения эффекта шлёт всё }
-    FLastScalars: array[0..52] of Single;
+    FLastScalars: array[0..GPU_SKIN_SCALAR_COUNT-1] of Single;
     FLastVecs: array[0..7] of TVector3;
     FLastInvP: TMatrix4;
     FLastValid: Boolean;
@@ -150,6 +124,9 @@ type
     { IK конечностей + перенос rig->байк (по FShIn*/FShRS/FShPS); зовётся
       лениво из ShadowJoint при FShDirty }
     procedure UpdateShadowLimbs;
+    procedure SetPoseMatrix(Index: Integer; const Q: TTripoVec4;
+      const P: TTripoVec3; const BindQ: TTripoVec4; const BindP: TTripoVec3);
+    procedure UploadPosePalette;
   public
     constructor Create(ARider: TTripoRiderScene);
     { Сгенерировать GLSL из рига, создать эффект и навесить на шейпы скина. }
@@ -272,6 +249,8 @@ begin
   FRestCount := 0;
   FRestList := TMatrix4List.Create;
   FBindTList := TVector3List.Create;
+  FUsePosePalette := GetEnvironmentVariable('REZVIVO_RIDER_POSE_PALETTE') <> '0';
+  FPoseList := TMatrix4List.Create;
 end;
 
 destructor TGpuRiderSkin.Destroy;
@@ -296,6 +275,7 @@ begin
   FVecsList.Free;
   FRestList.Free;
   FBindTList.Free;
+  FPoseList.Free;
   FShNameIdx.Free;
   inherited;
 end;
@@ -497,6 +477,7 @@ begin
   if (not FReady) or (FEffect = nil) or (FRider = nil) or (FRider.Rig = nil) then Exit;
   if FRider.Rig.JointCount <> FRestCount then Exit;
   UploadBindUniforms;
+  FLastValid := False; { body dimensions also invalidate the common pose }
   Result := True;
 end;
 
@@ -900,6 +881,11 @@ begin
   FUHandRest := TMFMatrix4f.Create(FEffect, True, 'uGskHandRest', []);
   for I:=0 to High(FHandJointIndices)do FUHandRest.Items.Add(TMatrix4.Identity);
   FEffect.AddCustomField(FUHandRest);
+  FPoseList.Clear;
+  for I := 0 to GPU_POSE_UPLOAD_COUNT-1 do FPoseList.Add(TMatrix4.Identity);
+  FUPose := TMFMatrix4f.Create(FEffect, True, 'uGskPose', []);
+  FUPose.Items.Assign(FPoseList);
+  FEffect.AddCustomField(FUPose);
   { These axes come from the live bind. Embedding their floating-point
     values made almost identical avatars compile separate full shaders,
     and left the GPU axis stale after a body-shape edit. }
@@ -942,7 +928,8 @@ begin
       что тождественно Σw·D·bind при любом состоянии суставов. }
     SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'mat4 skinMatrix;' + #10 + '#endif' + #10 + '');
     SL.Add('uniform mat4 uInvP;');
-    SL.Add('uniform float uScalars[61];');
+    SL.Add('uniform float uScalars['+IntToStr(GPU_SKIN_SCALAR_COUNT)+'];');
+    SL.Add('#define GSK_POSE_PALETTE '+IntToStr(Ord(FUsePosePalette)));
     SL.Add('uniform mat4 uGskHandRest[' + IntToStr(Length(FHandJointIndices)) + '];');
     SL.Add('uniform int uGskIterations[3];');
     SL.Add('uniform vec3 uGskHandForward0, uGskHandForward1;');
@@ -1284,15 +1271,25 @@ begin
     if ArmOk[1] then EmitArmSolve('gskArmD_L', 'gskAC1_A_', 'gskArmBase1', 'uGripL', 'uPronL', -1);
 
     { ── getD: отображение индекса сустава в дельта-матрицу ── }
-    SL.Add('mat4 gskDelta[22];');
+    SL.Add('#if GSK_POSE_PALETTE');
+    SL.Add('uniform mat4 uGskPose['+IntToStr(GPU_POSE_UPLOAD_COUNT)+'];');
+    SL.Add('#define gskDelta uGskPose');
+    SL.Add('#else');
+    SL.Add('mat4 gskDelta['+IntToStr(GPU_POSE_MATRIX_COUNT)+'];');
     { Keep the dynamically indexed matrix bank small. A quaternion and pivot
       are enough; construct a twist matrix only for a vertex using a helper. }
     SL.Add('vec4 gskForeRoll[2];');
     SL.Add('vec3 gskForePivot[2];');
+    SL.Add('#endif');
     SL.Add('mat4 gskTwistD(int kind, int part) {');
-    SL.Add('  int side=kind-4; vec4 q=gskForeRoll[side];');
+    SL.Add('  int side=kind-4;');
+    SL.Add('#if GSK_POSE_PALETTE');
+    SL.Add('  vec4 q=uGskPose['+IntToStr(GPU_POSE_MATRIX_COUNT)+'+side][0];');
+    SL.Add('  vec3 p=uGskPose['+IntToStr(GPU_POSE_MATRIX_COUNT)+'+side][1].xyz;');
+    SL.Add('#else');
+    SL.Add('  vec4 q=gskForeRoll[side]; vec3 p=gskForePivot[side];');
+    SL.Add('#endif');
     SL.Add('  if(part==4) q=normalize(vec4(q.xyz,q.w+1.0));');
-    SL.Add('  vec3 p=gskForePivot[side];');
     SL.Add('  return gskDMat(q,p,vec4(0.0,0.0,0.0,1.0),p)*gskDelta[side==0?14:18];');
     SL.Add('}');
     if FRider.Face<>nil then SL.Add(FRider.Face.ShaderSource)
@@ -1347,6 +1344,7 @@ begin
     SL.Add('  ivec4 J = ivec4(castle_SkinJoints0 + vec4(0.5));');
     { Each limb has one solver call site per vertex. Weighted joints only
       select its results, avoiding repeated inlining of the entire solver. }
+    SL.Add('#if !GSK_POSE_PALETTE');
     SL.Add('  bool need[6]; bool armLimb[2];');
     SL.Add('  for (int k = 0; k < 6; k++) need[k] = false;');
     SL.Add('  armLimb[0] = false; armLimb[1] = false;');
@@ -1385,6 +1383,7 @@ begin
       SL.Add('  if (need[4]) gskArmD_R(armLimb[0], gskDelta[12], gskDelta[13], gskDelta[14], gskDelta[15], gskForeRoll[0], gskForePivot[0]);');
     if ArmOk[1] then
       SL.Add('  if (need[5]) gskArmD_L(armLimb[1], gskDelta[16], gskDelta[17], gskDelta[18], gskDelta[19], gskForeRoll[1], gskForePivot[1]);');
+    SL.Add('#endif');
     if (FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then
     begin
       SL.Add('vec3 psdP,psdN;riderPsdOffset(psdP,psdN);vec3 p=castle_Vertex.xyz+psdP;');
@@ -1534,6 +1533,31 @@ begin
   end;
 end;
 
+procedure TGpuRiderSkin.SetPoseMatrix(Index: Integer; const Q: TTripoVec4;
+  const P: TTripoVec3; const BindQ: TTripoVec4; const BindP: TTripoVec3);
+var DQ: TTripoVec4;
+begin
+  { Same bind-relative transform as gskDMat. Keep the translation based on
+    the unnormalized delta, matching the existing GLSL exactly. }
+  DQ := QuatMul(Q, QuatConj(BindQ));
+  FPoseList[Index] := RestToCastle(Mat4FromTRS(
+    V3Sub(P, QuatRotateV3(DQ, BindP)), DQ, V3(1,1,1)));
+end;
+
+procedure TGpuRiderSkin.UploadPosePalette;
+var I, Slot: Integer;
+begin
+  for I := 0 to RiderSpineChainCount-1 do
+    if FSpineEx[I] then
+    begin
+      if I < 5 then Slot := 7+I else Slot := 15+I;
+      SetPoseMatrix(Slot, FShRS[I], FShPS[I], FShSpine[I].PR, FShSpine[I].PP);
+    end;
+  UpdateShadowLimbs;
+  FShDirty := False; { contacts, helmet and AO reuse this frame's pose }
+  FUPose.Send(FPoseList);
+end;
+
 procedure TGpuRiderSkin.UpdateShadowLimbs;
 var
   GripFrame:TRiderGripFrame;
@@ -1611,9 +1635,18 @@ begin
         Aim := V3Sub(Tgt, QuatRotateV3(qE, CT));
         Mid := ShSolveJoint(Root, Aim, L1, L2, Hint);
         UDir := V3Norm(V3Sub(Mid, Root));
+        qU := QuatMul(QuatFromTo(QuatRotateV3(UR, AXM), UDir), UR);
         pM := V3Add(Root, V3Scale(UDir, L1));
+        qMpre := QuatMul(qU, QuatMul(QuatConj(UR), MR));
         MDir := V3Norm(V3Sub(Aim, pM));
+        qM := QuatMul(QuatFromTo(QuatRotateV3(qMpre, AXE), MDir), qMpre);
         Aim := V3Add(pM, V3Scale(MDir, L2));
+        if FUsePosePalette then
+        begin
+          SetPoseMatrix(1+Side*3, qU, Root, UR, FShBind[SHJ_THIGH_R+Side]);
+          SetPoseMatrix(2+Side*3, qM, pM, MR, FShBind[SHJ_CALF_R+Side]);
+          SetPoseMatrix(3+Side*3, qE, Aim, ER, FShBind[SHJ_FOOT_R+Side]);
+        end;
         FShRigPts[SHJ_THIGH_R + Side] := Root;
         FShRigPts[SHJ_CALF_R + Side] := pM;
         FShRigPts[SHJ_FOOT_R + Side] := Aim;
@@ -1629,7 +1662,7 @@ begin
         if ClavInSpine then
         begin
           Rb := FShRS[ParentSpine];  Pb := FShPS[ParentSpine];
-          qCl := QuatMul(Rb,QuatMul(QuatConj(PR),QuatMul(FShClavicleDelta[Side],CR)));
+          qCl := QuatMul(QuatMul(Rb,QuatConj(PR)),QuatMul(FShClavicleDelta[Side],CR));
           pCl := V3Add(Pb, QuatRotateV3(Rb, CO));
         end
         else
@@ -1679,8 +1712,26 @@ begin
         FShRigPts[SHJ_FORE_R + Side] := pM;
         FShRigPts[SHJ_HAND_R + Side] := HandPos;
         FShHandQ[Side]:=qE;
+        if FUsePosePalette then
+        begin
+          SetPoseMatrix(12+Side*4, qCl, pCl, CR, CP);
+          SetPoseMatrix(13+Side*4, qU, Root, UR, FShBind[SHJ_UPARM_R+Side]);
+          SetPoseMatrix(14+Side*4, qM, pM, MR, FShBind[SHJ_FORE_R+Side]);
+          SetPoseMatrix(15+Side*4, qE, HandPos, ER, FShBind[SHJ_HAND_R+Side]);
+        end;
         qEnat:=QuatNormalize(QuatMul(qE,QuatConj(qEnat)));
         if qEnat.W<0 then begin qEnat.X:=-qEnat.X;qEnat.Y:=-qEnat.Y;qEnat.Z:=-qEnat.Z;qEnat.W:=-qEnat.W;end;
+        if FUsePosePalette then
+        begin
+          FoAxis := V3Norm(V3Sub(HandPos,pM));
+          Sv := V3Scale(FoAxis,V3Dot(V3(qEnat.X,qEnat.Y,qEnat.Z),FoAxis));
+          qU.X:=Sv.X; qU.Y:=Sv.Y; qU.Z:=Sv.Z; qU.W:=qEnat.W;
+          qU:=QuatNormalize(qU);
+          M:=TMatrix4.Identity;
+          M.Columns[0]:=Vector4(qU.X,qU.Y,qU.Z,qU.W);
+          M.Columns[1]:=Vector4(pM.X,pM.Y,pM.Z,0);
+          FPoseList[GPU_POSE_MATRIX_COUNT+Side]:=M;
+        end;
         FShHandTwist[Side]:=RadToDeg(2*ArcTan2(V3Dot(V3(qEnat.X,qEnat.Y,qEnat.Z),FoAxis),qEnat.W));
         Sv := V3Add(HandPos, QuatRotateV3(qE, CT));
         FShContacts[2 + Side] := FRider.Scene.Transform.MultPoint(Vector3(Sv.X, Sv.Y, Sv.Z));
@@ -1940,6 +1991,7 @@ begin
   FShInPose := Pose;
   FShInFootYaw := FootYaw;
   FShDirty := True;
+  if FUsePosePalette and (ChS or ChM or ChV) then UploadPosePalette;
 end;
 
 end.

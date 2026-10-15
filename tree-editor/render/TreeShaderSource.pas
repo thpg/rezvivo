@@ -7,13 +7,18 @@ function ReadRenderShader(const Url: string): string;
 implementation
 uses Classes, SysUtils{$ifdef ANDROID}, CastleDownload{$endif};
 function RenderShaderSource(const Source: string; GLES: Boolean): string;
+var Extensions:string;
 begin
   Result := Source;
   if not GLES then Exit;
-    Result := StringReplace(Result, '#version 330 core', '#version 300 es' + #10 +
-      'precision highp float;' + #10 + 'precision highp int;' + #10 +
-      'precision highp sampler2DArray;' + #10 +
-      'precision highp sampler2DShadow;', []);
+  Extensions:='';
+  if Pos('TREE_SAMPLE_MASK',Source)>0 then
+    Extensions:='#ifdef GL_OES_sample_variables'+#10+
+      '#extension GL_OES_sample_variables : enable'+#10+'#endif'+#10;
+  Result := StringReplace(Result, '#version 330 core', '#version 300 es' + #10 + Extensions +
+    'precision highp float;' + #10 + 'precision highp int;' + #10 +
+    'precision highp sampler2DArray;' + #10 +
+    'precision highp sampler2DShadow;', []);
 end;
 function ReadRenderShader(const Url: string): string;
 var S: TStringList;

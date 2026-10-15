@@ -38,7 +38,7 @@ uses
   Osm3dStudioLog          { LOGGING_ENABLED — общий master-флаг логирования }
   {$IFDEF IAM_LIVE}, Osm3dIamLive{$ENDIF}
 ,
-  Osm3dOsmIndex;     { TOsmRoadIndex — adjacency «узел → дорожные ways» }
+  Osm3dOsmIndex, Osm3dBridgeDetails;     { shared road index and baked bridge members }
 
 const
   { Высота бетонного парапета над настилом, м. }
@@ -114,11 +114,15 @@ type
       (TDeckJoint в Osm3dGeomBuilder). ClipRoadsUnderDecks режет подход в
       том же сечении (полотно не уходит под палубу). }
     WeldJoints: Boolean;
+    Details: TBridgeDetails;
   end;
   TBridgeSpecArray = array of TBridgeSpec;
 
   TBridgeBuilder = class
   public
+    { Only explicitly photo-grouped parts of the same physical bridge share
+      a deck. Unrelated nearby or crossing bridges keep their own heights. }
+    class procedure AlignDetailDeckGroups(var Specs:TBridgeSpecArray); static;
     { Reverse only bridge deck faces into a concrete underside. Works on
       cached composites too; never enters the wheel ground-height index. }
     class function BuildUnderside(Composite:TGroundCompositeMesh;
@@ -1763,6 +1767,7 @@ begin
     Spec.ApprStartWayId := apprStartWayId;
     Spec.ApprEndWayId   := apprEndWayId;
     Spec.WeldJoints     := weldB;
+    Spec.Details := ReadBridgeDetails(Way.Tags.Get(BRIDGE_DETAILS_TAG));
     if weldB then Inc(nWeld);
     { Имя реки под мостом — по пересечению ИСХОДНОГО пролёта C с водотоками. }
     Spec.RiverName := RiverNameUnderSpan(Waterways, C);
@@ -1774,15 +1779,172 @@ begin
   end;
 
   SetLength(Result, count);
+  AlignDetailDeckGroups(Result);
   if Assigned(LogProc) then
     LogProc(Format('Osm3dGeomBridges: %d bridge way(s) collected (%d welded to road — «одна геометрия»)',
       [count, nWeld]));
+end;
+
+class procedure TBridgeBuilder.AlignDetailDeckGroups(var Specs:TBridgeSpecArray);
+var I,J,K,M,Q:Integer;DX,DZ,L2,F,D2,BestD2,H,BestH,Edge,Blend,Run:Double;
+  P:TXZ;Group:string;
+  procedure Refine(var S:TBridgeSpec);
+  var A,B,N,U,V:Integer;C:TXZArray;Y:TSingleArray;L,T:Double;
+  begin
+    if Length(S.Center)<2 then Exit;
+    N:=1;
+    for A:=0 to High(S.Center)-1 do Inc(N,Max(1,Ceil(Hypot(S.Center[A+1].X-S.Center[A].X,S.Center[A+1].Z-S.Center[A].Z)/5)));
+    SetLength(C,N);SetLength(Y,N);U:=0;
+    for A:=0 to High(S.Center)-1 do begin
+      L:=Hypot(S.Center[A+1].X-S.Center[A].X,S.Center[A+1].Z-S.Center[A].Z);B:=Max(1,Ceil(L/5));
+      for V:=0 to B-1 do begin
+        T:=V/B;C[U].X:=S.Center[A].X+(S.Center[A+1].X-S.Center[A].X)*T;
+        C[U].Z:=S.Center[A].Z+(S.Center[A+1].Z-S.Center[A].Z)*T;
+        Y[U]:=S.CenterY[A]+(S.CenterY[A+1]-S.CenterY[A])*T;Inc(U);
+      end;
+    end;
+    C[U]:=S.Center[High(S.Center)];Y[U]:=S.CenterY[High(S.CenterY)];S.Center:=C;S.CenterY:=Y;
+    SetLength(S.AccumLen,N);S.AccumLen[0]:=0;
+    for A:=1 to N-1 do S.AccumLen[A]:=S.AccumLen[A-1]+Sqrt(Sqr(C[A].X-C[A-1].X)+Sqr(C[A].Z-C[A-1].Z)+Sqr(Y[A]-Y[A-1]));
+  end;
+  procedure LimitApproachGrade(var S:TBridgeSpec);
+  var A,N:Integer;Station:array of Double;Grade,Lo,Hi,Step,StartY,EndY:Double;
+  begin
+    N:=Length(S.Center);if N<2 then Exit;
+    SetLength(Station,N);Station[0]:=0;
+    for A:=1 to N-1 do Station[A]:=Station[A-1]+
+      Hypot(S.Center[A].X-S.Center[A-1].X,S.Center[A].Z-S.Center[A-1].Z);
+    if Station[N-1]<0.001 then Exit;
+    StartY:=S.CenterY[0];EndY:=S.CenterY[N-1];
+    Grade:=Max(Tan(BRIDGE_RAMP_SLOPE_DEG*Pi/180),Abs(EndY-StartY)/Station[N-1]);
+    { Different OSM bridge halves often end at different stations. A fixed
+      20 m blend or the projection distance gate can otherwise turn several
+      metres of DEM disagreement into a steep step. Keep both ground joints
+      fixed, and constrain the shared profile by the same grade as ramps. }
+    for A:=1 to N-2 do begin
+      Lo:=Max(StartY-Grade*Station[A],EndY-Grade*(Station[N-1]-Station[A]));
+      Hi:=Min(StartY+Grade*Station[A],EndY+Grade*(Station[N-1]-Station[A]));
+      S.CenterY[A]:=EnsureRange(Double(S.CenterY[A]),Lo,Max(Lo,Hi));
+    end;
+    for A:=1 to N-2 do begin
+      Step:=Grade*(Station[A]-Station[A-1]);
+      S.CenterY[A]:=EnsureRange(Double(S.CenterY[A]),S.CenterY[A-1]-Step,S.CenterY[A-1]+Step);
+    end;
+    for A:=N-2 downto 1 do begin
+      Step:=Grade*(Station[A+1]-Station[A]);
+      S.CenterY[A]:=EnsureRange(Double(S.CenterY[A]),S.CenterY[A+1]-Step,S.CenterY[A+1]+Step);
+    end;
+  end;
+begin
+  { Straight OSM decks may have only their two endpoints. Insert bounded
+    stations before blending; otherwise every vertex is a preserved joint. }
+  for I:=0 to High(Specs) do if Specs[I].Details.DeckGroup<>'' then Refine(Specs[I]);
+  for I:=0 to High(Specs) do begin
+    Group:=Specs[I].Details.DeckGroup;if Group='' then Continue;
+    M:=I;
+    for J:=0 to High(Specs) do if (Specs[J].Details.DeckGroup=Group) and
+      ((Specs[J].Width>Specs[M].Width) or ((Specs[J].Width=Specs[M].Width) and (Specs[J].WayId<Specs[M].WayId))) then M:=J;
+    if (M=I) or (Length(Specs[M].Center)<2) then Continue;
+    for K:=0 to High(Specs[I].Center) do begin
+      P:=Specs[I].Center[K];BestD2:=1e100;BestH:=Specs[I].CenterY[K];
+      for Q:=0 to High(Specs[M].Center)-1 do begin
+        DX:=Specs[M].Center[Q+1].X-Specs[M].Center[Q].X;
+        DZ:=Specs[M].Center[Q+1].Z-Specs[M].Center[Q].Z;L2:=DX*DX+DZ*DZ;if L2<1e-8 then Continue;
+        F:=EnsureRange(((P.X-Specs[M].Center[Q].X)*DX+(P.Z-Specs[M].Center[Q].Z)*DZ)/L2,0.0,1.0);
+        D2:=Sqr(P.X-Specs[M].Center[Q].X-DX*F)+Sqr(P.Z-Specs[M].Center[Q].Z-DZ*F);
+        if D2<BestD2 then begin
+          BestD2:=D2;BestH:=Specs[M].CenterY[Q]+F*(Specs[M].CenterY[Q+1]-Specs[M].CenterY[Q]);
+        end;
+      end;
+      if BestD2>Sqr((Specs[I].Width+Specs[M].Width)*0.5+20) then Continue;
+      { Ground joints stay fixed; the approach smoothly meets the common deck.
+        The central bridge cross-section is horizontal, sidewalks raised 16 cm. }
+      Edge:=Min(Hypot(P.X-Specs[I].Center[0].X,P.Z-Specs[I].Center[0].Z),
+        Hypot(P.X-Specs[I].Center[High(Specs[I].Center)].X,P.Z-Specs[I].Center[High(Specs[I].Center)].Z));
+      Blend:=EnsureRange(Edge/20,0.0,1.0);Blend:=Blend*Blend*(3-2*Blend);
+      H:=BestH+Specs[I].Details.DeckOffset-Specs[M].Details.DeckOffset;
+      Specs[I].CenterY[K]+=Blend*(H-Specs[I].CenterY[K]);
+    end;
+    LimitApproachGrade(Specs[I]);
+    Run:=0;SetLength(Specs[I].AccumLen,Length(Specs[I].Center));
+    for K:=0 to High(Specs[I].Center) do begin
+      if K>0 then Run+=Sqrt(Sqr(Specs[I].Center[K].X-Specs[I].Center[K-1].X)+
+        Sqr(Specs[I].Center[K].Z-Specs[I].Center[K-1].Z)+Sqr(Specs[I].CenterY[K]-Specs[I].CenterY[K-1]));
+      Specs[I].AccumLen[K]:=Run;
+    end;
+  end;
 end;
 
 class procedure TBridgeBuilder.EmitDeck(const Spec: TBridgeSpec;
   Composite: TGroundCompositeMesh);
 begin
   EmitDeckCore(Spec, Composite);
+end;
+
+{ OSM may map the two road halves and sidewalks as separated axes. Their
+  confirmed shared deck must cover the narrow spaces between those ribbons. }
+procedure EmitSharedDeckSeams(const Specs:TBridgeSpecArray;Composite:TGroundCompositeMesh);
+var I,J,K,V,LowerPart,Material:Integer;P0,P1,Q0,Q1,N,Facing:TVector3;Idx:array[0..3]of Integer;
+  Vertex:TMeshVertex;
+  function Edges(A,B,AtIndex:Integer;out P,R:TVector3):Boolean;
+  var S,Q:Integer;F,DX,DZ,L2,D2,Best,Gap,Len,BX,BZ,BY,UX,UZ:Double;
+  begin
+    Result:=False;P:=Vector3(Specs[A].Center[AtIndex].X,Specs[A].CenterY[AtIndex],Specs[A].Center[AtIndex].Z);
+    Best:=1e100;BX:=0;BZ:=0;BY:=0;UX:=0;UZ:=0;
+    for S:=0 to High(Specs[B].Center)-1 do begin
+      DX:=Specs[B].Center[S+1].X-Specs[B].Center[S].X;DZ:=Specs[B].Center[S+1].Z-Specs[B].Center[S].Z;
+      L2:=DX*DX+DZ*DZ;if L2<1e-8 then Continue;
+      F:=((P.X-Specs[B].Center[S].X)*DX+(P.Z-Specs[B].Center[S].Z)*DZ)/L2;
+      if (F<0) or (F>1) then Continue;
+      D2:=Sqr(P.X-Specs[B].Center[S].X-DX*F)+Sqr(P.Z-Specs[B].Center[S].Z-DZ*F);
+      if D2<Best then begin
+        Best:=D2;BX:=Specs[B].Center[S].X+DX*F;BZ:=Specs[B].Center[S].Z+DZ*F;
+        BY:=Specs[B].CenterY[S]+(Specs[B].CenterY[S+1]-Specs[B].CenterY[S])*F;UX:=DX;UZ:=DZ;
+      end;
+    end;
+    Len:=Sqrt(Best);Gap:=Len-(Specs[A].Width+Specs[B].Width)*0.5;
+    if (Gap< -2) or (Gap>6) or (Abs(P.Y-BY)>0.5) or
+      ((Gap<0.015) and (Abs(P.Y-BY)<0.025)) then Exit;
+    S:=Min(AtIndex+1,High(Specs[A].Center));Q:=Max(AtIndex-1,0);
+    DX:=Specs[A].Center[S].X-Specs[A].Center[Q].X;DZ:=Specs[A].Center[S].Z-Specs[A].Center[Q].Z;
+    if Abs(DX*UX+DZ*UZ)<0.97*Hypot(DX,DZ)*Hypot(UX,UZ) then Exit;
+    DX:=(BX-P.X)/Len;DZ:=(BZ-P.Z)/Len;
+    R:=Vector3(BX-DX*Specs[B].Width*0.5,BY,BZ-DZ*Specs[B].Width*0.5);
+    P.X+=DX*Specs[A].Width*0.5;P.Z+=DZ*Specs[A].Width*0.5;
+    if Gap<0.015 then begin
+      { Raised overlapping sidewalks still need their vertical curb face;
+        otherwise one sees water through the open side of the upper ribbon. }
+      if P.Y<R.Y then begin P.X:=R.X;P.Z:=R.Z end
+      else begin R.X:=P.X;R.Z:=P.Z end;
+    end;
+    Result:=True;
+  end;
+begin
+  for I:=0 to High(Specs)-1 do if Specs[I].Details.DeckGroup<>'' then
+    for J:=I+1 to High(Specs) do if Specs[J].Details.DeckGroup=Specs[I].Details.DeckGroup then
+      for K:=0 to High(Specs[I].Center)-1 do begin
+        if not Edges(I,J,K,P0,Q0) or not Edges(I,J,K+1,P1,Q1) then Continue;
+        N:=TVector3.CrossProduct(Q0-P0,P1-P0);if N.Length<0.00001 then Continue;
+        Material:=GROUND_MAT_ASPHALT;
+        if Abs(N.Y)<0.00001 then begin
+          LowerPart:=I;if P0.Y>Q0.Y then LowerPart:=J;
+          Facing:=Vector3(Specs[LowerPart].Center[0].X-P0.X,0,Specs[LowerPart].Center[0].Z-P0.Z);
+          if TVector3.DotProduct(N,Facing)<0 then N:=-N;
+          Material:=GROUND_MAT_PAVEMENT;
+        end else if N.Y<0 then N:=-N;
+        N:=N.Normalize;
+        Vertex.Normal:=N;Vertex.OsmId:=Specs[I].WayId;
+        for V:=0 to 3 do begin
+          case V of 0:Vertex.Position:=P0;1:Vertex.Position:=Q0;2:Vertex.Position:=Q1;3:Vertex.Position:=P1 end;
+          Vertex.UV:=MakeUV(Vertex.Position.X,Vertex.Position.Z);
+          Idx[V]:=Composite.AppendVertex(Vertex,Material);
+        end;
+        if TVector3.DotProduct(TVector3.CrossProduct(Q0-P0,P1-P0),N)>0 then begin
+          Composite.AppendTriangle(Idx[0],Idx[1],Idx[2]);Composite.AppendTriangle(Idx[0],Idx[2],Idx[3]);
+        end else begin
+          Composite.AppendTriangle(Idx[0],Idx[2],Idx[1]);Composite.AppendTriangle(Idx[0],Idx[3],Idx[2]);
+        end;
+      end;
 end;
 
 class procedure TBridgeBuilder.Emit(const Specs: TBridgeSpecArray;
@@ -1794,6 +1956,7 @@ var
   halfW, railOff: Single;
   RailL, RailR: TXZArray;
   RailMesh: TMesh;
+  RailKind: TBridgeRail;
   sumX, sumZ: Single;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1615);{$ENDIF}
@@ -1813,10 +1976,6 @@ begin
 
     { бетонный меш заборов уже есть, когда GenerateFences построил палитру;
       на всякий случай создаём его, если nil }
-    if Fences.Fences[concMat] = nil then
-      Fences.Fences[concMat] := TMesh.Create;
-    RailMesh := Fences.Fences[concMat];
-
     halfW   := Specs[s].Width * 0.5;
     railOff := halfW - BRIDGE_RAIL_INSET_M;
     if railOff < 0.05 then railOff := halfW;     { очень узкий настил: перила по краю }
@@ -1824,11 +1983,24 @@ begin
     OffsetPolyline(Specs[s].Center,  railOff, RailL);
     OffsetPolyline(Specs[s].Center, -railOff, RailR);
 
+    for RailKind:=brConcrete to brMetal do begin
+    if RailKind=brMetal then concMat:=Ord(fmMetal) else concMat:=Ord(fmConcrete);
+    if (Specs[s].Details.PositiveRail<>RailKind) and
+       (Specs[s].Details.NegativeRail<>RailKind) and
+       not ((RailKind=brConcrete) and Specs[s].Details.Suspension) then Continue;
+    if Fences.Fences[concMat]=nil then Fences.Fences[concMat]:=TMesh.Create;
+    RailMesh:=Fences.Fences[concMat];
     preVert := RailMesh.VertexCount;
     preTri  := RailMesh.TriangleCount;
 
-    EmitRailRun(RailL, Specs[s].CenterY, BRIDGE_RAIL_HEIGHT_M, concMat, RailMesh, Specs[s].WayId);
-    EmitRailRun(RailR, Specs[s].CenterY, BRIDGE_RAIL_HEIGHT_M, concMat, RailMesh, Specs[s].WayId);
+    if Specs[s].Details.PositiveRail=RailKind then
+      EmitRailRun(RailL, Specs[s].CenterY, BRIDGE_RAIL_HEIGHT_M, concMat, RailMesh, Specs[s].WayId);
+    if Specs[s].Details.NegativeRail=RailKind then
+      EmitRailRun(RailR, Specs[s].CenterY, BRIDGE_RAIL_HEIGHT_M, concMat, RailMesh, Specs[s].WayId);
+    RailMesh.CurrentOsmId:=Specs[s].WayId;
+    if RailKind=brConcrete then
+      EmitBridgeDetails(Specs[s].Details,Specs[s].Center,Specs[s].CenterY,Specs[s].Width,RailMesh);
+    RailMesh.CurrentOsmId:=0;
 
     vEnd  := RailMesh.VertexCount;
     tEnd  := RailMesh.TriangleCount;
@@ -1856,9 +2028,11 @@ begin
     Fences.TileAnchors[an].TriEnd    := tEnd;
     Fences.TileAnchors[an].VertStart := preVert;
     Fences.TileAnchors[an].VertEnd   := vEnd;
+    end;
   end;
 
   { настил дописан в композит — вернуть массивы к точной длине для тайлера }
+  EmitSharedDeckSeams(Specs,Composite);
   Composite.TrimArrays;
 
   if Assigned(LogProc) then

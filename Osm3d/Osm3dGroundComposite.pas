@@ -9,7 +9,7 @@ unit Osm3dGroundComposite;
 
 interface
 
-uses Osm3dStaticGeometry,
+uses Osm3dStaticGeometry, Osm3dSceneLighting,
   Classes,
   SysUtils,
   CastleImages,
@@ -993,6 +993,8 @@ end;
 function GROUND_COMPOSITE_FS: string;
 begin
   Result :=
+    SCENE_LIGHTING_GLSL +
+    'vec3 gc_scene_direct=vec3(0),gc_scene_indirect=vec3(0); bool gc_scene_valid=false;' + #10 +
     'bool gc_grass_display_active=false; vec3 gc_grass_display;' + #10 +
     StringReplace(RIDER_SHADOW_GLSL,'PLUG_fragment_modify','gc_grass_applyShadow',[rfReplaceAll]) +
     StringReplace(StringReplace(RTX_MATERIAL_GLSL,'rz','gp',[rfReplaceAll]),'gp_capture','rz_ground_capture',[rfReplaceAll]) +
@@ -1729,6 +1731,12 @@ begin
     '       material contrast) so grass/roads sit at a daylight level matching' + #10 +
     '       the instanced vegetation; Reinhard below still tames the bright end. */' + #10 +
     '    colorLin *= u_ground_exposure;' + #10 +
+    '    // Water owns its animated lighting in fragment_modify. The late' + #10 +
+    '    // ground resolve must not replace its waves/reflections with dry albedo.' + #10 +
+    '    if(rz_scene.x>.5 && !gc_grass_display_active && matId!=20){' + #10 +
+    '      gc_scene_direct=directLight*(rzSceneSun()/(SUN_COLOR*SUN_INTENSITY));' + #10 +
+    '      gc_scene_indirect=diffuseColor*rzSceneSky(worldN)*ao;gc_scene_valid=true;' + #10 +
+    '    }' + #10 +
     '' + #10 +
     '    /* Reinhard tone map. */' + #10 +
     '    vec3 colorTM = colorLin / (colorLin + vec3(1.0));' + #10 +
@@ -1743,7 +1751,7 @@ begin
     '    fragment_color.a   = 1.0;' + #10 +
     '}' + #10 +
     'void PLUG_fragment_modify(inout vec4 color) {' + #10 +
-    '    if (!gc_grass_display_active) gc_grass_applyShadow(color);' + #10 +
+    '    if (!gc_grass_display_active && !gc_scene_valid) gc_grass_applyShadow(color);' + #10 +
     '}' + #10 +
     'void PLUG_fragment_end(inout vec4 color) {' + #10 +
     '    if(rz_ground_capture>.5){color=gp_request;return;}' + #10 +
@@ -1753,6 +1761,8 @@ begin
     '    if (gc_grass_display_active) {' + #10 +
     '        color.rgb=gc_grass_display; gc_grass_applyShadow(color);' + #10 +
     '    }' + #10 +
+    '    // All coverage collectors have run now; keep indirect light in shadow.' + #10 +
+    '    if(gc_scene_valid)color.rgb=rzSceneDisplay(gc_scene_direct*(1.-gc_shadowCoverage())+gc_scene_indirect);' + #10 +
     '    if(gp_mask>.001)color.rgb=mix(color.rgb,gpWaterFilm(color.rgb,gp_normal,normalize(gLodToCamera),normalize(gc_SunDirToward)),gp_mask);' + #10 +
     '}' + #10;
 end;

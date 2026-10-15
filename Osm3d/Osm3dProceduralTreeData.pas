@@ -19,10 +19,19 @@ var ClassificationErrorCount: LongInt;
 function TreeClassificationErrors: LongInt;
 begin Result:=InterlockedCompareExchange(ClassificationErrorCount,0,0);end;
 procedure PrepareGameTreeDetail(var Data:TTreeData; MaxBytes:Int64);
-var I,N,Keep,Step,A,B,T,MaxItems,Branches,Foliage,LeafKeep,ShootKeep:Integer;LeafScale:Single;
-    Leaves:TTreeLeaves;
+var I,N,Keep,First,Last,MaxItems,Branches,Foliage,LeafKeep,ShootKeep:Integer;
+  function Representative(Index,Count,Total:Integer):Integer;
+  begin
+    First:=Int64(Index)*Total div Count;
+    Last:=Int64(Index+1)*Total div Count;
+    { Stratify over all branches, but do not repeatedly pick the same leaf
+      orientation in the generator's periodic twig/leaf order. }
+    Result:=First+Integer(Hash32(LongWord(Index) xor Data.Fingerprint) mod LongWord(Max(1,Last-First)));
+  end;
 begin
   Data.Crowns:=nil;
+  Data.SourceLeafCount:=Max(Data.SourceLeafCount,Length(Data.Leaves));
+  Data.SourceShootCount:=Max(Data.SourceShootCount,Length(Data.NeedleShoots));
   MaxItems:=Max(4,Min(High(Integer),MaxBytes div 64));
   N:=Length(Data.Fruits);Keep:=Min(N,MaxItems div 8);
   if N>Keep then begin
@@ -44,10 +53,8 @@ begin
       ShootKeep:=Min(Length(Data.NeedleShoots),Keep-LeafKeep);
       N:=Length(Data.NeedleShoots);
       if N>ShootKeep then begin
-        LeafScale:=Min(1.6,Sqrt(N/Max(1,ShootKeep)));
         for I:=0 to ShootKeep-1 do begin
-          Data.NeedleShoots[I]:=Data.NeedleShoots[Int64(I)*N div ShootKeep];
-          Data.NeedleShoots[I].NeedleWidth:=Data.NeedleShoots[I].NeedleWidth*LeafScale;
+          Data.NeedleShoots[I]:=Data.NeedleShoots[Representative(I,ShootKeep,N)];
         end;
         SetLength(Data.NeedleShoots,ShootKeep);
       end;
@@ -56,30 +63,14 @@ begin
   N:=Length(Data.Leaves);
   Keep:=LeafKeep;
   if N>Keep then begin
-    { Sample the whole tree, never truncate just one side of the crown.
-      Preserve projected coverage with the retained leaf blades. }
-    LeafScale:=Min(1.6,Sqrt(N/Max(1,Keep)));
+    { Keep physical blade sizes. The renderer represents the omitted twigs
+      with repeated, physically sized foliage on grouped cards. }
     for I:=0 to Keep-1 do begin
-      Data.Leaves[I]:=Data.Leaves[Int64(I)*N div Keep];
-      Data.Leaves[I].Size:=Data.Leaves[I].Size*LeafScale;
+      Data.Leaves[I]:=Data.Leaves[Representative(I,Keep,N)];
     end;
     SetLength(Data.Leaves,Keep);
   end;
-  { A prefix must cover the whole crown when fewer leaves are drawn at a
-    distance. A coprime stride permutes every leaf exactly once; positions,
-    attachment and seasonal phase stay unchanged. }
-  N:=Length(Data.Leaves);
-  if N>1 then begin
-    Step:=Max(1,Trunc(N*0.61803398875));
-    repeat
-      A:=Step;B:=N;
-      while B<>0 do begin T:=A mod B;A:=B;B:=T;end;
-      if A=1 then Break;
-      Inc(Step);
-    until False;
-    Leaves:=Copy(Data.Leaves);
-    for I:=0 to N-1 do Data.Leaves[I]:=Leaves[Int64(I)*Step mod N];
-  end;
+  { PrepareTreeGPU shuffles the draw prefix once. No second array/permutation. }
   { Preserve biological needle density. The renderer chooses a draw count from
     viewer distance; permanently reducing it here made nearby conifers bare. }
 end;

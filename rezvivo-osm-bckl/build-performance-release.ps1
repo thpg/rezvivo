@@ -161,7 +161,7 @@ if (Test-Path -LiteralPath (Join-Path $rtxRoot 'rezvivo_rtx.dll')) {
     Copy-Item -LiteralPath (Join-Path $rtxRoot 'rezvivo_rtx.dll') -Destination $buildRoot -Force
     $shaderRoot = Join-Path $projectRoot 'data\shaders\rtx'
     New-Item -ItemType Directory -Path $shaderRoot -Force | Out-Null
-    foreach ($shader in @('shadow.spv', 'reflection.spv')) {
+    foreach ($shader in @('shadow.spv', 'reflection.spv', 'screen_shadow.spv', 'screen_shadow_filter.spv')) {
         Copy-Item -LiteralPath (Join-Path $rtxRoot ('data\shaders\rtx\' + $shader)) -Destination $shaderRoot -Force
     }
 }

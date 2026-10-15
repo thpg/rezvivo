@@ -1,7 +1,7 @@
 unit GameRideLayout;
 {$mode objfpc}{$H+}
 interface
-const RideRiderCardHeight=36;RideRiderCardGap=3;
+const RideRiderCardHeight=44;RideRiderCardGap=3;
 type TRideHudLayout=record
   Margin,ButtonWidth,ButtonHeight,ButtonGap,ButtonsTop:Single;
   MetricsLeft,MetricsTop,MetricsWidth,MetricsHeight:Single;

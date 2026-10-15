@@ -2,6 +2,9 @@ unit GameRoadGuidance;
 {$mode objfpc}{$H+}
 interface
 uses Math,CastleVectors,Osm3dTravelRoads;
+const
+  RoadAcquireSeconds=3.0;
+  RoadAcquireHeadingDot=0.90;
 type
   TRoadGuidance=class
   private
@@ -12,7 +15,12 @@ type
     FTurnDirection:Integer;
     FDirection,FPending:Integer;
     FPendingTime,FManualHold,FReacquire,FLateral:Single;
-    function FindCurrent(const P,Heading:TVector3):Integer;
+    FAcquireTime:Double;
+    FAcquireValid:Boolean;
+    FAcquireRoad:TTravelRoad;
+    FAcquireDirection:Integer;
+    procedure ResetAcquisition;
+    function FindCurrent(const P,Heading:TVector3;MinDot:Single=0.45):Integer;
     function NextRoad(Index,Direction,Turn:Integer;out NextDirection:Integer):Integer;
   public
     OnRoad,Following,TurnTaken:Boolean;
@@ -21,10 +29,12 @@ type
     procedure Reset;
     procedure SetRoads(const Value:TTravelRoads);
     procedure QueueTurn(Direction:Integer);
-    function Step(const P,Heading:TVector3;Speed,ManualAxis,Dt:Single):Single;
+    function Step(const P,Heading:TVector3;Speed,ManualAxis,Dt:Single;
+      AcquireDelay:Single=RoadAcquireSeconds):Single;
     property PendingTurn:Integer read FPending;
     property SelectedTurnRoad:TTravelRoad read FTurnRoad;
     property SelectedTurnDirection:Integer read FTurnDirection;
+    property AcquireTime:Double read FAcquireTime;
   end;
 implementation
 function FlatUnit(const V:TVector3):TVector3;
@@ -36,16 +46,27 @@ function SameRoad(const A,B:TTravelRoad):Boolean;
 begin Result:=(A.WayId=B.WayId)and
   (((RoadDistanceSq(A.A,B.A)<0.04)and(RoadDistanceSq(A.B,B.B)<0.04))or
    ((RoadDistanceSq(A.A,B.B)<0.04)and(RoadDistanceSq(A.B,B.A)<0.04)))end;
+function ContinuesRoad(const A,B:TTravelRoad;ADirection,BDirection:Integer):Boolean;
+var EndP,StartP:TVector3;
+begin
+  if A.WayId=B.WayId then Exit(True);
+  if ADirection>0 then EndP:=A.B else EndP:=A.A;
+  if BDirection>0 then StartP:=B.A else StartP:=B.B;
+  Result:=RoadDistanceSq(EndP,StartP)<0.25;
+end;
 procedure TRoadGuidance.Reset;
 begin
   FHasLock:=False;FTurning:=False;FPending:=0;FPendingTime:=0;FManualHold:=0;FReacquire:=0;
+  ResetAcquisition;
   Following:=False;OnRoad:=False;TurnTaken:=False;WayId:=0;Width:=0;Distance:=0;FLateral:=0;SpeedLimit:=100;
 end;
+procedure TRoadGuidance.ResetAcquisition;
+begin FAcquireTime:=0;FAcquireValid:=False end;
 procedure TRoadGuidance.SetRoads(const Value:TTravelRoads);
 begin FRoads:=Value end;
 procedure TRoadGuidance.QueueTurn(Direction:Integer);
 begin if Direction<>0 then begin FPending:=Sign(Direction);FPendingTime:=6 end end;
-function TRoadGuidance.FindCurrent(const P,Heading:TVector3):Integer;
+function TRoadGuidance.FindCurrent(const P,Heading:TVector3;MinDot:Single):Integer;
 var I:Integer;Q,D:TVector3;T,Dist,Score,Best,Dot:Single;
 begin
   Result:=-1;Best:=1e30;Distance:=1e30;OnRoad:=False;Width:=0;
@@ -55,7 +76,7 @@ begin
     if Dist<Distance then Distance:=Dist;
     if Dist>FRoads[I].Width*0.5+0.65 then Continue;
     D:=FlatUnit(FRoads[I].B-FRoads[I].A);Dot:=Abs(TVector3.DotProduct(D,Heading));
-    if Dot<0.45 then Continue;
+    if Dot<MinDot then Continue;
     Score:=Dist+(1-Dot)*4;
     if FHasLock and(FRoads[I].WayId=FLocked.WayId)then Score:=Score-1.5;
     if FHasLock and SameRoad(FRoads[I],FLocked)then Score:=Score-2;
@@ -86,25 +107,30 @@ begin
     if Score<Best then begin Best:=Score;Result:=I;NextDirection:=D end;
   end;
 end;
-function TRoadGuidance.Step(const P,Heading:TVector3;Speed,ManualAxis,Dt:Single):Single;
-var I,J,D,ND,N:Integer;T,Remain,Look,Angle,Rate,Use,HalfW:Single;
+function TRoadGuidance.Step(const P,Heading:TVector3;Speed,ManualAxis,Dt:Single;
+  AcquireDelay:Single):Single;
+var I,J,D,ND,N:Integer;T,Remain,Look,Angle,Rate,Use,HalfW,MinDot:Single;
   Q,H,Target,Right:TVector3;
 begin
   Result:=ManualAxis;Following:=False;TurnTaken:=False;WayId:=0;SpeedLimit:=100;
   Dt:=EnsureRange(Dt,0,0.25);FReacquire:=Max(0,FReacquire-Dt);
   FPendingTime:=Max(0,FPendingTime-Dt);if FPendingTime=0 then FPending:=0;
   if Abs(ManualAxis)>0.25 then FManualHold:=FManualHold+Dt else FManualHold:=0;
-  I:=FindCurrent(P,Heading);
+  MinDot:=0.45;
+  if not FHasLock and(AcquireDelay>0)then MinDot:=RoadAcquireHeadingDot;
+  I:=FindCurrent(P,Heading,MinDot);
   { A held turn is an explicit request to leave the road. A short tap is
     latched for the next junction, where one connected branch is selected. }
-  if FManualHold>0.45 then begin FReacquire:=0.7;FHasLock:=False;FTurning:=False;FPending:=0;Exit end;
+  if FManualHold>0.45 then begin
+    FReacquire:=0.7;FHasLock:=False;FTurning:=False;FPending:=0;ResetAcquisition;Exit
+  end;
   if FTurning and(Speed>=0.2)then begin
     Q:=RoadProjection(P,FTurnRoad,T);
     H:=FlatUnit(FTurnRoad.B-FTurnRoad.A)*FTurnDirection;
     if FTurnDirection>0 then Target:=FTurnRoad.A else Target:=FTurnRoad.B;
     Remain:=TVector3.DotProduct(P-Target,H);
     if (Remain>1.5)and(Sqrt(RoadDistanceSq(P,Q))<FTurnRoad.Width*0.5)then begin
-      FTurning:=False;FLocked:=FTurnRoad;FHasLock:=True;I:=FindCurrent(P,Heading);
+      FTurning:=False;FLocked:=FTurnRoad;FDirection:=FTurnDirection;FHasLock:=True;I:=FindCurrent(P,Heading);
     end else if RoadDistanceSq(P,Target)>Sqr(35)then FTurning:=False
     else begin
       Following:=True;WayId:=FTurnRoad.WayId;Width:=FTurnRoad.Width;
@@ -115,8 +141,26 @@ begin
       Exit(EnsureRange(Angle*2.5/Max(0.15,Rate),-1,1));
     end;
   end;
-  if (I<0)or(FReacquire>0)or(Speed<0.2)then begin FHasLock:=False;Exit end;
+  if (I<0)or(FReacquire>0)or(Speed<0.2)then begin FHasLock:=False;ResetAcquisition;Exit end;
   H:=FlatUnit(FRoads[I].B-FRoads[I].A);D:=1;if TVector3.DotProduct(H,Heading)<0 then D:=-1;
+  if FHasLock and(AcquireDelay>0)and not ContinuesRoad(FLocked,FRoads[I],FDirection,D)then begin
+    FHasLock:=False;ResetAcquisition;
+  end;
+  if not FHasLock and(AcquireDelay>0)then begin
+    if(Abs(ManualAxis)>=0.15)or(Abs(TVector3.DotProduct(H,Heading))<RoadAcquireHeadingDot)then begin
+      ResetAcquisition;Exit
+    end;
+    { Count continuous forward travel on one corridor, not time spent near
+      arbitrary roads. Segment boundaries and connected OSM way IDs do not
+      interrupt the dwell; a different road or reversed heading does. }
+    if not FAcquireValid or not ContinuesRoad(FAcquireRoad,FRoads[I],FAcquireDirection,D)or
+      (TVector3.DotProduct(FlatUnit(FAcquireRoad.B-FAcquireRoad.A)*FAcquireDirection,H*D)<=0.5)then
+      FAcquireTime:=0;
+    FAcquireValid:=True;FAcquireRoad:=FRoads[I];FAcquireDirection:=D;
+    FAcquireTime:=FAcquireTime+Dt;
+    if FAcquireTime+1e-6<AcquireDelay then Exit;
+  end;
+  ResetAcquisition;
   Q:=RoadProjection(P,FRoads[I],T);Right:=Vector3(-H.Z*D,0,H.X*D);
   HalfW:=Max(0,FRoads[I].Width*0.5-0.45);
   if not FHasLock then FLateral:=EnsureRange(TVector3.DotProduct(P-Q,Right),-HalfW,HalfW);

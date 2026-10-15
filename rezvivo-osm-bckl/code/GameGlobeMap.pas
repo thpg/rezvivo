@@ -28,6 +28,7 @@ type
     FTiles:TList;FNorth,FSouth:TGlobePatch;
     FScene:TCastleScene;FSceneRoot:TX3DRootNode;
     FVectorMap:TVectorMap;
+    FAttribution:TCastleUserInterface;
     FOnChanged,FOnSelect:TNotifyEvent;
     FFitArea:TCastleUserInterface;
     procedure SyncProjection;
@@ -58,6 +59,7 @@ type
     procedure ShowPlanet;
     function MapStats:TJSONObject;
     procedure SetActive(Value:Boolean);
+    procedure SetBackgroundEnabled(Value:Boolean);
     procedure PauseTileLoading(Value:Boolean);
     function TileLoadingIdle:Boolean;
     procedure ZoomBy(Delta:Integer);
@@ -94,6 +96,9 @@ begin
   Old:=Texture;Texture:=TPixelTextureNode.Create;Texture.KeepExistingBegin;
   Texture.FdImage.Value:=Img;Texture.RepeatS:=False;Texture.RepeatT:=False;
   Props:=TTexturePropertiesNode.Create;Props.MinificationFilter:=minLinearMipmapLinear;
+  { TextureProperties overrides RepeatS/T. Wrapping samples the opposite
+    coast/terrain edge of this tile and produces seams while zooming. }
+  Props.BoundaryModeS:=bmClampToEdge;Props.BoundaryModeT:=bmClampToEdge;
   Props.MagnificationFilter:=magLinear;Props.AnisotropicDegree:=8;Texture.TextureProperties:=Props;
   if Old<>nil then begin Old.KeepExistingEnd;Old.FreeIfUnused;end;
 end;
@@ -119,6 +124,7 @@ begin
   Attribution:=TCastleLabel.Create(Self);Attribution.Caption:='© OpenStreetMap contributors';
   Attribution.FontSize:=11;Attribution.Color:=White;Attribution.Frame:=True;
   Attribution.Anchor(hpRight,-8);Attribution.Anchor(vpBottom,4);InsertFront(Attribution);
+  FAttribution:=Attribution;
   SyncProjection;
 end;
 destructor TGlobeMap.Destroy;
@@ -147,6 +153,12 @@ begin
   FZoom:=EnsureRange(Floor(FView.NominalZoom+0.0001),0,18);
   Camera.SetView(Vector3(0,0,FAltitude),Vector3(0,0,-1),Vector3(0,1,0));
   Camera.ProjectionNear:=FAltitude*0.1;Camera.ProjectionFar:=FAltitude+2.1;
+end;
+procedure TGlobeMap.SetBackgroundEnabled(Value:Boolean);
+begin
+  if FScene.Exists=Value then Exit;
+  FScene.Exists:=Value;FVectorMap.Exists:=Value;FAttribution.Exists:=Value;
+  PauseTileLoading(not Value);
 end;
 procedure TGlobeMap.SetActive(Value:Boolean);
 var I:Integer;T:TGlobeTile;
@@ -327,7 +339,9 @@ begin
     if T.Task<>nil then begin
       if not T.Needed then begin T.Task.Cancel;T.Attempted:=T.Texture<>nil;T.Detailed:=T.DetailReady;end;
       FinishedTask:=T.Task.Done;
-      if Uploads<1 then begin
+      { Small ready overview tiles can arrive together. Bound the batch so
+        opening the globe is quick without consuming an entire UI frame. }
+      if(Uploads<4)and((Uploads=0)or(GetTickCount64-NowTick<2))then begin
         Img:=T.Task.TakeImage(Partial);
         if Img<>nil then begin
           T.DetailPartial:=Partial;T.DetailReady:=not Partial and T.Task.Detailed;
@@ -358,7 +372,7 @@ begin
     for I:=0 to FTiles.Count-1 do begin T:=TGlobeTile(FTiles[I]);
       if not T.Needed or(T.Task<>nil)or(T.RetryAt>NowTick)then Continue;
       if(Pass=0)and T.Attempted then Continue;
-      if(Pass=0)and(T.Tile.Zoom>FLAT_MAP_WORLD_ZOOM)and(T.Tile.Zoom<FLAT_MAP_DETAIL_ZOOM)then Continue;
+      if(Pass=0)and(T.Tile.Zoom>FLAT_MAP_WORLD_ZOOM)and(T.Tile.Zoom<FLAT_MAP_DETAIL_ZOOM)and(T.Tile.Zoom<VECTOR_MAP_MIN_ZOOM)then Continue;
       if(Pass=1)and(not T.Visible or not T.Attempted or T.Detailed or(T.Tile.Zoom<FLAT_MAP_DETAIL_ZOOM))then Continue;
       if(Pass=1)and(FLoadDelay>0)then Continue;
       if(Pass=1)and(T.Tile.Zoom>=VECTOR_MAP_MIN_ZOOM)then Continue;

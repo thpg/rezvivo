@@ -9,7 +9,7 @@ unit Osm3dBuildingComposite;
 
 interface
 
-uses Osm3dStaticGeometry,
+uses Osm3dStaticGeometry, Osm3dSceneLighting,
   Classes,
   SysUtils,
   CastleImages,
@@ -104,10 +104,10 @@ function BuildingDetailGroup(Shape: TShapeNode): TCollisionNode;
 const
   BUILDING_COMPOSITE_VS = {$I shaders/building_material.vs.glsl.inc};
   BUILDING_COMPOSITE_FS = '#define PI 3.141592653589793' + #10 +
-    GLSL_PBR_HELPERS + {$I shaders/building_material.glsl.inc};
+    SCENE_LIGHTING_GLSL + GLSL_PBR_HELPERS + {$I shaders/building_material.glsl.inc};
   BUILDING_DETAIL_VS = {$I shaders/building_detail.vs.glsl.inc};
   BUILDING_DETAIL_FS = '#define PI 3.141592653589793' + #10 +
-    GLSL_PBR_HELPERS + {$I shaders/building_detail.glsl.inc};
+    SCENE_LIGHTING_GLSL + GLSL_PBR_HELPERS + {$I shaders/building_detail.glsl.inc};
 
 implementation
 
@@ -359,6 +359,7 @@ begin
   else Effect := TRiderShadowGroundEffect.Create;
   Effect.Language := slGLSL;
   Effect.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
+  AttachSceneLighting(Effect);
   PV := TEffectPartNode.Create; PV.ShaderType := stVertex;
   PV.Contents := BUILDING_DETAIL_VS;
   PF := TEffectPartNode.Create; PF.ShaderType := stFragment;
@@ -501,6 +502,7 @@ begin
     PF.Contents := BuildingShadowGLSL + BUILDING_COMPOSITE_FS;
   PF.Contents:=RTX_MATERIAL_GLSL+PF.Contents;
   AttachRtxMaterial(Effect);
+  AttachSceneLighting(Effect);
   Effect.SetParts([PV, PF]);
   if Effect is TRiderShadowGroundEffect then
     TRiderShadowGroundEffect(Effect).SetGroundFragment(PF);
@@ -583,6 +585,7 @@ begin
   App.SetEffects([Effect]);
 
   Result := TShapeNode.Create;
+  Result.X3DName := 'AtlasBuildingComposite';
   Result.Geometry   := Geo;
   Result.Appearance := App;
   CompactTileGeometry(Result);

@@ -473,6 +473,9 @@
 '    bool concrete=mod(style.z,256.0)>=128.0;' + #10 +
 '    vec4 aggregate=concrete ? vec4(0.016,0.062,0.00042,0.91)' + #10 +
 '        : rp_grainProfile(floor(mod(style.z,16.0)*0.5));' + #10 +
+'#ifdef RP_LIVE_FINISH' + #10 +
+'    if(!concrete)aggregate.xyz*=vec3(1.-.15*rz_surface.x,1.-.42*rz_surface.x,1.-.20*rz_surface.x);' + #10 +
+'#endif' + #10 +
 '    if(!concrete) {' + #10 +
 '        // The cached roughness also describes aggregate exposure: fresh' + #10 +
 '        // binder/repairs fill the gaps, weathered stretches expose the chips.' + #10 +

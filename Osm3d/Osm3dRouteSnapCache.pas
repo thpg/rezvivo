@@ -46,7 +46,7 @@ begin
       N := Length(S); MD5Update(C,N,SizeOf(N)); MD5Update(C,S[1],N);
     end;
     MD5Final(C,D);
-    Result := IncludeTrailingPathDelimiter(Cache.RootDir)+'route-snap-v9'+
+    Result := IncludeTrailingPathDelimiter(Cache.RootDir)+'route-snap-v11'+
       PathDelim+MD5Print(D)+'.snap';
   except Result := '' end; { cache I/O must never block the normal snap path }
 end;

@@ -4,7 +4,7 @@
   "generator_version" : 4,
   "species" : "prickly_pear",
   "gpu_family" : 18,
-  "profile_key" : "0EF32F8D",
+  "profile_key" : "2A5F92DF",
   "profile" : {
     "format" : "rezvivo.procedural-tree",
     "version" : 4,
@@ -41,10 +41,12 @@
   "capture_size" : 512,
   "seasonal_version" : 1,
   "fruit_layer" : false,
+  "relight_version" : 1,
+  "normal_size" : 128,
   "seasonal_parts" : "wood and foliage rendered separately from identical geometry, seeds and frames; each is an arithmetic mean",
   "method" : "arithmetic mean of actual full-detail GPU renders; linear premultiplied RGBA; 2x2 supersampling",
   "png_encoding" : "straight alpha; RGB gamma 2.2; age rows top to bottom: young, adult, old; views left to right: 0,90,180,270 degrees",
-  "lighting" : "baked diffuse, fixed editor sun; no specular, fog, wind, ground or crown proxies",
+  "lighting" : "unlit albedo with cavity; separate object-space mean normals at half resolution; runtime diffuse and foliage transmission",
   "sources" : [
     {
       "age_group" : 0,
@@ -401,6 +403,30 @@
     0.0000000000000000E+000,
     0.0000000000000000E+000
   ],
+  "coverage-fruit_age_0" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
+  "coverage-normal_age_0" : [
+    2.3887872695922852E-001,
+    2.1041679382324219E-001,
+    2.3887872695922852E-001,
+    2.1041679382324219E-001
+  ],
+  "coverage-wood-normal_age_0" : [
+    2.3887872695922852E-001,
+    2.1041679382324219E-001,
+    2.3887872695922852E-001,
+    2.1041679382324219E-001
+  ],
+  "coverage-foliage-normal_age_0" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
   "coverage_age_1" : [
     2.1689748764038086E-001,
     1.9060420989990234E-001,
@@ -414,6 +440,30 @@
     1.9060420989990234E-001
   ],
   "coverage-foliage_age_1" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
+  "coverage-fruit_age_1" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
+  "coverage-normal_age_1" : [
+    2.1689748764038086E-001,
+    1.9060420989990234E-001,
+    2.1689748764038086E-001,
+    1.9060420989990234E-001
+  ],
+  "coverage-wood-normal_age_1" : [
+    2.1689748764038086E-001,
+    1.9060420989990234E-001,
+    2.1689748764038086E-001,
+    1.9060420989990234E-001
+  ],
+  "coverage-foliage-normal_age_1" : [
     0.0000000000000000E+000,
     0.0000000000000000E+000,
     0.0000000000000000E+000,
@@ -437,6 +487,30 @@
     0.0000000000000000E+000,
     0.0000000000000000E+000
   ],
+  "coverage-fruit_age_2" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
+  "coverage-normal_age_2" : [
+    2.0813322067260742E-001,
+    1.8368339538574219E-001,
+    2.0813322067260742E-001,
+    1.8368339538574219E-001
+  ],
+  "coverage-wood-normal_age_2" : [
+    2.0813322067260742E-001,
+    1.8368339538574219E-001,
+    2.0813322067260742E-001,
+    1.8368339538574219E-001
+  ],
+  "coverage-foliage-normal_age_2" : [
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000,
+    0.0000000000000000E+000
+  ],
   "frames" : [
     [
       6.4584594964981079E-001,
@@ -454,6 +528,6 @@
       1.0044457912445068E+000
     ]
   ],
-  "renders" : 288,
+  "renders" : 672,
   "gpu_renderer" : "NVIDIA GeForce RTX 3060/PCIe/SSE2"
 }

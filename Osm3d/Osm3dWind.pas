@@ -13,9 +13,9 @@ unit Osm3dWind;
     grass vertex shader and the tree fragment shader include this *same* string and
     call it with their world XZ,
     so a gust rolls through grass and trees together.
-  - Time comes from an absolute monotonic clock (GetTickCount64). No per-frame
-    tick, no Update, no frame-token: every renderer reads the same WindNow, so
-    there is nothing to keep in sync and nothing to double-advance.
+  - Physical wind uses the absolute/replay clock. Vegetation shares a separate
+    continuous phase, sampled once per viewer frame. Fast camera motion pauses
+    that phase; rider/hair physics and water retain their own clocks.
 
   "Speed" here is an abstract strength, not m/s — each renderer multiplies it
   by its own gain to get a visual amount (grass bend / tree canopy lean). }
@@ -54,6 +54,9 @@ var
   { Rendering units read wind from here. Initialised to Defaults below so direct
     reads never see uninitialised data before the app assigns settings. }
   GlobalWind: TWindConfig;
+  VegetationWindSpeedControl: Boolean = True;
+  { Optional speed-dependent atlas range; zero preserves the chosen preset. }
+  VegetationMotionAtlasDistance: Single = 0;
 
 { Seconds since the unit started (absolute monotonic clock). The shaders'
   uWindTime. Cheap; safe to call many times per frame from many renderers. }
@@ -61,6 +64,13 @@ var
 procedure WindSetPlaybackTime(Seconds: Single);
 function WindPlaybackTime:Single;
 function WindNow: Single;
+procedure WindObserveCamera(const Position:TVector3; CameraKey:PtrUInt);
+function VegetationWindNow:Single;
+function VegetationWindBaseSpeed:Single;
+function VegetationWindRate:Single;
+function VegetationCameraSpeed:Single;
+function VegetationWindFrozen:Boolean;
+function VegetationMovingTreeDistance(BaseDistance:Single):Single;
 
 { Current base wind speed — base range remapped by a slow value-noise over time
   (period ~ BaseChangeInterval). This is the "main wind speed that changes". }
@@ -131,12 +141,13 @@ const
 implementation
 
 uses
-  SysUtils, Math;
+  SysUtils, Math, CastleTimeUtils, Osm3dWindMotion;
 
 var
   FPlaybackTime: Single = -1;
   FStartTick: QWord;
   FStarted:   Boolean = False;
+  FMotionClock:TVegetationWindClock;
 
 class function TWindConfig.Defaults: TWindConfig;
 begin
@@ -164,6 +175,29 @@ begin
     FStarted   := True;
   end;
   Result := (GetTickCount64 - FStartTick) / 1000.0;
+end;
+
+procedure WindObserveCamera(const Position:TVector3;CameraKey:PtrUInt);
+begin
+  FMotionClock.Observe(Position,CameraKey,TFramesPerSecond.RenderFrameId,
+    GetTickCount64,WindNow,VegetationWindSpeedControl);
+end;
+function VegetationWindNow:Single;
+begin
+  if FMotionClock.Valid then Result:=FMotionClock.Time else Result:=WindNow;
+end;
+function VegetationWindRate:Single;
+begin Result:=FMotionClock.Rate;end;
+function VegetationCameraSpeed:Single;
+begin Result:=FMotionClock.Speed;end;
+function VegetationWindFrozen:Boolean;
+begin Result:=FMotionClock.Valid and (FMotionClock.Rate=0);end;
+function VegetationMovingTreeDistance(BaseDistance:Single):Single;
+begin
+  Result:=BaseDistance;
+  if VegetationMotionAtlasDistance>0 then
+    Result:=BaseDistance-(BaseDistance-Min(BaseDistance,Max(40,VegetationMotionAtlasDistance)))*
+      (1-VegetationWindRate);
 end;
 
 { 1D integer hash -> [0,1). }
@@ -197,6 +231,14 @@ begin
   else
     N := VNoise1(WindNow / Cfg.BaseChangeInterval);
   Result := Cfg.BaseSpeedMin + N * (Cfg.BaseSpeedMax - Cfg.BaseSpeedMin);
+end;
+
+function VegetationWindBaseSpeed:Single;
+var N:Single;
+begin
+  if GlobalWind.BaseChangeInterval<0.01 then N:=0.5
+  else N:=VNoise1(VegetationWindNow/GlobalWind.BaseChangeInterval);
+  Result:=GlobalWind.BaseSpeedMin+N*(GlobalWind.BaseSpeedMax-GlobalWind.BaseSpeedMin);
 end;
 
 function WindVelocityAt(const WorldPosition:TVector3):TVector3;
@@ -257,8 +299,8 @@ begin
   if D.Length > 1e-5 then D := D.Normalize
   else D := Vector2(1.0, 0.0);
 
-  Base    := WindCurrentBaseSpeed;
-  TimeNow := WindNow;
+  Base    := VegetationWindBaseSpeed;
+  TimeNow := VegetationWindNow;
   { Taylor frozen turbulence: the gust pattern is carried downwind at the mean
     wind speed, so the field scrolls at the current base speed (m/s). }
   GustSpeed := Base;
@@ -274,5 +316,7 @@ end;
 
 initialization
   GlobalWind := TWindConfig.Defaults;
+  VegetationWindSpeedControl:=GetEnvironmentVariable('REZVIVO_WIND_SPEED_CONTROL')<>'0';
+  VegetationMotionAtlasDistance:=StrToIntDef(GetEnvironmentVariable('REZVIVO_FAST_TREES'),0);
 
 end.

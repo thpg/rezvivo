@@ -33,7 +33,7 @@ bool Context::reflect(const ReflectionCamera* camera,uint64_t expectedScene) {
     if(!active || active->id!=expectedScene || !reflectionPipeline) return false;
     Frame& f=acquireFrame();VkResult r;
     if(f.submitted){uint64_t stamps[2]{};r=GetQueryPoolResults(device,queries,frameIndex*2,2,sizeof(stamps),stamps,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT);
-        if(r==VK_SUCCESS){double ms=double(stamps[1]-stamps[0])*props.limits.timestampPeriod/1e6;if(f.reflection)reflectionMs=ms;else stats.traceMs=ms;}else if(r!=VK_NOT_READY)CHECK(r);}
+        if(r==VK_SUCCESS){double ms=double(stamps[1]-stamps[0])*props.limits.timestampPeriod/1e6;if(f.screen)screenMs=ms;else if(f.reflection)reflectionMs=ms;else stats.traceMs=ms;}else if(r!=VK_NOT_READY)CHECK(r);}
     f.scene=active;memcpy(f.views.mapped,camera,sizeof(*camera));
     static_cast<ReflectionCamera*>(f.views.mapped)->depthRange[2]=float(active->opaqueCount);
     VkWriteDescriptorSetAccelerationStructureKHR as{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};as.accelerationStructureCount=1;as.pAccelerationStructures=&active->tlas;
@@ -47,7 +47,7 @@ bool Context::reflect(const ReflectionCamera* camera,uint64_t expectedScene) {
     CmdResetQueryPool(f.cmd,queries,frameIndex*2,2);CmdWriteTimestamp(f.cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,queries,frameIndex*2);
     CmdBindPipeline(f.cmd,VK_PIPELINE_BIND_POINT_COMPUTE,reflectionPipeline);CmdBindDescriptorSets(f.cmd,VK_PIPELINE_BIND_POINT_COMPUTE,pipeLayout,0,1,&f.set,0,nullptr);CmdDispatch(f.cmd,(reflectionWidth+7)/8,(reflectionHeight+7)/8,1);
     CmdWriteTimestamp(f.cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,queries,frameIndex*2+1);barriers(f.cmd,false);CHECK(EndCommandBuffer(f.cmd));CHECK(ResetFences(device,1,&f.fence));handoff(f.cmd,f.fence);
-    f.submitted=true;f.reflection=true;frameIndex=(frameIndex+1)%unsigned(frames.size());++reflectionFrames;return true;
+    f.submitted=true;f.reflection=true;f.screen=false;frameIndex=(frameIndex+1)%unsigned(frames.size());++reflectionFrames;return true;
 }
 API int __cdecl rzrt_reflection_size(Context* c,const wchar_t* shader,uint32_t w,uint32_t h){try{if(!c)throw std::runtime_error("No RTX context");c->reflectionSize(shader,w,h);return 1;}catch(const std::exception& e){error=e.what();return 0;}}
 API GLuint __cdecl rzrt_reflection_texture(Context* c,int index){if(!c)return 0;return index==0?c->reflectionNormal.texture:index==1?c->reflectionDepth.texture:index==3?c->reflectionAtlas.texture:c->reflectionOutput.texture;}

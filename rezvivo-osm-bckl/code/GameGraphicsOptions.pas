@@ -9,7 +9,7 @@ uses SysUtils, Osm3dRenderProfile;
 type
   TGraphicsOption = (goFrameLimit, goAntialiasing, goShadowSize,
     goShadowFilter, goShadowDistance, goGrass, goTrees, goTextures,
-    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer);
+    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer,goWorldCache);
   TGraphicsPreset = (gpEconomy, gpLight, gpBalanced, gpHigh);
   TGraphicsValues = array[TGraphicsOption] of Integer;
   TGraphicsChangeEvent = procedure(Sender: TObject; Option: TGraphicsOption) of object;
@@ -17,11 +17,11 @@ type
 const
   GraphicsKeys: array[TGraphicsOption] of String =
     ('fps_limit', 'msaa', 'shadow_size', 'shadow_filter', 'shadow_distance',
-     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer');
+     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer','world_cache');
   GraphicsTitles: array[TGraphicsOption] of String =
     ('Frame rate limit', 'Anti-aliasing', 'Shadow map', 'Shadow filtering',
      'Shadow distance', '3D grass', 'Vegetation quality', 'Texture quality:',
-     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer');
+     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer','World image cache');
   GraphicsHints: array[TGraphicsOption] of String =
     ('VSync follows your monitor. A lower limit reduces GPU load.',
      'MSAA smooths edges. Takes effect after restarting the game.',
@@ -35,12 +35,13 @@ const
      'Reduce background work and distant detail when below the frame limit. Ultra keeps the procedural tree range.',
      'Controls hair detail, lighting and motion update rate. Applies immediately.',
      'Soft lens edges and distant scenery. Keeps the central rider area and interface clear. Applies immediately.',
-     'Nearby tree shadows stay animated. A shared depth cache speeds up distant forest shadows. RTX requires a ray-tracing GPU.',
+     'Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.',
      'Reflects buildings, trees and terrain in water and windows. Requires RTX world shadows.',
      'Full keeps all cloth relief and lighting. Lower modes simplify cloth shading without changing body animation.',
      'Full keeps detailed road relief. Lower modes use cached normals and remove parallax. Road layout and markings stay unchanged.',
      'Changes branches, needles, blade geometry and wind at the same distance. LOD distance is controlled separately.',
-     'Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.');
+     'Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.',
+     'Reuses distant scenery between frames. Nearby scenery and riders stay live. Works with RTX screen shadows. Uses additional GPU memory.');
   GraphicsPresetTitles: array[TGraphicsPreset] of String =
     ('Battery saver', 'Lightweight', 'Balanced', 'High');
   GraphicsPresetHints: array[TGraphicsPreset] of String =
@@ -48,9 +49,9 @@ const
      'Baked vegetation, small hard shadows and light materials.',
      'Procedural vegetation, soft shadows and detailed materials.',
      'Dense vegetation, detailed materials and longer soft shadows.');
-  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0){$endif};
+  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0){$endif};
   GraphicsDisplayOrder: array[TGraphicsOption] of TGraphicsOption =
-    (goRenderer,goFrameLimit,goAntialiasing,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
+    (goRenderer,goFrameLimit,goAntialiasing,goWorldCache,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
      goShadowDistance,goGrass,goTrees,goTextures,
      goVegetationCache,goVegetationAdaptive,goHair,goSoftening);
 
@@ -104,7 +105,7 @@ begin
   Result := Value;
   if not UniversalRenderer then Exit;
   case Option of
-    goWorldShadows, goRtxReflections, goSoftening: Result := 0;
+    goWorldShadows, goRtxReflections, goSoftening, goWorldCache: Result := 0;
     { CGE's EGL backend currently does not request multisample surfaces.
       Do not offer a setting that cannot affect the active Android renderer. }
     goAntialiasing: Result := {$ifdef OpenGLES}0{$else}Min(Value, 4){$endif};
@@ -123,9 +124,10 @@ begin
     goFrameLimit: Result := 7;
     goShadowSize: Result := 5;
     goAntialiasing, goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
-    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening,goWorldShadows: Result := 3;
+    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening: Result := 3;
+    goWorldShadows:Result:=4;
     goTrees: Result := 5;
-    goGrass, goVegetationAdaptive,goRtxReflections: Result := 2;
+    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache: Result := 2;
     goRenderer: if FullRendererSupported then Result := 2 else Result := 1;
   end;
 end;
@@ -147,7 +149,7 @@ begin
     goShadowFilter: Result := Filters[Index];
     goShadowDistance: Result := Distances[Index];
     goRenderer: if FullRendererSupported then Result := Index else Result := 1;
-    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := Index;
+    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldCache: Result := Index;
   end;
 end;
 
@@ -172,7 +174,7 @@ begin
       if V = 0 then Result := 'Simplified' else Result := Textures[V-1];
     goVegetationCache:
       case V of 0:Result:='Gentle';1:Result:='Balanced';else Result:='Fast';end;
-    goGrass, goVegetationAdaptive,goRtxReflections:
+    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache:
       if V = 0 then Result := 'Off' else Result := 'On';
     goTextures,goHair: Result := Textures[V];
     goRiderComplexity,goWorldComplexity,goVegetationComplexity:
@@ -180,7 +182,7 @@ begin
     goSoftening:
       case V of 0:Result:='Off';1:Result:='Subtle';else Result:='Stronger';end;
     goWorldShadows:
-      case V of 0:Result:='Raster';1:Result:='Cached trees';else Result:='RTX (experimental)';end;
+      case V of 0:Result:='Raster';1:Result:='Cached trees';2:Result:='RTX (experimental)';else Result:='RTX screen (experimental)';end;
   end;
 end;
 

@@ -273,7 +273,7 @@ begin
       SelectMenuButton(FButtons[O][I], V = GraphicsChoiceValue(O,I));
       FButtons[O][I].Enabled := Shadows or not (O in [goShadowFilter, goShadowDistance,goWorldShadows,goRtxReflections]);
       if O=goRtxReflections then FButtons[O][I].Enabled:=Shadows and
-        (Settings.GetGraphicsOption(Ord(goWorldShadows))=2);
+        (Settings.GetGraphicsOption(Ord(goWorldShadows)) in [2,3]);
       FButtons[O][I].Enabled := FButtons[O][I].Enabled and
         (EffectiveGraphicsValue(O, GraphicsChoiceValue(O,I)) = GraphicsChoiceValue(O,I));
     end;

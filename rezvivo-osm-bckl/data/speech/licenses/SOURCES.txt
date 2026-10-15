@@ -1,0 +1,15 @@
+Vosk-Apache-2.0.txt: https://raw.githubusercontent.com/alphacep/vosk-api/v0.3.45/COPYING
+GCC-GPL-3.0.txt: https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.1.0/COPYING3
+GCC-Runtime-Exception-3.1.txt: https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.1.0/COPYING.RUNTIME
+winpthreads.txt: https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/mingw-w64-libraries/winpthreads/COPYING
+OpenBLAS.txt: https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/v0.3.21/LICENSE
+Kaldi.txt: https://raw.githubusercontent.com/kaldi-asr/kaldi/master/COPYING
+
+Models: https://alphacephei.com/vosk/models
+RU small 0.22 and EN-US small 0.15: Apache License 2.0.
+
+Vosk DLL and the three accompanying runtime DLLs are unmodified files from
+https://github.com/alphacep/vosk-api/releases/tag/v0.3.45
+GCC runtime sources: https://gcc.gnu.org/git.html
+winpthreads sources: https://github.com/mingw-w64/mingw-w64
+OpenFst sources/license: https://www.openfst.org/ (Apache License 2.0)

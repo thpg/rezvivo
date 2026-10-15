@@ -42,7 +42,7 @@ function ReviewKnowledgePhoto(const CacheRoot:string;Request:TJSONObject;
 implementation
 uses Math, MD5, Osm3dTileKnowledge, Osm3dKnowledgeContext, Osm3dKnowledgeOsm,
   Osm3dPhotoSources, Osm3dFacadeLayout, Osm3dSceneMaterials, Osm3dBuildingMassing, Osm3dArchitecture, Osm3dCompoundRoof,
-  Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,Osm3dMeasuredAreaHeight,
+  Osm3dKnowledgeEvidence,Osm3dPhotoApi,Osm3dCache,Osm3dKnowledgeProperties,Osm3dMeasuredAreaHeight,Osm3dBridgeDetails,
   Osm3dVegetationLayout,Osm3dPhotoRoadProfile,Osm3dMeasuredRoadHeight,Osm3dGeomRoads,CastleVectors,Osm3dEnvironmentLayout,Osm3dPhotoPipeline,Osm3dBuildingParts,CastleLog;
 const RecipeVersion = 1;
   CatalogMaxBytes = 16*1024*1024;
@@ -101,6 +101,7 @@ begin
     26..30: Result:=CanonicalEnvironmentLayout(Value,KnowledgeProperties[Index].Category);
     32,36: Result:=CanonicalMeasuredRoadHeight(Value);
     37: Result:=CanonicalMeasuredArea(Value);
+    38: Result:=CanonicalBridgeDetails(Value);
     else raise ETileKnowledge.Create('Unsupported structured property');
   end;
 end;
@@ -137,6 +138,7 @@ begin
     if I in [26..30] then P.Add('library',EnvironmentLayoutCapabilities);
     if I in [32,36] then P.Add('note','version=1 or 2, datum=dem_aligned, width_m 1..30, feather_m 10..80, stations [{at_m,elevation_m}] 2..2048. Version 2 optionally adds terrain_sections [{at_m,points:[[signed_offset_m,relative_height_m],...]}], 2..256 sections spanning the height profile, 2..32 points per section, +/-60m lateral and +/-30m vertical, slope <=200%. Positive offset is LEFT of original OSM way. Both road edges must be explicit zero-height knots; paved core stays flat. Between sections interpolate side profiles; beyond outer knots blend to DEM. Distances along original complete open OSM way, spaced >=1m; ground roads only. Align datum and remove barometer drift; photo bank dimensions must carry estimated uncertainty, never claim survey precision. Cannot combine with road.profile until reprojected. Bakes both road and surrounding terrain; unchanged outside corridor.');
     if I=33 then P.Add('note','edge: continuous white edge lines only, no centre line; lane-manager widths/directions unchanged. none disables paint, lanes uses the existing lane layout.');
+    if I=38 then P.Add('note','Bridge road ways only. version=1, structure none/suspension, side -1/0/+1 (OffsetPolyline sign; positive geographic left, 0 both), tower_height_m 5..100 above deck, main_span_m 15..1500, side_offset_m 0..10 outside road edge; negative_rail and positive_rail none/concrete/metal; deck_group links parts of one confirmed physical bridge, deck_offset_m 0..0.3 is a raised sidewalk offset. Paired carriageways need outside members only, never duplicate central pylons. Shared baked geometry, no extra per-frame objects. Dimensions must be source-backed or explicitly estimated.');
     if I=37 then P.Add('note','Level stadium/yard pad, local: object anchored to existing OSM. version=1, datum=dem_aligned, elevation_m, feather_m 10..80, boundary 3..96 [lon,lat] points (simple convex polygon, no repeated closure, max 2 km). Correct the actual common terrain/road sampler; no extra overlay mesh. Inside overrides DEM and corridor blending; outside smoothly returns to the prior terrain. Align FIT barometer to the existing datum, retain uncertainty and record IDs. Do not infer survey precision from consumer GPS.');
     if I=8 then P.Add('note','version=1, type=colonnade, front_start/end [lon,lat], columns 1..24 per row, rows 1..2, pier_width_m 1..20, column_radius_m .2..2.5, opening_height_m 3..40, tower_height_m 0..3; fits a rectangular OSM footprint and height, otherwise retains OSM envelope. Baked geometry; separate pier/column obstacles, open passage ground preserved.');
     if I=7 then P.Add('note','version=1; facades: directed start/end [lon,lat], bays [{width_m, floor_shift, balcony_floors}], cornice_floors, balcony_depth_m, balcony_width; outward normal = edge cross up; floor 0 is ground; whole straight exterior edges only; repeated unseen bays must be labelled inferred');
@@ -653,6 +655,7 @@ begin
         if not IsLocalTarget(T) then begin
           ValidateSourceCategory(T.Get('category','building'),Current);
           SetTags:=AsObject(T.Find('set_tags'),'tags');
+          if SetTags.Find(BRIDGE_DETAILS_TAG)<>nil then ValidateBridgeDetailsSource(Current);
           if SetTags.Find(VEGETATION_LAYOUT_TAG)<>nil then
             ValidatePlantLayoutSource(SetTags.Get(VEGETATION_LAYOUT_TAG,''),Current);
           if SetTags.Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then begin
@@ -1052,6 +1055,7 @@ begin
         try
           for J:=0 to SetTags.Count-1 do After.Strings[SetTags.Names[J]]:=SetTags.Items[J].AsString;
           if Target.Get('category','building')='road' then ValidateRoadTags(After,Ordered[I]);
+          if SetTags.Find(BRIDGE_DETAILS_TAG)<>nil then ValidateBridgeDetailsSource(Source);
           if SetTags.Find(MEASURED_ROAD_HEIGHT_TAG)<>nil then begin
             ValidateMeasuredRoadHeight(SetTags.Get(MEASURED_ROAD_HEIGHT_TAG,''),Source);
             if SetTags.Find(PHOTO_ROAD_PROFILE_TAG)<>nil then

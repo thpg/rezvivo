@@ -4,6 +4,8 @@ interface
 uses TreeMath;
 const
   TREE_GENERATOR_VERSION = 4;
+  TREE_LEAF_SPRAY_VERSION = 3;
+  TREE_WOOD_VERSION = 1; { physical bark and structural branch geometry }
   TREE_BIRCH_GEOMETRY_VERSION = 1; { invalidate only birch LOD atlases }
   TREE_FRUIT_GEOMETRY_VERSION = 1;
   TREE_ROWAN_GEOMETRY_VERSION = 2; { open pinnate foliage and terminal bunches }
@@ -79,6 +81,7 @@ type
     NeedleShoots: TTreeNeedleShoots; { compact stems; individual needles exist only on GPU }
     Crowns: TTreeCrowns;
     Fruits: TTreeFruits; { bounded branch-attached descriptors, geometry on GPU }
+    SourceLeafCount, SourceShootCount: Integer; { before optional memory compaction; 0 = unchanged }
     BoundsMin, BoundsMax: TTreeVec3;
     Fingerprint: LongWord;
   end;
@@ -93,6 +96,9 @@ function TreeTypeVariant(Code: TTreeTypeCode): Integer;
 function MatureTreeAge(Species: TTreeSpecies): Integer;
 function SpeciesName(S: TTreeSpecies): string;
 function SpeciesFromName(const S: string): TTreeSpecies;
+function LeafSprayIndex(S:TTreeSpecies):Integer;
+function LeafSprayRows(S:TTreeSpecies):Integer;
+function LeafSprayAspect(S:TTreeSpecies):Single;
 function IsConifer(S: TTreeSpecies): Boolean;
 function IsShrub(S: TTreeSpecies): Boolean;
 function HasTreeFruit(S: TTreeSpecies): Boolean;
@@ -111,6 +117,32 @@ function BranchGrowth(Depth: Integer; Quality: Single): Single;
 implementation
 uses SysUtils, Math, TreeFruits, TreeRegionalPlants;
 
+function LeafSprayIndex(S:TTreeSpecies):Integer;
+begin
+  case S of
+    tsOak:Result:=0;tsBirch:Result:=1;tsWillow:Result:=2;tsShrub:Result:=3;
+    tsMaple:Result:=4;tsBroadleaf:Result:=5;tsColumnar:Result:=6;tsFruit:Result:=7;
+    tsEucalyptus:Result:=8;
+    else Result:=-1;
+  end;
+end;
+function LeafSprayRows(S:TTreeSpecies):Integer;
+begin
+  case S of
+    tsOak,tsMaple,tsBroadleaf:Result:=2;
+    tsBirch,tsWillow:Result:=6;
+    tsShrub,tsColumnar,tsFruit,tsEucalyptus:Result:=3;
+    else Result:=1;
+  end;
+end;
+function LeafSprayAspect(S:TTreeSpecies):Single;
+begin
+  case S of
+    tsOak:Result:=0.54;tsMaple:Result:=1.05;tsWillow:Result:=0.23;
+    tsEucalyptus:Result:=0.17;
+    else Result:=0.60;
+  end;
+end;
 function PackTreeType(Species: TTreeSpecies; AgeYears: Integer; Variant: Integer): TTreeTypeCode;
 begin
   if (Ord(Species)<0) or (Ord(Species)>Ord(High(TTreeSpecies))) then raise ERangeError.Create('Invalid tree family');
@@ -329,7 +361,7 @@ begin
     tsBamboo: begin
       Result.Height:=7; Result.TrunkRadius:=0.055; Result.CrownSpread:=0.45;
       Result.CrownStart:=0.38; Result.PrimaryBranches:=9; Result.MaxDepth:=2;
-      Result.LeafSize:=0.18; Result.LeafDensity:=1.4; Result.Droop:=0.15;
+      Result.LeafSize:=0.07; Result.LeafDensity:=1.4; Result.Droop:=0.15;
       Result.BarkColor:=ColorToLinear(Vec(0.38,0.49,0.22));
     end;
     tsPalm,tsFanPalm: begin
@@ -466,12 +498,15 @@ var Data: TTreeData; BC,LC,CC,NC,I,J,N,First,Last,Dep,ParentIndex: Integer;
   begin
     if BC>=Length(Data.Branches) then SetLength(Data.Branches,Max(64,BC*2));
     Data.Branches[BC]:=Item; Inc(BC);
-    Bounds(Item.Start,Item.Radius); Bounds(Item.Control,Item.Radius); Bounds(Item.Tip,Item.Radius);
+    if Item.Depth=0 then Bounds(Item.Start,Item.Radius*1.7) else Bounds(Item.Start,Item.Radius*1.26);
+    Bounds(Item.Control,Item.Radius); Bounds(Item.Tip,Item.Radius);
   end;
   procedure AddLeaf(const Item: TTreeLeaf);
   begin
     if LC>=Length(Data.Leaves) then SetLength(Data.Leaves,Max(256,LC*2));
-    Data.Leaves[LC]:=Item; Inc(LC); Bounds(Item.Center,Item.Size);
+    Data.Leaves[LC]:=Item; Inc(LC);
+    if LeafSprayIndex(P.Species)>=0 then Bounds(Item.Center,Item.Size*1.7*Max(1,Item.Aspect))
+    else Bounds(Item.Center,Item.Size);
   end;
   function MakeBranch(AParent, Depth: Integer; ID: LongWord; Attach: Single;
     const Start,Direction: TTreeVec3; LengthM,RadiusM: Single): TTreeBranch;
@@ -530,7 +565,10 @@ begin
   B:=MakeBranch(-1,0,Seed,0,Vec(0,0,0),Vec(0,1,0),P.Height,P.TrunkRadius);
   B.Tip.X:=(HashUnit(P.Seed,30)-0.5)*P.Height*P.Irregularity*0.19;
   B.Tip.Z:=(HashUnit(P.Seed,31)-0.5)*P.Height*P.Irregularity*0.19;
-  B.Control:=Add(Scale(B.Tip,0.5),Vec(P.Height*P.Irregularity*0.08,0,0));
+  { The former positive-X bend made every trunk lean in the same direction. }
+  A:=HashUnit(Seed,32)*Pi*2;
+  B.Control:=Add(Scale(B.Tip,0.5),Vec(Cos(A)*P.Height*P.Irregularity*0.06,0,
+    Sin(A)*P.Height*P.Irregularity*0.06));
   if P.Species=tsOak then begin
     B.Tip.Y:=P.Height*(0.70+0.18*Clamp(1-P.Maturity,0,1));
     B.Control.Y:=B.Tip.Y*0.54;
@@ -620,6 +658,8 @@ begin
     if P.Species in [tsSpruce,tsLarch] then R:=R*0.56;
     if IsShrub(P.Species) then R:=P.TrunkRadius*(0.42+HashUnit(Seed,17)*0.3);
     if StemCount>1 then R:=R*Parent.Radius/P.TrunkRadius;
+    { A lateral branch cannot be thicker than the stem it grows out of. }
+    R:=Min(R,(Parent.Radius*(1-T)+Parent.TipRadius*T)*0.82);
     B:=MakeBranch(ParentIndex,1,Seed,T,Curve(Parent.Start,Parent.Control,Parent.Tip,T),Dir,Len,R);
     AddBranch(B);
   end;
@@ -737,6 +777,8 @@ begin
       A:=HashUnit(Seed,3)*Pi*2; R:=Size*(0.4+HashUnit(Seed,4)*1.4);
       Leaf.Center:=Add(Center,Vec(Cos(A)*R,(HashUnit(Seed,5)-0.25)*Size*2,Sin(A)*R));
       Leaf.Axis:=Normalize(Vec(HashUnit(Seed,6)-0.5,0.12+HashUnit(Seed,7)*0.8,HashUnit(Seed,8)-0.5));
+      if P.Species=tsWillow then Leaf.Axis:=Normalize(Vec((HashUnit(Seed,6)-0.5)*0.75,
+        -0.65-HashUnit(Seed,7)*0.35,(HashUnit(Seed,8)-0.5)*0.75));
       Leaf.Size:=Size; Leaf.Aspect:=0.60;
       if P.Species=tsMaple then Leaf.Aspect:=1.05;
       if P.Species=tsOak then Leaf.Aspect:=0.54;
@@ -767,7 +809,7 @@ begin
       Data.Crowns[I].Radius.Y:=Data.Crowns[I].Radius.Y*0.28;
     end;
   end;
-  Data.Fingerprint:=Hash32(P.Seed);
+  Data.Fingerprint:=Hash32(P.Seed xor (TREE_WOOD_VERSION shl 4));
   if NC>0 then FingerprintValue(NeedlePairsPerShoot(P.LeafDensity)*NeedlesPerFascicle(P.Species));
   for I:=0 to BC-1 do begin
     B:=Data.Branches[I]; Data.Fingerprint:=Hash32(Data.Fingerprint xor B.ID);

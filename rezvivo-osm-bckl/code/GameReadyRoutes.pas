@@ -2,6 +2,8 @@ unit GameReadyRoutes;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
 uses Classes,SysUtils,fpjson,GameHttpClient;
+const
+  DefaultReadyRouteId = 'krylatskoye-small-circuit';
 type
   TReadyRouteSync=class(TThread)
   private
@@ -25,7 +27,9 @@ type
     FGeneration:Cardinal;
     FError:string;
     function FileFor(Item:TJSONObject):string;
+    function FindId(const Id:string):TJSONObject;
     function FindFile(const FileName:string):TJSONObject;
+    function GetBusy:Boolean;
   public
     constructor Create;
     destructor Destroy;override;
@@ -33,26 +37,39 @@ type
     procedure AppendFiles(Files:TStrings);
     function ResolveFile(const FileName:string):string;
     function Title(const FileName:string):string;
+    function Version(const FileName:string):Integer;
     function Identity(const FileName:string;out Id,SHA:string):Boolean;
     function Diagnostics:TJSONObject;
     property Generation:Cardinal read FGeneration;
+    property Busy:Boolean read GetBusy;
+    property ErrorText:string read FError;
   end;
 function ReadyRoutes:TReadyRoutes;
 procedure ReadyRoutesTick;
+function ReadyRouteReference(const Id:string):string;
+function IsReadyRouteReference(const Value:string):Boolean;
 implementation
 uses jsonparser,CastleDownload,AppRuntimePaths,VeloSiteAPI,GameUpdateDownload,
-  GameLocalization,DebugLog{$ifdef MSWINDOWS},Windows{$endif};
+  GameLocalization,UiTranslations,DebugLog{$ifdef MSWINDOWS},Windows{$endif};
 type
   TBoundedRouteStream=class(TStringStream)
     Limit:Integer;
     function Write(const Buffer;Count:LongInt):LongInt;override;
   end;
 var Instance:TReadyRoutes;
+const ReadyRoutePrefix = 'ready-route:';
 function TBoundedRouteStream.Write(const Buffer;Count:LongInt):LongInt;
 begin if Position+Count>Limit then raise Exception.Create('Ready route exceeds size limit');Result:=inherited Write(Buffer,Count)end;
 function ValidId(const S:string):Boolean;
 var C:Char;
 begin Result:=(Length(S)>0)and(Length(S)<=80);if not Result then Exit;for C in S do if not(C in ['a'..'z','0'..'9','-'])then Exit(False)end;
+function ReadyRouteReference(const Id:string):string;
+begin Result:=ReadyRoutePrefix+Id end;
+function IsReadyRouteReference(const Value:string):Boolean;
+begin
+ Result:=(Copy(Value,1,Length(ReadyRoutePrefix))=ReadyRoutePrefix)and
+  ValidId(Copy(Value,Length(ReadyRoutePrefix)+1,MaxInt));
+end;
 function ValidSHA(const S:string):Boolean;
 var C:Char;
 begin Result:=Length(S)=64;if not Result then Exit;for C in S do if not(C in ['a'..'f','0'..'9'])then Exit(False)end;
@@ -207,8 +224,15 @@ procedure TReadyRoutes.AppendFiles(Files:TStrings);
 var A:TJSONArray;I:Integer;P:string;
 begin A:=FCatalog.Arrays['items'];for I:=0 to A.Count-1 do begin P:=FileFor(A.Objects[I]);if FileExists(P)then Files.Add(P)end end;
 function TReadyRoutes.ResolveFile(const FileName:string):string;
-var D:TJSONData;A:TJSONArray;Id:string;I:Integer;
+var D:TJSONData;A:TJSONArray;Id:string;I:Integer;O:TJSONObject;
 begin
+ { A first-ride choice identifies a catalogue route, not one revision's hash
+   or a machine-specific path. An empty result means it still needs downloading. }
+ if IsReadyRouteReference(FileName)then begin
+  Result:='';O:=FindId(Copy(FileName,Length(ReadyRoutePrefix)+1,MaxInt));
+  if(O<>nil)and FileExists(FileFor(O))then Result:=FileFor(O);
+  Exit;
+ end;
  Result:=FileName;
  if FindFile(FileName)<>nil then Exit;
  if not SameFileName(ExtractFileDir(FileName),FDirectory+'objects')or
@@ -222,16 +246,28 @@ begin
   finally D.Free end;
  except { Keep the already downloaded file if an optional sidecar is damaged. }end;
 end;
+function TReadyRoutes.FindId(const Id:string):TJSONObject;
+var A:TJSONArray;I:Integer;
+begin Result:=nil;A:=FCatalog.Arrays['items'];for I:=0 to A.Count-1 do if A.Objects[I].Get('id','')=Id then Exit(A.Objects[I])end;
+function TReadyRoutes.GetBusy:Boolean;
+begin Result:=FTask<>nil end;
 function TReadyRoutes.FindFile(const FileName:string):TJSONObject;
 var A:TJSONArray;I:Integer;
 begin Result:=nil;A:=FCatalog.Arrays['items'];for I:=0 to A.Count-1 do if SameFileName(FileFor(A.Objects[I]),FileName)then Exit(A.Objects[I])end;
 function TReadyRoutes.Title(const FileName:string):string;
 var O:TJSONObject;
-begin Result:=ChangeFileExt(ExtractFileName(FileName),'');O:=FindFile(FileName);if O=nil then Exit;
+begin
+ if IsReadyRouteReference(FileName)then begin
+  Result:=UiText('Ready route');O:=FindId(Copy(FileName,Length(ReadyRoutePrefix)+1,MaxInt));
+ end else begin Result:=ChangeFileExt(ExtractFileName(FileName),'');O:=FindFile(FileName)end;
+ if O=nil then Exit;
  Result:=O.Get('title','');if(CurrentAppliedLanguage<>'ru')and(O.Get('title_en','')<>'')then Result:=O.Get('title_en','')end;
 function TReadyRoutes.Identity(const FileName:string;out Id,SHA:string):Boolean;
 var O:TJSONObject;
 begin Id:='';SHA:='';O:=FindFile(FileName);Result:=O<>nil;if Result then begin Id:=O.Get('id','');SHA:=O.Get('sha256','')end end;
+function TReadyRoutes.Version(const FileName:string):Integer;
+var O:TJSONObject;
+begin Result:=0;O:=FindFile(FileName);if O<>nil then Result:=O.Get('version',0) end;
 function TReadyRoutes.Diagnostics:TJSONObject;
 begin Result:=TJSONObject.Create(['generation',FGeneration,'busy',FTask<>nil,'error',FError,'revision',FCatalog.Get('revision','')]);Result.Add('items',FCatalog.Arrays['items'].Clone)end;
 finalization

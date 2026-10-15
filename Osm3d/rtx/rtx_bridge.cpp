@@ -42,6 +42,10 @@ struct GLInterop {
     void (APIENTRY *WaitSemaphore)(GLuint,GLuint,const GLuint*,GLuint,const GLuint*,const GLenum*);
     void (APIENTRY *SignalSemaphore)(GLuint,GLuint,const GLuint*,GLuint,const GLuint*,const GLenum*);
     void (APIENTRY *GetUnsignedBytei_v)(GLenum,GLuint,GLubyte*);
+    void (APIENTRY *GenBuffers)(GLsizei,GLuint*);
+    void (APIENTRY *DeleteBuffers)(GLsizei,const GLuint*);
+    void (APIENTRY *BindBuffer)(GLenum,GLuint);
+    void (APIENTRY *BufferStorageMem)(GLenum,intptr_t,GLuint,uint64_t);
     template<class T> static void load(T& out,const char* name) {
         PROC p=wglGetProcAddress(name);
         if(!p || p==reinterpret_cast<PROC>(1) || p==reinterpret_cast<PROC>(-1))
@@ -55,6 +59,8 @@ struct GLInterop {
         load(GenSemaphores,"glGenSemaphoresEXT"); load(DeleteSemaphores,"glDeleteSemaphoresEXT");
         load(ImportSemaphoreWin32Handle,"glImportSemaphoreWin32HandleEXT"); load(WaitSemaphore,"glWaitSemaphoreEXT");
         load(SignalSemaphore,"glSignalSemaphoreEXT"); load(GetUnsignedBytei_v,"glGetUnsignedBytei_vEXT");
+        load(GenBuffers,"glGenBuffers");load(DeleteBuffers,"glDeleteBuffers");
+        load(BindBuffer,"glBindBuffer");load(BufferStorageMem,"glBufferStorageMemEXT");
     }
 };
 
@@ -81,6 +87,12 @@ struct GLInterop {
 struct Buffer { VkBuffer handle{}; VkDeviceMemory memory{}; void* mapped{}; VkDeviceSize size{}; VkDeviceAddress address{}; };
 struct Image { VkImage handle{}; VkImageView view{}; VkDeviceMemory memory{}; GLuint texture{},glMemory{}; uint32_t layers{}; VkDeviceSize size{}; HANDLE exported{}; };
 struct Context;
+struct DynamicScene {
+    Buffer vertices,blasBuffer,tlasBuffer,scratch,instances;
+    VkAccelerationStructureKHR blas{},tlas{};
+    GLuint glBuffer{},glMemory{};HANDLE exported{};
+    uint32_t capacity{},count{},builtCount{};
+};
 struct Scene {
     Context* c{}; VkAccelerationStructureKHR blas{},groundBlas{},tlas{};
     Buffer vertices,cards,surfaces,blasBuffer,groundBuffer,tlasBuffer,scratch,instances;
@@ -88,7 +100,7 @@ struct Scene {
     uint64_t id{},triangles{},cardCount{}; uint32_t opaqueCount{},groundCount{}; LARGE_INTEGER start{};
     ~Scene();
 };
-struct Frame { VkCommandBuffer cmd{}; VkFence fence{}; VkDescriptorSet set{}; Buffer views; std::shared_ptr<Scene> scene; bool submitted{},reflection{}; };
+struct Frame { VkCommandBuffer cmd{}; VkFence fence{}; VkDescriptorSet set{}; Buffer views; DynamicScene dynamic; std::shared_ptr<Scene> scene; bool submitted{},reflection{},screen{}; };
 struct Context {
     HMODULE loader{}; VkInstance instance{}; VkPhysicalDevice gpu{}; VkDevice device{}; VkQueue queue{}; uint32_t family{};
     VkPhysicalDeviceMemoryProperties memory{}; VkPhysicalDeviceProperties props{}; uint32_t scratchAlignment{256};
@@ -98,12 +110,23 @@ struct Context {
 #undef DECL
     GLInterop gl{}; Image output,alpha; VkSemaphore ready{},done{}; GLuint glReady{},glDone{}; HANDLE readyHandle{},doneHandle{};
     VkCommandPool pool{}; VkDescriptorSetLayout setLayout{}; VkPipelineLayout pipeLayout{}; VkPipeline pipeline{};
-    VkDescriptorPool descPool{}; VkSampler sampler{}; VkQueryPool queries{};
+    VkDescriptorPool descPool{}; VkSampler sampler{},screenAlphaSampler{}; VkQueryPool queries{};
     std::array<Frame,6> frames{}; unsigned frameIndex{}; uint32_t side{},alphaSide{},alphaLayers{};
     std::shared_ptr<Scene> active,pending; Stats stats{}; std::string name;
     Image reflectionNormal,reflectionDepth,reflectionOutput,reflectionAtlas;
     VkPipeline reflectionPipeline{}; uint32_t reflectionWidth{},reflectionHeight{};
     double reflectionMs{}; uint64_t reflectionFrames{},busyFrames{};
+    Image screenDepth,screenOutput,screenSamples,screenReuse;VkPipeline screenPipeline{},screenFilterPipeline{};
+    uint32_t screenWidth{},screenHeight{};double screenMs{};uint64_t screenFrames{};
+    bool screenSupported{};
+    bool dynamicPrepared{};
+    uint32_t dynamicTriangles{};uint64_t dynamicBuilds{},dynamicRefits{};
+    GLuint dynamicBuffer(uint32_t triangles);
+    void destroyDynamic(DynamicScene& d);
+    void buildDynamic(Frame& f);
+    void dynamicBarrier(VkCommandBuffer cmd,DynamicScene& d,bool acquire);
+    void screenSize(const wchar_t* shader,uint32_t width,uint32_t height);
+    bool screenTrace(const ReflectionCamera* camera,uint64_t expectedScene);
     ~Context();
     void init(const wchar_t* shader,uint32_t size,uint32_t aSide,uint32_t aLayers);
     Frame& acquireFrame() {
@@ -166,26 +189,27 @@ struct Context {
     void begin(VkCommandBuffer cmd) {
         VkCommandBufferBeginInfo i{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; i.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; CHECK(BeginCommandBuffer(cmd,&i));
     }
-    void barriers(VkCommandBuffer cmd,bool acquire,bool initial=false,bool reflectionsOnly=false) {
-        VkImageMemoryBarrier b[6]{}; Image* images[6]={&output,&alpha,&reflectionNormal,&reflectionDepth,&reflectionOutput,&reflectionAtlas};
-        int begin=reflectionsOnly?2:0,end=reflectionWidth?6:2;
-        for(int k=begin;k<end;++k) {
-            b[k].sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b[k].srcAccessMask=initial||acquire?0:VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
-            b[k].dstAccessMask=acquire?VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT:0;
-            b[k].oldLayout=initial?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_GENERAL; b[k].newLayout=VK_IMAGE_LAYOUT_GENERAL;
-            b[k].srcQueueFamilyIndex=acquire?VK_QUEUE_FAMILY_EXTERNAL:family; b[k].dstQueueFamilyIndex=acquire?family:VK_QUEUE_FAMILY_EXTERNAL;
-            b[k].image=images[k]->handle; b[k].subresourceRange={VkImageAspectFlags(k==3?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,images[k]->layers};
+    void barriers(VkCommandBuffer cmd,bool acquire,bool initial=false,bool reflectionsOnly=false,bool screenOnly=false) {
+        Image* images[]={&output,&alpha,&reflectionNormal,&reflectionDepth,&reflectionOutput,&reflectionAtlas,&screenDepth,&screenOutput,&screenSamples,&screenReuse};
+        VkImageMemoryBarrier b[10]{};uint32_t count=0;
+        for(int k=0;k<10;++k) {
+            if(!images[k]->handle || (reflectionsOnly&&(k<2||k>5)) || (screenOnly&&k<6))continue;
+            auto& v=b[count++];v.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            v.srcAccessMask=initial||acquire?0:VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+            v.dstAccessMask=acquire?VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT:0;
+            v.oldLayout=initial?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_GENERAL;v.newLayout=VK_IMAGE_LAYOUT_GENERAL;
+            v.srcQueueFamilyIndex=acquire?VK_QUEUE_FAMILY_EXTERNAL:family;v.dstQueueFamilyIndex=acquire?family:VK_QUEUE_FAMILY_EXTERNAL;
+            v.image=images[k]->handle;v.subresourceRange={VkImageAspectFlags(k==3||k==6?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,images[k]->layers};
         }
         CmdPipelineBarrier(cmd,acquire||initial?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            acquire?VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT:VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,0,0,nullptr,0,nullptr,end-begin,b+begin);
+            acquire?VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT:VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,0,0,nullptr,0,nullptr,count,b);
     }
     void poll();
     void build(const float* xyz,uint32_t triangles,const Card* cards,uint32_t count,uint64_t id,const Surface* surfaces=nullptr);
     bool trace(const Zone* zones,uint64_t expectedScene);
     void reflectionSize(const wchar_t* shader,uint32_t width,uint32_t height);
     bool reflect(const ReflectionCamera* camera,uint64_t expectedScene);
-    void handoff(VkCommandBuffer cmd,VkFence fence);
+    void handoff(VkCommandBuffer cmd,VkFence fence,GLuint buffer=0);
 };
 
 void Context::image(Image& out,uint32_t size,uint32_t layers,VkFormat format,VkImageUsageFlags usage,uint32_t height) {
@@ -213,7 +237,7 @@ void Context::image(Image& out,uint32_t size,uint32_t layers,VkFormat format,VkI
     GLenum target=layers==1?GL_TEXTURE_2D:0x8C1A; GLint old=0;
     glGetIntegerv(layers==1?GL_TEXTURE_BINDING_2D:0x8C1D,&old);
     glGenTextures(1,&out.texture); glBindTexture(target,out.texture);
-    GLenum glFormat=format==VK_FORMAT_D32_SFLOAT?0x8CAC:format==VK_FORMAT_R16G16B16A16_SFLOAT?0x881A:format==VK_FORMAT_R8G8B8A8_UNORM?0x8058:0x822E;
+    GLenum glFormat=format==VK_FORMAT_R8_UNORM?0x8229:format==VK_FORMAT_D32_SFLOAT?0x8CAC:format==VK_FORMAT_R16G16_SFLOAT?0x822F:format==VK_FORMAT_R32G32_SFLOAT?0x8230:format==VK_FORMAT_R16G16B16A16_SFLOAT?0x881A:format==VK_FORMAT_R8G8B8A8_UNORM?0x8058:0x822E;
     if(layers==1) gl.TexStorageMem2D(target,1,glFormat,size,height,out.glMemory,0);
     else gl.TexStorageMem3D(target,1,0x8229 /*R8*/,size,size,layers,out.glMemory,0);
     glTexParameteri(target,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(target,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
@@ -259,6 +283,8 @@ void Context::init(const wchar_t* shader,uint32_t size,uint32_t aSide,uint32_t a
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; f12.pNext=&as;
     VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; f2.pNext=&f12; GetPhysicalDeviceFeatures2(gpu,&f2);
     if(!rq.rayQuery || !as.accelerationStructure || !f12.bufferDeviceAddress) throw std::runtime_error("Hardware ray queries are unavailable");
+    screenSupported=f2.features.shaderStorageImageExtendedFormats!=0;
+    VkPhysicalDeviceFeatures features{};features.shaderStorageImageExtendedFormats=screenSupported;
     // Enable only features used by this bridge.
     f12={VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES}; f12.pNext=&as; f12.bufferDeviceAddress=VK_TRUE;
     as={VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR}; as.pNext=&rq; as.accelerationStructure=VK_TRUE;
@@ -268,7 +294,7 @@ void Context::init(const wchar_t* shader,uint32_t size,uint32_t aSide,uint32_t a
     for(uint32_t j=0;j<count;++j) if((queues[j].queueFlags&VK_QUEUE_COMPUTE_BIT) && queues[j].timestampValidBits) { family=j; found=true; break; }
     if(!found) throw std::runtime_error("No timestamped compute queue");
     float priority=1; VkDeviceQueueCreateInfo qc{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}; qc.queueFamilyIndex=family; qc.queueCount=1; qc.pQueuePriorities=&priority;
-    VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&f12; dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qc; dc.enabledExtensionCount=static_cast<uint32_t>(std::size(wanted)); dc.ppEnabledExtensionNames=wanted;
+    VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO}; dc.pNext=&f12; dc.pEnabledFeatures=&features; dc.queueCreateInfoCount=1; dc.pQueueCreateInfos=&qc; dc.enabledExtensionCount=static_cast<uint32_t>(std::size(wanted)); dc.ppEnabledExtensionNames=wanted;
     CHECK(CreateDevice(gpu,&dc,nullptr,&device));
 #define LOAD_D(n) n=reinterpret_cast<PFN_vk##n>(GetDeviceProcAddr(device,"vk" #n)); if(!n) throw std::runtime_error("Missing vk" #n);
     DEVICE_FUNCS(LOAD_D)
@@ -288,9 +314,11 @@ void Context::init(const wchar_t* shader,uint32_t size,uint32_t aSide,uint32_t a
     CHECK(WaitForFences(device,1,&initial,VK_TRUE,UINT64_MAX)); DestroyFence(device,initial,nullptr); FreeCommandBuffers(device,pool,1,&first);
     VkSamplerCreateInfo sc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; sc.magFilter=VK_FILTER_NEAREST; sc.minFilter=VK_FILTER_NEAREST; sc.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST; sc.addressModeU=sc.addressModeV=sc.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     CHECK(CreateSampler(device,&sc,nullptr,&sampler));
-    std::array<VkDescriptorSetLayoutBinding,10> bindings{};
+    sc.magFilter=VK_FILTER_LINEAR;sc.minFilter=VK_FILTER_LINEAR;
+    CHECK(CreateSampler(device,&sc,nullptr,&screenAlphaSampler));
+    std::array<VkDescriptorSetLayoutBinding,11> bindings{};
     VkDescriptorType types[]={VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
     for(unsigned j=0;j<bindings.size();++j) { bindings[j].binding=j; bindings[j].descriptorType=types[j]; bindings[j].descriptorCount=1; bindings[j].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT; }
     VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; lc.bindingCount=uint32_t(bindings.size()); lc.pBindings=bindings.data(); CHECK(CreateDescriptorSetLayout(device,&lc,nullptr,&setLayout));
     VkPipelineLayoutCreateInfo plc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO}; plc.setLayoutCount=1; plc.pSetLayouts=&setLayout; CHECK(CreatePipelineLayout(device,&plc,nullptr,&pipeLayout));
@@ -301,7 +329,7 @@ void Context::init(const wchar_t* shader,uint32_t size,uint32_t aSide,uint32_t a
     VkComputePipelineCreateInfo cp{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO}; cp.layout=pipeLayout; cp.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}; cp.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; cp.stage.module=module; cp.stage.pName="main";
     VkResult result=CreateComputePipelines(device,VK_NULL_HANDLE,1,&cp,nullptr,&pipeline); DestroyShaderModule(device,module,nullptr); CHECK(result);
     uint32_t slots=uint32_t(frames.size());
-    VkDescriptorPoolSize sizes[]={{types[0],slots},{types[1],slots*2},{types[2],slots*4},{types[3],slots*3}};
+    VkDescriptorPoolSize sizes[]={{types[0],slots},{types[1],slots*2},{types[2],slots*5},{types[3],slots*3}};
     VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; dp.maxSets=slots; dp.poolSizeCount=4; dp.pPoolSizes=sizes; CHECK(CreateDescriptorPool(device,&dp,nullptr,&descPool));
     VkQueryPoolCreateInfo qp{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO}; qp.queryType=VK_QUERY_TYPE_TIMESTAMP; qp.queryCount=slots*2; CHECK(CreateQueryPool(device,&qp,nullptr,&queries));
     for(auto& f:frames) {
@@ -403,7 +431,7 @@ bool Context::trace(const Zone* zones,uint64_t expectedScene) {
     Frame& f=acquireFrame();
     if(f.submitted) {
         uint64_t stamps[2]{}; VkResult q=GetQueryPoolResults(device,queries,frameIndex*2,2,sizeof(stamps),stamps,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT);
-        if(q==VK_SUCCESS) { double ms=double(stamps[1]-stamps[0])*props.limits.timestampPeriod/1e6; if(f.reflection) reflectionMs=ms; else stats.traceMs=ms; }
+        if(q==VK_SUCCESS) { double ms=double(stamps[1]-stamps[0])*props.limits.timestampPeriod/1e6; if(f.screen)screenMs=ms;else if(f.reflection) reflectionMs=ms; else stats.traceMs=ms; }
         else if(q!=VK_NOT_READY) CHECK(q);
     }
     f.scene=active; memcpy(f.views.mapped,zones,4*sizeof(Zone));
@@ -419,16 +447,17 @@ bool Context::trace(const Zone* zones,uint64_t expectedScene) {
     CmdWriteTimestamp(f.cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,queries,frameIndex*2+1); barriers(f.cmd,false); CHECK(EndCommandBuffer(f.cmd));
     CHECK(ResetFences(device,1,&f.fence));
     handoff(f.cmd,f.fence);
-    f.submitted=true;f.reflection=false; frameIndex=(frameIndex+1)%unsigned(frames.size()); ++stats.frames; return true;
+    f.submitted=true;f.reflection=false;f.screen=false; frameIndex=(frameIndex+1)%unsigned(frames.size()); ++stats.frames; return true;
 }
-void Context::handoff(VkCommandBuffer cmd,VkFence fence) {
-    GLuint images[]={output.texture,alpha.texture,reflectionNormal.texture,reflectionDepth.texture,reflectionOutput.texture,reflectionAtlas.texture};
-    GLenum layouts[]={0x958D,0x958D,0x958D,0x958D,0x958D,0x958D}; GLuint count=reflectionWidth?6:2;
-    gl.SignalSemaphore(glReady,0,nullptr,count,images,layouts); glFlush();
-    VkPipelineStageFlags wait=VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+void Context::handoff(VkCommandBuffer cmd,VkFence fence,GLuint buffer) {
+    GLuint textures[]={output.texture,alpha.texture,reflectionNormal.texture,reflectionDepth.texture,reflectionOutput.texture,reflectionAtlas.texture,screenDepth.texture,screenOutput.texture,screenSamples.texture,screenReuse.texture};
+    GLuint images[10]{},count=0;GLenum layouts[10]{};
+    for(GLuint texture:textures)if(texture){images[count]=texture;layouts[count++]=0x958D;}
+    gl.SignalSemaphore(glReady,buffer?1:0,buffer?&buffer:nullptr,count,images,layouts); glFlush();
+    VkPipelineStageFlags wait=VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.waitSemaphoreCount=1; submit.pWaitSemaphores=&ready; submit.pWaitDstStageMask=&wait; submit.commandBufferCount=1; submit.pCommandBuffers=&cmd; submit.signalSemaphoreCount=1; submit.pSignalSemaphores=&done;
     CHECK(QueueSubmit(queue,1,&submit,fence));
-    gl.WaitSemaphore(glDone,0,nullptr,count,images,layouts);
+    gl.WaitSemaphore(glDone,buffer?1:0,buffer?&buffer:nullptr,count,images,layouts);
 }
 Scene::~Scene() {
     if(!c || !c->device) return;
@@ -442,21 +471,26 @@ Context::~Context() {
     // Lifecycle only. Rendering uses GPU semaphores and polls, never glFinish.
     if(device && DeviceWaitIdle) { glFinish(); DeviceWaitIdle(device); }
     pending.reset(); active.reset();
-    for(auto& f:frames) { f.scene.reset(); if(device && DestroyBuffer) destroy(f.views); if(f.fence) DestroyFence(device,f.fence,nullptr); }
-    if(device && DestroyImage) { destroy(output); destroy(alpha);destroy(reflectionNormal);destroy(reflectionDepth);destroy(reflectionOutput);destroy(reflectionAtlas); }
+    for(auto& f:frames) { f.scene.reset(); if(device && DestroyBuffer) {destroyDynamic(f.dynamic);destroy(f.views);} if(f.fence) DestroyFence(device,f.fence,nullptr); }
+    if(device && DestroyImage) { destroy(output); destroy(alpha);destroy(reflectionNormal);destroy(reflectionDepth);destroy(reflectionOutput);destroy(reflectionAtlas);destroy(screenDepth);destroy(screenOutput);destroy(screenSamples);destroy(screenReuse); }
     if(glReady) gl.DeleteSemaphores(1,&glReady); if(glDone) gl.DeleteSemaphores(1,&glDone);
     if(readyHandle) CloseHandle(readyHandle); if(doneHandle) CloseHandle(doneHandle);
     if(ready) DestroySemaphore(device,ready,nullptr); if(done) DestroySemaphore(device,done,nullptr);
     if(queries) DestroyQueryPool(device,queries,nullptr); if(sampler) DestroySampler(device,sampler,nullptr);
+    if(screenAlphaSampler) DestroySampler(device,screenAlphaSampler,nullptr);
     if(descPool) DestroyDescriptorPool(device,descPool,nullptr); if(pipeline) DestroyPipeline(device,pipeline,nullptr);
     if(reflectionPipeline) DestroyPipeline(device,reflectionPipeline,nullptr);
+    if(screenPipeline) DestroyPipeline(device,screenPipeline,nullptr);
+    if(screenFilterPipeline) DestroyPipeline(device,screenFilterPipeline,nullptr);
     if(pipeLayout) DestroyPipelineLayout(device,pipeLayout,nullptr); if(setLayout) DestroyDescriptorSetLayout(device,setLayout,nullptr);
     if(pool) DestroyCommandPool(device,pool,nullptr);
     if(device && DestroyDevice) DestroyDevice(device,nullptr); if(instance && DestroyInstance) DestroyInstance(instance,nullptr);
     if(loader) FreeLibrary(loader);
 }
 #include "reflections.inc"
-API uint32_t __cdecl rzrt_version() { return 4; }
+#include "dynamic_scene.inc"
+#include "screen_shadows.inc"
+API uint32_t __cdecl rzrt_version() { return 9; }
 API uint32_t __cdecl rzrt_ground_triangles(Context* c) { return c&&c->active?c->active->groundCount:0; }
 API uint64_t __cdecl rzrt_frame_waits(Context* c) { return c?c->busyFrames:0; }
 API const char* __cdecl rzrt_error() { return error.c_str(); }
@@ -482,6 +516,6 @@ API int __cdecl rzrt_trace(Context* c,const Zone* zones,uint64_t expectedScene) 
 }
 API int __cdecl rzrt_stats(Context* c,Stats* s) {
     try { if(!c || !s) throw std::runtime_error("No RTX context/stats"); c->poll(); *s=c->stats;
-        s->bytes+=c->reflectionNormal.size+c->reflectionDepth.size+c->reflectionOutput.size+c->reflectionAtlas.size;return 1; }
+        s->bytes+=c->reflectionNormal.size+c->reflectionDepth.size+c->reflectionOutput.size+c->reflectionAtlas.size+c->screenDepth.size+c->screenOutput.size+c->screenSamples.size+c->screenReuse.size;return 1; }
     catch(const std::exception& e) { error=e.what(); return 0; }
 }

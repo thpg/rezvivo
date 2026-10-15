@@ -240,6 +240,9 @@ var
     cfz := Spec.Center[idx].Z + oz * (TUNNEL_SURG_OUT_M + 2.0);
     cbx := Spec.Center[idx].X - ox * (TUNNEL_SURG_IN_M + 2.0);
     cbz := Spec.Center[idx].Z - oz * (TUNNEL_SURG_IN_M + 2.0);
+    { The apron must cover the opening as well as its lateral wings. Previously
+      a narrow cap (wing only) left sky gaps along both sides of the portal. }
+    wing := halfW + wingP;
     NUp := Vector3(0.0, 1.0, 0.0);
     AddQuadN(WallMesh,
       Vector3(Single(cfx - px * wing), yTop, Single(cfz - pz * wing)),
@@ -673,9 +676,10 @@ begin
       AApproachSegs[nApp].Seg.Width    := Params.Width;
       AApproachSegs[nApp].Seg.WayId    := Way.Id;
       AApproachSegs[nApp].Seg.IsBridge := False;
-      AApproachSegs[nApp].H0 := HMaxAcross(AApproachSegs[nApp].Seg.X0,
-        AApproachSegs[nApp].Seg.Z0, C[1].X - C[0].X, C[1].Z - C[0].Z,
-        Params.Width * 0.5);
+      { Join the leveled road axis. Raw DEM edge maxima measure portal
+        clearance, not the pavement, and made a bump at the ramp end. }
+      AApproachSegs[nApp].H0 := SampleTerrainYXZ(Sampler, Projection,
+        AApproachSegs[nApp].Seg.X0, AApproachSegs[nApp].Seg.Z0);
       AApproachSegs[nApp].H1 := CDeckY[0];
       Inc(nApp);
     end;
@@ -694,9 +698,8 @@ begin
       AApproachSegs[nApp].Seg.WayId    := Way.Id;
       AApproachSegs[nApp].Seg.IsBridge := False;
       AApproachSegs[nApp].H0 := CDeckY[k-1];
-      AApproachSegs[nApp].H1 := HMaxAcross(AApproachSegs[nApp].Seg.X1,
-        AApproachSegs[nApp].Seg.Z1, C[k-1].X - C[k-2].X, C[k-1].Z - C[k-2].Z,
-        Params.Width * 0.5);
+      AApproachSegs[nApp].H1 := SampleTerrainYXZ(Sampler, Projection,
+        AApproachSegs[nApp].Seg.X1, AApproachSegs[nApp].Seg.Z1);
       Inc(nApp);
     end;
 

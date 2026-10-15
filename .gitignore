@@ -56,3 +56,7 @@ rezvivo-osm-bckl/*settings*.xml
 rezvivo-osm-bckl/*session*.json
 rezvivo-osm-bckl/*tokens*.json
 rezvivo-osm-bckl/*profile*.json
+
+# Downloaded offline speech dependencies; restore with prepare-speech-assets.ps1.
+/rezvivo-osm-bckl/data/speech/models/
+/rezvivo-osm-bckl/data/speech/vosk-win64/

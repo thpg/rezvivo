@@ -28,7 +28,7 @@ function WorkoutFavorite(const Url: String): Boolean;
 procedure ToggleWorkoutFavorite(const Url: String);
 
 implementation
-uses GameRouteLibraryData, DebugLog, AppSettings;
+uses GameRouteLibraryData, DebugLog, AppSettings, GameReadyRoutes;
 var Preferences: TJSONObject; BoundDir: String;
 
 function UserDataDir: String;
@@ -94,7 +94,9 @@ begin
     MapId:=UserPreference('last_world');
     if MapId='' then begin Kind:=rmkReal;MapId:=UserPreference('last_route');end;
   end;
-  if MapId='' then begin Kind:=rmkDream;MapId:=FirstRideWorldId;end;
+  if MapId='' then begin
+    Kind:=rmkReal;MapId:=ReadyRouteReference(DefaultReadyRouteId);
+  end;
 end;
 
 function AvatarBodyParameters:TRiderBodyParameters;

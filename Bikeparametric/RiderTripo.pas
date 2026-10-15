@@ -217,6 +217,7 @@ type
   end;
 
   TRiderAppearanceAddon = class
+    function DisplayTopColor(out Color:TVector3):Boolean;virtual;
     procedure Update(Dt,Speed:Single);virtual;abstract;
     procedure ClothColorChanged(Slot:TClothSlot;const Color:TVector3;Enabled:Boolean);virtual;
     procedure HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);virtual;
@@ -693,6 +694,7 @@ type
       текстуру (cdmTexture). }
     procedure RefreshShaderClothDye;
     property ClothColor[Slot: TClothSlot]: TVector3 read GetDyeColor write SetDyeColor;
+    function DisplayClothColor(Slot:TClothSlot):TVector3;
     property ClothColorActive[Slot: TClothSlot]: Boolean read GetDyeActive;
     property ClothDyeMode: TClothDyeMode read FDyeMode write SetDyeMode;
     { Extra helmet nod about local X (degrees). Positive = visor down / forward. }
@@ -938,6 +940,9 @@ var
 implementation
 
 uses AppRuntimePaths;
+
+function TRiderAppearanceAddon.DisplayTopColor(out Color:TVector3):Boolean;
+begin Color:=TVector3.Zero;Result:=False end;
 
 procedure TRiderAppearanceAddon.ClothColorChanged(Slot:TClothSlot;
   const Color:TVector3;Enabled:Boolean);
@@ -3217,6 +3222,20 @@ end;
 function ClothMaterialLuminance(const C: TVector3): Single; inline;
 begin
   Result := 0.2126 * C.X + 0.7152 * C.Y + 0.0722 * C.Z;
+end;
+
+function TTripoRiderScene.DisplayClothColor(Slot:TClothSlot):TVector3;
+var I:Integer;Lum,Best:Single;C:TVector3;
+begin
+  Result:=ClothDyeNativeColor(Slot);
+  if FDyeActive[Slot]and(FDyeMode<>cdmNone)then Exit(FDyeColor[Slot]);
+  Best:=-1;
+  { Already collected materials include the authored colour of modern models;
+    the legacy chroma-key colour is not their visible fabric colour. }
+  for I:=0 to High(FDyeMaterial)do if FDyeMaterial[I].Slot=Slot then begin
+    C:=FDyeMaterial[I].Node.BaseColor;Lum:=ClothMaterialLuminance(C);
+    if Lum>Best then begin Best:=Lum;Result:=C end;
+  end;
 end;
 
 function TTripoRiderScene.ShaderClothDyeColor(Slot: TClothSlot): TVector3;
@@ -6316,6 +6335,9 @@ begin
     '  float a004=min(r.x*r.x,exp2(-9.28*nv))*r.x+r.y;' + #10 +
     '  vec2 ab=vec2(-1.04,1.04)*a004+r.zw;' + #10 +
     '  vec3 spec=max(f0*ab.x+ab.y,vec3(0.0))*radiance;' + #10 +
+    // Appearance effects can suppress sky reflection without suppressing
+    // diffuse sky light, occlusion or the rider's shadow reception.
+    '  /* PLUG: rider_environment_specular (spec) */' + #10 +
     '  light=(diffuseColor*irradiance/3.14159265+spec)*riderIndirectVisibility(N);' + #10 +
     '}';
   FreeAndNil(FSelfOcclusion);

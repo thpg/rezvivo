@@ -12,7 +12,7 @@ unit GameViewPlay;
 
 interface
 
-uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,GameRouteReturn,Osm3dTravelRoads,
+uses Classes,fpjson,GameRideMap,GameRiderBadge,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,GameRouteReturn,Osm3dTravelRoads,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleKeysMouse, CastleViewport, CastleScene, CastleVectors, CastleCameras,
   CastleTransform, CastleInputs, CastleThirdPersonNavigation, CastleDebugTransform,
@@ -23,9 +23,9 @@ uses Classes,fpjson,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,Gam
   TrainerData, GameRideClient, BikeParametric, GameBikeAvatar,
   CastleTimeUtils,
   GameRemoteRiders, GameBLEHud, GameCameraControl, PBRTextureUnit,
-  GameCinematicCamera, GameFreeCamera, GameWalkingCamera, GameScreenFX, GameSimClock, GameSimReplay, GameSimCameraTrack,
+  GameCinematicCamera, GameCameraEncounters, GameFreeCamera, GameWalkingCamera, GameScreenFX, GameSimClock, GameSimReplay, GameSimCameraTrack,
   GameOsmStreaming, FitFile, GpxFile, GamePath,
-  Osm3dRoadMaterial, Osm3dStudioSettings, GameTouchControls,   { LoadFogSettings: общий со студией файл настроек тумана }
+  Osm3dRoadMaterial, Osm3dStudioSettings, Osm3dWorldVisibility, GameTouchControls,
   GameRiderPoseControl, VeloSiteAPI,
   FreezeDiagLog, Osm3dRiderShadow, GameRideMetricsHud, Osm3dDreamWorld, GameDreamWorldScene;
 
@@ -36,12 +36,16 @@ type
     Bg: TCastleRectangleControl;
     LblTop: TCastleLabel;     { name + distance on route }
     LblBottom: TCastleLabel;  { speed, power, cadence, hr }
+    Badge:TRiderBadge;
+    ZoneBack:TCastleRectangleControl;
+    ZoneLabel:TCastleLabel;
     RouteDist: Single;        { absolute distance on route, for sorting }
     IsSelf: Boolean;
     constructor Create(AOwner: TComponent); override;
     procedure SetCardWidth(const Value:Single);
     procedure SetData(const AName: string; ARouteDist, ASpeed: Single;
       APower, ACadence, AHR: Integer; ASelf: Boolean);
+    procedure SetAppearance(const Color:TVector4;Sex:Integer;Bot:Boolean;Zone,ZoneCount:Integer);
   end;
 
   { Кольцо режимов камеры, переключаемое клавишей C:
@@ -169,7 +173,7 @@ type
     { Cinematic camera system }
     FCinematicCam: TCinematicCamera;
     FScreenFX: TScreenFX;   { optional scene effects; B bypasses all passes }
-    FNearbyBuf: array[0..15] of TVector3;
+    FNearbyBuf: array[0..15] of TCameraRider;
     FNearbyBufCount: Integer;
 
     { Free-fly camera (третий слот в кольце режимов клавиши C).
@@ -269,6 +273,20 @@ type
     FRiderListCount:Integer;
     FRiderInner: TCastleVerticalGroup;
     FRiderCards: array of TRiderCard;
+    FRideMap:TRideMapPanel;
+    FNextRideHud:QWord;
+    FMapPath:TGamePath;
+    FMapPathCount:Integer;
+    FMapPathSnapped:Boolean;
+    FMapDistances:array of Double;
+    FMapTotal:Double;
+    FMapTeleportPending:Boolean;
+    FMapTeleportDistance:Single;
+    procedure RideMapLayout(Sender:TObject);
+    procedure RideMapTeleport(Sender:TObject);
+    function MapGeo(const P:TVector3):TLatLon;
+    procedure UpdateRideMap;
+  private
 
     { Frame profiling — rolling average over ~60 frames }
     FProf_WorldUpdate: Double;
@@ -324,6 +342,7 @@ type
     FMenuButton, FAssistantButton: TCastleButton;
     FFxBtnTerr, FFxBtnRidr, FFxBtnAnim, FFxBtnShad, FFxBtnWorldShad, FFxBtnRoad, FFxBtnOcclusion: TCastleButton;
     FFxBtnTrees, FFxBtnTreeSeason: TCastleButton;
+    FFxBtnWorldLayers: array[TWorldRenderLayer] of TCastleButton;
     { Ряд 4: FIT path spheres (red raw / green snapped) on streaming map. }
     FFxBtnPath: TCastleButton;
 
@@ -438,6 +457,7 @@ type
     procedure ApplyTerrainSlopeToBikeShadow;
     { Per-frame Tripo pose for bots on the shared TBikeInstance pipeline. }
     procedure AnimateBotBikes(const SecondsPassed: Single);
+    procedure UpdateRiderVisibility(const PhysicsDt: Single);
     { Shadow LOD ботов: bsmCGE (свой теневой проход) только ближе 50 м
       от аватара; дальше — bsmNone и без проб теневой плоскости. }
   private
@@ -488,6 +508,8 @@ type
     function UseSharedRiderShadows: Boolean;
     procedure ApplyChaseCameraFrame;
     procedure ApplyWalkingCameraFrame(const Dt: Single);
+    function CameraShotClearPath(const AFrom,ATo:TVector3):Boolean;
+    procedure FeedCinematicBot(Id:Int64;Bot:TLocalBotAgent);
     procedure ApplyLeanSteerTestFrame(const SecondsPassed: Single);
   public
     constructor Create(AOwner: TComponent); override;
@@ -605,6 +627,7 @@ type
     procedure SetPerfAnim(AOn: Boolean);      { гейт AnimateFrame всех байков }
     procedure SetPerfRiders(AOn: Boolean);    { видимость Tripo-райдеров }
     procedure SetPerfTerrain(AOn: Boolean);   { видимость земли/карты }
+    procedure SetPerfWorldLayer(Layer: TWorldRenderLayer; AOn: Boolean);
     property PerfAnim: Boolean read FPerfAnim;
     property PerfRiders: Boolean read FPerfRiders;
     property PerfTerrain: Boolean read FPerfTerrain;
@@ -646,11 +669,12 @@ implementation
 
 
 uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,GameClientUpdate,GameActivitySource,
+  GameRiderVisibility, CastleFrustum,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
   GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
   Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap,GameRideLayout,
-  EliteSterzoProtocol;
+  EliteSterzoProtocol,GameHudZones;
 
 const
   MaxPower = 2500.0;
@@ -945,15 +969,21 @@ begin
   LblTop.FontSize := 12;
   LblTop.Color := Vector4(1, 1, 1, 1);
   LblTop.Anchor(vpTop, -2);
-  LblTop.Anchor(hpLeft, 6);
+  LblTop.Anchor(hpLeft, 31);
   InsertFront(LblTop);
 
   LblBottom := TCastleLabel.Create(Self);
   LblBottom.FontSize := 10;
   LblBottom.Color := Vector4(0.7, 0.8, 0.9, 1);
-  LblBottom.Anchor(vpTop, -19);
-  LblBottom.Anchor(hpLeft, 6);
+  LblBottom.Anchor(vpTop, -17);
+  LblBottom.Anchor(hpLeft, 31);
   InsertFront(LblBottom);
+
+  Badge:=TRiderBadge.Create(Self);Badge.Anchor(hpLeft,3);Badge.Anchor(vpTop,-3);InsertFront(Badge);
+  ZoneBack:=TCastleRectangleControl.Create(Self);ZoneBack.Width:=26;ZoneBack.Height:=14;
+  ZoneBack.Anchor(hpRight,-3);ZoneBack.Anchor(vpBottom,3);InsertFront(ZoneBack);
+  ZoneLabel:=TCastleLabel.Create(Self);ZoneLabel.FontSize:=10;ZoneLabel.Color:=Black;
+  ZoneLabel.Anchor(hpMiddle);ZoneLabel.Anchor(vpMiddle);ZoneBack.InsertFront(ZoneLabel);
 
   RouteDist := 0;
   IsSelf := False;
@@ -961,6 +991,14 @@ end;
 
 procedure TRiderCard.SetCardWidth(const Value:Single);
 begin Width:=Value;Height:=RideRiderCardHeight end;
+
+procedure TRiderCard.SetAppearance(const Color:TVector4;Sex:Integer;Bot:Boolean;Zone,ZoneCount:Integer);
+begin
+  Badge.Color:=Color;Badge.Sex:=Sex;Badge.Bot:=Bot;
+  ZoneBack.Exists:=Zone>=0;
+  if Zone<0 then Exit;
+  ZoneBack.Color:=TrainingZoneColor(Zone,ZoneCount);ZoneLabel.Caption:='Z'+IntToStr(Zone+1);
+end;
 
 procedure TRiderCard.SetData(const AName: string; ARouteDist, ASpeed: Single;
   APower, ACadence, AHR: Integer; ASelf: Boolean);
@@ -988,18 +1026,18 @@ begin
   if ASelf then
   begin
     LblTop.Caption := MenuEllipsis(AName,LblTop.Font,
-      Math.Max(1,(Width-50)*UIScale))+UiText('  (you)');
+      Math.Max(1,(Width-81)*UIScale))+UiText('  (you)');
     LblTop.Color := Vector4(0.3, 1.0, 0.3, 1);
     Bg.Color := Vector4(0.1, 0.25, 0.1, 0.9);
   end else begin
     LblTop.Caption := MenuEllipsis(AName,LblTop.Font,
-      Math.Max(1,(Width-65)*UIScale))+'  '+DistStr;
+      Math.Max(1,(Width-96)*UIScale))+'  '+DistStr;
     LblTop.Color := Vector4(1, 1, 1, 1);
     Bg.Color := Vector4(0.15, 0.15, 0.2, 0.85);
   end;
 
-  LblBottom.Caption := Format(UiText('%.1f km/h  %dW  %drpm  %dbpm'), [
-    ASpeed * 3.6, APower, ACadence, AHR]);
+  LblBottom.Caption := Format('%.1f km/h  %d W',[ASpeed*3.6,APower]);
+  LblBottom.Caption:=LblBottom.Caption+LineEnding+Format('%d rpm  %d bpm',[ACadence,AHR]);
 end;
 
 { Apply physics params from the live bike instance to agent's TPhysicsState.
@@ -1176,6 +1214,7 @@ begin
     Stage:=FOsmStreaming.RouteStartGroundStatus(LoadError,LoadInfo);
     Result.Add('loading_stage',Stage);Result.Add('loading_error',LoadError);
   end;
+  if FRideMap<>nil then Result.Add('ride_map',FRideMap.Diagnostics);
   Result.Add('walking_camera',WalkingCameraActive);
   if WalkingCameraActive then begin
     Result.Add('camera_overview',FWalkingCam.Overview);
@@ -2291,6 +2330,61 @@ begin
   Logger.Info('[ViewPlay] StreamingMap: STAGE 3/3 стриминговая карта запущена');
 end;
 
+procedure TViewPlay.UpdateRiderVisibility(const PhysicsDt: Single);
+var
+  Frustum:TFrustum;
+  Context:TRiderVisibilityContext;
+  Sun,ToSun:TVector3;
+  RayLength,Cone:Single;
+  CameraValid,ShadowsActive:Boolean;
+  I:Integer;
+  procedure Apply(Bike:TBikeInstance);
+  var Needed,WasNeeded:Boolean;
+  begin
+    if Bike=nil then Exit;
+    Needed:=FPerfRiders and not FFocusMode and (Bike.Group.World<>nil) and Bike.Group.ExistsInRoot and
+      (not RiderVisibilityEnabled or Context.Visible(
+        Bike.Group.WorldTranslation,Bike.BodyParameters.HeightCm*0.01));
+    WasNeeded:=Bike.VisualDetailRequired;
+    Bike.VisualDetailRequired:=Needed;
+    Bike.Group.Visible:=Needed;
+    { Camera movement is possible while simulation is paused. Re-enter with
+      the current pose immediately, not a buffer from the last visible frame. }
+    if Needed and not WasNeeded and (PhysicsDt<=0) then begin
+      if Bike.OnFoot and (Bike=FBikeInstance) and HasActiveState then
+        Bike.AnimateOnFoot(0,FActiveAvatarAgent.State.CurrentSpeed,Pi/2,
+          Tan(DegToRad(EnsureRange(FActiveAvatarAgent.State.CurrentGroundPitch,-45,45))))
+      else Bike.AnimateFrame(Single(0));
+    end;
+  end;
+begin
+  Frustum:=Default(TFrustum);
+  CameraValid:=(MainViewport is TOsmImpostorViewport)and
+    TOsmImpostorViewport(MainViewport).TryCurrentFrustum(Frustum);
+  ShadowsActive:=FPerfShadows;
+  Sun:=TVector3.Zero;
+  RayLength:=RIDER_VISIBILITY_SHADOW_RAY;
+  Cone:=RIDER_VISIBILITY_SHADOW_CONE;
+  if ShadowsActive and UseSharedRiderShadows then begin
+    if Settings.GetGraphicsOption(Ord(goWorldShadows))=3 then begin
+      if (FShadowAtlas<>nil)and FShadowAtlas.TryGetScreenCasterRay(ToSun,RayLength,Cone) then begin
+        Sun:=-ToSun;
+        { A new sun direction has not yet been prepared for this frame. Keep
+          the actors until that happens rather than cull against stale rays. }
+        if CurrentSun(ToSun)and((ToSun.Normalize-Sun).Length>0.00001)then
+          Sun:=TVector3.Zero;
+      end;
+    end else CurrentSun(Sun);
+  end;
+  Context:=PrepareRiderVisibility(Frustum,CameraValid,ShadowsActive,Sun,RayLength,Cone);
+  Apply(FBikeInstance);
+  if FBotBikes<>nil then for I:=0 to FBotBikes.Count-1 do Apply(TBikeInstance(FBotBikes[I]));
+  if FRemoteRiders<>nil then for I:=0 to FRemoteRiders.RemoteVisualCount-1 do
+    Apply(FRemoteRiders.BikeAtIndex(I));
+  if FShadowTestBikes<>nil then for I:=0 to FShadowTestBikes.Count-1 do
+    Apply(TBikeInstance(FShadowTestBikes[I]));
+end;
+
 procedure TViewPlay.AnimateBotBikes(const SecondsPassed: Single);
 var
   I: Integer;
@@ -2454,6 +2548,7 @@ procedure TViewPlay.UpdateRiderGroundShade(const Dt: Single);
 var Target, Current, Alpha, ResponseTime: Single; P: TVector3; Valid: Boolean;
 begin
   if (FBikeInstance=nil) or (FBikeInstance.TripoRider=nil) then Exit;
+  if not FBikeInstance.VisualDetailRequired then Exit;
   Target := FGroundShadeTarget;
   Valid := False;
   if (Assigned(FOsmStreaming)or Assigned(FDreamWorld)) and Assigned(FActiveAvatarAgent) and
@@ -2614,9 +2709,23 @@ var I: Integer; Focus, Sun: TVector3;
     B:TCacheBatch;T:TCacheTile;Revision:QWord;
 begin
   TOsmImpostorViewport(MainViewport).Rtx:=nil;
-  TOsmImpostorViewport(MainViewport).WorldRoot:=MainViewport.Items;
+  TOsmImpostorViewport(MainViewport).ImpostorCache:=Settings.GetGraphicsOption(Ord(goWorldCache))<>0;
+  { Cache only scenery. Bikes, riders, interval gates and markers stay in
+    the ordinary live viewport, including the RTX receiver-depth pass. }
+  Revision:=Settings.GraphicsRevision;
+  if FDreamVisual<>nil then begin
+    TOsmImpostorViewport(MainViewport).WorldRoot:=FDreamVisual.RenderRoot;
+    Revision:=Revision xor (QWord(FDreamVisual.RenderRevision) shl 32);
+  end else if Assigned(FOsmStreaming) and Assigned(FOsmStreaming.Session) then begin
+    TOsmImpostorViewport(MainViewport).WorldRoot:=FOsmStreaming.Session.Map;
+    if TOsmImpostorViewport(MainViewport).ImpostorCache then
+      for B in FOsmStreaming.Session.Map.RootBlocks do
+        for T in B.Tiles do
+          if T.Active then Revision:=(Revision xor T.MountGen)*16777619;
+  end else TOsmImpostorViewport(MainViewport).WorldRoot:=nil;
+  TOsmImpostorViewport(MainViewport).WorldRevision(Revision);
   if CurrentSun(Sun) then SetSkySun(Sun) else SetSkySun(Vector3(0,1,0),False);
-  if Settings.GetGraphicsOption(Ord(goWorldShadows))<>2 then SetRtxMaterialPass(False,0,Vector4(0,0,1,1));
+  if not (Settings.GetGraphicsOption(Ord(goWorldShadows)) in [2,3]) then SetRtxMaterialPass(False,0,Vector4(0,0,1,1));
   if HasActiveState then FActiveAvatarAgent.TracePosition(mtRenderBegin);
   if Assigned(FOsmStreaming)and Assigned(FOsmStreaming.Session)and
      Assigned(FOsmStreaming.Session.Map) then FOsmStreaming.Session.Map.RenderGpuGround;
@@ -2627,7 +2736,7 @@ begin
   if FPerfTerrain and ((FDreamWorld<>nil)or(Assigned(FOsmStreaming)and FOsmStreaming.Active))
      and Assigned(MainViewport.Camera) then
     RoadMaterialRender(MainViewport.Camera.WorldTransform.MultPoint(TVector3.Zero));
-  if UseSharedRiderShadows and FPerfShadows and FPerfRiders and FPerfTerrain and
+  if UseSharedRiderShadows and FPerfShadows and FPerfTerrain and
      Assigned(FBikeInstance) and Assigned(MainViewport.Camera) and
      ((FDreamWorld<>nil)or(Assigned(FOsmStreaming)and FOsmStreaming.Active)) then
   begin
@@ -2643,7 +2752,8 @@ begin
       FShadowAtlas.Casters.Clear;
       FShadowAtlas.RtxRequested:=Settings.GetGraphicsOption(Ord(goWorldShadows))<>0;
       FShadowAtlas.RtxRasterComparison:=Settings.GetGraphicsOption(Ord(goWorldShadows))=1;
-      FShadowAtlas.RtxReflections:=(Settings.GetGraphicsOption(Ord(goWorldShadows))=2) and
+      FShadowAtlas.RtxScreenShadows:=Settings.GetGraphicsOption(Ord(goWorldShadows))=3;
+      FShadowAtlas.RtxReflections:=(Settings.GetGraphicsOption(Ord(goWorldShadows)) in [2,3]) and
         (Settings.GetGraphicsOption(Ord(goRtxReflections))<>0);
       Revision:=2166136261;
       if FShadowAtlas.RtxRequested and (FDreamWorld=nil) and
@@ -2653,21 +2763,29 @@ begin
             if T.Active then Revision:=(Revision xor T.MountGen)*16777619;
       FShadowAtlas.RtxRevision:=Revision xor QWord(Ord(RenderTreesActive)) xor
         (QWord(Ord(ProceduralVegetationActive)) shl 1) xor
-        (QWord(Round(ProceduralVegetationSeason*12)) shl 2);
+        (QWord(Round(ProceduralVegetationSeason*12)) shl 2) xor
+        (QWord(Ord(WorldLayerVisible(wrlBuildings))) shl 6) xor
+        (QWord(Ord(WorldLayerVisible(wrlOther))) shl 7) xor
+        (QWord(Ord(WorldLayerVisible(wrlGround))) shl 8);
       FShadowAtlas.WorldCasters.Clear;
-      FShadowAtlas.WorldShadows := FAtlasWorldShadows and not RidePreparationHeld;
+      { Bot/model warm-up holds ride physics, not the already visible world. }
+      FShadowAtlas.WorldShadows := FAtlasWorldShadows and not FOsmPrepHold;
       if FShadowAtlas.WorldShadows then begin
         if FDreamWorld<>nil then FDreamVisual.AppendShadowCasters(FShadowAtlas.WorldCasters)
         else if FOsmStreaming.Session<>nil then FOsmStreaming.Session.Map.AppendWorldShadowCasters(FShadowAtlas.WorldCasters);
-        if (FDreamWorld<>nil) and FShadowAtlas.RtxReflections then
+        if (FDreamWorld<>nil) and (FShadowAtlas.RtxReflections or FShadowAtlas.RtxScreenShadows) then
           FDreamVisual.AppendReflectionSurfaces(FShadowAtlas.WorldCasters);
       end;
-      FShadowAtlas.Casters.Add(FBikeInstance.Group);
-      if FLocalBots<>nil then FLocalBots.AppendShadowCasters(FShadowAtlas.Casters);
-      if Assigned(FRemoteRiders) then FRemoteRiders.AppendShadowCasters(FShadowAtlas.Casters);
-      if Assigned(FShadowTestBikes) then
-        for I := 0 to FShadowTestBikes.Count - 1 do
-          FShadowAtlas.Casters.Add(TBikeInstance(FShadowTestBikes[I]).Group);
+      { Hiding actors must not disable the world's shadows and reflections. }
+      if FPerfRiders then begin
+        FShadowAtlas.Casters.Add(FBikeInstance.Group);
+        if FLocalBots<>nil then FLocalBots.AppendShadowCasters(FShadowAtlas.Casters,
+          FShadowAtlas.RtxRequested and not FShadowAtlas.RtxRasterComparison);
+        if Assigned(FRemoteRiders) then FRemoteRiders.AppendShadowCasters(FShadowAtlas.Casters);
+        if Assigned(FShadowTestBikes) then
+          for I := 0 to FShadowTestBikes.Count - 1 do
+            FShadowAtlas.Casters.Add(TBikeInstance(FShadowTestBikes[I]).Group);
+      end;
       { The avatar's receiver follows the bike, even when a cinematic camera
         flies high or looks elsewhere. World zones use the viewport frustum. }
       Focus := FBikeInstance.Group.WorldTransform.MultPoint(TVector3.Zero);
@@ -2676,10 +2794,11 @@ begin
         if FActiveAvatarAgent.State.RearGroundPointValid then
           Focus := (Focus+FActiveAvatarAgent.State.RearGroundPoint)*0.5;
       end;
-      FShadowAtlas.AvatarReceiver := True;
+      FShadowAtlas.AvatarReceiver := FPerfRiders and FBikeInstance.Group.Visible;
       if Assigned(FActiveAvatarAgent) and Assigned(FActiveAvatarAgent.State) then
         FShadowAtlas.SetGroundProbe(FActiveAvatarAgent.State.FrontGroundPoint,
-          FShadowAtlas.WorldShadows and FActiveAvatarAgent.State.FrontGroundPointValid, False)
+          FShadowAtlas.WorldShadows and FPerfRiders and FBikeInstance.Group.Visible and
+          FActiveAvatarAgent.State.FrontGroundPointValid, False)
       else FShadowAtlas.SetGroundProbe(Focus, False);
       FShadowAtlas.Render(MainViewport, Focus, Sun, FBikeInstance.ShadowStrength);
       TOsmImpostorViewport(MainViewport).Rtx:=FShadowAtlas.RtxBackend;
@@ -2729,7 +2848,7 @@ begin
   GroundReceiver := (Assigned(FOsmStreaming)or(Assigned(FDreamWorld)and UseSharedRiderShadows)) and not CliFlag('catchwhite');
   if Assigned(FBikeInstance) then
     FBikeInstance.SetGroundShadowReceiver(GroundReceiver);
-  if not FPerfShadows or not FPerfRiders then
+  if not FPerfShadows or (not FPerfRiders and not UseSharedRiderShadows) then
   begin
     HideGroundRiderShadow;
     Exit;
@@ -2848,12 +2967,16 @@ begin
 end;
 
 procedure TViewPlay.Start;
+const
+  LayerCaptions: array[wrlTrees..wrlOther] of String = ('Trees', 'Grass', 'Buildings', 'Other');
+  LayerNames: array[wrlTrees..wrlOther] of String = ('PerfTrees', 'PerfGrass', 'PerfBuildings', 'PerfOther');
 var
   SL: TStringList;
   Labels: THudLabels;
   WorldSun: TVector3;
   FogDistM: Single;
   FogClearM: Single;
+  Layer: TWorldRenderLayer;
   I: Integer;
 begin
   if AccountChangePending then
@@ -3112,6 +3235,11 @@ begin
     FRiderScroll.ScrollBarWidth := 8;
     FRiderScroll.EnableDragging := True;
     VerticalGroup1.InsertFront(FRiderScroll);
+
+    FRideMap:=TRideMapPanel.Create(FreeAtStop);FRideMap.Name:='RideMap';
+    FRideMap.OnLayout:=@RideMapLayout;FRideMap.OnTeleport:=@RideMapTeleport;
+    VerticalGroup1.InsertFront(FRideMap);
+    FNextRideHud:=0;FMapPath:=nil;FMapPathCount:=-1;FMapDistances:=nil;FMapTotal:=0;FMapTeleportPending:=False;
 
     FRiderInner := TCastleVerticalGroup.Create(FreeAtStop);
     FRiderInner.Spacing := 3;
@@ -3466,6 +3594,8 @@ begin
 
   { ── ряд 3: perf-тумблеры (земля/райдер/анимация/тень) ── }
   FFxBtnTerr := TMenuButton.Create(FreeAtStop);
+  FFxBtnTerr.Name := 'PerfGround';
+  FFxBtnWorldLayers[wrlGround] := FFxBtnTerr;
   FFxBtnTerr.AutoSize := False;
   FFxBtnTerr.PaddingHorizontal := 3;
   FFxBtnTerr.PaddingVertical := 2;
@@ -3592,6 +3722,24 @@ begin
   FFxBtnTreeSeason.CustomTextColorUse := True;
   FFxBtnTreeSeason.Anchor(hpLeft, 126); FFxBtnTreeSeason.Anchor(vpTop, -144);
   FFxBtnTreeSeason.OnClick := @OnFxToggleClick; FFxPanel.InsertFront(FFxBtnTreeSeason);
+
+  FFxPanel.Height := FFxPanel.Height + 26;
+  for Layer := wrlTrees to wrlOther do
+  begin
+    FFxBtnWorldLayers[Layer] := TMenuButton.Create(FreeAtStop);
+    with FFxBtnWorldLayers[Layer] do
+    begin
+      Name := LayerNames[Layer];
+      AutoSize := False; PaddingHorizontal := 2; PaddingVertical := 2;
+      FontSize := 11; Width := 54; Height := 22;
+      CustomTextColorUse := True;
+      Anchor(hpLeft, 10 + Ord(Layer) * 58); Anchor(vpTop, -170);
+      OnClick := @OnFxToggleClick;
+    end;
+    TMenuButton(FFxBtnWorldLayers[Layer]).AutoIcon := False;
+    BindUiText(FFxBtnWorldLayers[Layer], LayerCaptions[Layer]);
+    FFxPanel.InsertFront(FFxBtnWorldLayers[Layer]);
+  end;
 
   InsertFront(FFxPanel);
 
@@ -3806,6 +3954,8 @@ begin
     но FRiderCards остаётся stale между Stop и следующим Start, что
     вызывает access violation в UpdateRiderList следующего захода. }
   SetLength(FRiderCards, 0);
+  FRideMap:=nil;FRiderScroll:=nil;FRiderInner:=nil;FMapPath:=nil;
+  FMapDistances:=nil;FMapTeleportPending:=False;
   if Assigned(FRemoteRiders) and Assigned(FRemoteRiders.RideClient) then
     FRemoteRiders.RideClient.OnRiderCountChanged := nil;
   { Экземпляры TBikeInstance — plain-class, владельца не имеют: только
@@ -3896,6 +4046,7 @@ begin
   FFpsBgRect := nil;
   FBotPanel := nil;
   FFxPanel := nil;
+  FillChar(FFxBtnWorldLayers, SizeOf(FFxBtnWorldLayers), 0);
   FSimPanel := nil;
   FMenuButton := nil;
   FAssistantButton := nil;
@@ -4037,13 +4188,18 @@ begin
 end;
 
 procedure TViewPlay.OnFxToggleClick(Sender: TObject);
+var Layer: TWorldRenderLayer;
 begin
+  for Layer := Low(TWorldRenderLayer) to High(TWorldRenderLayer) do
+    if Sender = FFxBtnWorldLayers[Layer] then
+    begin
+      SetPerfWorldLayer(Layer, not WorldLayerVisible(Layer));
+      Exit;
+    end;
   { Plain buttons: state lives in TScreenFX / FPerf* — a click flips the
     matching switch, the caption color (green/gray) shows the result.
     Perf-кнопки обрабатываем ПЕРВЫМИ: они не зависят от FScreenFX. }
-  if Sender = FFxBtnTerr then
-    SetPerfTerrain(not FPerfTerrain)
-  else if Sender = FFxBtnRidr then
+  if Sender = FFxBtnRidr then
     SetPerfRiders(not FPerfRiders)
   else if Sender = FFxBtnAnim then
     SetPerfAnim(not FPerfAnim)
@@ -4089,6 +4245,7 @@ begin
 end;
 
 procedure TViewPlay.UpdateFxButtonColors;
+var Layer: TWorldRenderLayer;
 
   procedure Paint(Btn: TCastleButton; const IsOn: Boolean);
   begin
@@ -4100,6 +4257,8 @@ procedure TViewPlay.UpdateFxButtonColors;
   end;
 
 begin
+  for Layer := Low(TWorldRenderLayer) to High(TWorldRenderLayer) do
+    Paint(FFxBtnWorldLayers[Layer], WorldLayerVisible(Layer));
   if Assigned(FScreenFX) then
   begin
     Paint(FFxBtnFog,    FScreenFX.FogEnabled);
@@ -4110,7 +4269,6 @@ begin
     Paint(FFxBtnHatch,  FScreenFX.HatchEnabled);
   end;
   { perf-кнопки — всегда, не зависят от FScreenFX }
-  Paint(FFxBtnTerr, FPerfTerrain);
   Paint(FFxBtnRidr, FPerfRiders);
   Paint(FFxBtnAnim, FPerfAnim);
   Paint(FFxBtnShad, FPerfShadows);
@@ -4142,7 +4300,7 @@ end;
 
 procedure TViewPlay.UpdateAdminPanels;
 var ShowPanels: Boolean; LayoutHeight,LayoutWidth,S,MenuTop: Single;
-  L:TRideHudLayout;I:Integer;
+  L:TRideHudLayout;I:Integer;ListHeight,MapAvailable:Single;
 begin
   ShowPanels := AdminPanelsVisible and not FFocusMode;
   LayoutHeight := 0;LayoutWidth:=0;
@@ -4165,18 +4323,24 @@ begin
   if FBotPanel <> nil then FBotPanel.Exists := ShowPanels;
   if LabelFps <> nil then LabelFps.Exists := ShowPanels;
   if FFpsBgRect <> nil then FFpsBgRect.Exists := ShowPanels;
-  { VerticalGroup1 also holds the normal rider list: keep that list visible. }
+  ListHeight:=0;
+  { The list and cached map share the available right-hand column. }
   if FRiderScroll <> nil then
   begin
     FRiderScroll.Width:=L.RidersWidth;
     FRiderScroll.ScrollBarWidth:=4;
-    FRiderScroll.Height:=Math.Min(L.RidersMaxHeight,
+    FRiderScroll.Height:=Math.Min(Math.Min(L.RidersMaxHeight,Math.Max(RideRiderCardHeight+4,(LayoutHeight-L.RidersTop)*0.38)),
       Math.Max(RideRiderCardHeight+4,FRiderListCount*(RideRiderCardHeight+RideRiderCardGap)+4));
+    if FHasOtherRiders then ListHeight:=FRiderScroll.Height;
     if FRiderInner<>nil then begin
       FRiderInner.AutoSizeWidth:=False;FRiderInner.Width:=L.RidersWidth-6;
       FRiderInner.Spacing:=RideRiderCardGap;
     end;
     for I:=0 to High(FRiderCards)do FRiderCards[I].SetCardWidth(L.RidersWidth-10);
+  end;
+  if FRideMap<>nil then begin
+    MapAvailable:=LayoutHeight-L.RidersTop-ListHeight-20;
+    FRideMap.SetSize(L.RidersWidth,MapAvailable);
   end;
   if VerticalGroup1 <> nil then
   begin
@@ -4184,7 +4348,8 @@ begin
   end;
   S:=1;MenuTop:=L.ButtonsTop;
   if FFocusMode then S:=TrainingFocusScale(UIScale);
-  if ShowPanels then MenuTop:=278;
+  if ShowPanels and (FFxPanel<>nil) then
+    MenuTop:=Math.Max(MenuTop, -FFxPanel.Translation.Y + FFxPanel.Height + 8);
   if FMenuButton <> nil then begin
     FMenuButton.Width:=L.ButtonWidth/S;FMenuButton.Height:=L.ButtonHeight/S;FMenuButton.FontSize:=12/S;
     FMenuButton.Anchor(hpLeft,L.Margin/S);FMenuButton.Anchor(vpTop,-MenuTop/S);
@@ -4210,8 +4375,9 @@ end;
 procedure TViewPlay.UpdateRiderListVisibility;
 begin
   if FRiderScroll <> nil then FRiderScroll.Exists := FHasOtherRiders and not FFocusMode;
+  if FRideMap<>nil then FRideMap.Exists:=not FFocusMode;
   if VerticalGroup1 <> nil then
-    VerticalGroup1.Exists := FHasOtherRiders and not FFocusMode;
+    VerticalGroup1.Exists := not FFocusMode;
 end;
 
 procedure TViewPlay.RiderCountChanged(Sender: TObject);
@@ -4223,6 +4389,7 @@ begin
     FHasOtherRiders:=FHasOtherRiders or(FRemoteRiders.RideClient.RemoteRiderCount>0);
   UpdateRiderListVisibility;
   if FHasOtherRiders then UpdateRiderList;
+  FAdminLayoutValid:=False;UpdateAdminPanels;
 end;
 
 procedure TViewPlay.BeginActivityRecord;
@@ -4337,6 +4504,87 @@ begin
     FActiveAvatarAgent.Physics.SetWheelProbeHalfSpan(FBikeInstance.AxleHalfSpanM);
 end;
 
+procedure TViewPlay.RideMapLayout(Sender:TObject);
+begin FAdminLayoutValid:=False;UpdateAdminPanels end;
+
+function TViewPlay.MapGeo(const P:TVector3):TLatLon;
+begin
+  if (FOsmStreaming<>nil)and FOsmStreaming.Active and(FOsmStreaming.Session<>nil) then
+    Result:=FOsmStreaming.Session.CameraGeo(P.X,P.Z)
+  else Result:=TLatLon.Make(P.Z/111195.080233533,-P.X/111195.080233533);
+end;
+
+procedure TViewPlay.RideMapTeleport(Sender:TObject);
+begin
+  if not FFreeExplore or not HasActiveState or RidePreparationHeld or
+    (FRideMap=nil)or not FRideMap.Canvas.Map.HasTarget or(FOsmStreaming=nil)or
+    not FOsmStreaming.Active then Exit;
+  FMapTeleportDistance:=FActiveAvatarAgent.State.CumulativeDistance;
+  FMapTeleportPending:=True;FExploreStart:=FRideMap.Canvas.Map.Target;
+  StopMoving;ConfigureTravel;
+  FOsmStreaming.BeginExploreTeleport(FExploreStart);
+  FPointExplore:=True;FOsmStreaming.LoadAvatarPath(FActiveAvatarAgent.Path);
+  FOsmPrepHold:=True;FOsmPrepHoldLogTick:=0;FOsmPrepGroundSince:=0;
+  FOsmPrepRaised:=False;FOsmPrepResumeAutoMove:=False;
+  FMapPath:=nil;FMapPathCount:=-1;FRideMap.Canvas.Following:=True;
+end;
+
+procedure TViewPlay.UpdateRideMap;
+var P:TGamePath;I,N,K,Sex:Integer;A,B,Pos:TVector3;Geo:TLatLon;C:TVector4;
+  Snapped,HasGeo:Boolean;Routes,Lines,Points:TJSONArray;R:TJSONObject;
+  Station,Ftp:Single;Riders:TRiderBroadcastArray;RiderBike:TBikeInstance;
+  Marks:TRideMapMarkers;
+  procedure Marker(const V:TVector3;Inst:TBikeInstance;SelfMarker:Boolean);
+  var M:Integer;
+  begin
+    M:=Length(Marks);SetLength(Marks,M+1);RiderBadgeAppearance(Inst,C,Sex);
+    Marks[M].Geo:=MapGeo(V);Marks[M].Color:=C;Marks[M].IsSelf:=SelfMarker;
+  end;
+begin
+  if (FRideMap=nil)or not HasActiveState then Exit;
+  HasGeo:=(FOsmStreaming<>nil)and FOsmStreaming.Active;
+  FRideMap.SetTravel(FFreeExplore,HasGeo);
+  P:=FActiveAvatarAgent.Path;N:=P.PointCount;
+  Snapped:=HasGeo and FOsmStreaming.SnapReady;
+  if(P<>FMapPath)or(N<>FMapPathCount)or(Snapped<>FMapPathSnapped)then begin
+    FMapPath:=P;FMapPathCount:=N;FMapPathSnapped:=Snapped;
+    SetLength(FMapDistances,N+1);FMapTotal:=0;Routes:=TJSONArray.Create;
+    try
+      if not FPointExplore and(N>1)then begin
+        Points:=TJSONArray.Create;Lines:=TJSONArray.Create;Lines.Add(Points);
+        R:=TJSONObject.Create(['id',0,'map_path',Lines,'line_width',3]);
+        R.Add('line_color',TJSONArray.Create([0.13,0.73,0.90,1]));Routes.Add(R);
+        for I:=0 to N do begin
+          A:=P.GetPathPointWorld(I mod N);Geo:=MapGeo(A);
+          Points.Add(TJSONArray.Create([Geo.Lon,Geo.Lat]));
+          if I>0 then FMapTotal+=Hypot(A.X-B.X,A.Z-B.Z);
+          FMapDistances[I]:=FMapTotal;B:=A;
+        end;
+      end;
+      FRideMap.Canvas.Map.SetRoutes(Routes);
+    finally Routes.Free end;
+  end;
+  Marks:=nil;Marker(FActiveAvatarAgent.State.WorldPosition,FBikeInstance,True);
+  if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do
+    if TLocalBotAgent(FBotAgents[I]).Visible then
+      Marker(TLocalBotAgent(FBotAgents[I]).State.WorldPosition,TBikeInstance(FBotBikes[I]),False);
+  if (FRemoteRiders<>nil)and(FRemoteRiders.RideClient<>nil)then begin
+    Riders:=FRemoteRiders.RideClient.GetAllRemoteRiders;
+    for I:=0 to High(Riders)do
+      if FRemoteRiders.HudRider(Riders[I].RiderId,RiderBike,Pos,Ftp)then Marker(Pos,RiderBike,False);
+  end;
+  FRideMap.Canvas.Map.Markers:=Marks;
+  FRideMap.Canvas.Follow(MapGeo(FActiveAvatarAgent.State.WorldPosition));
+  Station:=0;
+  if(FMapTotal>0)and(N>0)then begin
+    K:=EnsureRange(P.Position.Segment,0,N-1);
+    Station:=FMapDistances[K]+EnsureRange(P.Position.T,0.0,1.0)*(FMapDistances[K+1]-FMapDistances[K]);
+  end;
+  if FFreeExplore then
+    FRideMap.SetProgress(FActiveAvatarAgent.State.CumulativeDistance,0,0,False)
+  else FRideMap.SetProgress(FActiveAvatarAgent.State.CumulativeDistance,FMapTotal,Station,not P.OutAndBack);
+end;
+
 procedure TViewPlay.UpdateRiderList;
 var
   Riders: TRiderBroadcastArray;
@@ -4347,7 +4595,8 @@ var
   LocalPower, LocalCadence, LocalHR: Integer;
   LocalName: string;
   TmpCard: TRiderCard;
-  SelfY, ScrollH, ContentH: Single;
+  SelfY, ScrollH, ContentH, Ftp: Single;
+  Color:TVector4;Sex:Integer;RiderBike:TBikeInstance;Pos:TVector3;
 begin
   CountRiderWork(rwRiderList);
   if not Assigned(FRiderInner) then Exit;
@@ -4399,13 +4648,19 @@ begin
   { Fill card 0 = self }
   FRiderCards[0].SetData(LocalName, 0, LocalSpeed,
     LocalPower, LocalCadence, LocalHR, True);
+  RiderBadgeAppearance(FBikeInstance,Color,Sex);
+  FRiderCards[0].SetAppearance(Color,Sex,False,FBLEHud.PowerZone(LocalPower),FBLEHud.PowerZoneCount);
 
   { Fill cards 1..N = remote riders (relative distance from self) }
-  for I := 0 to High(Riders) do
+  for I := 0 to High(Riders) do begin
     FRiderCards[I + 1].SetData(Riders[I].Name,
       Riders[I].Distance - LocalDist,
       Riders[I].Speed, Riders[I].Power,
       Riders[I].Cadence, Riders[I].HeartRate, False);
+    RiderBike:=nil;Ftp:=0;FRemoteRiders.HudRider(Riders[I].RiderId,RiderBike,Pos,Ftp);
+    RiderBadgeAppearance(RiderBike,Color,Sex);
+    FRiderCards[I+1].SetAppearance(Color,Sex,False,FBLEHud.PowerZone(Riders[I].Power,Ftp),FBLEHud.PowerZoneCount);
+  end;
 
   J:=Length(Riders)+1;
   if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do begin
@@ -4414,7 +4669,11 @@ begin
     if Bot.Oncoming and(FLocalBots<>nil)then BotGap:=FLocalBots.RouteGap(I);
     FRiderCards[J].SetData(Bot.Name,BotGap,
       Bot.State.CurrentSpeed,Round(Bot.State.AppliedPowerWatts),
-      Round(Bot.RequestedCadence),0,False);Inc(J);
+      Round(Bot.RequestedCadence),0,False);
+    RiderBadgeAppearance(TBikeInstance(FBotBikes[I]),Color,Sex);
+    Ftp:=0;if FLocalBots<>nil then Ftp:=FLocalBots.ReferencePower(I);
+    FRiderCards[J].SetAppearance(Color,Sex,True,FBLEHud.PowerZone(Bot.State.AppliedPowerWatts,Ftp),FBLEHud.PowerZoneCount);
+    Inc(J);
   end;
 
   { Hide excess }
@@ -4511,6 +4770,8 @@ begin
   if GameSound<>nil then GameSound.StopRide;
   FAudioSampleTimer:=0;
   WorkoutPlayer.Stop;
+  FMapPath:=nil;FMapPathCount:=-1;FMapTeleportPending:=False;
+  if FRideMap<>nil then FRideMap.CancelTarget;
   WorldChanged:=(FDreamWorld<>nil)or(AWorld<>nil);
   McpUnregisterPlayObjects;
   SceneLifecycleLog(Format('=== TViewPlay.ResetRideToFit: %s (world=%s, bike=$%p) ===',
@@ -4808,6 +5069,24 @@ begin
   UpdateFxButtonColors;
 end;
 
+procedure TViewPlay.SetPerfWorldLayer(Layer: TWorldRenderLayer; AOn: Boolean);
+begin
+  if not SetWorldLayerVisible(Layer, AOn) then Exit;
+  if not SessionAlive then Exit;
+  if Layer in [wrlBuildings, wrlOther, wrlGround] then
+  begin
+    if Assigned(FOsmStreaming) and (FOsmStreaming.Session <> nil) then
+      FOsmStreaming.Session.Map.RefreshRenderVisibility
+    else if FDreamVisual <> nil then
+      FDreamVisual.RefreshRenderVisibility
+    else if SceneLevel <> nil then
+      ApplyWorldVisibility(SceneLevel.RootNode);
+  end;
+  { Cached world images must not keep geometry that was just hidden. }
+  TOsmImpostorViewport(MainViewport).Invalidate;
+  UpdateFxButtonColors;
+end;
+
 function TViewPlay.RoutePrepDone: Boolean;
 begin
   { «Можно стартовать» для UI/MCP: плоская карта прогрева снята и райдер
@@ -4848,6 +5127,26 @@ begin
   if not Value and (ViewPlay <> nil) then
     ViewPlay.FFreezeDiagLastHeartBeat := GetTickCount64;
   ApplyGameFpsMode;
+end;
+
+function TViewPlay.CameraShotClearPath(const AFrom,ATo:TVector3):Boolean;
+var P,Fwd:TVector3;
+begin
+  Result:=True;
+  if(FOsmStreaming=nil)or not FOsmStreaming.Active then Exit;
+  P:=ATo;Fwd:=ATo-AFrom;Fwd.Y:=0;
+  if Fwd.LengthSqr<0.001 then Fwd:=Vector3(0,0,1)else Fwd:=Fwd.Normalize;
+  { Query the swept lens volume, discard its correction. CinematicCamera is
+    the sole owner of the camera; blocked close shots are rejected. }
+  Result:=not FOsmStreaming.BuildingBodyMove(AFrom,Fwd,Vector3(0.22,0.22,0.22),P);
+end;
+
+procedure TViewPlay.FeedCinematicBot(Id:Int64;Bot:TLocalBotAgent);
+begin
+  if(Bot=nil)or not Bot.Visible or not Bot.Spawned or Bot.StartGroundPending or
+    (Bot.Actor=nil)or(Bot.Actor.Transform=nil)or not Bot.Actor.Transform.Exists then Exit;
+  FCinematicCam.AddNearbyRider(Id,Bot.Actor.Transform.Translation,
+    Bot.Actor.Transform.Direction,Bot.State.CurrentSpeed,Bot.State.CurrentModelPitch);
 end;
 
 procedure TViewPlay.Update(const SecondsPassed: Single; var HandleInput: Boolean);
@@ -5048,6 +5347,10 @@ begin
           answer may arrive later, even though the start tile is ready. }
         if HasActiveState then
           FActiveAvatarAgent.InitializeAtStart(WuGroundY);
+        if FMapTeleportPending and HasActiveState then begin
+          FActiveAvatarAgent.State.CumulativeDistance:=FMapTeleportDistance;
+          FMapTeleportPending:=False;
+        end;
         if FBotAgents <> nil then
           for I := 0 to FBotAgents.Count - 1 do
             TPhysicalAgent(FBotAgents[I]).InitializeAtStart(WuGroundY);
@@ -5065,7 +5368,7 @@ begin
           FCinematicCam.ResetAtTarget;
         end;
         if FTravelMode=travelFlight then
-          MainViewport.Camera.SetView(Vector3(0,WuGroundY+12,10),Vector3(0,-0.25,-1).Normalize,Vector3(0,1,0));
+          MainViewport.Camera.SetView(FActiveAvatarAgent.State.WorldPosition+Vector3(0,12,10),Vector3(0,-0.25,-1).Normalize,Vector3(0,1,0));
         FOsmStreaming.NotifyRiderPlaced(WuPlaceErr);
 
         if Assigned(FActivePlayerController) and
@@ -5297,13 +5600,21 @@ begin
         ThirdPersonNavigation.Avatar := nil;
 
       ThirdPersonNavigation.Exists := False;
+      FCinematicCam.RiderShotsEnabled:=FTravelMode=travelBicycle;
+      FCinematicCam.ClearPathQuery:=nil;
+      if(FOsmStreaming<>nil)and FOsmStreaming.Active then
+        FCinematicCam.ClearPathQuery:=@CameraShotClearPath;
       FCinematicCam.ClearNearby;
       if Assigned(AvatarTransform) then
       begin
-        FRemoteRiders.GetNearbyRiderPositions(
-          AvatarTransform.Translation, 30.0, FNearbyBuf, FNearbyBufCount);
+        FRemoteRiders.GetNearbyCameraRiders(
+          AvatarTransform.Translation, 36.0, FNearbyBuf, FNearbyBufCount);
         for I := 0 to FNearbyBufCount - 1 do
-          FCinematicCam.AddNearby(FNearbyBuf[I]);
+          with FNearbyBuf[I]do FCinematicCam.AddNearbyRider(Id,Position,Direction,Speed,Pitch);
+        if FPerfRiders and(FBotAgents<>nil)then
+          for I:=0 to FBotAgents.Count-1 do FeedCinematicBot(-1-I,TLocalBotAgent(FBotAgents[I]));
+        if FPerfRiders and(FLocalBots<>nil)then
+          FeedCinematicBot(-1000-Int64(PtrUInt(FLocalBots.CrossAgent)),FLocalBots.CrossAgent);
       end;
       { Скорость райдера (м/с) — питает сценарий "райдер стоит": ниже ~0.3 м/с
         дольше ~1.5 с камера переключается на медленный облёт (cmOrbit) вместо
@@ -5354,9 +5665,12 @@ begin
     FRemoteRiders.UpdateDistanceCulling;
   end;
 
-  { 3c. Rider list display — every 30 frames }
-  if (FProfileFrameNum mod 30 = 0) then
-    UpdateRiderList;
+  UpdateRiderVisibility(PhysDt);
+
+  { HUD and cached map are bounded by wall time, including unlimited FPS. }
+  if GetTickCount64>=FNextRideHud then begin
+    FNextRideHud:=GetTickCount64+1000;UpdateRiderList;UpdateRideMap;
+  end;
 
   T4b := Timer;   { TEMP-DIAG: конец culling/riderlist }
 
