@@ -32,7 +32,7 @@ interface
 
 uses
   Classes, SysUtils, syncobjs, fgl,
-  TrainerData, GameTransportBase, GameSensorLog, GameSimClock;
+  TrainerData, GameTransportBase, GameSensorLog, GameSimClock, GameVideoClock;
 
 type
   TSimTransportSession = class;
@@ -381,7 +381,7 @@ function TSimTransportSession.AdvancePlayback(RealSeconds: Single): Single;
 var Before: Integer;
 begin
   Before:=Trunc(FClock.Position);
-  Result:=FClock.Advance(RealSeconds,GetTickCount64);
+  Result:=FClock.Advance(RealSeconds,GetTickCount64,OfflineVideoClock.Active);
   if (Trunc(FClock.Position)<>Before) or (GetTickCount64-FLastEmitTick>=250) then PublishCurrent;
 end;
 

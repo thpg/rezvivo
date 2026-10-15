@@ -12,7 +12,8 @@ def safe_runtime_path(value):
         raise ValueError('Noncanonical Windows runtime path: ' + value)
     if str(path) != value:
         raise ValueError('Noncanonical runtime path: ' + value)
-    if not (path.parts[0] == 'data' and len(path.parts) > 1) and not (len(path.parts) == 1 and (value in ('REZVIVO.exe', 'release.json') or path.suffix.lower() == '.dll')):
+    encoder_file = value in ('tools/video/ffmpeg.exe', 'tools/video/LICENSE.txt', 'tools/video/NOTICE.txt')
+    if not encoder_file and not (path.parts[0] == 'data' and len(path.parts) > 1) and not (len(path.parts) == 1 and (value in ('REZVIVO.exe', 'release.json') or path.suffix.lower() == '.dll')):
         raise ValueError('Not an installation-owned file: ' + value)
     return value
 

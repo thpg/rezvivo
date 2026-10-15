@@ -4988,8 +4988,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 93539,
-    "sha256": "81735fc8e537494deb258da1e42aef325a82f169719c7ed06a183c59a9d15c6c",
+    "bytes": 94131,
+    "sha256": "f51e68edef060bb7fe08a6d93307db7410527f1b4d7b308029870edab7e6f08e",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -5044,8 +5044,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 145827,
-    "sha256": "5ca4e47e52d84379104af5c815109f7c851729e58d233bdb00c62346da2fd2ce",
+    "bytes": 146684,
+    "sha256": "d9165ede5cf1dcdff56a5d8c35d9822287f0e0609b5d681410a7248bfbefa82c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -5121,5 +5121,21 @@
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/tools/video/LICENSE.txt",
+    "bytes": 35147,
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "license": "GPL-3.0-or-later",
+    "source": "FFmpeg / Gyan Doshi Windows essentials build",
+    "evidence": "Unmodified GPL license and dependency provenance in tools/video/NOTICE.txt"
+  },
+  {
+    "path": "rezvivo-osm-bckl/tools/video/NOTICE.txt",
+    "bytes": 542,
+    "sha256": "58d69bb1d983514292b8dfbb213d53f70d7f620e221b9fcd828b156ff886e656",
+    "license": "GPL-3.0-or-later",
+    "source": "FFmpeg / Gyan Doshi Windows essentials build",
+    "evidence": "Unmodified GPL license and dependency provenance in tools/video/NOTICE.txt"
   }
 ]

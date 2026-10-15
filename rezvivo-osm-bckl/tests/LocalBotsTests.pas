@@ -59,7 +59,7 @@ begin
 end;
 
 procedure Profiles;
-var I,J,K,Near,Weak,Strong:Integer;P,Q:TLocalBotProfile;W:Single;
+var I,J,K,Sex,Near,Weak,Strong:Integer;P,Q:TLocalBotProfile;W:Single;
   Seen:array[0..LocalBotCatalogCount-1]of Boolean;
   Seeds:array[0..3]of Cardinal=(0,12345,987654321,High(Cardinal));
 begin
@@ -88,6 +88,21 @@ begin
         and(P.Mustache=Q.Mustache),'selection retains authored appearance');
     end;
   end;
+  for Sex:=0 to 1 do
+    for K:=0 to High(Seeds) do begin
+      FillChar(Seen,SizeOf(Seen),0);
+      for I:=0 to LocalBotCatalogCount-1 do begin
+        P:=MakeLocalBotProfile(I,Seeds[K],Sex);
+        Check(not Seen[P.CatalogIndex],'opposite-sex first rider keeps unique roster');
+        Seen[P.CatalogIndex]:=True;
+        Q:=LocalBotCatalogProfile(P.CatalogIndex);
+        Check(CompareMem(@P,@Q,SizeOf(P)),'opposite-sex choice preserves whole identity');
+        if I=0 then Check((P.Body.Sex>=0.5)<>(Sex>=0.5),'first companion is opposite sex');
+        Q:=MakeLocalBotProfile(I,Seeds[K]);
+        Check((P.Ability<0.85)=(Q.Ability<0.85),'weak roles unchanged');
+        Check((P.Ability>1.15)=(Q.Ability>1.15),'strong roles unchanged');
+      end;
+    end;
   Near:=0;Weak:=0;Strong:=0;
   for I:=0 to LocalBotCount-1 do begin
     P:=MakeLocalBotProfile(I,12345);Q:=MakeLocalBotProfile(I,12345);

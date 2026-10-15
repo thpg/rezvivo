@@ -27,6 +27,12 @@ def payload(out):
     print('Excluded unused assets:',len(audit),'MiB:',round(sum(x['bytes'] for x in audit)/2**20,1),flush=True)
     files=[(ROOT/'third_person_navigation.exe',Path('REZVIVO.exe'))]
     files += [(ROOT/x,Path(x)) for x in DLLS]
+    # Desktop only. Android uses the same data assets but does not launch FFmpeg.
+    for name in ('ffmpeg.exe', 'LICENSE.txt', 'NOTICE.txt'):
+        rel=Path('tools/video')/name
+        if not (ROOT/rel).is_file():
+            raise ValueError('Run tools/prepare-video-encoder.ps1 before packaging: '+str(rel))
+        files.append((ROOT/rel,rel))
     files.extend(runtime_assets(ROOT, excluded))
     for src,rel in files:
         dest=stage/rel;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dest)

@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses GameVideoCapture, GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe, GameRiderPoseProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -56,7 +56,7 @@ uses GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, Ap
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameDeviceTypes, GameDeviceSensor, TrainerData,
   GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
-  BikeParametric, RiderPoseCatalog, RiderAttention, RiderLod, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
+  BikeParametric, RiderScreenLighting, RiderPoseCatalog, RiderAttention, RiderLod, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, Osm3dWorldVisibility, TreeSeason, TreeRenderer, TreeGPUData, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
@@ -1243,7 +1243,7 @@ var
   BotIndex, PoseIndex: Integer;
   State: TBikePlaybackState;
   Anchor, Facing: TJSONArray;
-  Paused: Boolean;
+  Paused, SavedVisualDetail: Boolean;
   CurSec, TotalSec: Integer;
   Cadence: Single;
 begin
@@ -1331,6 +1331,9 @@ begin
     if Assigned(ViewPlay.Bike.Group.Parent) then
       ViewPlay.Bike.Group.Parent.Rotation := Vector4(0,1,0,ModelBaseYRotation);
   end;
+  SavedVisualDetail:=Bike.VisualDetailRequired;
+  Bike.VisualDetailRequired:=True;
+  try
   Bike.RestoreReplay(State);
   Bike.SampleRiderDynamics;
   if BotIndex>=0 then
@@ -1341,6 +1344,9 @@ begin
   end;
   AResult.Add('sample', Bike.RiderMotionDebugJson);
   AResult.Add('gpu', Bike.GpuAnim);
+  finally
+    Bike.VisualDetailRequired:=SavedVisualDetail;
+  end;
 end;
 
 procedure CmdBikeSetGpuAnim(const AParams: TJSONObject; AResult: TJSONObject);
@@ -2099,6 +2105,7 @@ begin
   if AParams.Find('ground_merge_gap')<>nil then StaticIndexCullMergeGapTriangles:=EnsureRange(AParams.Get('ground_merge_gap',0),0,65536);
   if AParams.Find('ground_max_ranges')<>nil then StaticIndexCullMultiDrawMaxRanges:=EnsureRange(AParams.Get('ground_max_ranges',1024),1,8192);
   if AParams.Find('rtx_receiver_bounds')<>nil then RtxScreenReceiverBounds:=AParams.Get('rtx_receiver_bounds',True);
+  if AParams.Find('rtx_rider_lighting')<>nil then RiderScreenLightingEnabled:=AParams.Get('rtx_rider_lighting',True);
   if AParams.Find('wind_time')<>nil then WindSetPlaybackTime(AParams.Get('wind_time',-1.0));
   if AParams.Find('shared_uniform_arrays')<>nil then
     UseSharedUniformArrayCache:=AParams.Get('shared_uniform_arrays',True);
@@ -2142,6 +2149,7 @@ begin
   AResult.Add('ground_merge_gap',StaticIndexCullMergeGapTriangles);
   AResult.Add('ground_max_ranges',StaticIndexCullMultiDrawMaxRanges);
   AResult.Add('rtx_receiver_bounds',RtxScreenReceiverBounds);
+  AResult.Add('rtx_rider_lighting',RiderScreenLightingEnabled);
   AResult.Add('ground_cull_passes',Int64(StaticIndexCullPasses));
   AResult.Add('ground_candidate_indices',Int64(StaticIndexCullCandidateIndices));
   AResult.Add('ground_submitted_indices',Int64(StaticIndexCullSubmittedIndices));
@@ -2532,6 +2540,17 @@ begin
 end;
 
 { ── app.screenshot ───────────────────────────────────────────────────── }
+
+procedure CmdVideo(const AParams: TJSONObject; AResult: TJSONObject);
+var Action: String;
+begin
+  Action:=AParams.Get('action','status');
+  if Action='start' then ViewPlay.StartVideoRecording
+  else if Action='stop' then StopGameVideo
+  else if Action<>'status' then raise Exception.Create('Unknown video action');
+  AResult.Add('video',GameVideoStatus);
+  if DeviceService<>nil then AResult.Add('sim_time_sec',DeviceService.SimPositionSec);
+end;
 
 procedure CmdScreenshot(const AParams: TJSONObject; AResult: TJSONObject);
 var
@@ -3038,7 +3057,7 @@ begin
     'binary_shader_names (diagnostic comparison with legacy locale-dependent lookups), ' +
     'discard_shadow_shader (diagnostic: remove the disabled ground-shadow shader). Each key optional.',
     '{"type":"object","properties":{"anim":{"type":"boolean"},"tree_draw_mask":{"type":"integer"},' +
-    '"tree_prepared_frames":{"type":"boolean"},"tree_fragment_reuse":{"type":"boolean"},"grass_vertex_cache":{"type":"boolean"},"ground_index_culling":{"type":"boolean"},"rtx_receiver_bounds":{"type":"boolean"},"rider_visibility":{"type":"boolean"},"wheel_probes":{"type":"boolean"},' +
+    '"tree_prepared_frames":{"type":"boolean"},"tree_fragment_reuse":{"type":"boolean"},"grass_vertex_cache":{"type":"boolean"},"ground_index_culling":{"type":"boolean"},"rtx_receiver_bounds":{"type":"boolean"},"rtx_rider_lighting":{"type":"boolean"},"rider_visibility":{"type":"boolean"},"wheel_probes":{"type":"boolean"},' +
     '"ground_merge_gap":{"type":"integer"},"ground_max_ranges":{"type":"integer"},"wind_time":{"type":"number"},' +
     '"riders":{"type":"boolean"},"terrain":{"type":"boolean"},"shadows":{"type":"boolean"},"tree_pass_batching":{"type":"boolean"},"grass_base_instance":{"type":"boolean"},"shared_effect_revisions":{"type":"boolean"},"shared_uniform_arrays":{"type":"boolean"},"shared_effect_bindings":{"type":"boolean"},"binary_shader_names":{"type":"boolean"},"cached_mesh_bindings":{"type":"boolean"},"tree_parameter_cache":{"type":"boolean"},"program_uniform_cache":{"type":"boolean"},"stack_mesh_attributes":{"type":"boolean"},"pose_cache":{"type":"boolean"},"delayed_pose":{"type":"boolean"},' +
     '"occlusion":{"type":"boolean"},"persist":{"type":"boolean"},"world_shadows":{"type":"boolean"},"dynamic_batching":{"type":"boolean"},"log_shaders":{"type":"boolean"},' +
@@ -3101,6 +3120,10 @@ begin
     '"inline":{"type":"boolean","description":"include PNG base64 in the reply (default true)"}' +
     '}}',
     @CmdScreenshot);
+  RegisterMcpCommand('app.video',
+    'Offline 30 fps video capture of the active ride. Frames stream to H.264 without image files. Same start as the debug button; Esc/stop finishes the MP4. Status includes frames, duration and file paths.',
+    '{"type":"object","properties":{"action":{"type":"string","enum":["start","stop","status"]}}}',
+    @CmdVideo);
   RegisterMcpCommand('bikefit.body','Read/change shared avatar physical parameters.',
     '{"type":"object"}',@CmdBikeFitBody);
   RegisterMcpCommand('bikefit.auto_fit','Use the same automatic size and fit button as the game UI.',

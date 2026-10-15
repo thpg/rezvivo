@@ -1,0 +1,10 @@
+FFmpeg 9.0.2, essentials Windows build by Gyan Doshi. GPL v3.
+https://ffmpeg.org/
+Binary build, dependencies and source references:
+https://www.gyan.dev/ffmpeg/builds/
+https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip
+Source code: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+Source revision: https://github.com/FFmpeg/FFmpeg/commit/946fcce07b
+The exact configure options are printed by ffmpeg.exe -buildconf.
+libx264 source: https://code.videolan.org/videolan/x264
+License text: LICENSE.txt in this directory.

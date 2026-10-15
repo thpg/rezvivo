@@ -60,3 +60,6 @@ rezvivo-osm-bckl/*profile*.json
 # Downloaded offline speech dependencies; restore with prepare-speech-assets.ps1.
 /rezvivo-osm-bckl/data/speech/models/
 /rezvivo-osm-bckl/data/speech/vosk-win64/
+
+# Downloaded desktop encoder; restore with prepare-video-encoder.ps1.
+/rezvivo-osm-bckl/tools/video/ffmpeg.exe

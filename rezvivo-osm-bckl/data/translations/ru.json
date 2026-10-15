@@ -1866,5 +1866,13 @@
   "Me": "Я",
   "Teleport": "Переместить",
   "%.2f / %.2f km": "%.2f / %.2f км",
-  "Lap %d": "Круг %d"
+  "Lap %d": "Круг %d",
+  "Record video (30 fps)": "Записать видео (30 кадров/с)",
+  "Offline recording. Esc finishes and saves the video.": "Покадровая запись. Esc завершает запись и сохраняет видео.",
+  "Start a ride before recording video.": "Для записи видео сначала запустите заезд.",
+  "Video encoder not found in tools/video.": "Не найден видеокодировщик в папке tools/video.",
+  "Video recording failed: %s": "Ошибка записи видео: %s",
+  "Finishing video...": "Завершение записи видео...",
+  "Incomplete video; the partial file was preserved.": "Видео записано не полностью; частичный файл сохранён.",
+  "Video saved: %s": "Видео сохранено: %s"
 }

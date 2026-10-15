@@ -1742,6 +1742,10 @@ begin
     FPoseTimer := 0;
     ApplyResultPose;
     Logger.Info(Format('[BikeFit]   FitCam/pose %d ms', [GetTickCount64 - T0]));
+    { The first visit may precede the first ride. Use the same personal fit
+      here instead of persisting the catalogue's arbitrary default post. }
+    if not Settings.FitParamsValid and FResultBike.HasTripoRider and
+      (FSizeNames.Count>0)then FAutoFitPending:=True;
   end;
   UpdateLabels;
 end;

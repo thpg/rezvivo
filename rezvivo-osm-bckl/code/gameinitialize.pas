@@ -50,7 +50,7 @@ uses AppRuntimePaths, AvatarGait, SysUtils,
   RideUploadQueue, VeloSiteAPI, GameOsmAccess,
   GameLocalization, AppSettings, GameGraphicsOptions,
   GameMcpServer,GameClientUpdate,GameCrashReports,GameAudio,GameOfflineReadiness,
-  GameStreamingRetirement, GameShaderCache, GameScreenshots;
+  GameStreamingRetirement, GameShaderCache, GameScreenshots, GameVideoCapture;
 
 var
   Window: TCastleWindow;
@@ -179,6 +179,7 @@ begin
   Window.Container.View := ViewMenu;
   Window.Container.Controls.InsertFront(CreateGameFpsControl(Window));
   Window.Container.Controls.InsertFront(CreateGameScreenshotControl(Window));
+  Window.Container.Controls.InsertFront(CreateGameVideoControl(Window));
 
   { Скан недозагруженных заездов. Если приложение упало с активной
     сессией, CSV остался без маркера .uploaded — фоновая очередь

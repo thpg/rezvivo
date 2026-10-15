@@ -33,7 +33,7 @@ type
     FWorld: TCastleTransform;
     FRtx:TRtxShadow;
     FLayers: array[0..4] of TImpostorLayer;
-    FCollector, FFiltered: TShapesCollector;
+    FCollector, FFiltered, FDeferredBlending: TShapesCollector;
     FRenderer: TShapesRenderer;
     FCaptureCamera: TRenderingCamera;
     FProgram, FVAO: GLuint;
@@ -50,6 +50,7 @@ type
     FBaseProjection: TMatrix4;
     FFrames, FFallbacks: QWord;
     FFrameCacheUsed: Boolean;
+    FScreenRiders:TCastleTransformList;
     FDepthReuseFrames: QWord;
     FLightingMode: Integer;
     FNear, FMiddle, FFar: Single;
@@ -92,9 +93,12 @@ type
     procedure LayerRange(Index:Integer;const P:TMatrix4;out N,F:Single);
     procedure DrawCachedWorld(const Params:TRenderParams;UpdateLayers:Boolean=True);
     procedure DrawWorld(const Params:TRenderParams);
+    procedure DrawTransforms(const Params:TRenderParams;One:TCastleTransform;
+      Many:TCastleTransformList=nil);
     function ReflectionShape(const Shape:TShape):Boolean;
     procedure DrawReflectors(const Params:TRenderParams);
     procedure DrawScreenDepth(const Params:TRenderParams);
+    procedure DrawScreenRiders(const Params:TRenderParams);
   protected
     procedure RenderFromView3D(const Params:TRenderParams); override;
     procedure Notification(AComponent:TComponent;Operation:TOperation); override;
@@ -122,7 +126,7 @@ implementation
 
 uses CastleRenderContext, CastleApplicationProperties, CastleProjection, CastleComponentSerialize,
   CastleLog, CastleRendererInternalShader, Osm3dRtxMaterials, Osm3dRiderShadow, Osm3dRtxScreenState,
-  CastleGLUtils;
+  CastleGLUtils, RiderScreenLighting;
 
 const
   BaseOverscan=1.16;
@@ -228,6 +232,8 @@ begin
   FLightingMode:=-1;
   FRtxCache:=True;FShadowCapture:=-1;
   FCollector:=TShapesCollector.Create(True);
+  FDeferredBlending:=TShapesCollector.Create(True);
+  FScreenRiders:=TCastleTransformList.Create(False);
   FFiltered:=TShapesCollector.Create(False);
   FRenderer:=TShapesRenderer.Create;
   FRenderer.BlendingSort:=sort3D;FRenderer.OcclusionSort:=sort3D;
@@ -248,6 +254,8 @@ begin
   FGPUTimer.Free;FGPUSamples.Free;FSubmitSamples.Free;FFrameSamples.Free;
   for I:=0 to High(FStageTimers) do begin FStageTimers[I].Free;FStageSamples[I].Free end;
   FCaptureCamera.Free;FFiltered.Free;FCollector.Free;FRenderer.Free;
+  FDeferredBlending.Free;
+  FScreenRiders.Free;
   FStabilitySamples.Free;
   FStabilityFrames.Free;
   inherited;
@@ -436,9 +444,13 @@ begin
 end;
 
 procedure TOsmImpostorViewport.DrawWorld(const Params:TRenderParams);
+begin DrawTransforms(Params,FWorld) end;
+
+procedure TOsmImpostorViewport.DrawTransforms(const Params:TRenderParams;
+  One:TCastleTransform;Many:TCastleTransformList);
 var SavedCollector,SavedRenderer:TObject;SavedTransform:PTransformation;
     SavedFrustum:PFrustum;SavedVolumes:Boolean;T:TTransformation;Frustum:TFrustum;
-    Pass:TRenderOnePassParams;
+    Pass:TRenderOnePassParams;I,Count:Integer;Node:TCastleTransform;
 begin
   SavedCollector:=Params.Collector;SavedRenderer:=Params.RendererToPrepareShapes;
   SavedTransform:=Params.Transformation;SavedFrustum:=Params.Frustum;
@@ -446,15 +458,24 @@ begin
   try
     FCollector.Clear;Params.Collector:=FCollector;Params.RendererToPrepareShapes:=FRenderer.Renderer;
     Params.UsingShadowVolumes:=False;
-    T.Init;if FWorld.Parent<>nil then T.MultiplyMatrix(FWorld.Parent.WorldTransform);
-    Frustum:=Params.RenderingCamera.Frustum.TransformByInverse(T.Transform);
-    Params.Transformation:=@T;Params.Frustum:=@Frustum;
-    FWorld.Render(Params);
+    Count:=1;if Many<>nil then Count:=Many.Count;
+    for I:=0 to Count-1 do begin
+      Node:=One;if Many<>nil then Node:=Many[I];
+      if (Node=nil) or not Node.ExistsInRoot or not Node.HasWorldTransform then Continue;
+      T.Init;if Node.Parent<>nil then T.MultiplyMatrix(Node.Parent.WorldTransform);
+      Frustum:=Params.RenderingCamera.Frustum.TransformByInverse(T.Transform);
+      Params.Transformation:=@T;Params.Frustum:=@Frustum;
+      Node.Render(Params);
+    end;
     Pass.Init;Pass.UsingBlending:=False;
     FFiltered.Clear;FFiltered.AddFiltered(FCollector,[False],[False,True]);
     FRenderer.Render(FFiltered,Params,Pass);
     Pass.UsingBlending:=True;
     FFiltered.Clear;FFiltered.AddFiltered(FCollector,[True],[False,True]);
+    { The live actor pass also draws translucent gates / markers in front of
+      riders. Their original collected transforms survive the RTX depth pass;
+      no second scene traversal or double alpha blend is needed. }
+    if Many=FScreenRiders then FFiltered.AddFiltered(FDeferredBlending,[True],[False,True]);
     FRenderer.Render(FFiltered,Params,Pass);
   finally
     Params.Collector:=SavedCollector;Params.RendererToPrepareShapes:=SavedRenderer;
@@ -815,9 +836,22 @@ begin
   finally OcclusionCulling:=SavedOcclusion;end;
 end;
 
+procedure TOsmImpostorViewport.DrawScreenRiders(const Params:TRenderParams);
+begin
+  if FScreenRiders.Count=0 then Exit;
+  SetRiderScreenSun(RtxScreenTexture,RtxScreenView,FRtx.ScreenStrength);
+  try
+    FRenderer.OcclusionCulling:=OcclusionCulling;
+    DrawTransforms(Params,nil,FScreenRiders);
+  finally
+    SetRiderScreenSun(0,Vector4(0,0,1,1),0);
+  end;
+end;
+
 procedure TOsmImpostorViewport.RenderFromView3D(const Params:TRenderParams);
 var Started,Finished:TTimerResult;Ns:QWord;Screen,SavedOcclusion,DeferredShadow:Boolean;I,LightingMode:Integer;
   SavedExclusive,SavedCache,SavedRequired,CachePath:Boolean;
+  MainCollector,SavedDeferred:TShapesCollector;
 begin
   SavedExclusive:=RtxScreenExclusive;SavedCache:=UseCachedRiderMeshes;
   SavedRequired:=RequireDeformedMeshBuffers;
@@ -840,6 +874,8 @@ begin
   try
     if Screen then begin
       FFrameCacheUsed:=False;
+      FScreenRiders.Clear;
+      FDeferredBlending.Clear;
       FShadowCapture:=-1;
       RtxScreenExclusive:=(FRtx<>nil) and FRtx.ScreenShadows;
       if RtxScreenExclusive then begin UseCachedRiderMeshes:=True;RequireDeformedMeshBuffers:=True;end;
@@ -857,7 +893,17 @@ begin
       DeferredShadow:=RtxScreenExclusive and CachePath;
       if (FRtx<>nil) and not DeferredShadow then FRtx.RenderScreenShadows(Params,@DrawScreenDepth);
       SyncScreenShadowReceivers;
+      if RtxScreenExclusive and RiderScreenLightingEnabled and FRtx.ScreenReady then
+        CollectRiderScreenReceivers(FRtx.DynamicCasters,FScreenRiders);
     end;
+    { Draw each rider's colour exactly once, after world composition. The
+      depth / RTX pass still sees them normally, with the same cached posed
+      vertices. This prevents a second, display-space darkening of material
+      lighting and works with both the full world and its RGB-D cache. }
+    if Screen then for I:=0 to FScreenRiders.Count-1 do FScreenRiders[I].Visible:=False;
+    MainCollector:=TShapesCollector(Params.Collector);SavedDeferred:=MainCollector.DeferredBlending;
+    if Screen and(FScreenRiders.Count>0)then MainCollector.DeferredBlending:=FDeferredBlending;
+    try
     if not CachePath then
       inherited
     else try DrawCachedWorld(Params);
@@ -870,6 +916,10 @@ begin
       end;
       inherited RenderFromView3D(Params);
     end end;
+    finally
+      MainCollector.DeferredBlending:=SavedDeferred;
+      if Screen then for I:=0 to FScreenRiders.Count-1 do FScreenRiders[I].Visible:=True;
+    end;
     if DeferredShadow then begin
       FRtx.RenderScreenShadows(Params,@DrawScreenDepth);
       try BakeShadow(Params);
@@ -878,6 +928,7 @@ begin
       end end;
     end;
     if Screen and RtxScreenExclusive then FRtx.CompositeScreenShadows;
+    if Screen then DrawScreenRiders(Params);
   finally
     RtxScreenExclusive:=SavedExclusive;UseCachedRiderMeshes:=SavedCache;
     RequireDeformedMeshBuffers:=SavedRequired;
@@ -964,6 +1015,7 @@ begin
   Dest.Add('used_this_frame',FFrameCacheUsed);
   Dest.Add('rtx_depth_reuse_frames',Int64(FDepthReuseFrames));
   Dest.Add('rtx_screen', (FRtx<>nil) and FRtx.ScreenShadows);
+  Dest.Add('screen_material_riders',FScreenRiders.Count);
   Dest.Add('rtx_cache',FRtxCache);Dest.Add('rtx_shadow_bakes',Int64(FShadowBakes));
   Dest.Add('near_msaa',FNearSamples);
   Dest.Add('detail_layer',FDetailLayer);Dest.Add('detail_m',FDetail);Dest.Add('live_m',LiveDistance);

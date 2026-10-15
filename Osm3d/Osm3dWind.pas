@@ -62,6 +62,8 @@ var
   uWindTime. Cheap; safe to call many times per frame from many renderers. }
 { Negative time returns to the normal real-time clock. Main thread only. }
 procedure WindSetPlaybackTime(Seconds: Single);
+{ Virtual viewer time for offline video; negative restores the live camera clock. }
+procedure WindSetOfflineTime(Seconds: Double);
 function WindPlaybackTime:Single;
 function WindNow: Single;
 procedure WindObserveCamera(const Position:TVector3; CameraKey:PtrUInt);
@@ -145,6 +147,7 @@ uses
 
 var
   FPlaybackTime: Single = -1;
+  FOfflineTime: Double = -1;
   FStartTick: QWord;
   FStarted:   Boolean = False;
   FMotionClock:TVegetationWindClock;
@@ -163,6 +166,8 @@ end;
 
 procedure WindSetPlaybackTime(Seconds: Single);
 begin FPlaybackTime:=Seconds end;
+procedure WindSetOfflineTime(Seconds: Double);
+begin FOfflineTime:=Seconds end;
 function WindPlaybackTime:Single;
 begin Result:=FPlaybackTime end;
 
@@ -178,9 +183,12 @@ begin
 end;
 
 procedure WindObserveCamera(const Position:TVector3;CameraKey:PtrUInt);
+var Tick:QWord;
 begin
+  if FOfflineTime>=0 then Tick:=Round(FOfflineTime*1000)
+  else Tick:=GetTickCount64;
   FMotionClock.Observe(Position,CameraKey,TFramesPerSecond.RenderFrameId,
-    GetTickCount64,WindNow,VegetationWindSpeedControl);
+    Tick,WindNow,VegetationWindSpeedControl);
 end;
 function VegetationWindNow:Single;
 begin

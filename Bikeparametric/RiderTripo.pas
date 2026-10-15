@@ -37,7 +37,7 @@ unit RiderTripo;
 
 interface
 
-uses RiderShaderSharing, RiderLod, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
+uses RiderShaderSharing, RiderScreenLighting, RiderLod, RiderBodyParameters, RiderBodyMorph, RiderCorrectiveData, RiderHandGrip, RiderClothShader, RiderFabricShader, RiderSkinShader, RiderFace, RiderHair, RiderHairPhysics, RiderOcclusion, RiderHeadAppearance,
   Classes, SysUtils, Types, Math, fpjson, jsonparser,
   CastleUtils, CastleVectors, CastleQuaternions, CastleScene, CastleTransform, X3DNodes,
   X3DFields, CastleBoxes, CastleImages, CastleRenderOptions, TripoRig,
@@ -1631,10 +1631,11 @@ begin
     FGroundShadeEffect.UniformMissing := umIgnore; { omitted by depth-only pass }
     FGroundShadeUniform := TSFFloat.Create(FGroundShadeEffect,True,'riderGroundShade',V);
     FGroundShadeEffect.AddCustomField(FGroundShadeUniform);
+    AttachRiderScreenSun(FGroundShadeEffect);
     Part := TEffectPartNode.Create; Part.FdType.Value := 'FRAGMENT';
-    Part.Contents := 'uniform float riderGroundShade;' + #10 +
+    Part.Contents := RIDER_SCREEN_SUN_GLSL + 'uniform float riderGroundShade;' + #10 +
       'void PLUG_light_scale(inout float scale, const vec3 N, const vec3 L) {' + #10 +
-      '  scale *= 1.0 - 0.92 * clamp(riderGroundShade, 0.0, 1.0);' + #10 +
+      '  scale *= riderSunVisibility(riderGroundShade);' + #10 +
       '}';
     FGroundShadeEffect.SetParts([Part]);
     ShareRiderEffect(FGroundShadeEffect);

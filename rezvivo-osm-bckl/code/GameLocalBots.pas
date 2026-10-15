@@ -98,7 +98,7 @@ type
     procedure CreateCrossing(RouteIndex,VisualIndex:Integer);
     procedure RemoveCrossing;
     function GetAgent(Index:Integer):TLocalBotAgent;
-    procedure CreateBot(Index:Integer;Seed:Cardinal);
+    procedure CreateBot(Index:Integer;Seed:Cardinal;AvatarSex:Single);
     procedure SetVisible(Index:Integer;Value:Boolean;ReserveLane:Boolean=True);
     function PrepareCrossingGround(Index:Integer):Boolean;
     function VisibilityPosition(Agent:TLocalBotAgent):TVector3;
@@ -140,7 +140,8 @@ type
 implementation
 uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, jsonparser,
   BikeGeometryLib, BikeParametric_Frame, BikeParametric_Crankset,
-  GameBikeAvatar, GameRiderTraffic, GameAgentNetwork, GameMath, DebugLog, AppSettings, UiTranslations;
+  GameBikeAvatar, GameRiderTraffic, GameAgentNetwork, GameMath, DebugLog, AppSettings, UiTranslations,
+  GameUserData;
 
 function TLocalBotAgent.RequestedCadence:Single;
 begin
@@ -182,7 +183,7 @@ end;
 
 constructor TLocalBots.Create(Owner:TComponent;Viewport:TCastleViewport;Level:TCastleScene;
   World:TGameWorld;Avatar:TPhysicalAgent;Ftp:Single;Seed:Cardinal);
-var I:Integer;Text:TStringList;
+var I:Integer;Text:TStringList;AvatarSex:Single;
 begin
   inherited Create;
   FOwner:=Owner;FViewport:=Viewport;FLevel:=Level;FWorld:=World;FAvatar:=Avatar;
@@ -196,7 +197,8 @@ begin
     Text.LoadFromFile(BikeJsonUrlToFilename('castle-data:/bike_road2.json'));
     FJson:=InjectRiderPath(Text.Text,ResolveRiderGlbPath('castle-data:/avatars/RIDER.glb'),False);
   finally Text.Free end;
-  for I:=0 to LocalBotCount-1 do CreateBot(I,Seed);
+  AvatarSex:=AvatarBodyParameters.Sex;
+  for I:=0 to LocalBotCount-1 do CreateBot(I,Seed,AvatarSex);
 end;
 
 destructor TLocalBots.Destroy;
@@ -218,10 +220,10 @@ end;
 function TLocalBots.GetAgent(Index:Integer):TLocalBotAgent;
 begin Result:=TLocalBotAgent(FAgents[Index]) end;
 
-procedure TLocalBots.CreateBot(Index:Integer;Seed:Cardinal);
+procedure TLocalBots.CreateBot(Index:Integer;Seed:Cardinal;AvatarSex:Single);
 var A:TLocalBotAgent;T:TCastleTransform;S:TCastleScene;
 begin
-  FProfiles[Index]:=MakeLocalBotProfile(Index,Seed);
+  FProfiles[Index]:=MakeLocalBotProfile(Index,Seed,AvatarSex);
   T:=TCastleTransform.Create(FOwner);T.Name:='LocalBotTransform'+IntToStr(Index);
   S:=TCastleScene.Create(FOwner);S.Name:='LocalBotScene'+IntToStr(Index);T.Add(S);
   A:=TLocalBotAgent.Create(FOwner);A.Name:=FProfiles[Index].DisplayName;
@@ -546,13 +548,22 @@ begin
   { One companion can wait at the start; nobody races a motionless player.
     During excursions existing companions keep moving independently. }
   A:=GetAgent(0);
-  if not A.Spawned and not FExcursion.Active and not FAvatar.State.FreeTravel then begin
-    Behind:=-4;
-    if FAvatar.Path.OutAndBack and(Station(FAvatar.Path.Position)<5)then Behind:=4;
-    P:=FAvatar.Path.Position;FAvatar.Path.AdvanceFollow(P,Behind);
-    A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance+Behind;
-    A.State.CurrentSpeed:=0;A.State.AppliedPowerWatts:=0;A.Spawned:=True;
-    if FRenderEnabled and(FRenderLimit>0)then SetVisible(0,True);
+  if not A.Spawned and not FExcursion.Active and not FAvatar.State.FreeTravel and
+    (FElapsed>=FNextAppearance)then begin
+    if FAvatar.Path.OutAndBack and(Station(FAvatar.Path.Position)<5)then begin
+      Behind:=4;P:=FAvatar.Path.Position;FAvatar.Path.AdvanceFollow(P,Behind);
+    end else begin
+      Distance:=24;
+      if FAvatar.Path.OutAndBack then Distance:=Min(Distance,Station(FAvatar.Path.Position));
+      if FindCompanionStartBehind(FAvatar.Path,FAvatar.Path.Position,Distance,P,Behind)then
+        Behind:=-Behind
+      else Behind:=0;
+    end;
+    if Behind<>0 then begin
+      A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance+Behind;
+      A.State.CurrentSpeed:=0;A.State.AppliedPowerWatts:=0;A.Spawned:=True;
+      if FRenderEnabled and(FRenderLimit>0)then SetVisible(0,True);
+    end else FNextAppearance:=FElapsed+1;
   end;
   Target:=FAvatar.State.AppliedPowerWatts;
   if Target>10 then FReferencePower:=FReferencePower+
@@ -560,7 +571,7 @@ begin
   for I:=0 to LocalBotCount-1 do begin
     A:=GetAgent(I);C:=TLocalBotController(A.PowerControl);
     if not A.Spawned then begin
-      if FExcursion.Active or FAvatar.State.FreeTravel or not RiderMoving or A.Oncoming or
+      if (I=0)or FExcursion.Active or FAvatar.State.FreeTravel or not RiderMoving or A.Oncoming or
         (FElapsed<I*LocalBotJoinInterval) then Continue;
       Behind:=72+I*12;
       { At the start of an out-and-back ride there is no road behind yet.

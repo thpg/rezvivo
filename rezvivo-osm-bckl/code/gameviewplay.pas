@@ -341,7 +341,7 @@ type
     FFxPanel: TCastleRectangleControl;
     FMenuButton, FAssistantButton: TCastleButton;
     FFxBtnTerr, FFxBtnRidr, FFxBtnAnim, FFxBtnShad, FFxBtnWorldShad, FFxBtnRoad, FFxBtnOcclusion: TCastleButton;
-    FFxBtnTrees, FFxBtnTreeSeason: TCastleButton;
+    FFxBtnTrees, FFxBtnTreeSeason, FFxBtnVideo: TCastleButton;
     FFxBtnWorldLayers: array[TWorldRenderLayer] of TCastleButton;
     { Ряд 4: FIT path spheres (red raw / green snapped) on streaming map. }
     FFxBtnPath: TCastleButton;
@@ -403,6 +403,7 @@ type
     procedure RestoreActivityRecord;
     procedure SaveActivityCheckpoint;
     procedure OnFxToggleClick(Sender: TObject);
+    procedure ClickRecordVideo(Sender: TObject);
     procedure UpdateFxButtonColors;
     function AdminPanelsVisible: Boolean;
     procedure UpdateAdminPanels;
@@ -515,6 +516,7 @@ type
     constructor Create(AOwner: TComponent); override;
     procedure Start; override;
     procedure OpenMenu;
+    procedure StartVideoRecording;
     procedure BikeFitChanged;
     function RideSpeed: Single;
     function RideCadence: Single;
@@ -671,7 +673,7 @@ implementation
 uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,GameClientUpdate,GameActivitySource,
   GameRiderVisibility, CastleFrustum,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
-  GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
+  GameVideoCapture, GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
   Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap,GameRideLayout,
   EliteSterzoProtocol,GameHudZones;
@@ -715,6 +717,7 @@ var
   GFpsSimFrameHold: Boolean = False;
   GFpsGraphicsBenchmark: Boolean = False;
   GFpsActiveWorld: Boolean = False;
+  GFpsVideoRecording: Boolean = False;
   GFpsSwapPending:  Boolean = False;
   GFpsDesiredSwap:  LongInt = 1;
   {$IFDEF MSWINDOWS}
@@ -740,6 +743,7 @@ procedure ApplyGameFpsMode;
 var Limit: Integer; MenuLimit:Single;
 begin
   GFpsActiveWorld:=HasActiveFpsWorld;
+  GFpsVideoRecording:=GameVideoRecording;
   case GFpsMode of
     flmVsyncOn:     begin ApplicationProperties.LimitFPS := 0;  GFpsDesiredSwap := 1; end;
     flmVsyncOffMax: begin ApplicationProperties.LimitFPS := 0;  GFpsDesiredSwap := 0; end;
@@ -752,7 +756,7 @@ begin
   end;
   MenuLimit:=ApplicationProperties.LimitFPS;
   if (MenuLimit<=0)or(MenuLimit>60)then MenuLimit:=60;
-  if GFpsGraphicsBenchmark then begin
+  if GFpsGraphicsBenchmark or GFpsVideoRecording then begin
     ApplicationProperties.LimitFPS:=0; GFpsDesiredSwap:=0;
   end else if GFpsSimFrameHold and GFpsActiveWorld then begin
     ApplicationProperties.LimitFPS:=1; GFpsDesiredSwap:=0;
@@ -763,7 +767,7 @@ begin
     ApplicationProperties.LimitFPS:=MenuLimit;
     GFpsDesiredSwap:=0;
   end;
-  if GFpsGraphicsBenchmark or(GFpsSimFrameHold and GFpsActiveWorld)then
+  if GFpsGraphicsBenchmark or GFpsVideoRecording or(GFpsSimFrameHold and GFpsActiveWorld)then
     SetVegetationFrameLimit(0,False)
   else SetVegetationFrameLimit(ApplicationProperties.LimitFPS,GFpsDesiredSwap<>0);
   {$IFDEF MSWINDOWS}
@@ -878,7 +882,8 @@ end;
 procedure TFpsSwapApplier.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 begin
   inherited;
-  if HasActiveFpsWorld<>GFpsActiveWorld then ApplyGameFpsMode;
+  if (HasActiveFpsWorld<>GFpsActiveWorld) or
+     (GameVideoRecording<>GFpsVideoRecording) then ApplyGameFpsMode;
 end;
 
 function CreateGameFpsControl(AOwner:TComponent):TCastleUserInterface;
@@ -3741,6 +3746,16 @@ begin
     FFxPanel.InsertFront(FFxBtnWorldLayers[Layer]);
   end;
 
+  FFxBtnVideo:=TMenuButton.Create(FreeAtStop);
+  FFxBtnVideo.Name:='RecordVideo';
+  FFxBtnVideo.AutoSize:=False;
+  FFxBtnVideo.Width:=228; FFxBtnVideo.Height:=24; FFxBtnVideo.FontSize:=12;
+  FFxBtnVideo.Anchor(hpLeft,10); FFxBtnVideo.Anchor(vpTop,-196);
+  BindUiText(FFxBtnVideo,'Record video (30 fps)');
+  FFxBtnVideo.Tooltip:=UiText('Offline recording. Esc finishes and saves the video.');
+  FFxBtnVideo.OnClick:=@ClickRecordVideo;
+  {$ifdef ANDROID}FFxBtnVideo.Exists:=False;{$else}FFxPanel.Height:=228;{$endif}
+  FFxPanel.InsertFront(FFxBtnVideo);
   InsertFront(FFxPanel);
 
   { ── Remote riders manager ── }
@@ -3914,6 +3929,7 @@ procedure TViewPlay.Stop;
 var
   I: Integer;
 begin
+  StopGameVideo;
   RideRooms.EndAutomatic;
   FreeAndNil(FRouteReturn);FreeAndNil(FRoadGuidance);
   FRouteExcursion:=False;FCancelWarmup:=False;
@@ -4046,6 +4062,7 @@ begin
   FFpsBgRect := nil;
   FBotPanel := nil;
   FFxPanel := nil;
+  FFxBtnVideo := nil;
   FillChar(FFxBtnWorldLayers, SizeOf(FFxBtnWorldLayers), 0);
   FSimPanel := nil;
   FMenuButton := nil;
@@ -4295,7 +4312,7 @@ end;
 function TViewPlay.AdminPanelsVisible: Boolean;
 begin
   Result := VeloSite.IsAuthorized and VeloSite.HasCachedProfile and
-    VeloSite.CachedProfile.IsAdmin and not FAdminPanelsHidden;
+    VeloSite.CachedProfile.IsAdmin and not FAdminPanelsHidden and not GameVideoRecording;
 end;
 
 procedure TViewPlay.UpdateAdminPanels;
@@ -4303,6 +4320,7 @@ var ShowPanels: Boolean; LayoutHeight,LayoutWidth,S,MenuTop: Single;
   L:TRideHudLayout;I:Integer;ListHeight,MapAvailable:Single;
 begin
   ShowPanels := AdminPanelsVisible and not FFocusMode;
+  if FFxBtnVideo<>nil then FFxBtnVideo.Enabled:=not GameVideoBusy and not RidePreparationHeld;
   LayoutHeight := 0;LayoutWidth:=0;
   if Container <> nil then begin
     LayoutHeight := Container.UnscaledHeight;LayoutWidth:=Container.UnscaledWidth;
@@ -4466,6 +4484,7 @@ end;
 
 procedure TViewPlay.OpenMenu;
 begin
+  if GameVideoRecording then begin StopGameVideo; Exit end;
   if FOsmPrepHold then begin FCancelWarmup:=True;Exit end;
   if Container.PendingFrontView <> Self then Exit;
   if FFocusPanel<>nil then FFocusPanel.SyncWindow(False);
@@ -4474,6 +4493,19 @@ begin
   Container.ReleaseCapture(Self);
   Container.ReleaseCapture(ThirdPersonNavigation);
   Container.PushView(ViewMenu);
+end;
+
+procedure TViewPlay.ClickRecordVideo(Sender: TObject);
+begin StartVideoRecording end;
+
+procedure TViewPlay.StartVideoRecording;
+begin
+  if not HasActiveFpsWorld then
+    raise Exception.Create(UiText('Start a ride before recording video.'));
+  StartGameVideo;
+  UpdateAdminPanels;
+  RefreshSimPlayer;
+  ApplyGameFpsMode;
 end;
 
 procedure TViewPlay.BikeFitChanged;
@@ -6832,6 +6864,9 @@ begin
     DeviceService.SimPlayerInfo(Paused,CurSec,TotalSec);
     HoldFrame:=(DeviceService.SimGetSpeed<=SimFrameSeconds+0.000001) and
       (not Paused) and (not RidePreparationHeld) and (Container.FrontView=Self);
+  end else if GameVideoRecording then begin
+    WindSetPlaybackTime(GameVideoWindTime);
+    CompositeShaderSetPlaybackTime(GameVideoSurfaceTime);
   end else begin
     WindSetPlaybackTime(-1);
     CompositeShaderSetPlaybackTime(-1);
@@ -6903,7 +6938,8 @@ var SimActive,Paused: Boolean; CurSec,TotalSec: Integer; Rate: Single;
 begin
   if FSimPanel=nil then Exit;
   SimActive:=Assigned(DeviceService) and DeviceService.SimPlayerInfo(Paused,CurSec,TotalSec);
-  FSimPanel.Exists:=Settings.GetSimulationEnabled and not FFocusMode and(FTravelMode=travelBicycle);
+  FSimPanel.Exists:=Settings.GetSimulationEnabled and not FFocusMode and
+    not GameVideoRecording and(FTravelMode=travelBicycle);
   if not FSimPanel.Exists then Exit;
   if Assigned(FWorkoutHud) and FWorkoutHud.Exists then
     FSimPanel.Anchor(vpBottom,FWorkoutHud.EffectiveHeight+12)

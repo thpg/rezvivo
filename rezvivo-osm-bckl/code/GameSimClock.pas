@@ -20,7 +20,8 @@ type
     procedure Stop;
     procedure Seek(Seconds: Double);
     procedure Step;
-    function Advance(RealSeconds: Single; Tick: QWord): Single;
+    function Advance(RealSeconds: Single; Tick: QWord;
+      ContinuousFrames: Boolean = False): Single;
     function FrameMode: Boolean;
     property Position: Double read FPosition;
     property Duration: Double read FDuration write FDuration;
@@ -58,13 +59,14 @@ procedure TSimPlaybackClock.Step;
 begin FPaused:=True; FStepPending:=True; end;
 function TSimPlaybackClock.FrameMode: Boolean;
 begin Result:=FRate<=SimFrameSeconds+0.000001; end;
-function TSimPlaybackClock.Advance(RealSeconds: Single; Tick: QWord): Single;
+function TSimPlaybackClock.Advance(RealSeconds: Single; Tick: QWord;
+  ContinuousFrames: Boolean): Single;
 begin
   Result:=0;
   if not FPlaying or (FDuration<=0) then Exit;
   if FStepPending then begin Result:=SimFrameSeconds; FStepPending:=False end
   else if FPaused then Exit
-  else if FrameMode then begin
+  else if FrameMode and not ContinuousFrames then begin
     if FNextFrameTick=0 then begin FNextFrameTick:=Tick+1000; Exit end;
     if Tick<FNextFrameTick then Exit;
     Result:=SimFrameSeconds; FNextFrameTick:=Tick+1000;

@@ -30,7 +30,8 @@ type
     EffortSeed:Cardinal;
   end;
 function LocalBotCatalogProfile(Index: Integer): TLocalBotProfile;
-function MakeLocalBotProfile(Index: Integer; Seed: Cardinal): TLocalBotProfile;
+function MakeLocalBotProfile(Index: Integer; Seed: Cardinal;
+  AvatarSex: Single = -1): TLocalBotProfile;
 function LocalBotSustainablePower(const Profile: TLocalBotProfile;
   ReferencePower, ReferenceMass: Single): Single;
 function BotCanAppear(RouteGap, RiderDistance, CameraDistance: Single;
@@ -108,9 +109,10 @@ begin
   Result.EffortSeed:=Cardinal(Index+1)*7919;
 end;
 
-function MakeLocalBotProfile(Index: Integer; Seed: Cardinal): TLocalBotProfile;
+function MakeLocalBotProfile(Index: Integer; Seed: Cardinal;
+  AvatarSex: Single): TLocalBotProfile;
 const Steps: array[0..19] of Byte=(1,3,7,9,11,13,17,19,21,23,27,29,31,33,37,39,41,43,47,49);
-var Start,Stride,Role,Rank,I,Entry,Category: Integer;
+var Start,Stride,Role,Rank,I,Entry,Category,SwapRank: Integer;
 begin
   { The roster is balanced, but each person's ability and appearance are fixed.
     Walk one permutation, selecting without replacement within each category. }
@@ -121,6 +123,19 @@ begin
     4: begin Role:=1;Rank:=Index div LocalBotCount end;
     5: begin Role:=2;Rank:=Index div LocalBotCount end;
     else begin Role:=0;Rank:=(Index div LocalBotCount)*5+Min(4,Index mod LocalBotCount) end;
+  end;
+  if (AvatarSex>=0)and(Role=0) then begin
+    { Swap whole authored identities within the comparable-strength category.
+      This preserves the no-repeat permutation and weak/strong companions,
+      including when no opposite-sex rider was in the first seven entries. }
+    SwapRank:=0;
+    for I:=0 to LocalBotCatalogCount-1 do begin
+      Entry:=(Start+I*Stride) mod LocalBotCatalogCount;
+      if(Catalog[Entry].Ability<0.85)or(Catalog[Entry].Ability>1.15)then Continue;
+      if (Catalog[Entry].Sex>=0.5)<>(AvatarSex>=0.5) then Break;
+      Inc(SwapRank);
+    end;
+    if Rank=0 then Rank:=SwapRank else if Rank=SwapRank then Rank:=0;
   end;
   for I:=0 to LocalBotCatalogCount-1 do begin
     Entry:=(Start+I*Stride) mod LocalBotCatalogCount;

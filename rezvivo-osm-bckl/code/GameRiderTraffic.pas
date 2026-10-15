@@ -1,13 +1,43 @@
 unit GameRiderTraffic;
 {$mode objfpc}{$H+}
 interface
-uses GamePhysicsCommon, GamePhysicalAgent;
+uses GamePhysicsCommon, GamePhysicalAgent, GamePath;
 function RegisterTrafficAgent(Manager: TLaneManager; Agent: TPhysicalAgent): TLaneRiderHandle;
 procedure PlaceTrafficAgent(Manager: TLaneManager; Agent: TPhysicalAgent);
 procedure PlaceTrafficStartSlot(Manager:TLaneManager;Agent:TPhysicalAgent;Slot:Integer);
+{ A negative route distance is not necessarily physically behind the rider:
+  the loop seam may double back or cross the outgoing branch. Check the
+  starting corridor once per spawn, without querying scene geometry. }
+function FindCompanionStartBehind(Path:TGamePath;const Start:TPathPosition;
+  MaxBehind:Single;out Position:TPathPosition;out Behind:Single):Boolean;
 procedure UpdateRiderTraffic(Manager: TLaneManager; Dt: Single);
 implementation
-uses Math, CastleVectors, GamePath;
+uses Math, CastleVectors;
+
+function FindCompanionStartBehind(Path:TGamePath;const Start:TPathPosition;
+  MaxBehind:Single;out Position:TPathPosition;out Behind:Single):Boolean;
+var Candidate,A,B,V,D:TVector3;Cursor,Next:TPathPosition;
+    Step:Integer;T:Single;Clear:Boolean;
+begin
+  Result:=False;Position:=Start;Behind:=4;
+  if (Path=nil)or(Path.PointCount<2)then Exit;
+  { The front 12 m must remain free for acceleration and steering. Sampling
+    every 1 m with a 2.8 m clearance is conservative even at sharp bends. }
+  while Behind<=Min(24,MaxBehind)do begin
+    Position:=Start;Path.AdvanceFollow(Position,-Behind);
+    Candidate:=Path.RoadCenterAt(Position);Cursor:=Start;Clear:=True;
+    for Step:=1 to 12 do begin
+      Next:=Cursor;Path.AdvanceFollow(Next,1);
+      A:=Path.RoadCenterAt(Cursor);B:=Path.RoadCenterAt(Next);
+      V:=B-A;V.Y:=0;D:=Candidate-A;D.Y:=0;
+      T:=0;if V.LengthSqr>1e-8 then T:=EnsureRange(TVector3.DotProduct(D,V)/V.LengthSqr,0,1);
+      if (D-V*T).LengthSqr<Sqr(2.8)then begin Clear:=False;Break end;
+      Cursor:=Next;
+    end;
+    if Clear then Exit(True);
+    Behind:=Behind+4;
+  end;
+end;
 
 procedure BindTrafficConstraints(Manager:TLaneManager;Agent:TPhysicalAgent);
 begin

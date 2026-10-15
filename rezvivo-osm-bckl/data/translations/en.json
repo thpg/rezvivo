@@ -1673,5 +1673,13 @@
   "Connect to download this route.": "Connect to download this route.",
   "Route is unavailable. Choose another route or wait for the next update.": "Route is unavailable. Choose another route or wait for the next update.",
   "RTX screen (experimental)": "RTX screen (experimental)",
-  "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.": "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU."
+  "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.": "Cached trees reuses distant shadows. RTX screen uses one ray-traced shadow for every visible surface, including riders and distant scenery. Other shadow methods are disabled. RTX requires a ray-tracing GPU.",
+  "Record video (30 fps)": "Record video (30 fps)",
+  "Offline recording. Esc finishes and saves the video.": "Offline recording. Esc finishes and saves the video.",
+  "Start a ride before recording video.": "Start a ride before recording video.",
+  "Video encoder not found in tools/video.": "Video encoder not found in tools/video.",
+  "Video recording failed: %s": "Video recording failed: %s",
+  "Finishing video...": "Finishing video...",
+  "Incomplete video; the partial file was preserved.": "Incomplete video; the partial file was preserved.",
+  "Video saved: %s": "Video saved: %s"
 }

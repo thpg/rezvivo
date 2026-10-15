@@ -1,7 +1,7 @@
 {
-  "version": "0.4.0-alpha.1",
-  "build": 15,
-  "file_version": "0.4.0.15",
+  "version": "0.4.1-alpha.1",
+  "build": 16,
+  "file_version": "0.4.1.16",
   "channel": "alpha",
-  "notes": "Start new installations on the Krylatskoye circuit with downloadable ready-made world tiles. Improve tree foliage, bark, background preparation and rendering performance. Add screen-space RTX shadows and layered world rendering caches. Reduce unnecessary work for distant riders and correct FIT slope estimation when recorded distance stalls. Preserve the last selected real or Dream World route."
+  "notes": "Add smooth offline 30 fps MP4 recording with hidden debug panels. Improve rider and bot bike fitting and choose an opposite-sex first companion. Fix blocked keyboard-powered starts on the rollerski route. Apply RTX Screen rider shadows to sunlight before tone mapping, preserving sky illumination and transparent overlays."
 }

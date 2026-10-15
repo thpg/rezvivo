@@ -190,5 +190,11 @@
     "bytes": 366907,
     "sha256": "92caeb8a4ea281c674003462a233f3b445b685b0a6f93eb11254feda2dda9cde",
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/tools/video/ffmpeg.exe",
+    "bytes": 105423872,
+    "sha256": "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec",
+    "source_manifest": "rezvivo-osm-bckl/tools/prepare-video-encoder.ps1"
   }
 ]

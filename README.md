@@ -12,7 +12,7 @@ Terrain, roads, buildings, water and vegetation are generated from OSM and
 elevation data, with map tiles loaded as you move. Handcrafted Dream Worlds and
 interval workouts offer more ways to ride.
 
-[Website](https://rezvivo.com) · [Download for Windows](https://rezvivo.com/download) ·
+[Website](https://rezvivo.com) · [Watch videos](https://rezvivo.com/#videos) · [Download for Windows](https://rezvivo.com/download) ·
 [Report an issue on the website](https://rezvivo.com/feedback) or
 [GitHub Issues](https://github.com/thpg/rezvivo/issues) · [License](LICENSE)
 
@@ -79,6 +79,33 @@ or route transfers between apps.
 Related topics: [zwift-alternative](https://github.com/topics/zwift-alternative),
 [indoor-cycling](https://github.com/topics/indoor-cycling),
 [openstreetmap](https://github.com/topics/openstreetmap).
+
+## Videos
+
+Recordings from REZVIVO, with the in-game interface. Click a preview to play the
+video in your browser, or download the MP4 from the GitHub release.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://rezvivo.com/static/videos/2026-10-15/pine-forest.mp4"><img src="docs/videos/2026-10-15/pine-forest-poster.webp" alt="Play: riding through a pine forest" width="440"></a><br>
+      Riding through a pine forest · 1:01<br>
+      <a href="https://github.com/thpg/rezvivo/releases/download/v0.4.1-alpha.1/rezvivo-pine-forest.mp4">Download on GitHub</a>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://rezvivo.com/static/videos/2026-10-15/birch-road.mp4"><img src="docs/videos/2026-10-15/birch-road-poster.webp" alt="Play: a road among birch trees" width="440"></a><br>
+      A road among birch trees · 0:50<br>
+      <a href="https://github.com/thpg/rezvivo/releases/download/v0.4.1-alpha.1/rezvivo-birch-road.mp4">Download on GitHub</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <a href="https://rezvivo.com/static/videos/2026-10-15/city-ride.mp4"><img src="docs/videos/2026-10-15/city-ride-poster.webp" alt="Play: city riding with companions" width="720"></a><br>
+      City riding with companions · 1:45<br>
+      <a href="https://github.com/thpg/rezvivo/releases/download/v0.4.1-alpha.1/rezvivo-city-ride.mp4">Download on GitHub</a>
+    </td>
+  </tr>
+</table>
 
 ## Screenshots
 
@@ -188,6 +215,11 @@ Offline voice input uses the optional Vosk runtime and small English/Russian mod
 Restore them with `powershell -File rezvivo-osm-bckl/tools/prepare-speech-assets.ps1`.
 The Windows installer includes them; Git contains the upstream URLs, checksums
 and license notices in [data/speech/assets.json](rezvivo-osm-bckl/data/speech/assets.json).
+
+Offline 30 fps MP4 recording uses a separate FFmpeg process. Restore the pinned
+desktop encoder with `powershell -File rezvivo-osm-bckl/tools/prepare-video-encoder.ps1`.
+The Windows installer includes it; source and license references are in
+[tools/video/NOTICE.txt](rezvivo-osm-bckl/tools/video/NOTICE.txt).
 
 The optional RTX backend has its source in [Osm3d/rtx](Osm3d/rtx). To build it,
 install the Visual C++ x64 build tools and a Vulkan SDK shader compiler, then add

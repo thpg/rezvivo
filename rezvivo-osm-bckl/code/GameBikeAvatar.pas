@@ -568,9 +568,23 @@ function LoadActiveBikeInstance(AOwner: TComponent;
   LOD3Dist: Single; LOD2Dist: Single; LOD1Dist: Single): TBikeInstance;
 var
   Url, Fn, JsonText, Rider, Size: string;
-  SL: TStringList;
-  Insights: Boolean;
+  SL, Sizes: TStringList;
+  Insights, Fitted: Boolean;
+  Geometries: TBikeGeometryList;
+  Info: TBikeModelInfo;
+  Fit: TAutomaticBikeFit;
 begin
+  if (Settings<>nil)and not Settings.FitParamsValid and
+     (Trim(Settings.SelectedBikeJson)='')then begin
+    { Match the first model shown by BikeFit. Otherwise the first ride would
+      fit the JSON template, but opening BikeFit would silently apply those
+      post/stem lengths to a different catalogue frame. }
+    SL:=TStringList.Create;
+    try
+      ScanInsightsCatalog(SL,nil);
+      if SL.Count>0 then Settings.SelectedBikeJson:=SL[0];
+    finally SL.Free end;
+  end;
   Insights := IsBikeInsightsPath(ResolveActiveBikeJsonUrl);
   Url := ResolveActiveBikeBuildUrl;
   Logger.Info('[BikeAvatar] LoadActiveBikeInstance url=' + Url +
@@ -630,6 +644,35 @@ begin
       Settings.FitHeightCm, Settings.FitInseamCm,
       Settings.FitBulk, Settings.FitBelly);
     ApplyFitKneeAnkle(Result, Settings.FitKneeFlare, Settings.FitAnkleFlex);
+  end;
+  if (Result<>nil)and Result.HasTripoRider and(Settings<>nil)and
+     not Settings.FitParamsValid then begin
+    { A fresh profile has no personal fit. The base JSON's fixed post length
+      is only a construction default, not a fit for every body. Do this once
+      after applying the actual body and retain later manual adjustments. }
+    Fit:=Default(TAutomaticBikeFit);Fitted:=False;
+    if Insights then begin
+      Geometries:=nil;Sizes:=TStringList.Create;
+      try
+        if ExtractBikeInsights(Settings.SelectedBikeJson,Info,Geometries)then begin
+          CollectInsightSizes(Geometries,Sizes);
+          Fitted:=FitCatalogBike(Result,Geometries,Sizes,Info,Result.BodyParameters,Fit);
+          if Fitted then Size:=Sizes[Fit.SizeIndex];
+        end;
+      finally Sizes.Free;Geometries.Free end;
+    end else begin
+      Fitted:=Result.FitSaddleToRider(35,True)and Result.FitCockpitToRider(Fit.CockpitScore);
+      if Fitted then ReadFitAdjustments(Result,Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem);
+    end;
+    if Fitted then begin
+      Settings.BeginUpdate;
+      try
+        if Insights then Settings.SelectedBikeSize:=Size;
+        Settings.SetFitAdjustments(Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem);
+      finally Settings.EndUpdate end;
+      Logger.Info(Format('[BikeAvatar] initial fit size=%s seat=%.1f offset=%.1f spacers=%.0f stem=%.0f',
+        [Size,Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem]));
+    end;
   end;
   { Шлем — live tint: райдер уже в сцене. Повторный вызов только
     применяет шлем; glb больше не грузится. }

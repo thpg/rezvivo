@@ -6887,6 +6887,7 @@ var
   OriginalSaddle,Axis,Hip,Knee,Foot,U,V,BB:TVector3;
   Pass,I,J,SaddleIndex:Integer;
   Lo,Hi,Mid,MinFlex,Flex,Lengths,NewPost:Single;
+  SavedVisualDetail:Boolean;
 
   function RailOffset(PostMm:Single):Single;
   var Height:Single;
@@ -6910,6 +6911,12 @@ begin
   Axis:=Vector3(-Cos(DegToRad(Frame.SeatTubeAngle)),Sin(DegToRad(Frame.SeatTubeAngle)),0);
   SaddleIndex:=FBikeSkeleton.FindIndex('saddle_contact');
   Saved:=CaptureReplay;
+  SavedVisualDetail:=FVisualDetailRequired;
+  { Fitting is an explicit one-time IK query. A loading/detached bot or an
+    off-camera avatar may have pose updates culled; never measure that stale
+    pose. Restore the normal visibility policy after the calculation. }
+  FVisualDetailRequired:=True;
+  try
   Lo:=LowPostMm;Hi:=400;
   KneeFlexDeg:=EnsureRange(KneeFlexDeg,20,45);
   try
@@ -6938,6 +6945,7 @@ begin
       begin
         FPhase:=I/32;
         UpdateTripoRider(FAnimElapsed);
+        if FUtrLastError<>'' then Exit;
         for J:=0 to 1 do
         begin
           if not (RiderJointPos(Sides[J]+'Thigh',Hip) and
@@ -6962,6 +6970,9 @@ begin
   Seat.SeatpostExtension:=NewPost;
   RebuildGroup(BSG_FRAME,True);
   Result:=True;
+  finally
+    FVisualDetailRequired:=SavedVisualDetail;
+  end;
 end;
 
 function TBikeInstance.FitCockpitToRider(out FitScore:Single):Boolean;
@@ -6973,6 +6984,7 @@ var
   I,J,Side,StemMm,SpacerMm,MaxStem:Integer;
   OldStem,OldSpacers,BestStem,BestSpacers,Score,Flex,Shoulder,Lengths:Single;
   P:TRiderPose;
+  SavedVisualDetail:Boolean;
 
   procedure MoveGrips;
   var K:Integer;Name:string;
@@ -6998,6 +7010,9 @@ begin
   PostAxis:=Vector3(-Cos(DegToRad(Frame.HeadTubeAngle)),Sin(DegToRad(Frame.HeadTubeAngle)),0);
   StemAxis:=Vector3(Cos(DegToRad(Fork.StemAngle)),Sin(DegToRad(Fork.StemAngle)),0);
   SavedBones:=Copy(FBikeSkeleton.FBones);Saved:=CaptureReplay;
+  SavedVisualDetail:=FVisualDetailRequired;
+  FVisualDetailRequired:=True;
+  try
   MaxStem:=140;if BarType=btFlat then MaxStem:=110;
   try
     P:=BuiltinRiderPose(0);ApplyRiderPose(P,0);
@@ -7042,6 +7057,9 @@ begin
   if IsInfinite(FitScore)or IsNan(FitScore)then Exit;
   Fork.StemLength:=BestStem;Fork.HeadsetSpacer:=BestSpacers;
   RebuildGroup(BSG_FRAME,True);Result:=True;
+  finally
+    FVisualDetailRequired:=SavedVisualDetail;
+  end;
 end;
 
 function TBikeInstance.WheelSupportPoint(Front:Boolean;const GroundNormal:TVector3;

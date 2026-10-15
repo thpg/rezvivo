@@ -175,6 +175,7 @@ type
     property ScreenReady:Boolean read GetScreenReady;
     property ScreenReuseActive:Boolean read FScreenReuseActive write FScreenReuseActive;
     property ScreenRevision:QWord read FScreenRevision;
+    property DynamicCasters:TCastleTransformList read FDynamicCasters;
     { Camera-depth ranges: live far, refreshed slab near/far. X=0 disables. }
     property ReflectionRanges:TVector3 read FReflectionRanges write FReflectionRanges;
     property DebugReflections:Boolean read FDebugReflections write FDebugReflections;
