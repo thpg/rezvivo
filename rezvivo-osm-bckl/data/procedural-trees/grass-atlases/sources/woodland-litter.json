@@ -1,0 +1,16 @@
+{
+  "asset": "https://polyhaven.com/a/leaves_forest_ground",
+  "download": "https://dl.polyhaven.org/file/ph-assets/Textures/png/1k/leaves_forest_ground/leaves_forest_ground_diff_1k.png",
+  "license": "CC0-1.0",
+  "license_url": "https://polyhaven.com/license",
+  "authors": [
+    "Dimitrios Savva",
+    "Dario Barresi"
+  ],
+  "physical_size_m": 1.3,
+  "bytes": 5855461,
+  "sha256": "1954d02ab8318d5d81221716348ead928b2974abb707ce733dee8a5a88431182",
+  "use": "Woodland top and surface atlas: 20 percent real leaf-litter albedo, 80 percent procedural vegetation; three source repeats over four metres; averaged before baking. No runtime source texture or extra texture sampler.",
+  "generator": "tree-editor/render/GrassRenderer.pas: BakeKind (shared by editor and CLI)",
+  "reproduction": "Use Bake all grass atlases in Tree Editor; source is tree-editor/grass-sources/leaves_forest_ground_diff_1k.png."
+}

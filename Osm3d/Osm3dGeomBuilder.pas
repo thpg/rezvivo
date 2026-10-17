@@ -3255,6 +3255,25 @@ var
   K:             TLanduseMeshKind;
   T0:            TDateTime;
 
+  procedure AnchorVegetation(var Instances:TTreeInstanceArray);
+  var I,Adjusted:Integer; Hit:TSurfaceHit; Difference,MaxDifference:Single;
+  begin
+    if (Length(Instances)=0) or (AInput.GroundComposite=nil) then Exit;
+    if SurfaceQuery=nil then SurfaceQuery:=TGroundSurfaceQuery.Create(AInput.GroundComposite);
+    Adjusted:=0;MaxDifference:=0;
+    for I:=0 to High(Instances) do begin
+      if (I and 1023)=0 then CheckGenerationCancelled;
+      if SurfaceQuery.Sample(Instances[I].X,Instances[I].Z,Hit,False,Instances[I].Y) then begin
+        Difference:=Abs(Hit.Position.Y-Instances[I].Y);
+        if Difference>0.03 then Inc(Adjusted);
+        MaxDifference:=Max(MaxDifference,Difference);
+        Instances[I].Y:=Hit.Position.Y;
+      end;
+    end;
+    if Adjusted>0 then LogInfo(Format('Vegetation ground contact: %d/%d corrected, max=%.3f m',
+      [Adjusted,Length(Instances),MaxDifference]));
+  end;
+
 
   { Always publish partial results as well: the caller owns and frees
     TSceneInput when cancellation or another exception stops this build. }
@@ -3931,6 +3950,10 @@ begin
       if Length(AInput.Manholes)>0 then
         LogInfo(Format('Manholes: %d cached placements (%d ms)',
           [Length(AInput.Manholes),GetTickCount64 - TPhase]));
+      { Trees were sampled before road grading. Store roots on the final
+        surface, reusing the surface index already needed for street details. }
+      AnchorVegetation(ATrees.Trees);
+      AnchorVegetation(ATrees.Shrubs);
     finally SurfaceQuery.Free end;
 
     { RenderLabels gates building the label X3D nodes (text shapes + material)

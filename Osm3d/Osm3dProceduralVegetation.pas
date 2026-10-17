@@ -4,7 +4,7 @@ unit Osm3dProceduralVegetation;
 interface
 uses Classes, SysUtils, Generics.Collections, CastleTransform, CastleVectors,
   CastleBoxes, CastleFrustum, Osm3dTileX3D, Osm3dGeoMath,
-  TreeModel, TreeMath, TreeRuntime, TreeRenderer, TreeFoliageLOD,
+  TreeModel, TreeMath, TreeRuntime, TreeRenderer, TreeFoliageLOD, TreeDistantArena,
   CastleGLUtils, Osm3dVegetationBudget, Osm3dRtxShadow, Osm3dMotionPrefetch;
 type
   TSpeciesVersions = array[TTreeSpecies] of QWord;
@@ -34,6 +34,7 @@ type
     Dirty, Uploaded: Boolean;
   end;
   TProceduralCells = array of TProceduralCell;
+  TProceduralDrawEntry=record Cell:TProceduralCell;Entry,Order,Bin:Integer;end;
   TProceduralFarBatch = class
     LastUse: QWord;
     Origin: TTreeWorldPosition;
@@ -83,13 +84,24 @@ type
   TOsmProceduralVegetation = class(TCastleTransform)
   private
     FCells: specialize TObjectList<TProceduralCell>;
-    FVisibleCells: TProceduralCells;
+    FVisibleCells, FDrawCells: TProceduralCells;
+    FDrawEntries:array of TProceduralDrawEntry;
     FDetails: specialize TObjectList<TProceduralDetail>;
     FBatches: array[0..5] of TProceduralFarBatch;
+    FArenas:array[TTreeSpecies]of TTreeRenderer;
+    FArenaUnavailable:array[TTreeSpecies]of Boolean;
+    FArenaFailures:QWord;
+    FArenaLastError:string;
+    FArenaIDs:TTreeCellIDs;
     FBatchUse: QWord;
     FShared: TTreeRenderer;
     FProfiles: array[TTreeSpecies] of TTreeParams;
     FJob: TProceduralJob;
+    FAtlasUploadingSpecies:TTreeSpecies;
+    FAtlasRetryAt:TSpeciesVersions;
+    FAtlasAttempts:TSpeciesCounts;
+    FAtlasFailureCount:QWord;
+    FAtlasLastError:string;
     FDetailJobs: specialize TObjectList<TProceduralJob>;
     FIdleJobs: specialize TObjectList<TProceduralJob>;
     FWorkerLimit:Integer;
@@ -110,6 +122,7 @@ type
     FMemoryTime, FUploadTime, FTargetFPS: Single;
     FLastRenderTick: QWord;
     FLastColorFrame: Int64;
+    FLastAtlasUploadFrame:Int64;
     FLastColorCamera: TCastleCamera;
     FQualityRevision: Cardinal;
     FLoad: TTreeLoadControl;
@@ -118,6 +131,8 @@ type
     FSeason: Single;
     procedure ContextClose(Sender: TObject);
     procedure PollJob;
+    function AtlasRetryReady(S:TTreeSpecies):Boolean;
+    procedure AtlasFailed(S:TTreeSpecies;const MessageText:string);
     procedure PollDetails;
     function DetailPending(CellID, Entry: Integer): Boolean;
     procedure CancelDetails;
@@ -157,7 +172,7 @@ implementation
 uses {$IFDEF MSWINDOWS}Windows,{$ENDIF} Math, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleRenderContext, CastleRenderOptions,
   CastleApplicationProperties, CastleUriUtils, Osm3dProceduralTreeData,
   Osm3dStudioSettings, Osm3dRenderInstanced, Osm3dWind, TreeSeason, TreeLOD, CastleLog,
-  Osm3dVegetationQuality, CastleTimeUtils, Osm3dRtxMaterials, TreeGPUData, Osm3dShadowSchedule;
+  Osm3dVegetationQuality, CastleTimeUtils, Osm3dRtxMaterials, TreeGPUData, Osm3dShadowSchedule,VegetationRenderOptions;
 const
   CELL_METERS = 128;
 var LastRenderer: TOsmProceduralVegetation;
@@ -196,7 +211,7 @@ begin
         if not FShared.HasSeasonLOD(FProfiles[S]) then begin
           { An off-screen caster still needs its mask. The colour renderer's
             visibility-driven queue alone cannot prepare all shadow casters. }
-          if (FJob=nil) and (FError='') then begin
+          if (FJob=nil) and not FShared.AtlasPending and (FError='') and AtlasRetryReady(S) then begin
             FJob:=TProceduralJob.Create(True);FJob.AtlasJob:=True;
             FJob.Profile:=FProfiles[S];FJob.AtlasDirectory:=FAtlasDir;FJob.Start;
           end;
@@ -330,6 +345,7 @@ var S: TTreeSpecies;
 begin
   inherited;
   FLastColorFrame:=-1;
+  FLastAtlasUploadFrame:=-1;
   FCells:=specialize TObjectList<TProceduralCell>.Create(True);
   FDetails:=specialize TObjectList<TProceduralDetail>.Create(True);
   FDetailJobs:=specialize TObjectList<TProceduralJob>.Create(True);
@@ -354,7 +370,7 @@ begin
   inherited;
 end;
 procedure TOsmProceduralVegetation.ContextClose(Sender: TObject);
-var C: TProceduralCell; I: Integer;
+var C: TProceduralCell; I: Integer;S:TTreeSpecies;
 begin
   CancelDetails;
   for I:=FDetails.Count-1 downto 0 do ReleaseDetail(I);
@@ -362,9 +378,17 @@ begin
     C.Dirty:=True;
   end;
   for I:=Low(FBatches) to High(FBatches) do FreeAndNil(FBatches[I]);
+  for S:=Low(S)to High(S)do begin
+    if FArenas[S]<>nil then begin FArenas[S].Release;FreeAndNil(FArenas[S]);end;
+    FArenaUnavailable[S]:=False;
+  end;
+  FArenaFailures:=0;FArenaLastError:='';
   if FShared<>nil then begin FShared.Release;FreeAndNil(FShared);end;
   FAtlasCount:=0;FError:='';
+  FAtlasRetryAt:=Default(TSpeciesVersions);FAtlasAttempts:=Default(TSpeciesCounts);
+  FAtlasLastError:='';FAtlasFailureCount:=0;
   FreeAndNil(FMemory);FMemoryTime:=0;FLastRenderTick:=0;
+  FLastAtlasUploadFrame:=-1;
 end;
 procedure TOsmProceduralVegetation.ReleaseDetail(Index: Integer);
 var D: TProceduralDetail;
@@ -414,11 +438,12 @@ begin
   RebuildBounds;FPlanTime:=0;
 end;
 procedure TOsmProceduralVegetation.RemoveTile(TileX,TileZ: Single);
-var I,J: Integer;C: TProceduralCell;
+var I,J: Integer;C: TProceduralCell;S:TTreeSpecies;
 begin
   for I:=FCells.Count-1 downto 0 do begin
     C:=FCells[I];if (C.TileX<>TileX) or (C.TileZ<>TileZ) then Continue;
     for J:=FDetails.Count-1 downto 0 do if FDetails[J].Cell=C then ReleaseDetail(J);
+    for S:=Low(S)to High(S)do if FArenas[S]<>nil then FArenas[S].RemoveDistantCell(C.ID);
     FCells.Delete(I);
   end;
   RebuildBounds;
@@ -532,10 +557,10 @@ end;
 procedure TOsmProceduralVegetation.QueueAtlasAhead;
 var C:TProceduralCell;I:Integer;Predicted:TVector3;S:TTreeSpecies;Radius:Single;
 begin
-  if (FJob<>nil) or (FError<>'') or (FMotion.Speed<0.15) or
+  if (FJob<>nil) or FShared.AtlasPending or (FError<>'') or (FMotion.Speed<0.15) or
     (FSeconds<FAtlasPlanTime) or (FSeconds<FUploadTime) then Exit;
   FAtlasPlanTime:=FSeconds+Max(0.5,FLoad.PlanInterval);
-  Radius:=TreePreloadDistance;
+  Radius:=TreePreloadDistance+FMotion.Speed*Min(4.0,FShared.AtlasUploadLatency);
   Predicted:=FLocalViewer+FMotion.CacheOffset(Radius,ProceduralTreeDistance,16,2.5);
   { Visible missing atlases have already taken the single worker. Prime
     upcoming species with the same worker/upload budget, also in baked mode. }
@@ -545,7 +570,7 @@ begin
     for I:=0 to C.Count-1 do begin
       if (WorldPos(C.Entries[I].Position)-Predicted).Length>Radius then Continue;
       S:=C.Entries[I].Instance.Species;
-      if FShared.HasSeasonLOD(FProfiles[S]) then Continue;
+      if FShared.HasSeasonLOD(FProfiles[S]) or not AtlasRetryReady(S) then Continue;
       FJob:=TProceduralJob.Create(True);FJob.AtlasJob:=True;FJob.Profile:=FProfiles[S];
       FJob.AtlasDirectory:=FAtlasDir;FJob.Start;Exit;
     end;
@@ -627,7 +652,7 @@ begin
     if Best=nil then Exit;
     E:=Best.Cell.Entries[Best.Entry];
     if not FShared.HasSeasonLOD(FProfiles[E.Instance.Species]) then begin
-      if FJob=nil then begin
+      if (FJob=nil)and not FShared.AtlasPending and AtlasRetryReady(E.Instance.Species) then begin
         FJob:=TProceduralJob.Create(True);FJob.AtlasJob:=True;
         FJob.Profile:=FProfiles[E.Instance.Species];FJob.AtlasDirectory:=FAtlasDir;
         FJob.Priority:=tpLower;FJob.Start;
@@ -645,15 +670,50 @@ begin
   finally FQueueMS:=FQueueMS+TimerSeconds(Timer,Started)*1000;end;
 end;
 
-procedure TOsmProceduralVegetation.PollJob;
+function TOsmProceduralVegetation.AtlasRetryReady(S:TTreeSpecies):Boolean;
 begin
+  Result:=(FAtlasRetryAt[S]=0)or(GetTickCount64>=FAtlasRetryAt[S]);
+end;
+procedure TOsmProceduralVegetation.AtlasFailed(S:TTreeSpecies;const MessageText:string);
+var DelayMS:QWord;
+begin
+  Inc(FAtlasFailureCount);FAtlasAttempts[S]:=Min(7,FAtlasAttempts[S]+1);
+  DelayMS:=Min(30000,500 shl(FAtlasAttempts[S]-1));
+  FAtlasRetryAt[S]:=GetTickCount64+DelayMS;
+  FAtlasLastError:=SpeciesName(S)+': '+MessageText;
+  { Back off only this species. Other complete atlases and species continue;
+    context recreation clears the backoff. No permanent global FError latch. }
+  WriteLnLog('Vegetation atlas',FAtlasLastError+'; retry in '+IntToStr(DelayMS)+' ms');
+end;
+procedure TOsmProceduralVegetation.PollJob;
+var S:TTreeSpecies;
+begin
+  if FLastAtlasUploadFrame=TFramesPerSecond.RenderFrameId then Exit;
+  FLastAtlasUploadFrame:=TFramesPerSecond.RenderFrameId;
+  if FShared.AtlasPending then begin
+    try
+      if FShared.StepLODAtlas(1024*1024,Max(0.25,Min(1.5,FLoad.UploadBudgetMS*0.5)))then begin
+        Inc(FAtlasCount);Inc(FUploadCount);
+        FAtlasAttempts[FAtlasUploadingSpecies]:=0;FAtlasRetryAt[FAtlasUploadingSpecies]:=0;
+      end;
+    except on E:Exception do begin
+      FShared.CancelLODAtlas;AtlasFailed(FAtlasUploadingSpecies,E.Message);
+    end;end;
+    Exit;
+  end;
   if (FJob=nil) or not FJob.ReadyToCollect or (FSeconds<FUploadTime) then Exit;
   try
     if FJob.Cancelled then begin Inc(FDiscardedJobs);Exit;end;
-    if FJob.Error<>'' then begin FError:=FJob.Error;Exit;end;
-    FShared.UploadLODAtlas(FJob.Atlas);Inc(FAtlasCount);Inc(FUploadCount);
-    { Atlas mip creation is larger work. Keep detail uploads out of this frame. }
-    FUploadTime:=FSeconds+FLoad.UploadInterval;
+    S:=FJob.Profile.Species;
+    if FJob.Error<>'' then begin AtlasFailed(S,FJob.Error);Exit;end;
+    try
+      if VegetationAtlasBudget then begin
+        FAtlasUploadingSpecies:=S;FShared.BeginLODAtlas(FJob.Atlas);
+      end else begin
+        FShared.UploadLODAtlas(FJob.Atlas);Inc(FAtlasCount);Inc(FUploadCount);
+        FUploadTime:=FSeconds+FLoad.UploadInterval;FAtlasAttempts[S]:=0;FAtlasRetryAt[S]:=0;
+      end;
+    except on E:Exception do begin FShared.CancelLODAtlas;AtlasFailed(S,E.Message);end;end;
   finally FreeAndNil(FJob);end;
 end;
 
@@ -814,7 +874,79 @@ var Projection,View,Model:TTreeMat4;M,V:TMatrix4;Frustum:TFrustum;
     OldProgram,OldVAO,OldBuffer,OldActive,OldTexture,OldNormalTexture,OldDepthFunc:GLint;OldRange:TDepthRange;
     OldPolygon:array[0..1]of GLint;Viewport:array[0..3]of GLint;
     WasDepth,WasBlend,WasCull,OldDepthMask:GLBoolean;
-    VisibleCount:Integer;Batch:TProceduralFarBatch;BatchOrigin:TTreeWorldPosition;
+    VisibleCount,EntryCount,DrawIndex:Integer;Batch:TProceduralFarBatch;BatchOrigin:TTreeWorldPosition;
+  function CellKey(Cell:TProceduralCell):Int64;
+  var P:TVector3;Bin:Integer;
+  begin
+    P:=(Cell.Bounds.Data[0]+Cell.Bounds.Data[1])*0.5;
+    Bin:=Floor(Max(0,(P-LocalCamera).Length-64)/64);
+    Result:=Int64(Bin)*$100000000+Cardinal(Cell.ID);
+  end;
+  procedure SortCells(L,R:Integer);
+  var A,B:Integer;Pivot:Int64;Swap:TProceduralCell;
+  begin
+    A:=L;B:=R;Pivot:=CellKey(FDrawCells[(L+R)div 2]);
+    repeat
+      while CellKey(FDrawCells[A])<Pivot do Inc(A);
+      while CellKey(FDrawCells[B])>Pivot do Dec(B);
+      if A<=B then begin Swap:=FDrawCells[A];FDrawCells[A]:=FDrawCells[B];FDrawCells[B]:=Swap;Inc(A);Dec(B) end;
+    until A>B;
+    if L<B then SortCells(L,B);if A<R then SortCells(A,R);
+  end;
+  procedure SortEntries(L,R:Integer);
+  var A,B:Integer;Pivot: Int64;Swap:TProceduralDrawEntry;
+    function Key(Index:Integer):Int64;
+    begin Result:=Int64(FDrawEntries[Index].Bin)*$100000000+Cardinal(FDrawEntries[Index].Order);end;
+  begin
+    A:=L;B:=R;Pivot:=Key((L+R)div 2);
+    repeat
+      while Key(A)<Pivot do Inc(A);while Key(B)>Pivot do Dec(B);
+      if A<=B then begin Swap:=FDrawEntries[A];FDrawEntries[A]:=FDrawEntries[B];FDrawEntries[B]:=Swap;Inc(A);Dec(B)end;
+    until A>B;
+    if L<B then SortEntries(L,B);if A<R then SortEntries(A,R);
+  end;
+  procedure RenderFar;
+  var S:TTreeSpecies;J:Integer;R:TTreeRenderer;Cell:TProceduralCell;UseArena:Boolean;
+  begin
+    M:=WorldTransform*TranslationMatrix(WorldPos(BatchOrigin));Model:=ToTreeMatrix(M);
+    if VegetationStableFarBuffers then begin
+      if Length(FArenaIDs)<VisibleCount then SetLength(FArenaIDs,Length(FVisibleCells));
+      for J:=0 to VisibleCount-1 do FArenaIDs[J]:=FDrawCells[J].ID;
+    end;
+    for S:=Low(S) to High(S) do begin
+        UseArena:=VegetationStableFarBuffers and not FArenaUnavailable[S];
+        if UseArena then try
+          for J:=0 to VisibleCount-1 do begin
+            Cell:=FDrawCells[J];
+            if(Length(Cell.FarItems[S])=0)and(FArenas[S]=nil)then Continue;
+            if FArenas[S]=nil then begin FArenas[S]:=TTreeRenderer.Create;FArenas[S].Initialize(FShaderDir,FShared);end;
+            FArenas[S].EnsureDistantCell(Cell.ID,Cell.FarVersion[S],Cell.Origin,Cell.FarItems[S]);
+          end;
+          R:=FArenas[S];if R=nil then Continue;
+          R.SelectDistantCells(FArenaIDs,VisibleCount,BatchOrigin);
+        except on E:Exception do begin
+          { A failed optional arena must never hide the species or publish
+            invalid offsets. The original per-species batch keeps the same
+            cells, descriptors, atlas and LOD. Retry after context recreation. }
+          FArenaUnavailable[S]:=True;UseArena:=False;Inc(FArenaFailures);
+          FArenaLastError:=SpeciesName(S)+': '+E.Message;
+          if FArenas[S]<>nil then begin FArenas[S].Release;FreeAndNil(FArenas[S]);end;
+          WriteLnLog('Vegetation arena',FArenaLastError+'; using legacy batches for this context');
+        end;end;
+        if not UseArena then begin
+          if Batch=nil then Batch:=FarBatch(FVisibleCells,VisibleCount,BatchOrigin);
+          R:=Batch.Renderer[S];if(R=nil)or(Batch.Count[S]=0)then Continue;
+        end;
+        R.Environment:=Env;
+        Instance:=Default(TreeModel.TTreeInstance);Instance.TypeCode:=PackTreeType(S);
+        R.Render(Instance,FProfiles[S],Projection,View,Model,Eye,
+          0,VegetationWindNow,VegetationWindBaseSpeed*0.12,False,False,True,False,True,False);
+        Stats:=R.Stats;
+        if Depth then Inc(FShadowDraws,Stats.DrawCalls) else begin
+          Inc(FDrawCalls,Stats.DrawCalls);Inc(FTriangles,Stats.Triangles);Inc(FFarTrees,Stats.FarTrees);
+        end;
+    end;
+  end;
 begin
   if RtxReflectionCaptureActive then Exit;
   if not ProceduralVegetationActive then begin
@@ -972,7 +1104,7 @@ begin
       if not Depth then begin
         for I:=0 to C.Count-1 do begin
           S:=C.Entries[I].Instance.Species;
-          if not FShared.HasSeasonLOD(FProfiles[S]) and (FJob=nil) and (FError='') then begin
+          if not FShared.HasSeasonLOD(FProfiles[S]) and (FJob=nil) and not FShared.AtlasPending and (FError='') and AtlasRetryReady(S) then begin
             FJob:=TProceduralJob.Create(True);FJob.AtlasJob:=True;FJob.Profile:=FProfiles[S];
             FJob.AtlasDirectory:=FAtlasDir;FJob.Start;Break;
           end;
@@ -984,26 +1116,30 @@ begin
     BatchOrigin:=Default(TTreeWorldPosition);
     BatchOrigin.X:=Floor(LocalCamera.X/CELL_METERS)*CELL_METERS;
     BatchOrigin.Z:=Floor(LocalCamera.Z/CELL_METERS)*CELL_METERS;
-    Batch:=FarBatch(FVisibleCells,VisibleCount,BatchOrigin);
+    Batch:=nil;
+    if not VegetationStableFarBuffers then Batch:=FarBatch(FVisibleCells,VisibleCount,BatchOrigin);
     FShared.BeginBatch(Projection,View,Eye,Env,VegetationWindNow);
     M:=WorldTransform*TranslationMatrix(WorldPos(BatchOrigin));Model:=ToTreeMatrix(M);
-    for S:=Low(S) to High(S) do if (Batch.Renderer[S]<>nil) and (Batch.Count[S]>0) then begin
-        Batch.Renderer[S].Environment:=Env;
-        Instance:=Default(TreeModel.TTreeInstance);Instance.TypeCode:=PackTreeType(S);
-        Batch.Renderer[S].Render(Instance,FProfiles[S],Projection,View,Model,Eye,
-          0,VegetationWindNow,VegetationWindBaseSpeed*0.12,False,False,True,False,True,False);
-        Stats:=Batch.Renderer[S].Stats;
-        if Depth then Inc(FShadowDraws,Stats.DrawCalls) else begin
-          Inc(FDrawCalls,Stats.DrawCalls);Inc(FTriangles,Stats.Triangles);Inc(FFarTrees,Stats.FarTrees);
-        end;
-    end;
+    if Length(FDrawCells)<VisibleCount then SetLength(FDrawCells,Length(FVisibleCells));
+    for I:=0 to VisibleCount-1 do FDrawCells[I]:=FVisibleCells[I];
+    if VegetationDepthOrder and (VisibleCount>1) then SortCells(0,VisibleCount-1);
+    if not VegetationDepthOrder then RenderFar;
+    EntryCount:=0;
     for CellIndex:=0 to VisibleCount-1 do begin
-      C:=FVisibleCells[CellIndex];
+      C:=FDrawCells[CellIndex];
       for I:=0 to C.Count-1 do begin
         D:=C.Entries[I].Detail;if (D=nil) or (D.Renderer=nil) or (D.Quality<=0) then Continue;
         if Depth and (ShadowCapturePartitions>1) and
           (Integer(C.Entries[I].ShadowBucket and Cardinal(ShadowCapturePartitions-1))<>ShadowCapturePartition) then Continue;
         if not Frustum.Box3DCollisionPossibleSimple(C.Entries[I].Bounds) then Continue;
+        if EntryCount=Length(FDrawEntries)then SetLength(FDrawEntries,Max(64,EntryCount*2));
+        with FDrawEntries[EntryCount]do begin Cell:=C;Entry:=I;Order:=EntryCount;Bin:=Floor(Max(0,(WorldPos(C.Entries[I].Position)-LocalCamera).Length-C.Entries[I].Radius)/16)end;
+        Inc(EntryCount);
+      end;
+    end;
+    if VegetationDepthOrder and(EntryCount>1)then SortEntries(0,EntryCount-1);
+    for DrawIndex:=0 to EntryCount-1 do begin
+        C:=FDrawEntries[DrawIndex].Cell;I:=FDrawEntries[DrawIndex].Entry;D:=C.Entries[I].Detail;
         S:=C.Entries[I].Instance.Species;
         M:=WorldTransform*TranslationMatrix(WorldPos(C.Entries[I].Position));Model:=ToTreeMatrix(M);
         { Visual detail follows the viewer in colour and shadow passes alike.
@@ -1030,8 +1166,8 @@ begin
           Inc(FDrawCalls,Stats.DrawCalls);Inc(FTriangles,Stats.Triangles);Inc(FCrownProxies,Stats.Proxies);
           Inc(FFoliageShoots,Stats.Shoots);
         end;
-      end;
     end;
+    if VegetationDepthOrder then RenderFar;
     if not Depth and (FError='') then QueueDetail;
     if FreshColor then QueueAtlasAhead;
   finally
@@ -1048,12 +1184,21 @@ begin
   end;
 end;
 function TOsmProceduralVegetation.Diagnostics:string;
-var C:TProceduralCell;D:TProceduralDetail;N,I,Ready,Active,Waiting,CompactCount,Queued,MissingClose,MissingVisible:Integer;GPU:Int64;S:TTreeSpecies;Job:TProceduralJob;
+var C:TProceduralCell;D:TProceduralDetail;N,I,Ready,Active,Waiting,CompactCount,Queued,MissingClose,MissingVisible,AtlasPendingCount:Integer;GPU,AtlasPendingMemory:Int64;ArenaUploads:QWord;AtlasLatency:Single;S:TTreeSpecies;Job:TProceduralJob;
 begin
   N:=0;for C in FCells do Inc(N,C.Count);GPU:=0;
   if FShared<>nil then GPU:=FShared.LODTextureBytes;
   for I:=Low(FBatches) to High(FBatches) do if FBatches[I]<>nil then
     for S:=Low(S) to High(S) do Inc(GPU,Int64(FBatches[I].Count[S])*64);
+  ArenaUploads:=0;
+  for S:=Low(S)to High(S)do if FArenas[S]<>nil then begin
+    Inc(GPU,FArenas[S].DistantArenaBytes);Inc(ArenaUploads,FArenas[S].DistantArenaUploadBytes);
+  end;
+  AtlasPendingCount:=0;AtlasPendingMemory:=0;AtlasLatency:=0;
+  if FShared<>nil then begin
+    AtlasPendingCount:=Ord(FShared.AtlasPending);AtlasPendingMemory:=FShared.AtlasPendingBytes;
+    AtlasLatency:=FShared.AtlasUploadLatency;
+  end;
   Ready:=0;Active:=0;Waiting:=0;CompactCount:=0;Queued:=0;MissingClose:=0;MissingVisible:=0;
   for Job in FDetailJobs do if Job.ReadyToCollect then Inc(Queued);
   for D in FDetails do begin
@@ -1078,6 +1223,10 @@ begin
      FSelectionHash,Ready,Active,Waiting,CompactCount,
      FDetailBytes,FCacheBudget,FFreeVram,FLoad.Level,FTargetFPS,FLoad.MeasuredFPS,
      FLoad.PlanInterval*1000,FLoad.UploadInterval*1000,FFoliageShoots,TreeClassificationErrors,Ord(not ProceduralVegetationActive),FPrefetchOffset.Length,FMotion.Speed,Queued,MissingClose,FBuildMS,FDetailUploadMS,FDetailUploadMaxMS,FLoad.UploadBudgetMS,FPlanMS,FQueueMS,MissingVisible,FError]);
+  Result:=Result+Format(' arena_upload_bytes=%d arena_hits=%d atlas_pending=%d atlas_pending_bytes=%d atlas_upload_bytes=%d atlas_published=%d atlas_latency_ms=%.2f season_builds=%d season_hits=%d',
+    [ArenaUploads,VegetationArenaHits,AtlasPendingCount,AtlasPendingMemory,VegetationAtlasUploadBytes,VegetationAtlasPublished,AtlasLatency*1000,VegetationTreeSeasonBuilds,VegetationTreeSeasonHits]);
+  Result:=Result+Format(' atlas_failures=%d atlas_last_error=%s',[FAtlasFailureCount,FAtlasLastError]);
+  Result:=Result+Format(' arena_failures=%d arena_last_error=%s',[FArenaFailures,FArenaLastError]);
 end;
 function ProceduralVegetationDiagnostics:string;
 begin if LastRenderer=nil then Result:='inactive' else Result:=LastRenderer.Diagnostics;end;

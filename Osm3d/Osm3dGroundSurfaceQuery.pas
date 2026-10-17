@@ -29,14 +29,14 @@ type
     procedure AppendIndex(const Stage: string);
     class procedure FreeLevels(var Levels: TGridLevels); static;
     function TriangleCells(T: Integer; out X0,Z0,X1,Z1: Integer): Integer;
-    procedure SampleTriangle(T: Integer; X,Z: Single; Tangent: Boolean;
+    procedure SampleTriangle(T: Integer; X,Z,ReferenceY: Single; Tangent: Boolean;
       var BestTriangle: Integer; var Hit: TSurfaceHit);
   public
     constructor Create(Ground:TGroundCompositeMesh);
     destructor Destroy; override;
     procedure IncludeAppended;
     function Sample(X,Z:Single; out Hit:TSurfaceHit;
-      Tangent:Boolean=False):Boolean;
+      Tangent:Boolean=False; ReferenceY:Single=1e30):Boolean;
     function IndexBytes:Int64;
   end;
 implementation
@@ -156,7 +156,7 @@ begin
     Inc(Result,(Int64(Length(FBatches[B][L].Offsets))+Length(FBatches[B][L].Triangles))*4
       +Int64(FBatches[B][L].Count)*40); { includes estimated dictionary slots }
 end;
-procedure TGroundSurfaceQuery.SampleTriangle(T:Integer;X,Z:Single;
+procedure TGroundSurfaceQuery.SampleTriangle(T:Integer;X,Z,ReferenceY:Single;
   Tangent:Boolean;var BestTriangle:Integer;var Hit:TSurfaceHit);
 var I0,I1,I2:Integer;A,B,C:TVector3;D,U,V,W,Y:Single;UA,UB,UC:TVector2;
 begin
@@ -168,7 +168,16 @@ begin
   V:=((C.Z-A.Z)*(X-C.X)+(A.X-C.X)*(Z-C.Z))/D;W:=1-U-V;
   if Min(U,Min(V,W))< -0.00001 then Exit;
   Y:=A.Y*U+B.Y*V+C.Y*W;
-  if (Y<Hit.Position.Y)or((Y=Hit.Position.Y)and(T<BestTriangle)) then Exit;
+  if BestTriangle>=0 then begin
+    { For roots, prefer the highest support below their previous height;
+      if grading raised all surfaces, use the lowest. This keeps trees below
+      bridge decks. The default reference preserves the ordinary top query. }
+    if (Y<=ReferenceY+0.75)=(Hit.Position.Y<=ReferenceY+0.75) then begin
+      if Y<=ReferenceY+0.75 then begin if Y<Hit.Position.Y then Exit end
+      else if Y>Hit.Position.Y then Exit;
+      if (Y=Hit.Position.Y)and(T<BestTriangle) then Exit;
+    end else if Y>ReferenceY+0.75 then Exit;
+  end;
   Hit.Position.Y:=Y;Hit.MaterialId:=FGround.MatIdOf(I0);Hit.Owner:=FGround.OsmIdOf(I0);
   UA:=FGround.UVOf(I0);UB:=FGround.UVOf(I1);UC:=FGround.UVOf(I2);
   Hit.UV:=UA*U+UB*V+UC*W;
@@ -180,7 +189,7 @@ begin
   end;
   BestTriangle:=T;
 end;
-function TGroundSurfaceQuery.Sample(X,Z:Single;out Hit:TSurfaceHit;Tangent:Boolean):Boolean;
+function TGroundSurfaceQuery.Sample(X,Z:Single;out Hit:TSurfaceHit;Tangent:Boolean;ReferenceY:Single):Boolean;
 var CX,CZ,C,I,B,L,BestTriangle:Integer;
 begin
   Result:=False;Hit:=Default(TSurfaceHit);Hit.Position:=Vector3(X,-1e20,Z);
@@ -190,7 +199,7 @@ begin
     CX:=Floor(X/FBatches[B][L].Cell);CZ:=Floor(Z/FBatches[B][L].Cell);
     if not FBatches[B][L].Cells.TryGetValue(CellKey(CX,CZ),C) then Continue;
     for I:=FBatches[B][L].Offsets[C] to FBatches[B][L].Offsets[C+1]-1 do
-      SampleTriangle(FBatches[B][L].Triangles[I],X,Z,Tangent,BestTriangle,Hit);
+      SampleTriangle(FBatches[B][L].Triangles[I],X,Z,ReferenceY,Tangent,BestTriangle,Hit);
   end;
   { Equal-height ties use the original triangle index, independent of level. }
   Result:=BestTriangle>=0;

@@ -19,6 +19,8 @@ type
     LastGroundClock: Double;
     PhysicsTranslation: TVector3;
     VisualExtrapolated: Boolean;
+    HeadingStep, HeadingRate, HeadingBaseYaw: Single;
+    VisualHeadingApplied: Boolean;
     Translation: TVector3;
     Rotation: TVector4;
   end;
@@ -67,6 +69,10 @@ type
     { Визуальная экстраполяция }
     FPhysicsTranslation: TVector3;
     FVisualExtrapolated: Boolean;
+    { Presentation follows the same fractional fixed step in position AND
+      heading. Never feed the displayed heading back into physics/network. }
+    FHeadingStep, FHeadingRate, FHeadingBaseYaw: Single;
+    FVisualHeadingApplied: Boolean;
 
     { Диагностика }
     FFrameCounter: Cardinal;
@@ -82,6 +88,8 @@ type
 
     procedure RestorePhysicsPosition;
     procedure ExtrapolateVisual;
+    procedure ResetVisualHeading;
+    procedure ApplyVisualHeading;
     procedure FinishVisualUpdate(const SecondsPassed: Single);
   protected
     procedure AfterPhysicsCreated; virtual;
@@ -215,6 +223,10 @@ begin
   Result.LastGroundClock:=FLastGroundClock;
   Result.PhysicsTranslation:=FPhysicsTranslation;
   Result.VisualExtrapolated:=FVisualExtrapolated;
+  Result.HeadingStep:=FHeadingStep;
+  Result.HeadingRate:=FHeadingRate;
+  Result.HeadingBaseYaw:=FHeadingBaseYaw;
+  Result.VisualHeadingApplied:=FVisualHeadingApplied;
   Result.Translation:=FActor.Transform.Translation;
   Result.Rotation:=FActor.Transform.Rotation;
 end;
@@ -230,6 +242,10 @@ begin
   FLastGroundClock:=Saved.LastGroundClock;
   FPhysicsTranslation:=Saved.PhysicsTranslation;
   FVisualExtrapolated:=Saved.VisualExtrapolated;
+  FHeadingStep:=Saved.HeadingStep;
+  FHeadingRate:=Saved.HeadingRate;
+  FHeadingBaseYaw:=Saved.HeadingBaseYaw;
+  FVisualHeadingApplied:=Saved.VisualHeadingApplied;
   FActor.Transform.Translation:=Saved.Translation;
   FActor.Transform.Rotation:=Saved.Rotation;
 end;
@@ -296,6 +312,7 @@ begin FController := AController; end;
 
 procedure TPhysicalAgent.RecreatePhysics(const AMode: TPhysicsMode);
 begin
+  ResetVisualHeading;
   FreePhysics;
   FPhysicsMode := AMode;
   case FPhysicsMode of
@@ -325,6 +342,7 @@ begin
   FFrameCounter := 0;
   FLastGroundClock := -1;
   if Assigned(FPhysics) then FPhysics.InitializeAtStart(InitialGroundY);
+  ResetVisualHeading;
 end;
 
 procedure TPhysicalAgent.TeleportToPath(const Pos: TPathPosition);
@@ -345,6 +363,7 @@ begin
   if Assigned(FActor.Transform) then
     FActor.Transform.Translation := FState.WorldPosition;
   if Assigned(FPhysics) then FPhysics.ResetTrackingAfterTeleport;
+  ResetVisualHeading;
 end;
 
 procedure TPhysicalAgent.StartMoving;
@@ -364,6 +383,7 @@ begin
     FPath.Position := FPath.ProjectFollow(FState.WorldPosition, FPath.Position, 2);
   end;
   FVisualExtrapolated := False;
+  ResetVisualHeading;
   if Assigned(FPhysics) then FPhysics.StopMoving;
 end;
 
@@ -379,11 +399,27 @@ begin
 end;
 
 procedure TPhysicalAgent.FixedStep(const FixedDelta: Single);
-var BeforeTime: Single; BeforePos, Travel: TVector3; Traced: Boolean;
+var BeforeTime, BeforeYaw, Turn: Single; BeforePos, Travel: TVector3; Traced: Boolean;
 begin
   Traced := MotionTrace.Target = Pointer(Self);
   if Traced then begin BeforeTime := FState.SimulationTime; BeforePos := FState.WorldPosition end;
+  BeforeYaw := FState.CurrentYawRad;
   if Assigned(FPhysics) then FPhysics.FixedStep(FixedDelta);
+  FHeadingStep := 0;
+  if (FPhysicsMode = pmKinematicCurrent) and (FixedDelta > 0) then
+  begin
+    Turn := FState.CurrentYawRad - BeforeYaw;
+    while Turn > Pi do Turn := Turn - 2*Pi;
+    while Turn < -Pi do Turn := Turn + 2*Pi;
+    { Corrections/teleports are not angular velocity. Predict at most the
+      remainder of one accepted step, using its actual (collision-safe) turn. }
+    if Abs(Turn) <= MaxTurnSpeed * FixedDelta + 0.00001 then
+    begin
+      FHeadingStep := FixedDelta;
+      FHeadingRate := Turn / FixedDelta;
+      FHeadingBaseYaw := FState.CurrentYawRad;
+    end;
+  end;
   if Traced then begin
     Travel := Vector3(0,0,0);
     if FState.SimulationTime <> BeforeTime then Travel := FState.MovementVelocity * FixedDelta;
@@ -402,6 +438,9 @@ end;
 
 procedure TPhysicalAgent.RestorePhysicsPosition;
 begin
+  if FVisualHeadingApplied and Assigned(FActor.Transform) then
+    FActor.Transform.Direction := FState.ForwardDir;
+  FVisualHeadingApplied := False;
   if FPhysicsMode <> pmKinematicCurrent then
   begin
     if FVisualExtrapolated and Assigned(FActor.Transform) then
@@ -446,6 +485,33 @@ begin
   FVisualExtrapolated := true;
 end;
 
+procedure TPhysicalAgent.ResetVisualHeading;
+begin
+  FHeadingStep := 0;
+  FHeadingRate := 0;
+  FVisualHeadingApplied := False;
+  if Assigned(FActor.Transform) and (FState.ForwardDir.LengthSqr > 0.000001) then
+    FActor.Transform.Direction := FState.ForwardDir;
+end;
+
+procedure TPhysicalAgent.ApplyVisualHeading;
+var Remaining, Yaw: Single; Direction: TVector3;
+begin
+  if (FPhysicsMode <> pmKinematicCurrent) or not ShouldSimulateLocally or not FState.AutoMove or
+     not Assigned(FActor.Transform) or (FHeadingStep <= 0) then Exit;
+  { Also reject an external heading correction made between fixed steps. }
+  if FState.CurrentYawRad <> FHeadingBaseYaw then Exit;
+  Remaining := EnsureRange(FState.AccumulatedTime, 0, FHeadingStep);
+  if (Remaining <= 0) or (Abs(FHeadingRate) < 0.000001) then Exit;
+  Yaw := FState.CurrentYawRad + FHeadingRate * Remaining;
+  Direction := Vector3(Cos(Yaw), 0, Sin(Yaw));
+  if Assigned(FState.TrafficHeadingConstraint) then
+    Direction := FState.TrafficHeadingConstraint(FState.TrafficTag,
+      FActor.Transform.Translation, FState.ForwardDir, Direction, False);
+  FActor.Transform.Direction := Direction;
+  FVisualHeadingApplied := True;
+end;
+
 procedure TPhysicalAgent.FinishVisualUpdate(const SecondsPassed: Single);
 var
   DtGround: Single;
@@ -482,6 +548,7 @@ begin
     end;
     FPhysics.ApplyVisualGroundPlacement(SecondsPassed);
   end;
+  ApplyVisualHeading;
   if Assigned(FPhysics) then FPhysics.UpdateVisualDebug;
   TracePosition(mtGround);
 end;
@@ -756,6 +823,7 @@ begin
   if Delta >= FPredictionSoftSnapDistance then
   begin
     FVisualExtrapolated := False;
+    ResetVisualHeading;
     FState.MovementVelocity := Vector3(0, 0, 0);
     FLastGroundClock := -1;
     if Assigned(FPhysics) then FPhysics.InvalidateGroundPlacement;
@@ -855,6 +923,7 @@ begin
     FState.WorldPosition := AState.Position; FState.ForwardDir := AState.ForwardDir;
     FState.CurrentSpeed := AState.Speed; FState.AppliedPowerWatts := AState.PowerWatts; FState.AutoMove := AState.AutoMove;
     if Assigned(FActor.Transform) then begin FActor.Transform.Translation := AState.Position; FActor.Transform.Direction := AState.ForwardDir; end;
+    ResetVisualHeading;
   end; end;
 end;
 

@@ -1681,5 +1681,6 @@
   "Video recording failed: %s": "Video recording failed: %s",
   "Finishing video...": "Finishing video...",
   "Incomplete video; the partial file was preserved.": "Incomplete video; the partial file was preserved.",
-  "Video saved: %s": "Video saved: %s"
+  "Video saved: %s": "Video saved: %s",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default."
 }

@@ -27,7 +27,7 @@ implementation
 
 uses
   SysUtils, CastleVectors, CastleScene, GamePath, GameProfiler, DebugLog,
-  GameMath, RiderGroundTurn;
+  GameMath, RiderGroundTurn, GameObstacleSteering;
 
 const
   { Полосное смещение райдера как доля ПОЛУШИРИНЫ дороги.
@@ -81,7 +81,7 @@ end;
 
 procedure TKinematicActorPhysics.FreeTravelStep(const Dt: Single);
 var Wanted, Safe, Dir: TVector3;
-  Turn, Accel, OldSpeed, LengthBefore, StepDistance: Single;
+  Turn, Accel, OldSpeed, LengthBefore, StepDistance,MaxTurn,ObstacleSpeed: Single;
 begin
   if Dt<=0 then Exit;
   ApplyControlInput;
@@ -113,6 +113,16 @@ begin
       acceleration at speed. Rear tyre follows the integrated heading. }
     Turn:=FState.TravelSteering*Min(1.25,FState.CurrentSpeed*0.55);
     Turn:=EnsureRange(Turn,-5/Max(1,FState.CurrentSpeed),5/Max(1,FState.CurrentSpeed));
+  end;
+  if not FState.GroundTurn.Frame.Active then begin
+    if FState.Walking then MaxTurn:=1.8
+    else MaxTurn:=Min(Min(1.25,Max(0.3,OldSpeed)*0.55),5/Max(1,OldSpeed));
+    SteerAroundBuildings(FState.ObstacleSteering,FState.PositionConstraint,
+      FState.WorldPosition,FState.ForwardDir,FState.CollisionHalfSize,Dt,OldSpeed,
+      MaxTurn,Turn,ObstacleSpeed);
+    if Abs(OldSpeed)>ObstacleSpeed then
+      if OldSpeed<0 then Accel:=Max(Accel,Min(4,(Abs(OldSpeed)-ObstacleSpeed)*3))
+      else Accel:=Min(Accel,-Min(4,(OldSpeed-ObstacleSpeed)*3));
   end;
   if FState.Walking then FState.CurrentSpeed:=EnsureRange(OldSpeed+Accel*Dt,-2,6)
   else FState.CurrentSpeed:=EnsureRange(OldSpeed+Accel*Dt,0,MaxSpeed);
@@ -263,7 +273,7 @@ begin
   { 1. Direction — carrot offset by lane }
   MoveDir := FPath.GetSmartRouteDirection(
     FState.WorldPosition, FState.CurrentSpeed, FixedDelta,
-    FState.LaneOffset);
+    FState.LaneOffset,False,FState.TrafficLookAhead);
   SmoothRotateToDirection(MoveDir, FixedDelta);
   if Assigned(FProfiler) then FProfiler.Mark('dir');
 

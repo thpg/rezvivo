@@ -1,7 +1,8 @@
 """LOD integration: native/GPU poses, live body/clothes, shadows, ride restart."""
-import json,time
+import argparse,json,time
 from pathlib import Path
 from McpHarness import GameSession,GPULock,write_sim_fit
+from McpRuntimeOptions import add_runtime_arguments
 from RideRecoveryFocusMcpTest import wait_for
 from TravelWardrobeMcpTest import ready
 
@@ -9,10 +10,21 @@ GAME=Path(__file__).resolve().parents[1]
 OUT=GAME/'tests/artifacts/rider-lod-20261012/lifecycle'
 
 def main():
+    global OUT
+    parser=argparse.ArgumentParser(description=__doc__)
+    add_runtime_arguments(parser)
+    parser.add_argument('--output','--out',type=Path,default=OUT)
+    parser.add_argument('--exe',help='Executable relative to --runtime (or the source game)')
+    args=parser.parse_args()
+    OUT=args.output.resolve()
+    runtime=args.runtime.resolve() if args.runtime else GAME
+    executable=args.exe or ('third_person_navigation.exe' if args.runtime else
+        'castle-engine-output/performance-release/third_person_navigation.exe')
     OUT.mkdir(parents=True,exist_ok=True);fit=OUT/'steady.fit';write_sim_fit(fit,300,180)
-    s=GameSession(GAME,OUT/'profile',dict(fps_limit=60,msaa=4,cinematic_softening=0),
-        executable='castle-engine-output/performance-release/third_person_navigation.exe')
+    s=GameSession(runtime,OUT/'profile',dict(fps_limit=60,msaa=4,cinematic_softening=0),
+        executable=executable)
     s.env['REZVIVO_TEST_HIDDEN']='1';s.env['REZVIVO_TEST_TRACE_EXCEPTIONS']='1';rows=[]
+    s.env.update(args.env)
     def save(): (OUT/'report.json').write_text(json.dumps(rows,indent=2),encoding='utf-8')
     def capture(app,name):
         time.sleep(.4);state=app.call('bike.anim_debug')['anim']

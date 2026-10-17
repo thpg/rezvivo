@@ -33,6 +33,7 @@ type
     FPalette:TMFMatrix4f;
     FActive:TSFFloat;
     FEvaluations,FUploads:QWord;
+    FRevision:QWord;
     FHeadShape:TAbstractShapeNode;
     FLastSeen:QWord;
     function FilterShape(const Shape:TAbstractShapeNode;const Params:TRenderParams):Boolean;
@@ -47,6 +48,7 @@ type
     procedure AttachGpu(Effect:TEffectNode);
     procedure DetachGpu;
     function ShaderSource:String;
+    function PreparedDelta(Joint:Integer):TMatrix4;
     procedure SetExpression(Manual:Boolean;Jaw,Smile,Strain:Single);
     function CaptureReplay:TRiderFaceReplay;
     procedure RestoreReplay(const Saved:TRiderFaceReplay);
@@ -54,6 +56,7 @@ type
     function RecentlyRenderedFar(const MinDistance:Single):Boolean;
     property Valid:Boolean read FValid;
     property Visibility:Single read FVisibility;
+    property Revision:QWord read FRevision;
     property Gpu:Boolean read FGpu write SetGpu;
     property Suspended:Boolean read FSuspended write FSuspended;
     property Controls:TVector3 read FControls;
@@ -164,6 +167,12 @@ begin
 end;
 procedure TRiderFace.DetachGpu;
 begin FPalette:=nil;FActive:=nil end;
+function TRiderFace.PreparedDelta(Joint:Integer):TMatrix4;
+begin
+  if not FValid or(FVisibility<=0)or(Joint<FFirst)or(Joint>=FFirst+FCount)then
+    Result:=TMatrix4.Identity
+  else Result:=FMatrices[Joint-FFirst];
+end;
 function TRiderFace.ShaderSource:String;
 begin
   if not FValid then Exit('mat4 riderFaceDelta(int j){return mat4(1.0);}'+#10);
@@ -175,6 +184,7 @@ procedure TRiderFace.Evaluate;
 var I,C,R:Integer;Shift:array[0..RiderFaceJointCount-1]of TVector3;
   A,BrowAngle,LidAngle,Smile,Strain,Sign:Single;Jaw,D,Turn:TTripoMat4;Pivot:TTripoVec3;M:TMatrix4;Q,Rotation:TQuaternion;
 begin
+  Inc(FRevision);
   if not FValid then Exit;
   Inc(FEvaluations);A:=DegToRad(16)*FControls.X;Smile:=FControls.Y;Strain:=FControls.Z;
   for I:=0 to RiderFaceJointCount-1 do Shift[I]:=TVector3.Zero;
@@ -248,7 +258,7 @@ begin
   if not Active and not FWasActive then Exit;
   if FActive<>nil then if Active<>FWasActive then FActive.Send(Ord(Active));
   FWasActive:=Active;
-  if not Active then begin FControls:=TVector3.Zero;FEyeControls:=TVector3.Zero;ResetNodes;Exit end;
+  if not Active then begin Inc(FRevision);FControls:=TVector3.Zero;FEyeControls:=TVector3.Zero;ResetNodes;Exit end;
   if FOverride then Target:=FRequested
   else begin
     Load:=EnsureRange((BreathLoad-0.20)/1.15,0,1);

@@ -5,7 +5,7 @@ interface
 uses
   Classes,
   CastleVectors, CastleTransform, CastleViewport, CastleScene,
-  CastleThirdPersonNavigation, CastleShapes, RiderGroundTurn;
+  CastleThirdPersonNavigation, CastleShapes, RiderGroundTurn, RiderDrift, GameObstacleSteering;
 
 type
   TRiderMoveConstraint = function(Tag: Pointer; const Position, Movement: TVector3;
@@ -50,8 +50,7 @@ type
     высота берётся не raycast-ом, а прямым запросом к рельефному мешу.
     Когда не назначен (nil) — физика работает по-старому, через
     PhysicsRayCast. }
-  TPositionConstraint = function(const From,Forward,HalfSize:TVector3;
-    var Target:TVector3):Boolean of object;
+  TPositionConstraint = TObstacleMoveQuery;
 
   { ReferenceY is the current contact level; overlapping floors must not
     select an overhead deck or terrain above a tunnel. }
@@ -96,6 +95,7 @@ type
   end;
 
   TPhysicsReplayState = record
+    ObstacleSteering:TObstacleSteeringState;
     GroundTurn: TGroundTurnState;
     AutoMove, FreeTravel: Boolean;
     WorldPosition: TVector3;
@@ -171,7 +171,9 @@ type
     TravelRoadSpeedLimit:Single;
     GroundTurn: TGroundTurnState;
     PositionConstraint: TPositionConstraint;
+    ObstacleSteering:TObstacleSteeringState;
     CollisionHalfWidth, CollisionBodyHeight: Single;
+    function CollisionHalfSize:TVector3;
     function ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
   public
     ForwardDir: TVector3;
@@ -240,6 +242,7 @@ type
     TrafficHeadingConstraint: TRiderHeadingConstraint;
     TrafficTag: Pointer;
     TrafficSpeedLimit: Single;
+    TrafficLookAhead: Single; { zero: ordinary route steering; metres while yielding }
 
     { Ширина дороги под текущей точкой пути (метры, 0 = мимо дорог).
       Записывается кинематикой каждый шаг из RoadWidthAt — то же самое
@@ -378,7 +381,7 @@ type
     Active: Boolean;
     LoopPos: Single;       { current position on loop }
     PrevLoopPos: Single;   { previous frame position }
-    Lane: Integer;         { target lane (integer) }
+    Lane: Single;          { fractional slots allow a safe, continuous company line }
     SmoothLane: Single;    { current smooth lane (float, lerps toward Lane) }
     Tag: Pointer;          { owner data — TPhysicalAgent etc }
     DriftTimer: Single;    { countdown to next random lane drift (seconds) }
@@ -391,6 +394,9 @@ type
     PassageDistance, PassageAge: Single;
     ManualSteering: Boolean;
     SteeringAxis: Single;
+    CompanyLine:Boolean;
+    CompanyOffset:Single;
+    PassingTime:Single; { keep the agreed right side until the entire pair clears }
   end;
 
   TLaneReplayState = array of TLaneRider;
@@ -415,7 +421,9 @@ type
     FNominalWidth: Single;
     function WidthAtLoop(ALoopPos: Single): Single;
     function OffsetForWidth(ALane, ARoadWidth: Single): Single;
-    function LaneClear(AHandle, ALane: Integer; Clearance: Single): Boolean;
+    function LaneForOffset(Offset, RoadWidth:Single):Single;
+    procedure PlanOncoming(const Dt:Single);
+    function LaneClear(AHandle: Integer; ALane, Clearance: Single): Boolean;
   public
     constructor Create;
 
@@ -443,11 +451,13 @@ type
       const Position, PreviousDir, ProposedDir: TVector3;
       Commit: Boolean): TVector3;
     function TrafficLimit(AHandle: TLaneRiderHandle): Single;
+    function TrafficLookAhead(AHandle:TLaneRiderHandle):Single;
     procedure UnregisterRider(AHandle: TLaneRiderHandle);
     procedure ReplaceRiderTag(OldTag,NewTag:Pointer);
     procedure SetRiderPos(AHandle: TLaneRiderHandle; ALoopPos: Single);
     procedure SetRiderActive(AHandle: TLaneRiderHandle; AActive: Boolean);
     procedure SetSteering(AHandle: TLaneRiderHandle; Enabled: Boolean; Axis: Single);
+    procedure SetCompanyLine(AHandle:TLaneRiderHandle;Enabled:Boolean;Offset:Single);
     function GetLane(AHandle: TLaneRiderHandle): Integer;
     function GetLaneOffset(ALane: Integer): Single;
     { Smooth offset — use this for positioning (smooth lane transitions) }
@@ -489,8 +499,8 @@ const
   MaxLeanAngle = 45.0;
   TurnLeanMultiplier = 1.95;
   TurnDragFactor = 1.8;
-  TurnSpeedSafety = 0.92;
-  MaxAllowedLateralAccelFactor = 0.85;
+  TurnSpeedSafety = RIDER_CORNER_SPEED_SAFETY;
+  MaxAllowedLateralAccelFactor = RIDER_CORNER_GRIP_FACTOR;
   MinVelocityForTrajectory = 0.10;
   TrajectoryRadiusWindowSeconds = 0.2;
   MaxMeaningfulTurnRadius = 5000.0;
@@ -664,6 +674,7 @@ end;
 function TPhysicsState.CaptureReplay: TPhysicsReplayState;
 begin
   Result.AutoMove:=AutoMove;
+  Result.ObstacleSteering:=ObstacleSteering;
   Result.FreeTravel:=FreeTravel;
   Result.GroundTurn:=GroundTurn;
   Result.WorldPosition:=WorldPosition;
@@ -712,6 +723,7 @@ end;
 procedure TPhysicsState.RestoreReplay(const Saved: TPhysicsReplayState);
 begin
   AutoMove:=Saved.AutoMove;
+  ObstacleSteering:=Saved.ObstacleSteering;
   FreeTravel:=Saved.FreeTravel;
   GroundTurn:=Saved.GroundTurn;
   WorldPosition:=Saved.WorldPosition;
@@ -788,19 +800,23 @@ begin
   ResetDynamic;
 end;
 
-function TPhysicsState.ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
-var HalfSize:TVector3;
+function TPhysicsState.CollisionHalfSize:TVector3;
 begin
-  Result:=False;if not Assigned(PositionConstraint) then Exit;
-  if Walking then HalfSize:=Vector3(CollisionHalfWidth,CollisionBodyHeight*0.5,0.4)
-  else HalfSize:=Vector3(CollisionHalfWidth,(CollisionBodyHeight+0.2)*0.5,
+  if Walking then Result:=Vector3(CollisionHalfWidth,CollisionBodyHeight*0.5,0.4)
+  else Result:=Vector3(CollisionHalfWidth,(CollisionBodyHeight+0.2)*0.5,
     Max(0.85,ModelHalfLength-ScaledWheelInset+ScaledWheelRadius));
-  Result:=PositionConstraint(From,ForwardDir,HalfSize,Target);
+end;
+
+function TPhysicsState.ConstrainBodyMove(const From:TVector3; var Target:TVector3):Boolean;
+begin
+  Result:=Assigned(PositionConstraint)and PositionConstraint(From,ForwardDir,CollisionHalfSize,Target);
 end;
 
 procedure TPhysicsState.ResetDynamic;
 begin
   GroundTurn:=Default(TGroundTurnState);
+  ObstacleSteering:=Default(TObstacleSteeringState);
+  TrafficLookAhead:=0;
   AutoMove := false;
   CurrentYawRad := 0;
   PrevWorldPosition := Vector3(0, 0, 0);
@@ -1025,9 +1041,29 @@ begin
   Edge := Max(0.0,W*0.5-RIDER_EDGE_MARGIN);
   Step := Min(W / FLaneCount, Edge / HalfSlots);
   Base := (FDefaultLane-HalfSlots)*Step*LaneCenterFactor(W);
-  { The usual line remains centered on narrow paths. Passing slots retain
-    their physical spacing instead of collapsing all riders onto that line. }
-  Result := EnsureRange(Base+(EnsureRange(ALane,0.0,FLaneCount-1.0)-FDefaultLane)*Step,-Edge,Edge);
+  { Keep the ordinary line and left-side slots. The two slots to its right
+    must span the remaining usable width: simply translating a wide-road
+    grid to the centre left only ~0.3 m to pass on a 3 m cycle track. }
+  ALane:=EnsureRange(ALane,0.0,FLaneCount-1.0);
+  if ALane>FDefaultLane then
+    Result:=Base+(ALane-FDefaultLane)*(Edge-Base)/Max(1,FLaneCount-1-FDefaultLane)
+  else Result:=Max(-Edge,Base+(ALane-FDefaultLane)*Step);
+end;
+
+function TLaneManager.LaneForOffset(Offset,RoadWidth:Single):Single;
+var Base,Edge,Step:Single;
+begin
+  Base:=OffsetForWidth(FDefaultLane,RoadWidth);
+  Edge:=OffsetForWidth(FLaneCount-1,RoadWidth);
+  if Offset>Base then begin
+    if Edge-Base<0.001 then Exit(FDefaultLane);
+    Result:=FDefaultLane+(Offset-Base)*(FLaneCount-1-FDefaultLane)/(Edge-Base);
+  end else begin
+    Step:=Min(Max(0,RoadWidth)/FLaneCount,Edge/((FLaneCount-1)*0.5));
+    if Step<0.001 then Exit(FDefaultLane);
+    Result:=FDefaultLane+(Offset-Base)/Step;
+  end;
+  Result:=EnsureRange(Result,0.0,FLaneCount-1.0);
 end;
 
 procedure TLaneManager.SetPathLength(APathLength: Single);
@@ -1076,6 +1112,7 @@ begin
     FRiders[AHandle].PoseValid := False;
     FRiders[AHandle].PassageKey := 0;
     FRiders[AHandle].PassageAge := 0;
+    FRiders[AHandle].PassingTime := 0;
   end;
 end;
 
@@ -1095,14 +1132,17 @@ procedure TLaneManager.SetRiderActive(AHandle: TLaneRiderHandle; AActive: Boolea
 begin
   if (AHandle >= 0) and (AHandle < FCount) then begin
     FRiders[AHandle].Active := AActive;
-    if not AActive then begin FRiders[AHandle].PassageKey:=0;FRiders[AHandle].PassageAge:=0 end;
+    if not AActive then begin
+      FRiders[AHandle].PassageKey:=0;FRiders[AHandle].PassageAge:=0;
+      FRiders[AHandle].PassingTime:=0;
+    end;
   end;
 end;
 
 function TLaneManager.GetLane(AHandle: TLaneRiderHandle): Integer;
 begin
   if (AHandle >= 0) and (AHandle < FCount) then
-    Result := FRiders[AHandle].Lane
+    Result := Round(FRiders[AHandle].Lane)
   else
     Result := FDefaultLane;
 end;

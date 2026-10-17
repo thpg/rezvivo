@@ -1,6 +1,7 @@
 #version 330 core
 uniform sampler2DArray uAtlas;
 uniform int uMode,uBake;
+uniform int uCheapRejects;
 uniform float uDistanceOverride;
 uniform vec4 uLodDistances;
 in vec3 vColor;
@@ -25,6 +26,25 @@ in vec3 vShadowRelative;
 /*__GRASS_SURFACE_LIBRARY__*/
 out vec4 fragColor;
 float edge(vec2 a,vec2 b,vec2 p){vec2 d=b-a;return d.x*(p.y-a.y)-d.y*(p.x-a.x);}
+// Independent tests, shared by the baseline and reordered paths. Derivatives
+// are captured in main before either call; no implicit texture derivative is
+// allowed here, including when this rejects only part of a fragment quad.
+void rejectGrassCoverage(float lod,float visibility,float noise){
+  if(uBake==0 && uMode!=2){
+    if(uMode==0){if(noise>=(1.0-lod)*visibility*vPopulation)discard;}
+    else if(vSlice==3){if(noise>=visibility)discard;}
+    else{if(1.0-noise>lod*visibility)discard;}
+  }
+  if(uMode!=0 || vForm>=4){
+    vec3 e=vec3(edge(vAB.xy,vAB.zw,vRoot),edge(vAB.zw,vC,vRoot),edge(vC,vAB.xy,vRoot));
+    if(!(all(greaterThanEqual(e,vec3(0)))||all(lessThanEqual(e,vec3(0)))))discard;
+  }
+  if(uMode!=0){
+    float angleNoise=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy)+vec2(37,113),vec2(0.00583715,0.06711056))));
+    if(vSlice!=3 && angleNoise<vTopBlend)discard;
+    if(vSlice!=3 && vUV.y>vWeedCard.x && vWeedCard.y<0.5)discard;
+  }
+}
 void main(){
   // Take derivatives before any stochastic discard; implicit derivatives
   // after divergent coverage tests can choose inconsistent texture mips.
@@ -38,6 +58,7 @@ void main(){
     lod=smoothstep(vWeedRange.x,vWeedRange.y,d);
   float visibility=1.0-smoothstep(uLodDistances.z,uLodDistances.w,d);
   float noise=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy),vec2(0.06711056,0.00583715))));
+  if(uCheapRejects!=0)rejectGrassCoverage(lod,visibility,noise);
   if(uBake==0) {
     float rock=gcSlopeRockMask(vSurfaceXZ,vSlopeUp);
     // The terrain already contains the overhead grass/rock blend. A second
@@ -45,20 +66,10 @@ void main(){
     if(uMode!=0 && vSlice==3 && rock>0.001)discard;
     if(noise<rock)discard;
   }
-  if(uBake==0 && uMode!=2){
-    if(uMode==0){if(noise>=(1.0-lod)*visibility*vPopulation)discard;}
-    else if(vSlice==3){if(noise>=visibility)discard;}
-    else{if(1.0-noise>lod*visibility)discard;}
-  }
+  if(uCheapRejects==0)rejectGrassCoverage(lod,visibility,noise);
   vec3 referenceLight=(vec3(0.55,0.64,0.50)+vec3(1,0.96,0.9)*(2.55*0.68))*0.55;
   vec4 c=vec4(vColor,1);
   if(uMode!=0){
-    vec3 e=vec3(edge(vAB.xy,vAB.zw,vRoot),edge(vAB.zw,vC,vRoot),edge(vC,vAB.xy,vRoot));
-    if(!(all(greaterThanEqual(e,vec3(0)))||all(lessThanEqual(e,vec3(0)))))discard;
-    // The carpet remains below the tufts. Only the added volume fades away.
-    float angleNoise=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy)+vec2(37,113),vec2(0.00583715,0.06711056))));
-    if(vSlice!=3 && angleNoise<vTopBlend)discard;
-    if(vSlice!=3 && vUV.y>vWeedCard.x && vWeedCard.y<0.5)discard;
     c=textureGrad(uAtlas,vec3(vUV,float(vKind*4+vSlice)),uvDx,uvDy);
     c.rgb/=max(c.a,0.00001);
     if(uMode==2)c.rgb=mix(vColor*0.70,c.rgb,c.a);
@@ -67,8 +78,6 @@ void main(){
     if(vSlice!=3)c.a*=smoothstep(0.025,min(0.75,max(0.075,vWeedCard.x*0.75)),vUV.y);
   }else{
     if(vForm>=4){
-      vec3 edges=vec3(edge(vAB.xy,vAB.zw,vRoot),edge(vAB.zw,vC,vRoot),edge(vC,vAB.xy,vRoot));
-      if(!(all(greaterThanEqual(edges,vec3(0)))||all(lessThanEqual(edges,vec3(0)))))discard;
       float t=vBlade.x,s=abs(vBlade.y);
       if(vForm==4){
         // A broad heart-shaped burdock leaf, with a narrow petiole at its root.
@@ -110,7 +119,9 @@ void main(){
     float alphaNoise=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy)+vec2(79,23),vec2(0.06711056,0.00583715))));
     if(alphaNoise>=c.a)discard;
   }
-  if(uBake==0 || uBake==3)c.rgb*=gcGrassSurface(vSurfaceXZ,footprint);
+  if(uBake==0 || uBake==3){
+    c.rgb*=gcGrassSurface(vSurfaceXZ,footprint);
+  }
   fragColor=vec4(c.rgb,1);
 #ifdef GRASS_SHADOW
   if(uBake==0){

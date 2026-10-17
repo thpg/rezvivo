@@ -52,7 +52,7 @@
 '}' + #10 +
 '// Height, analytic gradient and albedo variation of compacted aggregate.' + #10 +
 '// Jittered angular cells form individual stones, with bevels into bitumen.' + #10 +
-'vec4 rp_aggregate(vec2 p,uint seed,float footprint,vec3 grit,out vec3 stoneTint) {' + #10 +
+'vec4 rp_aggregate(vec2 p,uint seed,float footprint,vec3 grit,float exposure,out vec3 stoneTint) {' + #10 +
 '    ivec2 cell=ivec2(floor(p)),stoneCell=cell;' + #10 +
 '    vec2 f=fract(p),v1=vec2(0),v2=vec2(0);' + #10 +
 '    float d1=1e10,d2=1e10; vec3 key=vec3(0.5);' + #10 +
@@ -80,16 +80,23 @@
 '    float t=clamp((edge-0.012)/width,0.0,1.0),bevel=t*t*(3.0-2.0*t);' + #10 +
 '    vec2 tilt=(key.xy-0.5)*0.28;' + #10 +
 '    float face=0.60+0.35*mineral.y-dot(v1,tilt);' + #10 +
-'    vec2 gradient=face*(6.0*t*(1.0-t)/width)*dg+bevel*tilt;' + #10 +
-'    float color=mix(-0.36,0.27+(mineral.y-0.5)*0.95,bevel)+0.025;' + #10 +
+'    float rawHeight=bevel*face;' + #10 +
+'    // Binder fills the lower part of each chip. Only the exposed crown' + #10 +
+'    // differs in mineral colour; the rest belongs to a continuous matrix.' + #10 +
+'    float binderLevel=mix(0.52,0.27,exposure);' + #10 +
+'    bool coated=exposure>=0.0;' + #10 +
+'    float revealed=coated ? smoothstep(binderLevel-0.08,binderLevel+0.12,rawHeight) : bevel;' + #10 +
+'    vec2 gradient=(face*(6.0*t*(1.0-t)/width)*dg+bevel*tilt)*(coated ? revealed : 1.0);' + #10 +
+'    float color=coated ? mix(-0.08,0.16+(mineral.y-0.5)*0.50,revealed)' + #10 +
+'        : mix(-0.36,0.27+(mineral.y-0.5)*0.95,bevel)+0.025;' + #10 +
 '    // Sparse warm granite, cool grey and pale mineral faces. Tint belongs' + #10 +
 '    // to each stone, never to the bitumen or to screen-space noise.' + #10 +
 '    stoneTint=vec3(0);' + #10 +
 '    if(mineral.z<0.19) stoneTint=vec3(0.036,0.004,-0.023);' + #10 +
 '    else if(mineral.z<0.37) stoneTint=vec3(-0.020,0.002,0.027);' + #10 +
 '    else if(mineral.z>0.91) stoneTint=vec3(0.033,0.026,0.013);' + #10 +
-'    stoneTint*=bevel*(0.65+0.35*mineral.x);' + #10 +
-'    return vec4(bevel*face,gradient,color);' + #10 +
+'    stoneTint*=revealed*(coated ? 0.25+0.45*exposure : 1.0)*(0.65+0.35*mineral.x);' + #10 +
+'    return vec4(coated ? max(0.0,rawHeight-binderLevel) : rawHeight,gradient,color);' + #10 +
 '}' + #10 +
 'float rp_segment(vec2 p, vec2 a, vec2 b) {' + #10 +
 '    vec2 v=b-a;' + #10 +
@@ -476,11 +483,12 @@
 '#ifdef RP_LIVE_FINISH' + #10 +
 '    if(!concrete)aggregate.xyz*=vec3(1.-.15*rz_surface.x,1.-.42*rz_surface.x,1.-.20*rz_surface.x);' + #10 +
 '#endif' + #10 +
+'    float exposed=0.5;' + #10 +
 '    if(!concrete) {' + #10 +
 '        // The cached roughness also describes aggregate exposure: fresh' + #10 +
 '        // binder/repairs fill the gaps, weathered stretches expose the chips.' + #10 +
 '        // Keep stone coordinates fixed, varying relief and contrast only.' + #10 +
-'        float exposed=clamp((colorRough.a-0.75)/0.17,0.0,1.0);' + #10 +
+'        exposed=clamp((colorRough.a-0.75)/0.17,0.0,1.0);' + #10 +
 '        aggregate.y*=mix(0.78,1.13,exposed);' + #10 +
 '        aggregate.z*=mix(0.70,1.12,exposed);' + #10 +
 '    }' + #10 +
@@ -498,7 +506,7 @@
 '        }' + #10 +
 '        vec3 stoneTint;' + #10 +
 '        vec4 grain=rp_aggregate(p/aggregate.x,uint(seed),' + #10 +
-'            max(footprint.x,footprint.y)/aggregate.x,grit,stoneTint);' + #10 +
+'            max(footprint.x,footprint.y)/aggregate.x,grit,concrete ? -1.0 : exposed,stoneTint);' + #10 +
 '        // The smaller aggregate also breaks up the faces of larger stones.' + #10 +
 '        vec2 slope=grain.yz*0.80+grit.yz*(0.65/0.35);' + #10 +
 '        colorRough.rgb+=((grain.w*0.95+(grit.x-0.5)*0.40)*aggregate.y+stoneTint*(concrete ? 0.3 : 1.0))*grainFade;' + #10 +

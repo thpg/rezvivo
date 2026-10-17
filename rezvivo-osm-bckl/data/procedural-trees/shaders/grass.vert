@@ -1,12 +1,21 @@
 #version 330 core
-layout(location=0) in vec4 aBase;
-layout(location=1) in vec4 aSurface;
-layout(location=2) in vec4 aAB;
-layout(location=3) in vec4 aC;
+layout(location=0) in vec4 inBase;
+layout(location=1) in vec4 inSurface;
+layout(location=2) in vec4 inAB;
+layout(location=3) in vec4 inC;
 layout(location=4) in ivec4 aVertexTemplate;
 uniform mat4 uProjection,uView,uModel;
 uniform mat4 uViewModel;
 uniform int uVertexCache;
+uniform int uCardEnvelope;
+uniform vec2 uEnvelopePoints[8],uEnvelopeViewport;
+/*__VEGETATION_CARD_ENVELOPE__*/
+layout(location=5) in uvec2 aAcceptedRoot;
+uniform int uAcceptedRoots,uAcceptedHead,uAcceptedWeedsOnly,uPatchTableWidth;
+uniform sampler2D uPatchTable;
+vec4 aBase,aSurface,aAB,aC;
+vec4 rootPatchTexel(int i){return texelFetch(uPatchTable,ivec2(i%uPatchTableWidth,i/uPatchTableWidth),0);}
+
 uniform vec3 uCamera,uSun;
 uniform vec4 uProfile[8];
 uniform vec4 uGrowth[8]; // broad leaves, rosettes, seed heads, dry blades
@@ -53,12 +62,29 @@ vec3 canopyViewGain(){
   return mix(uBladeViewGain[vKind*4+band],uBladeViewGain[vKind*4+band+1],clamp((e-lo)/(hi-lo),0.0,1.0));
 }
 void main(){
+  aBase=inBase;aSurface=inSurface;aAB=inAB;aC=inC;
+  int vertexID=gl_VertexID;ivec4 vertexTemplate=aVertexTemplate;
+  if(uAcceptedRoots!=0){
+    int offset=int(aAcceptedRoot.x)*4;
+    aBase=rootPatchTexel(offset);aSurface=rootPatchTexel(offset+1);
+    aAB=rootPatchTexel(offset+2);aC=rootPatchTexel(offset+3);
+    int id=int(aAcceptedRoot.y);
+    if(uAcceptedHead!=0){
+      if((uAcceptedWeedsOnly!=0 && id>=2) ||
+         (uGeometryDetail==2 && id>=2 && !((gl_VertexID>=6 && gl_VertexID<12) || gl_VertexID>=24))){gl_Position=vec4(2,2,2,1);return;}
+      vertexID=uGrid*uGrid*7+id*30+gl_VertexID;vertexTemplate=ivec4(-1,id,0,0);
+    }else{
+      vertexID=id*7+gl_VertexID;
+      vertexTemplate=ivec4(id,id/uGrid,id%uGrid,int((hash(uint(id)^0x68bc21ebu)&3u)!=0u));
+    }
+  }
+
   vKind=int(aBase.w+0.5);vec4 profile=uProfile[vKind];
   float d=uDistanceOverride>=0.0?uDistanceOverride:distance(aBase.xyz,uCamera);
   // A following camera already sees the verge several metres ahead of it.
   // Keep actual silhouettes ahead of a camera several metres above the rider.
   int firstHead=uGrid*uGrid*7;
-  bool weedGeometry=uMode==0 && gl_VertexID>=firstHead && gl_VertexID<firstHead+60 && uWeeds[vKind].x>0.0;
+  bool weedGeometry=uMode==0 && vertexID>=firstHead && vertexID<firstHead+60 && uWeeds[vKind].x>0.0;
   float detailHeight=weedGeometry?max(profile.x,uWeeds[vKind].y):profile.x;
   float heightScale=mix(0.8,1.0,clamp((detailHeight-0.09)/0.53,0.0,1.0));
   float bladeEnd=uLodDistances.y*heightScale;
@@ -67,6 +93,8 @@ void main(){
   vWeedRange=uLodDistances.xy*mix(0.8,1.0,clamp((weedHeight-0.09)/0.53,0.0,1.0));
   float variation=uVariation[vKind];
   float community=uBake==0?clamp((aBase.w-float(vKind))*2.5,0.0,1.0):0.5;
+  // Habitat changes the plant community and height, without removing the
+  // entire low canopy and exposing broad bare patches between LODs.
   profile.x*=mix(1.0,mix(0.76,1.03,community),variation);
   vSlice=0;vAB=aAB;vC=aC.xy;vUV=vec2(0);vRoot=vec2(0);vColor=vec3(0);vTopBlend=0.0;
   vBlade=vec2(1,0);vForm=0;vBladeGain=vec3(1);vPopulation=1.0;vSurfaceXZ=vec2(0);vSlopeUp=1.0;
@@ -75,13 +103,14 @@ void main(){
   if(uBake==0 && ((uMode==0 && d>bladeEnd+2.0) || d>uLodDistances.w+2.0)) {gl_Position=vec4(2,2,2,1);return;}
   vec3 p,normal;vec3 albedo=uColors[vKind];
   if(uMode!=0){
-    int card=gl_VertexID/6;
+    int card=vertexID/(uCardEnvelope!=0?18:6);
     // Bound horizontal card spread, slope rise and the full plant height.
     // A whole card inside the live-blade range has zero fragment coverage.
     float cardReach=1.7*(1.0+length(aSurface.xy))+max(profile.x,uWeeds[vKind].y)*1.12+0.01;
     if(uBake==0 && card<4 && d+cardReach<vBladeRange.x){gl_Position=vec4(2,2,2,1);return;}
     uint cardBits=hash(uint(aSurface.z)+uint(card)*0x9e3779b9u);
-    vSlice=card==4?3:int(cardBits%3u);vec2 uv=quad[gl_VertexID%6];vUV=uv;
+    vSlice=card==4?3:int(cardBits%3u);
+    vec2 uv=uCardEnvelope!=0?fullEnvelopeUV(vertexID%18):quad[vertexID%6];vUV=uv;
     vec3 groundNormal=normalize(vec3(-aSurface.x,1.0,-aSurface.y));
     float elevation=dot(normalize(uCamera-aBase.xyz+vec3(0,0.0001,0)),groundNormal);
     // The ground carpet fills gaps continuously. Cards only supply volume;
@@ -106,23 +135,34 @@ void main(){
     vec2 center=(vec2(card%2,card/2)+mix(vec2(0.12),vec2(0.88),jitter))*0.5-0.5;
     float angle=(float((cardBits>>24u)&255u)/255.0-0.5)*1.2;
     right=right*cos(angle)+toward*sin(angle);
-    vec2 off=center+right*((uv.x-0.5)*1.8);
     float canopyHeight=uWeeds[vKind].x>0.0?max(profile.x,uWeeds[vKind].y):profile.x;
+    float weedCardChoice=float(hash(cardBits^0xa3c59ac3u)&65535u)/65535.0;
+    vWeedCard=vec2(profile.x/canopyHeight,weedCardChoice<uWeeds[vKind].x*0.75?1.0:0.0);
+    // A high-weed atlas is cropped at a habitat-dependent height on ordinary
+    // cards. Its convex hull cannot be rescaled to that lower UV interval;
+    // keep the original rectangle there. Full plants use the union envelope.
+    if(uCardEnvelope!=0 && (vWeedCard.y>=0.5 || vWeedCard.x>=1.0)){
+      vec2 base=center-right*.9;vec3 origin=aBase.xyz+vec3(base.x,dot(aSurface.xy,base)-.002,base.y);
+      vec3 across=vec3(right.x*1.8,dot(aSurface.xy,right)*1.8,right.y*1.8);
+      mat4 clip=uProjection*uViewModel;
+      if(envelopeFootprint(clip*vec4(origin,1),clip*vec4(across,0),clip*vec4(0,canopyHeight*1.12,0,0),uEnvelopeViewport,512.0))
+        uv=uEnvelopePoints[envelopeIndex(vertexID%18)];
+      vUV=uv;
+    }
     // The side atlas contains a representative of each rare herb. Keep the
     // ordinary low carpet on every card but only retain its upper herbs at
     // their actual density (four cards sampling three source slices).
-    float weedCardChoice=float(hash(cardBits^0xa3c59ac3u)&65535u)/65535.0;
-    vWeedCard=vec2(profile.x/canopyHeight,weedCardChoice<uWeeds[vKind].x*0.75?1.0:0.0);
     // Most cards contain only the short carpet. The fragment shader used to
     // reject this entire blank upper rectangle; trim it before rasterizing.
     if(vWeedCard.y<0.5){uv.y*=min(1.0,vWeedCard.x);vUV=uv;}
+    vec2 off=center+right*((uv.x-0.5)*1.8);
     p=aBase.xyz+vec3(off.x,dot(aSurface.xy,off)+uv.y*canopyHeight*1.12-0.002,off.y);
     vRoot=off;normal=vec3(toward.x,0.5,toward.y);
     }
   } else {
     if(uVertexCache==0 && uBake!=2 && (uBake!=1 || aSurface.w<=0.0))vBladeGain=canopyViewGain();
-    int headStart=uGrid*uGrid*7;bool head=gl_VertexID>=headStart;
-    int row=uVertexCache!=0?aVertexTemplate.y:(head?(gl_VertexID-headStart)/30:(gl_VertexID/7)/uGrid);
+    int headStart=uGrid*uGrid*7;bool head=vertexID>=headStart;
+    int row=uVertexCache!=0?vertexTemplate.y:(head?(vertexID-headStart)/30:(vertexID/7)/uGrid);
     // Reuse two existing flower slots for whole plants. Their descriptors,
     // density and silhouettes stay identical in the live and baked paths.
     // These sparse plants survive thinning of the ordinary fine grass.
@@ -137,7 +177,7 @@ void main(){
         gl_Position=vec4(2,2,2,1);return;
       }
       float h=uWeeds[vKind].y*mix(0.72,1.0,wr.z);
-      int slot=(gl_VertexID-headStart)%30;int section=slot/6;
+      int slot=(vertexID-headStart)%30;int section=slot/6;
       vec2 uv=quad[slot%6];float yaw=wr.z*6.2831853;
       float phase=dot(mod(aBase.xz,256.0),vec2(0.17180585,0.12271846))+uTime*0.75;
       vec2 wind=vec2(1,0.35)*sin(phase+wr.y)*h*uWind*0.018;
@@ -169,13 +209,13 @@ void main(){
     // for every flower created metre-spaced stripes even in the live blades.
     uint columnBits=hash(uint(aSurface.z)^uint(row)*0x85ebca6bu^0xc2b2ae35u);
     int flowerColumn=int(uVertexCache!=0?(columnBits&uint(uGrid-1)):(columnBits%uint(uGrid)));
-    int blade=head?row*uGrid+flowerColumn:(uVertexCache!=0?aVertexTemplate.x:gl_VertexID/7);
-    ivec2 cell=uVertexCache!=0?ivec2(head?flowerColumn:aVertexTemplate.z,row):ivec2(blade%uGrid,blade/uGrid);
-    int part=head?1+((gl_VertexID-headStart)%30)/15:0;int vertex=head?(gl_VertexID-headStart)%15:0;
+    int blade=head?row*uGrid+flowerColumn:(uVertexCache!=0?vertexTemplate.x:vertexID/7);
+    ivec2 cell=uVertexCache!=0?ivec2(head?flowerColumn:vertexTemplate.z,row):ivec2(blade%uGrid,blade/uGrid);
+    int part=head?1+((vertexID-headStart)%30)/15:0;int vertex=head?(vertexID-headStart)%15:0;
     // One stable subset becomes the middle canopy. Its roots, tip and wind
     // never change; removed blades fade before the CPU skips their indices.
     float thinning=uBake==0?smoothstep(uDensityDistances.x,uDensityDistances.y,d):0.0;
-    if(part==0 && (uVertexCache!=0?aVertexTemplate.w!=0:(hash(uint(blade)^0x68bc21ebu)&3u)!=0u)){
+    if(part==0 && (uVertexCache!=0?vertexTemplate.w!=0:(hash(uint(blade)^0x68bc21ebu)&3u)!=0u)){
       vPopulation=1.0-thinning;
       if(vPopulation<=0.0){gl_Position=vec4(2,2,2,1);return;}
     }
@@ -188,7 +228,8 @@ void main(){
     uint groupBits=hash(uint(aSurface.z)^uint(group.x+group.y*uGrid)*0x85ebca6bu);
     float plantChoice=float(groupBits&65535u)/65535.0;
     vec4 growth=uGrowth[vKind];
-    vec2 fractions=growth.xy*mix(0.72,1.28,community);
+    float herbHabitat=mix(1.0,mix(0.22,1.78,smoothstep(0.2,0.8,community)),variation);
+    vec2 fractions=growth.xy*herbHabitat;
     fractions/=max(1.0,(fractions.x+fractions.y)/0.92);
     int form=plantChoice<fractions.x?1:(plantChoice<fractions.x+fractions.y?2:0);
     if(form==1 && vKind==1 && ((groupBits>>20u)&3u)!=0u)form=3;
@@ -215,7 +256,7 @@ void main(){
     vec2 lean=bend*h*spread+wind;
     p=aBase.xyz+vec3(root.x,dot(aSurface.xy,root)-0.002,root.y);
     float t,s;
-    if(part==0){int j=gl_VertexID%7;t=j==6?1.0:float(j/2)/3.0;s=j==6?0.0:float(j%2)*2.0-1.0;
+    if(part==0){int j=vertexID%7;t=j==6?1.0:float(j/2)/3.0;s=j==6?0.0:float(j%2)*2.0-1.0;
       // The coarse leaf triangle needs a broad lower pair, not the narrow
       // petiole. Its omitted root is already covered by the ground carpet.
       if(form!=0 && uGeometryDetail==2 && j!=6)t=0.20;
@@ -235,7 +276,7 @@ void main(){
       if(form==0)albedo=mix(albedo,albedo*vec3(1.55,0.97,1.32),dry);
       else albedo*=form==2?vec3(0.80,1.00,1.26):vec3(0.86,0.97,1.14);
     }else{
-      int hv=(gl_VertexID-headStart)%30;
+      int hv=(vertexID-headStart)%30;
       int petal=hv/6;int corner=hv%6;
       const int diamond[6]=int[6](0,1,2,0,2,3);
       int point=diamond[corner];

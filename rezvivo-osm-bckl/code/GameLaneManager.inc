@@ -23,6 +23,7 @@ begin
   if FRiders[AHandle].PoseValid and
     ((Position-FRiders[AHandle].WorldPosition).Length>Max(8,FRiders[AHandle].Speed*FLastDT*3+2))then begin
     FRiders[AHandle].PassageKey:=0;FRiders[AHandle].PassageAge:=0;
+    FRiders[AHandle].PassingTime:=0;
   end;
   D:=Vector3(Direction.X,0,Direction.Z);
   if D.Length<0.001 then D:=Vector3(0,0,1) else D:=D.Normalize;
@@ -47,6 +48,7 @@ procedure TLaneManager.InvalidateRiderPose(AHandle: TLaneRiderHandle);
 begin
   if (AHandle>=0) and (AHandle<FCount) then begin
     FRiders[AHandle].PoseValid:=False;
+    FRiders[AHandle].PassingTime:=0;
     FRiders[AHandle].PassageKey:=0;FRiders[AHandle].PassageAge:=0;
   end;
 end;
@@ -91,9 +93,10 @@ begin
   Result:=True;
 end;
 
-function TLaneManager.LaneClear(AHandle, ALane: Integer; Clearance: Single): Boolean;
+function TLaneManager.LaneClear(AHandle: Integer; ALane, Clearance: Single): Boolean;
 var J: Integer; Target,OtherTarget,Gap,Across,FutureAcross,CurrentAcross,LowSide,HighSide: Single;
     Right,OtherRight,Delta,Future: TVector3;
+    Cooperative:Boolean;
 begin
   Result:=True;
   if not FRiders[AHandle].PoseValid then begin
@@ -122,16 +125,23 @@ begin
       must not reserve every exit lane in front of its leader. }
     if(Gap< -2.4)and(TVector3.DotProduct(FRiders[J].ForwardDir,FRiders[AHandle].ForwardDir)>0.5)and
       (FRiders[J].Speed<=FRiders[AHandle].Speed+0.5)then Continue;
+    { Company riders may follow a moving wheel, but an oncoming rider or
+      a stopped obstacle still reserves the full approach corridor. }
+    if FRiders[AHandle].CompanyLine and(Gap>=2.8)and(FRiders[J].Speed>0.5)and
+      (TVector3.DotProduct(FRiders[J].ForwardDir,FRiders[AHandle].ForwardDir)>0.95)then Continue;
     Across:=CurrentAcross+TVector3.DotProduct(Delta,Right);
     OtherRight:=Vector3(-FRiders[J].ForwardDir.Z,0,FRiders[J].ForwardDir.X);
     OtherTarget:=OffsetForWidth(FRiders[J].Lane,FRiders[J].RoadWidth);
     { A stopped cyclist cannot slide to a requested lane: steering needs
       forward travel. Reserving that phantom side position blocks the real
       free side as well and deadlocks an exit beside a waiting cyclist. }
-    if FRiders[J].Speed<0.1 then OtherTarget:=FRiders[J].ActualOffset;
+    Cooperative:=(FRiders[AHandle].PassingTime>0)and(FRiders[J].PassingTime>0)and
+      (TVector3.DotProduct(FRiders[J].ForwardDir,FRiders[AHandle].ForwardDir)<-0.65);
+    if(FRiders[J].Speed<0.1)and not Cooperative then OtherTarget:=FRiders[J].ActualOffset;
     Future:=Delta+OtherRight*(OtherTarget-FRiders[J].ActualOffset);
     FutureAcross:=CurrentAcross+TVector3.DotProduct(Future,Right);
-    if (Abs(Across-Target)<0.95) or (Abs(FutureAcross-Target)<0.95) then Exit(False);
+    if(Abs(FutureAcross-Target)<0.95)or
+      ((Abs(Across-Target)<0.95)and not(Cooperative and(Gap>0)))then Exit(False);
     { A target beyond a nearby bicycle is not reachable by steering through
       its side. Re-evaluate that lane before braking reaches zero, while the
       genuinely free side remains selectable. }
@@ -257,9 +267,56 @@ begin
     { A free side can be reached at walking speed; the physical sweep remains
       authoritative. Min with Result preserves a zero corridor reservation. }
     if(LeadLimit<0.8)and
-      (Abs(OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset)>0.15)and
+      (Abs(OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset)>
+        IfThen(FRiders[AHandle].PassingTime>0,0.03,0.15))and
       LaneClear(AHandle,FRiders[AHandle].Lane,6)then LeadLimit:=0.8;
+    { When already nose-to-nose, first turn into the agreed free side.
+      Crawling straight ahead during the lane blend consumes the remaining
+      turning clearance and wedges both swept bicycle shapes together. }
+    if(FRiders[AHandle].PassingTime>0)and(Gap<4)and(Across<0.65)and
+      (OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset>0.2)and
+      (TVector3.DotProduct(FRiders[AHandle].CollisionDir,Right)<Min(0.55,
+       (OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset)*0.8))then LeadLimit:=0;
     Result:=Min(Result,LeadLimit);
+  end;
+end;
+
+function TLaneManager.TrafficLookAhead(AHandle:TLaneRiderHandle):Single;
+begin
+  Result:=0;
+  if(AHandle>=0)and(AHandle<FCount)and(FRiders[AHandle].PassingTime>0)then
+    Result:=Max(0.7,FRiders[AHandle].Speed*0.65);
+end;
+
+procedure TLaneManager.PlanOncoming(const Dt:Single);
+var I,J:Integer;Delta,Right:TVector3;Along,Across,Horizon,Width,Target:Single;
+begin
+  for I:=0 to FCount-1 do FRiders[I].PassingTime:=Max(0,FRiders[I].PassingTime-Max(0,Dt));
+  { Decide both sides from the same pose snapshot, before lane selection.
+    Centre-following on a cycle track must still leave its right half usable.
+    Truly single-file passages remain governed by their entry reservation. }
+  for I:=0 to FCount-1 do if FRiders[I].Active and FRiders[I].PoseValid then
+    for J:=I+1 to FCount-1 do if FRiders[J].Active and FRiders[J].PoseValid then begin
+      Width:=Min(FRiders[I].RoadWidth,FRiders[J].RoadWidth);
+      if Width<TrafficPassingWidth then Continue;
+      if TVector3.DotProduct(FRiders[I].ForwardDir,FRiders[J].ForwardDir)>-0.65 then Continue;
+      Delta:=FRiders[J].WorldPosition-FRiders[I].WorldPosition;
+      Horizon:=EnsureRange(3*(FRiders[I].Speed+FRiders[J].Speed)+8,18,70);
+      if(Abs(Delta.Y)>2)or(Delta.LengthSqr>Sqr(Horizon+4))then Continue;
+      Along:=TVector3.DotProduct(Delta,FRiders[I].ForwardDir);
+      if(Along< -4)or(Along>Horizon)then Continue;
+      Along:=TVector3.DotProduct(-Delta,FRiders[J].ForwardDir);
+      if(Along< -4)or(Along>Horizon)then Continue;
+      Right:=Vector3(-FRiders[I].ForwardDir.Z,0,FRiders[I].ForwardDir.X);
+      Across:=Abs(TVector3.DotProduct(Delta,Right));
+      if Across>Min(4,Width*0.5)+0.9 then Continue;
+      FRiders[I].PassingTime:=0.8;FRiders[J].PassingTime:=0.8;
+    end;
+  for I:=0 to FCount-1 do if FRiders[I].PassingTime>0 then begin
+    { Do not pull a rider already farther right across its waiting neighbour
+      merely to form the minimum passing line. }
+    Target:=Max(FRiders[I].ActualOffset,Max(0.9,OffsetForWidth(FDefaultLane,FRiders[I].RoadWidth)));
+    FRiders[I].Lane:=LaneForOffset(Target,FRiders[I].RoadWidth);
   end;
 end;
 
@@ -270,13 +327,22 @@ begin
   FRiders[AHandle].SteeringAxis:=EnsureRange(Axis,-1,1);
 end;
 
-procedure TLaneManager.Update(const DeltaTime: Single);
-var I,L,Best: Integer; Approach,Cost,BestCost,Alpha: Single;
+procedure TLaneManager.SetCompanyLine(AHandle:TLaneRiderHandle;Enabled:Boolean;Offset:Single);
 begin
+  if(AHandle<0)or(AHandle>=FCount)then Exit;
+  FRiders[AHandle].CompanyLine:=Enabled;
+  FRiders[AHandle].CompanyOffset:=Offset;
+end;
+
+procedure TLaneManager.Update(const DeltaTime: Single);
+var I,L,Best: Integer; Approach,Cost,BestCost,Alpha,Preferred: Single;
+begin
+  PlanOncoming(DeltaTime);
   for I:=0 to FCount-1 do begin
     if not FRiders[I].Active then Continue;
     if FRiders[I].PassageKey<>0 then FRiders[I].PassageAge:=FRiders[I].PassageAge+Max(0,DeltaTime);
     FRiders[I].Lane:=EnsureRange(FRiders[I].Lane,0,FLaneCount-1);
+    if FRiders[I].PassingTime>0 then Continue;
     if FRiders[I].ManualSteering then
     begin
       { Center holds the selected line. Request the next slot only after the
@@ -285,10 +351,18 @@ begin
       if (FRiders[I].Speed>0.3) and (Abs(FRiders[I].SteeringAxis)>0.08) and
         (Abs(FRiders[I].SmoothLane-FRiders[I].Lane)<0.2) then
       begin
-        L:=EnsureRange(FRiders[I].Lane-Sign(FRiders[I].SteeringAxis),0,FLaneCount-1);
+        L:=EnsureRange(Round(FRiders[I].Lane)-Sign(FRiders[I].SteeringAxis),0,FLaneCount-1);
         if (L<>FRiders[I].Lane) and LaneClear(I,L,4) then FRiders[I].Lane:=L;
       end;
       Continue;
+    end;
+    if FRiders[I].CompanyLine then begin
+      Preferred:=LaneForOffset(FRiders[I].CompanyOffset,FRiders[I].RoadWidth);
+      { 2.8 m between centres is longer than a bicycle. Collision sweeps,
+        heading constraints and TrafficLimit still arbitrate every step. }
+      if LaneClear(I,Preferred,12+FRiders[I].Speed)then begin
+        FRiders[I].Lane:=Preferred;Continue;
+      end;
     end;
     Approach:=12+Min(18,FRiders[I].Speed*0.8);
     if not LaneClear(I,FRiders[I].Lane,Approach) then begin
@@ -303,7 +377,10 @@ begin
   end;
   Alpha:=1-Exp(-3*Max(DeltaTime,0));
   for I:=0 to FCount-1 do begin
-    FRiders[I].SmoothLane:=FRiders[I].SmoothLane+(FRiders[I].Lane-FRiders[I].SmoothLane)*Alpha;
+    if FRiders[I].CompanyLine and not FRiders[I].ManualSteering and(FRiders[I].PassingTime<=0) then
+      FRiders[I].SmoothLane:=FRiders[I].SmoothLane+
+        (FRiders[I].Lane-FRiders[I].SmoothLane)*(1-Exp(-Max(DeltaTime,0)))
+    else FRiders[I].SmoothLane:=FRiders[I].SmoothLane+(FRiders[I].Lane-FRiders[I].SmoothLane)*Alpha;
     FRiders[I].PrevLoopPos:=FRiders[I].LoopPos;
   end;
   FLastDT:=DeltaTime;

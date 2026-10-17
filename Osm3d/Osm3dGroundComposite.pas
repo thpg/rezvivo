@@ -1211,6 +1211,7 @@ begin
     '    return clamp(v * u_road_halo_strength, 0.0, 1.0);' + #10 +
     '}' + #10 +
     '' + #10 +
+    'uniform float gc_water_color_replaced;' + #10 +
     'void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)' + #10 +
     '{' + #10 +
     '    float gp_pixel=max(length(dFdx(vRoadCoord.xy)),length(dFdy(vRoadCoord.xy)));' + #10 +
@@ -1223,6 +1224,8 @@ begin
     '    int matId = int(floor(vGroundMaterialId + 0.5));' + #10 +
     '    if (matId < 0) matId = 0;' + #10 +
     '    if (matId >= U_GROUND_MAT_COUNT) matId = 0;' + #10 +
+    '    // Water owns color; shared position/capture/shadow plugs still execute.' + #10 +
+    '    if(matId==20 && gc_water_color_replaced>.5){fragment_color=vec4(0,0,0,1);return;}' + #10 +
     '    bool isTerrain      = (matId == MAT_TERRAIN);' + #10 +
     '    bool isGrassBase    = isTerrain || matId==1 || matId==2 || matId==8 || matId==9;' + #10 +
     '#ifndef GC_GRASS_NATIVE_LIGHTING' + #10 +
@@ -1362,24 +1365,33 @@ begin
     '            /* заострение: полоса бленда ~1/3 блока вокруг шва */' + #10 +
     '            vec2 rndS = clamp((rndFR - 0.5) * 3.0 + 0.5, 0.0, 1.0);' + #10 +
     '            rndS = rndS * rndS * (3.0 - 2.0 * rndS);' + #10 +
-    '            mat2 rndTR;' + #10 +
-    '            vec2 rndTO;' + #10 +
-    '            gc_rndBlockTap(rndFC,                  rp.yz, rndTR, rndTO);' + #10 +
-    '            rndR = rndTR;' + #10 +
-    '            vec2 rndUV0 = rndTR * rndLocalUV + rndTO;' + #10 +
-    '            gc_rndBlockTap(rndFC + vec2(1.0, 0.0), rp.yz, rndTR, rndTO);' + #10 +
-    '            rndR1 = rndTR;' + #10 +
-    '            rndUV1 = rndTR * (rndLocalUV - vec2(rndRepeat, 0.0)) + rndTO;' + #10 +
-    '            gc_rndBlockTap(rndFC + vec2(0.0, 1.0), rp.yz, rndTR, rndTO);' + #10 +
-    '            rndR2 = rndTR;' + #10 +
-    '            rndUV2 = rndTR * (rndLocalUV - vec2(0.0, rndRepeat)) + rndTO;' + #10 +
-    '            gc_rndBlockTap(rndFC + vec2(1.0, 1.0), rp.yz, rndTR, rndTO);' + #10 +
-    '            rndR3 = rndTR;' + #10 +
-    '            rndUV3 = rndTR * (rndLocalUV - vec2(rndRepeat)) + rndTO;' + #10 +
     '            rndW = vec4((1.0 - rndS.x) * (1.0 - rndS.y),' + #10 +
     '                        rndS.x * (1.0 - rndS.y),' + #10 +
     '                        (1.0 - rndS.x) * rndS.y,' + #10 +
     '                        rndS.x * rndS.y);' + #10 +
+    '            mat2 rndTR;' + #10 +
+    '            vec2 rndTO;' + #10 +
+    '            vec2 rndUV0=baseUV;' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.x>0.0){' + #10 +
+    '            gc_rndBlockTap(rndFC,                  rp.yz, rndTR, rndTO);' + #10 +
+    '            rndR = rndTR;' + #10 +
+    '            rndUV0 = rndTR * rndLocalUV + rndTO;' + #10 +
+    '            }' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.y>0.0){' + #10 +
+    '            gc_rndBlockTap(rndFC + vec2(1.0, 0.0), rp.yz, rndTR, rndTO);' + #10 +
+    '            rndR1 = rndTR;' + #10 +
+    '            rndUV1 = rndTR * (rndLocalUV - vec2(rndRepeat, 0.0)) + rndTO;' + #10 +
+    '            }' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.z>0.0){' + #10 +
+    '            gc_rndBlockTap(rndFC + vec2(0.0, 1.0), rp.yz, rndTR, rndTO);' + #10 +
+    '            rndR2 = rndTR;' + #10 +
+    '            rndUV2 = rndTR * (rndLocalUV - vec2(0.0, rndRepeat)) + rndTO;' + #10 +
+    '            }' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.w>0.0){' + #10 +
+    '            gc_rndBlockTap(rndFC + vec2(1.0, 1.0), rp.yz, rndTR, rndTO);' + #10 +
+    '            rndR3 = rndTR;' + #10 +
+    '            rndUV3 = rndTR * (rndLocalUV - vec2(rndRepeat)) + rndTO;' + #10 +
+    '            }' + #10 +
     '            baseUV = rndUV0;' + #10 +
     '        }' + #10 +
     '    }' + #10 +
@@ -1527,12 +1539,12 @@ begin
     '      vec3 roadViewTS=vec3(dot(roadView,Tgeo),dot(roadView,Bgeo),dot(roadView,Ngeo));' + #10 +
     '      rp_sample(vRoadCoord,vRoadStyle,roadDx,roadDy,roadViewTS,roadColor,roadNormal);' + #10 +
     '      diffSample=vec4(roadColor.rgb,1.0);' + #10 +
-    '    } else diffSample = textureGrad(u_ground_atlas,atlasUV,gradX,gradY);' + #10 +
+    '    } else {diffSample=vec4(0);if(GC_SKIP_ZERO==0 || rndW.x>0.0)diffSample = textureGrad(u_ground_atlas,atlasUV,gradX,gradY);}' + #10 +
     '    if (rndOn > 0.5) {' + #10 +
-    '        diffSample = diffSample * rndW.x' + #10 +
-    '            + textureGrad(u_ground_atlas, rndAUV1, rndGX1, rndGY1) * rndW.y' + #10 +
-    '            + textureGrad(u_ground_atlas, rndAUV2, rndGX2, rndGY2) * rndW.z' + #10 +
-    '            + textureGrad(u_ground_atlas, rndAUV3, rndGX3, rndGY3) * rndW.w;' + #10 +
+    '        diffSample *= rndW.x;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.y>0.0)diffSample += textureGrad(u_ground_atlas, rndAUV1, rndGX1, rndGY1) * rndW.y;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.z>0.0)diffSample += textureGrad(u_ground_atlas, rndAUV2, rndGX2, rndGY2) * rndW.z;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.w>0.0)diffSample += textureGrad(u_ground_atlas, rndAUV3, rndGX3, rndGY3) * rndW.w;' + #10 +
     '    }' + #10 +
     '    // At world overview scale, a pixel covers a whole repeated cell.' + #10 +
     '    // Global atlas mips then mix neighbouring MATERIALS and make bands.' + #10 +
@@ -1547,12 +1559,12 @@ begin
     '        if (proceduralRoad) {' + #10 +
     '          vec2 n=roadNormal.xy*2.0-1.0;' + #10 +
     '          nrmSample=vec3(roadNormal.xy,sqrt(max(0.0,1.0-dot(n,n)))*0.5+0.5);' + #10 +
-    '        } else nrmSample = textureGrad(u_ground_normal_atlas, atlasUV, gradX, gradY).rgb;' + #10 +
+    '        } else {nrmSample=vec3(0);if(GC_SKIP_ZERO==0 || rndW.x>0.0)nrmSample = textureGrad(u_ground_normal_atlas, atlasUV, gradX, gradY).rgb;}' + #10 +
     '        if (rndOn > 0.5) {' + #10 +
-    '            nrmSample = nrmSample * rndW.x' + #10 +
-    '                + textureGrad(u_ground_normal_atlas, rndAUV1, rndGX1, rndGY1).rgb * rndW.y' + #10 +
-    '                + textureGrad(u_ground_normal_atlas, rndAUV2, rndGX2, rndGY2).rgb * rndW.z' + #10 +
-    '                + textureGrad(u_ground_normal_atlas, rndAUV3, rndGX3, rndGY3).rgb * rndW.w;' + #10 +
+    '            nrmSample *= rndW.x;' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.y>0.0)nrmSample += textureGrad(u_ground_normal_atlas, rndAUV1, rndGX1, rndGY1).rgb * rndW.y;' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.z>0.0)nrmSample += textureGrad(u_ground_normal_atlas, rndAUV2, rndGX2, rndGY2).rgb * rndW.z;' + #10 +
+    '            if(GC_SKIP_ZERO==0 || rndW.w>0.0)nrmSample += textureGrad(u_ground_normal_atlas, rndAUV3, rndGX3, rndGY3).rgb * rndW.w;' + #10 +
     '        }' + #10 +
     '    }' + #10 +
     '    diffSample.rgb=mix(diffSample.rgb,sidewalkConcrete,sidewalkCurb.x);' + #10 +
@@ -1658,12 +1670,12 @@ begin
     '       u_ground_roughness[] is left attached but no longer read here. */' + #10 +
     '    vec4 maskSample;' + #10 +
     '    if (proceduralRoad) maskSample=vec4(roadColor.a,0.0,roadNormal.z,1.0);' + #10 +
-    '    else maskSample=textureGrad(u_ground_mask_atlas,atlasUV,gradX,gradY);' + #10 +
+    '    else {maskSample=vec4(0);if(GC_SKIP_ZERO==0 || rndW.x>0.0)maskSample=textureGrad(u_ground_mask_atlas,atlasUV,gradX,gradY);}' + #10 +
     '    if (rndOn > 0.5) {' + #10 +
-    '        maskSample = maskSample * rndW.x' + #10 +
-    '            + textureGrad(u_ground_mask_atlas, rndAUV1, rndGX1, rndGY1) * rndW.y' + #10 +
-    '            + textureGrad(u_ground_mask_atlas, rndAUV2, rndGX2, rndGY2) * rndW.z' + #10 +
-    '            + textureGrad(u_ground_mask_atlas, rndAUV3, rndGX3, rndGY3) * rndW.w;' + #10 +
+    '        maskSample *= rndW.x;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.y>0.0)maskSample += textureGrad(u_ground_mask_atlas, rndAUV1, rndGX1, rndGY1) * rndW.y;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.z>0.0)maskSample += textureGrad(u_ground_mask_atlas, rndAUV2, rndGX2, rndGY2) * rndW.z;' + #10 +
+    '        if(GC_SKIP_ZERO==0 || rndW.w>0.0)maskSample += textureGrad(u_ground_mask_atlas, rndAUV3, rndGX3, rndGY3) * rndW.w;' + #10 +
     '    }' + #10 +
     '    maskSample=mix(maskSample,vec4(u_ground_roughness[matId],u_ground_metallic[matId],1.0,1.0),atlasFar);' + #10 +
     '    maskSample.r=mix(maskSample.r,0.9,sidewalkCurb.x);' + #10 +
@@ -1765,6 +1777,9 @@ begin
     '    if(gc_scene_valid)color.rgb=rzSceneDisplay(gc_scene_direct*(1.-gc_shadowCoverage())+gc_scene_indirect);' + #10 +
     '    if(gp_mask>.001)color.rgb=mix(color.rgb,gpWaterFilm(color.rgb,gp_normal,normalize(gLodToCamera),normalize(gc_SunDirToward)),gp_mask);' + #10 +
     '}' + #10;
+  if GetEnvironmentVariable('REZVIVO_LEGACY_ZERO_WEIGHTS')='1' then
+    Result := '#define GC_SKIP_ZERO 0'+#10+Result
+  else Result := '#define GC_SKIP_ZERO 1'+#10+Result;
 end;
 
 

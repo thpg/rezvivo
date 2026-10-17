@@ -3,7 +3,7 @@ unit GameLocalBots;
 interface
 uses Classes, SysUtils, CastleVectors, CastleTransform, CastleScene, CastleViewport,
   BikeParametric, GamePhysicalAgent, GameAgentControllers, GamePhysicsCommon,
-  GameWorld, GamePath, GameLocalBotProfile, GameBotEffort, GameBotCompanyMotion, GameBotRouteExcursion,
+  GameWorld, GamePath, GameLocalBotProfile, GameBotEffort, GameBotCompanyMotion, GameBotRouteExcursion, GameBotSocial,
   GameRiderPoseControl, Osm3dRouteSnapper, fpjson, RiderTripo, GameBotShadow, GameRiderShaderWarmup;
 type
   TCrossingGround = record
@@ -42,6 +42,7 @@ type
     NextAppearance,NextOncoming:Double;
     ReferencePower: Single;
     Excursion:TBotExcursionTarget;
+    Social:TBotSocialState;
     Bots: array[0..LocalBotCount-1] of TLocalBotReplay;
     CrossActive:Boolean;
     CrossRoute,CrossVisual:Integer;
@@ -72,8 +73,14 @@ type
     FReferencePower,FFtp:Single;
     FPrepareIndex,FPrepareStage,FVisibleCount,FRenderLimit:Integer;
     FReady,FRenderEnabled,FAnimationEnabled:Boolean;
+    FPreparing:Boolean;
     FStarted:Boolean;
     FExcursion:TBotExcursionTarget;
+    FSocial:TBotSocialState;
+    FSocialRiders:TSocialRiders;
+    function SocialAgent(Index:Integer):TPhysicalAgent;
+    procedure PlanCompany(Dt:Single;AvatarBike:TBikeInstance);
+  private
     FPoseCachePolicy:Integer;
     FGlbWorker:TTripoGlbWorker;
     FMaxPrepareMs,FLastSwitchMs,FMaxSwitchMs:QWord;
@@ -112,7 +119,11 @@ type
       Models remain cached and detached when absent: no GLB/texture loads while riding. }
     procedure PrepareNext;
     procedure ResetOnRoute(Lanes:TLaneManager;Avatar:TPhysicalAgent);
-    procedure BeforePhysics(Dt:Single);
+    procedure BeforePhysics(Dt:Single;AvatarBike:TBikeInstance=nil);
+    procedure ApplySocialLook(ActorIndex:Integer;var Situation:TRiderSituation);
+    procedure PrepareSocialContact(BotIndex:Integer;AvatarBike:TBikeInstance);
+    function SocialAnimationIndex(Slot:Integer):Integer;
+    function SocialContactParticipant(BotIndex:Integer):Boolean;
     procedure SetRouteExcursion(Active:Boolean;const Nearest:TPathPosition);
     function AnimationStep(Index:Integer;Dt:Single):Single;
     procedure InvalidateShadowPose(Index:Integer);
@@ -141,7 +152,7 @@ implementation
 uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, jsonparser,
   BikeGeometryLib, BikeParametric_Frame, BikeParametric_Crankset,
   GameBikeAvatar, GameRiderTraffic, GameAgentNetwork, GameMath, DebugLog, AppSettings, UiTranslations,
-  GameUserData;
+  GameUserData, RiderHandGrip;
 
 function TLocalBotAgent.RequestedCadence:Single;
 begin
@@ -189,7 +200,11 @@ begin
   FOwner:=Owner;FViewport:=Viewport;FLevel:=Level;FWorld:=World;FAvatar:=Avatar;
   FFtp:=EnsureRange(Ftp,70,600);FReferencePower:=FFtp*0.75;
   FRenderEnabled:=True;FAnimationEnabled:=True;FRenderLimit:=LocalBotVisibleLimit;
-  FPoseCachePolicy:=-1;
+  { Reproducible isolated MCP rides; never changes a normal user's roster. }
+  if(GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1')and
+    (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'')then
+    Seed:=Cardinal(StrToQWordDef(GetEnvironmentVariable('REZVIVO_TEST_BOT_SEED'),Seed));
+  FPoseCachePolicy:=-1;ResetBotSocial(FSocial,Seed xor $73518423);
   FShaderWarmup:=TRiderShaderWarmup.Create;
   FAgents:=TList.Create;FBikes:=TList.Create;FPoses:=TList.Create;
   Text:=TStringList.Create;
@@ -244,83 +259,101 @@ procedure TLocalBots.PrepareNext;
 var I:Integer;B:TBikeInstance;A:TLocalBotAgent;Slot:TClothSlot;Tick:QWord;
   Advance:Boolean;
   Config, Rider:TJSONObject;
+  Pose:TObject;
 begin
-  if FReady then Exit;
-  Tick:=GetTickCount64;I:=FPrepareIndex;A:=GetAgent(I);B:=TBikeInstance(FBikes[I]);
-  Advance:=True;
+  if FReady or FPreparing then Exit;
+  { A native modal loop / thread wait can pump window messages. Never start
+    the same model stage a second time while ownership is being transferred. }
+  FPreparing:=True;
   try
-    case FPrepareStage of
-      0:begin
-        FGlbWorker:=TTripoGlbWorker.Create(ResolveRiderGlbPath('castle-data:/avatars/RIDER.glb'));
-        Config:=TJSONObject(GetJSON(FJson));
-        try
-          Rider:=Config.Objects['tripoRider'];
-          Rider.Delete('body');Rider.Add('body',WriteRiderBody(FProfiles[I].Body));
-          Rider.Floats['scale']:=1;
-          { Cleats follow this bike's actual pedals, not a legacy width
-            saved for an older model. No user fit/profile is inherited. }
-          Rider.Floats['stanceHalf']:=0;
-          Rider.Floats['footYawDeg']:=0;
-          FPrepareJson:=Config.AsJSON;
-        finally Config.Free end;
-        B:=LoadBikeInstanceFromJSONString(FPrepareJson,FOwner,12,30,65,False,True,True);
-        FBikes[I]:=B;B.ShadowMode:=bsmNone;
-        A.Actor.Scene.Add(B.Group);
-        B.ClothDyePresetMode:=cdmShader;
-        for Slot:=Low(Slot)to High(Slot)do B.StageRiderClothColor(Slot,FProfiles[I].Colors[Slot]);
+    Tick:=GetTickCount64;I:=FPrepareIndex;A:=GetAgent(I);B:=TBikeInstance(FBikes[I]);
+    Advance:=True;
+    try
+      case FPrepareStage of
+        0:begin
+          FGlbWorker:=TTripoGlbWorker.Create(ResolveRiderGlbPath('castle-data:/avatars/RIDER.glb'));
+          Config:=TJSONObject(GetJSON(FJson));
+          try
+            Rider:=Config.Objects['tripoRider'];
+            Rider.Delete('body');Rider.Add('body',WriteRiderBody(FProfiles[I].Body));
+            Rider.Floats['scale']:=1;
+            { Cleats follow this bike's actual pedals, not a legacy width
+              saved for an older model. No user fit/profile is inherited. }
+            Rider.Floats['stanceHalf']:=0;
+            Rider.Floats['footYawDeg']:=0;
+            FPrepareJson:=Config.AsJSON;
+          finally Config.Free end;
+          B:=LoadBikeInstanceFromJSONString(FPrepareJson,FOwner,12,30,65,False,True,True);
+          FBikes[I]:=B;B.ShadowMode:=bsmNone;
+          A.Actor.Scene.Add(B.Group);
+          B.ClothDyePresetMode:=cdmShader;
+          for Slot:=Low(Slot)to High(Slot)do B.StageRiderClothColor(Slot,FProfiles[I].Colors[Slot]);
+        end;
+        1:begin
+          if not FGlbWorker.Finished then Exit;
+          AttachTripoRiderFromJSON(B,FPrepareJson,FGlbWorker.Prepared);
+          FreeAndNil(FGlbWorker);
+          FPrepareJson:='';
+          if not B.HasTripoRider then raise Exception.Create('Companion rider model unavailable');
+          { Body was staged before attaching the GLB. Do not deform/upload
+            a default body first and repeat it for the bot's real proportions. }
+          if not B.FitSaddleToRider then
+            raise Exception.Create('Companion rider saddle fit failed');
+        end;
+        2:begin
+          B.TripoRider.HairStyle:=FProfiles[I].Hair;
+          B.TripoRider.SetHeadAppearance(FProfiles[I].Headwear,FProfiles[I].Beard,FProfiles[I].Mustache);
+          B.SetHeadwearColorLive(FProfiles[I].Helmet,True);
+          B.SetFrameColorLive(FProfiles[I].Frame);B.SetRimColorLive(FProfiles[I].Rim);
+          FPoses[I]:=TRiderPoseManager.Create(B,FProfiles[I].EffortSeed);
+          A.Physics.SetWheelProbeHalfSpan(B.AxleHalfSpanM);
+          B.AnimationEnabled:=FAnimationEnabled;
+          B.AnimateFrame(Single(0));
+          B.RiderScene.RenderOptions.CachedAnimationRevision:=1;
+          FShadows[I]:=TBotShadow.Create(FOwner);B.Group.Add(FShadows[I]);
+          FShadows[I].UpdatePose(B);
+          if Assigned(FOnReady)then FOnReady(B,A);
+        end;
+        { All four SubScene accessors now refer to the same bicycle scene.
+          Upload textures once; compile/draw shapes in bounded loading steps. }
+        3:FViewport.PrepareResources(B.Group,[]);
+        4:Advance:=FShaderWarmup.Step(FViewport,A.Actor.Transform,B.Group,B.RiderScene);
       end;
-      1:begin
-        if not FGlbWorker.Finished then Exit;
-        AttachTripoRiderFromJSON(B,FPrepareJson,FGlbWorker.Prepared);
+      if FPrepareStage<Length(FPrepareTimes) then
+        FPrepareTimes[FPrepareStage]:=Max(FPrepareTimes[FPrepareStage],GetTickCount64-Tick);
+      if Advance then Inc(FPrepareStage);
+    except
+      on E:Exception do begin
+        Logger.Warning(Format('[LocalBots] prepare %d stage %d: %s: %s',
+          [I,FPrepareStage,E.ClassName,E.Message]));
+        if Assigned(BackTraceStrFunc) and (ExceptAddr<>nil) then
+          Logger.Warning('[LocalBots] '+BackTraceStrFunc(ExceptAddr));
+        { Detach all ownership slots before destructors, which may dispatch
+          messages while waiting for workers. A failed cleanup must not leave
+          a freed bike/pose available to the next preparation attempt. }
+        FPrepareStage:=5;
+        FBikes[I]:=nil;
+        Pose:=TObject(FPoses[I]);FPoses[I]:=nil;
         FreeAndNil(FGlbWorker);
         FPrepareJson:='';
-        if not B.HasTripoRider then raise Exception.Create('Companion rider model unavailable');
-        { Body was staged before attaching the GLB. Do not deform/upload
-          a default body first and repeat it for the bot's real proportions. }
-        if not B.FitSaddleToRider then
-          raise Exception.Create('Companion rider saddle fit failed');
+        Pose.Free;
+        FreeAndNil(FShadows[I]);
+        FShaderWarmup.Finish;
+        B.Free;
       end;
-      2:begin
-        B.TripoRider.HairStyle:=FProfiles[I].Hair;
-        B.TripoRider.SetHeadAppearance(FProfiles[I].Headwear,FProfiles[I].Beard,FProfiles[I].Mustache);
-        B.SetHeadwearColorLive(FProfiles[I].Helmet,True);
-        B.SetFrameColorLive(FProfiles[I].Frame);B.SetRimColorLive(FProfiles[I].Rim);
-        FPoses[I]:=TRiderPoseManager.Create(B,FProfiles[I].EffortSeed);
-        A.Physics.SetWheelProbeHalfSpan(B.AxleHalfSpanM);
-        B.AnimationEnabled:=FAnimationEnabled;
-        B.AnimateFrame(Single(0));
-        B.RiderScene.RenderOptions.CachedAnimationRevision:=1;
-        FShadows[I]:=TBotShadow.Create(FOwner);B.Group.Add(FShadows[I]);
-        FShadows[I].UpdatePose(B);
-        if Assigned(FOnReady)then FOnReady(B,A);
+    end;
+    FMaxPrepareMs:=Max(FMaxPrepareMs,GetTickCount64-Tick);
+    if FPrepareStage>=5 then begin
+      B:=TBikeInstance(FBikes[I]);if B<>nil then B.Group.Exists:=FRenderEnabled;
+      Inc(FPrepareIndex);FPrepareStage:=0;FReady:=FPrepareIndex>=LocalBotCount;
+      if FReady then begin
+        FShaderWarmup.Finish;
+        Logger.Info(Format('[LocalBots] prepared %d cached riders; max stage=%d ms; visible cap=%d',
+          [LocalBotCount,FMaxPrepareMs,LocalBotVisibleLimit]));
       end;
-      { All four SubScene accessors now refer to the same bicycle scene.
-        Upload textures once; compile/draw shapes in bounded loading steps. }
-      3:FViewport.PrepareResources(B.Group,[]);
-      4:Advance:=FShaderWarmup.Step(FViewport,A.Actor.Transform,B.Group,B.RiderScene);
     end;
-    FPrepareTimes[FPrepareStage]:=Max(FPrepareTimes[FPrepareStage],GetTickCount64-Tick);
-    if Advance then Inc(FPrepareStage);
-  except
-    on E:Exception do begin
-      Logger.Warning('[LocalBots] prepare '+IntToStr(I)+': '+E.Message);
-      FreeAndNil(FGlbWorker);
-      FPrepareJson:='';
-      TObject(FPoses[I]).Free;FPoses[I]:=nil;
-      FreeAndNil(FShadows[I]);
-      FShaderWarmup.Finish;
-      B.Free;FBikes[I]:=nil;FPrepareStage:=5;
-    end;
-  end;
-  FMaxPrepareMs:=Max(FMaxPrepareMs,GetTickCount64-Tick);
-  if FPrepareStage>=5 then begin
-    B:=TBikeInstance(FBikes[I]);if B<>nil then B.Group.Exists:=FRenderEnabled;
-    Inc(FPrepareIndex);FPrepareStage:=0;FReady:=FPrepareIndex>=LocalBotCount;
-    if FReady then begin
-      FShaderWarmup.Finish;
-      Logger.Info(Format('[LocalBots] prepared %d cached riders; max stage=%d ms; visible cap=%d',
-        [LocalBotCount,FMaxPrepareMs,LocalBotVisibleLimit]));
-    end;
+  finally
+    FPreparing:=False;
   end;
 end;
 
@@ -331,6 +364,7 @@ begin
   for I:=0 to FAgents.Count-1 do SetVisible(I,False);
   FLanes:=Lanes;FAvatar:=Avatar;FElapsed:=0;FSelectionTime:=0;FStarted:=False;
   FExcursion:=Default(TBotExcursionTarget);
+  ResetBotSocial(FSocial,FProfiles[0].EffortSeed xor $73518423);
   FNextAppearance:=0;FNextOncoming:=LocalBotOncomingFirst;
   FReferencePower:=FFtp*0.75;FLength:=0;
   SetLength(FDistances,FAvatar.Path.PointCount+1);
@@ -432,6 +466,7 @@ begin
     B.Group.Exists:=FRenderEnabled;
     FViewport.Items.Add(A.Actor.Transform);
   end else begin
+    if B<>nil then B.ResetPartnerContact;
     Dec(FVisibleCount);FViewport.Items.Remove(A.Actor.Transform);
     if A.Oncoming then begin
       A.Spawned:=False;A.PowerControl.SetEnabled(False);
@@ -440,8 +475,7 @@ begin
     A.SetPhysicsLOD(plMinimal);A.Actor.RiderOwnsLean:=False;
     A.State.ShadowPlaneWanted:=False;
     if FLanes<>nil then begin H:=FLanes.FindRider(A);if H>=0 then FLanes.UnregisterRider(H) end;
-    A.State.TrafficMoveConstraint:=nil;A.State.TrafficHeadingConstraint:=nil;
-    A.State.LaneOffsetExternal:=False;
+    ClearTrafficConstraints(A);
   end;
   FLastSwitchMs:=GetTickCount64-Tick;
   FMaxSwitchMs:=Max(FMaxSwitchMs,FLastSwitchMs);
@@ -470,7 +504,7 @@ begin
     frame, visibly stepping the bike and its rider. Only the at-most-three
     rendered bikes facing the camera need continuous animation; unseen
     models still use the cheap cadence and hidden agents keep coarse physics. }
-  if not InCamera then Interval:=1/8;
+  if not InCamera and not SocialContactParticipant(Index)then Interval:=1/8;
   A.AnimationDebt:=A.AnimationDebt+Dt;Result:=0;
   if A.AnimationDebt+0.00001<Interval then Exit;
   Result:=Min(A.AnimationDebt,0.4);A.AnimationDebt:=0;
@@ -534,15 +568,116 @@ begin
   end;
 end;
 
-procedure TLocalBots.BeforePhysics(Dt:Single);
+function TLocalBots.SocialAgent(Index:Integer):TPhysicalAgent;
+begin
+  Result:=nil;
+  if Index=0 then Result:=FAvatar
+  else if(Index>0)and(Index<=LocalBotCount)then Result:=GetAgent(Index-1);
+end;
+
+procedure TLocalBots.PlanCompany(Dt:Single;AvatarBike:TBikeInstance);
+var I,H:Integer;A:TPhysicalAgent;B:TBikeInstance;P:TRiderPose;
+begin
+  if FSocial.Debt+Dt+1e-7<0.2 then begin FSocial.Debt:=FSocial.Debt+Dt;Exit end;
+  FSocialRiders:=Default(TSocialRiders);
+  for I:=0 to High(FSocialRiders)do begin
+    A:=SocialAgent(I);if(A=nil)or(A.State=nil)then Continue;
+    B:=AvatarBike;if I>0 then B:=TBikeInstance(FBikes[I-1]);
+    with FSocialRiders[I]do begin
+      Present:=not FExcursion.Active and not A.State.Walking and FRenderEnabled and
+        FAnimationEnabled and not A.State.FreeTravel;
+      if I>0 then Present:=Present and GetAgent(I-1).Visible and
+        not GetAgent(I-1).Oncoming and not GetAgent(I-1).StartGroundPending;
+      Moving:=A.State.AutoMove and(A.State.CurrentSpeed>0.5);
+      Position:=A.State.WorldPosition;Forward:=A.State.ForwardDir;
+      Speed:=A.State.CurrentSpeed;Width:=A.State.CurrentRoadWidth;
+      Offset:=A.State.LaneOffset;LateralAccel:=A.State.CurrentLateralAccel;
+      Effort:=A.State.AppliedPowerWatts/Max(100,FFtp);Reserve:=1;
+      if I>0 then begin
+        Effort:=A.State.AppliedPowerWatts/Max(100,ReferencePower(I-1));
+        Reserve:=GetAgent(I-1).Effort.Energy;
+      end;
+      if Present and(B<>nil)then begin
+        P:=B.BuildRiderPose('');
+        HandsAvailable:=not B.RiderContactsChanging and not P.Grounded and
+          (P.Motion.Standing<0.1)and(P.HandPosR>0)and(P.HandPosL>0);
+      end;
+    end;
+  end;
+  StepBotSocial(FSocial,FSocialRiders,Dt);
+  if FLanes<>nil then for I:=1 to High(FSocialRiders)do begin
+    H:=FLanes.FindRider(SocialAgent(I));
+    FLanes.SetCompanyLine(H,FSocial.Riders[I].LineWanted and FSocialRiders[I].Present,
+      FSocial.Riders[I].LineOffset);
+  end;
+end;
+
+procedure TLocalBots.ApplySocialLook(ActorIndex:Integer;var Situation:TRiderSituation);
+var I:Integer;A,B:TPhysicalAgent;
+begin
+  if(ActorIndex<0)or(ActorIndex>=SocialRiderCount)then Exit;
+  Situation.CompanySupport:=(FSocial.Helper>=0)and
+    ((FSocial.Helper=ActorIndex)or(FSocial.Recipient=ActorIndex));
+  with FSocial.Riders[ActorIndex]do begin
+    if(LookTime<=0)or(LookDelay>0)then Exit;
+    I:=LookPartner;
+  end;
+  A:=SocialAgent(ActorIndex);B:=SocialAgent(I);
+  if(A=nil)or(B=nil)then Exit;
+  if(I>0)and not GetAgent(I-1).Visible then Exit;
+  Situation.PartnerLookSerial:=FSocial.Riders[ActorIndex].LookSerial;
+  SetRiderLookTarget(Situation,A.State.WorldPosition,A.State.ForwardDir,
+    B.State.WorldPosition+Vector3(0,1.45,0));
+end;
+
+function TLocalBots.SocialContactParticipant(BotIndex:Integer):Boolean;
+begin
+  Result:=(FSocial.Helper>=0)and((FSocial.Helper=BotIndex+1)or
+    (FSocial.Recipient=BotIndex+1));
+end;
+
+function TLocalBots.SocialAnimationIndex(Slot:Integer):Integer;
+var H:Integer;
+begin
+  Result:=Slot;H:=FSocial.Helper-1;
+  if(H<0)or(H>=FBikes.Count)then Exit;
+  if Slot=FBikes.Count-1 then Result:=H
+  else if Slot>=H then Result:=Slot+1;
+end;
+
+procedure TLocalBots.PrepareSocialContact(BotIndex:Integer;AvatarBike:TBikeInstance);
+var B,Peer:TBikeInstance;P:TVector3;Frame:TRiderGripFrame;J:Integer;
+begin
+  B:=TBikeInstance(FBikes[BotIndex]);if B=nil then Exit;
+  if FSocial.Helper<>BotIndex+1 then begin
+    B.SetPartnerContact(False,TVector3.Zero,Default(TRiderGripFrame));Exit;
+  end;
+  J:=FSocial.Recipient;Peer:=AvatarBike;
+  if J>0 then Peer:=TBikeInstance(FBikes[J-1]);
+  if(Peer<>nil)and Peer.Group.Exists and not Peer.RiderContactsChanging and
+    Peer.RiderBackContact(B.Group.WorldTranslation,P,Frame)and
+    B.SetPartnerContact(True,P,Frame)then Exit;
+  { Anatomy/pose may reject an otherwise safe physical pairing. Release it
+    immediately instead of stretching the arm or hovering beside the back. }
+  B.SetPartnerContact(False,TVector3.Zero,Default(TRiderGripFrame));
+  FSocial.Riders[BotIndex+1].Mode:=smPass;
+  FSocial.Helper:=-1;FSocial.Recipient:=-1;FSocial.AssistCooldown:=15;
+end;
+
+procedure TLocalBots.BeforePhysics(Dt:Single;AvatarBike:TBikeInstance);
 var I,CompanionLimit:Integer;A:TLocalBotAgent;C:TLocalBotController;P:TPathPosition;
   Distance,CameraDistance,Target,Gap,Behind:Single;InCamera:Boolean;
   EffortInput:TBotEffortInput;
   WaitInput:TBotWaitInput;WaitControl:TBotWaitControl;RiderMoving:Boolean;
+  SocialBrake,SpeedError,Resistance:Single;
 begin
   if not FReady or(Dt<=0)or IsNan(Dt)or IsInfinite(Dt)or(FLength<200)then Exit;
   StepBotExcursionTarget(FExcursion,Dt);
   RiderMoving:=FAvatar.State.AutoMove and (Abs(FAvatar.State.CurrentSpeed)>0.2);
+  { A powered rider yielding to oncoming traffic is still riding. Otherwise
+    the waiting company stops across the very space needed to finish passing. }
+  if FStarted and FAvatar.State.AutoMove and(FAvatar.State.AppliedPowerWatts>20)and
+    (FAvatar.State.TrafficLookAhead>0)then RiderMoving:=True;
   if RiderMoving then FStarted:=True;
   if RiderMoving or FExcursion.Active then FElapsed:=FElapsed+Dt;
   { One companion can wait at the start; nobody races a motionless player.
@@ -568,6 +703,7 @@ begin
   Target:=FAvatar.State.AppliedPowerWatts;
   if Target>10 then FReferencePower:=FReferencePower+
     (EnsureRange(Target,FFtp*0.30,FFtp*1.5)-FReferencePower)*(1-Exp(-Dt/90));
+  PlanCompany(Dt,AvatarBike);
   for I:=0 to LocalBotCount-1 do begin
     A:=GetAgent(I);C:=TLocalBotController(A.PowerControl);
     if not A.Spawned then begin
@@ -581,6 +717,7 @@ begin
       A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance-Behind;
       A.State.CurrentSpeed:=FAvatar.State.CurrentSpeed;A.Spawned:=True;
     end;
+    EffortInput:=Default(TBotEffortInput);SocialBrake:=0;
     EffortInput.SustainableWatts:=LocalBotSustainablePower(FProfiles[I],FReferencePower,FAvatar.State.AvatarMass);
     EffortInput.CapacitySeconds:=FProfiles[I].CapacitySeconds;
     EffortInput.RecoverySeconds:=FProfiles[I].RecoverySeconds;
@@ -590,6 +727,20 @@ begin
     EffortInput.Racing:=not FExcursion.Active and not A.Oncoming and (EffortInput.RiderSpeed>0.5);
     EffortInput.UnderPressure:=(EffortInput.Gap>0)and(EffortInput.Gap<30)and
       (EffortInput.RiderSpeed>EffortInput.Speed+0.4);
+    EffortInput.CompanyControl:=FSocial.Riders[I+1].Control and RiderMoving and
+      not FExcursion.Active and not A.Oncoming;
+    if EffortInput.CompanyControl then begin
+      SpeedError:=FSocial.Riders[I+1].FollowSpeed-A.State.CurrentSpeed;
+      Resistance:=0.5*AirDensity*A.State.DragCoefficient*A.State.FrontalArea*Sqr(A.State.CurrentSpeed)+
+        A.State.AvatarMass*Gravity*(Sin(DegToRad(A.State.CurrentSlopeAngle))+
+        A.State.RollingResistance*Cos(DegToRad(A.State.CurrentSlopeAngle)));
+      EffortInput.CompanyPower:=Max(0,(Resistance+A.State.AvatarMass*
+        EnsureRange(SpeedError*0.65,-0.8,0.8))*Max(2,A.State.CurrentSpeed));
+      { Light physical braking when coasting cannot close a downhill gap.
+        Never set velocity or bypass the traffic limiter. }
+      if EffortInput.CompanyPower<1 then SocialBrake:=EnsureRange(
+        -Resistance-A.State.AvatarMass*SpeedError*0.65,0.0,60.0);
+    end;
     WaitInput:=Default(TBotWaitInput);
     WaitInput.Started:=FStarted;WaitInput.RiderMoving:=RiderMoving;
     WaitInput.Distance:=A.State.CumulativeDistance;WaitInput.Gap:=RouteGap(I);
@@ -624,6 +775,7 @@ begin
       WaitControl:=StepBotWait(A.Waiting,WaitInput,Dt);
       C.SetDesiredPower(WaitControl.Power);C.SetEnabled(WaitControl.Enabled);
       C.BrakeForce:=WaitControl.BrakeForce;
+      if A.Waiting.Mode=bwmRiding then C.BrakeForce:=Max(C.BrakeForce,SocialBrake);
       if not WaitControl.Enabled then A.State.AppliedPowerWatts:=0;
     end;
   end;
@@ -898,7 +1050,7 @@ var I:Integer;A:TLocalBotAgent;
 begin
   Result:=Default(TLocalBotsReplay);
   Result.Started:=FStarted;
-  Result.Excursion:=FExcursion;
+  Result.Excursion:=FExcursion;Result.Social:=FSocial;
   Result.Elapsed:=FElapsed;Result.SelectionTime:=FSelectionTime;Result.ReferencePower:=FReferencePower;
   Result.NextAppearance:=FNextAppearance;Result.NextOncoming:=FNextOncoming;
   for I:=0 to LocalBotCount-1 do begin A:=GetAgent(I);
@@ -927,7 +1079,7 @@ var I:Integer;A:TLocalBotAgent;
 begin
   RemoveCrossing;
   FStarted:=Value.Started;
-  FExcursion:=Value.Excursion;
+  FExcursion:=Value.Excursion;FSocial:=Value.Social;
   FElapsed:=Value.Elapsed;FSelectionTime:=Value.SelectionTime;FReferencePower:=Value.ReferencePower;
   for I:=0 to LocalBotCount-1 do begin A:=GetAgent(I);
     A.Spawned:=Value.Bots[I].Spawned;A.StepDebt:=Value.Bots[I].StepDebt;
@@ -965,6 +1117,8 @@ var I:Integer;Rows:TJSONArray;A:TLocalBotAgent;B:TBikeInstance;P,V,BB,Saddle:TVe
   Frame:TFrameComponent;Crank:TCranksetComponent;
 begin
   Result:=TJSONObject.Create(['count',FAgents.Count,'company_count',LocalBotCount,
+    'social_helper',FSocial.Helper,'social_recipient',FSocial.Recipient,
+    'social_contact_time',FSocial.AssistTime,'social_hold_seconds',FSocial.AssistHold,
     'pose_cache_policy',FPoseCachePolicy,
     'crossings',Length(FCrossings),'cross_active',FCrossAgent<>nil,
     'cross_created',FCrossSerial,'cross_removed',FCrossRemoved,
@@ -986,6 +1140,10 @@ begin
     V:=VisibilityPosition(A);RiderDistance:=(V-FAvatar.State.WorldPosition).Length;
     CameraRelation(A,CameraDistance,InCamera);
     Rows.Add(TJSONObject.Create(['index',I,'spawned',A.Spawned,'visible',A.Visible,
+      'social',SocialModeName(FSocial.Riders[I+1].Mode),'partner',FSocial.Riders[I+1].Partner,
+      'social_speed',FSocial.Riders[I+1].FollowSpeed,'social_line',FSocial.Riders[I+1].LineOffset,
+      'drafts',Int64(FSocial.Riders[I+1].Drafts),'lead_changes',Int64(FSocial.Riders[I+1].Changes),
+      'helps',Int64(FSocial.Riders[I+1].Helps),'partner_looks',Int64(FSocial.Riders[I+1].Looks),
       'oncoming',A.Oncoming,'heading',TJSONArray.Create([A.State.ForwardDir.X,A.State.ForwardDir.Y,A.State.ForwardDir.Z]),
       'model_loaded',FBikes[I]<>nil,'ability',FProfiles[I].Ability,
       'effort',BotEffortModeName(A.Effort.Mode),'reserve_pct',A.Effort.Energy*100,

@@ -8,7 +8,8 @@ unit RiderPoseCorrectives;
 interface
 
 uses RiderShaderSharing, Classes, SysUtils, Math, fpjson, jsonparser, CastleUtils, CastleVectors, CastleImages,
-  CastleScene, X3DNodes, X3DFields, TripoRig, RiderBodyParameters, RiderBodyDeformation;
+  CastleScene, X3DNodes, X3DFields, TripoRig, RiderBodyParameters, RiderBodyDeformation,
+  RiderPosePreparation;
 
 type
   TRiderPoseCorrectives = class
@@ -29,13 +30,20 @@ type
     FBody: TRiderBodyDeformation;
     FFaceValue: TVector4;
     FCpuFace, FGpuFace: TSFVec4f;
+    FPreparedExpressions:TRiderPoseExpressions;
+    FPreparedField:TMFFloat;
+    FPreparedList:TSingleList;
+    FPrepareScratch,FPrepareInputs,FPrepareWeights:array of Single;
+    FPreparedValid:Boolean;
   public
     NeededJoints: array of Boolean;
     constructor Create;
     destructor Destroy; override;
     function Load(const ModelPath: string; Scene: TCastleScene;
       Skin: TSkinNode; Rig: TTripoRig): Boolean;
-    function ShaderSource: string;
+    function ShaderSource(const Prepared:Boolean=False): string;
+    procedure AddPreparedUniforms(Effect:TEffectNode);
+    procedure PreparePose(const Angles:TVector3List);
     procedure AddUniforms(Effect: TEffectNode);
     procedure SetGpuActive(Enabled: Boolean);
     procedure SetNativeSkinActive(Enabled: Boolean);
@@ -56,11 +64,13 @@ begin
   inherited;
   FNativeSkinActive := True;
   FAngleList := TSingleList.Create;
+  FPreparedList:=TSingleList.Create;
 end;
 
 destructor TRiderPoseCorrectives.Destroy;
 begin
   FBody.Free;
+  FPreparedExpressions.Free;FPreparedList.Free;
   FAngleList.Free;
   if FCpuEffect <> nil then
   begin
@@ -84,6 +94,7 @@ var
   Coefficients: TJSONArray;
   FileData: TMemoryStream;
   Lines: TStringList;
+  Symbols:TStringList;
   Pixels: TRGBAlphaFloatImage;
   Props: TTexturePropertiesNode;
   Shape: TShapeNode;
@@ -153,12 +164,16 @@ begin
     SetLength(NeededJoints, Rig.JointCount);
     Shapes := ArrOf(Root, 'shapes'); Controls := ArrOf(Root, 'controls');
     SetLength(ControlMasks, Controls.Count);
+    FreeAndNil(FPreparedExpressions);FPreparedExpressions:=TRiderPoseExpressions.Create;
     Lines := TStringList.Create;
+    Symbols:=TStringList.Create;
     try
       Lines.Add('float riderPsdWeight(int id) {');
       for I := 0 to Controls.Count - 1 do
       begin
         Control := Controls.Objects[I]; Variables := ObjOf(Control, 'variables');
+        Symbols.Clear;
+        for K:=0 to 3 do Symbols.AddObject('uRiderFaceShape.'+'xyzw'[K+1],TObject(PtrInt(Rig.JointCount*3+K)));
         Lines.Add('  if (id == ' + IntToStr(I) + ') {');
         for K := 0 to Variables.Count - 1 do
         begin
@@ -181,14 +196,24 @@ begin
           NeededJoints[J] := True;
           ControlMasks[I] := ControlMasks[I] or JointMask(J);
           Lines.Add('    float ' + Variables.Names[K] + ' = riderPsdComponent(' + IntToStr(J) + ',' + IntToStr(Axis) + ');');
+          Symbols.AddObject(Variables.Names[K],TObject(PtrInt(J*3+Axis)));
         end;
         Expr := Control.Get('glsl', '0.0');
+        if FPreparedExpressions<>nil then
+          try FPreparedExpressions.Add(Expr,Symbols);
+          except on E:EReadError do FreeAndNil(FPreparedExpressions) end;
         Lines.Add('    return ' + Expr + ';');
         Lines.Add('  }');
       end;
       Lines.Add('  return 0.0;'); Lines.Add('}');
       FWeightsSource := Lines.Text;
-    finally Lines.Free end;
+    finally Symbols.Free;Lines.Free end;
+    if FPreparedExpressions<>nil then begin
+      SetLength(FPrepareScratch,FPreparedExpressions.NodeCount);
+      SetLength(FPrepareWeights,FPreparedExpressions.Count);
+      SetLength(FPrepareInputs,Rig.JointCount*3+4);
+      FPreparedList.Count:=FPreparedExpressions.Count;
+    end;
     Pixels := TRGBAlphaFloatImage.Create(FWidth, FHeight);
     try
       FileData.ReadBuffer(Pixels.RawPixels^, FWidth * FHeight * SizeOf(TVector4));
@@ -324,6 +349,7 @@ end;
 procedure TRiderPoseCorrectives.DetachGpu;
 begin
   FGpuFace:=nil;
+  FPreparedField:=nil;FPreparedValid:=False;
   if FBody<>nil then FBody.DetachGpu;
 end;
 
@@ -382,14 +408,42 @@ begin
   finally Seen.Free end;
 end;
 
-function TRiderPoseCorrectives.ShaderSource: string;
+procedure TRiderPoseCorrectives.AddPreparedUniforms(Effect:TEffectNode);
+begin
+  if FPreparedExpressions=nil then Exit;
+  FPreparedField:=TMFFloat.Create(Effect,True,'uRiderPreparedPsd',[]);
+  FPreparedField.Items.Assign(FPreparedList);Effect.AddCustomField(FPreparedField);
+  FPreparedValid:=False;
+end;
+
+procedure TRiderPoseCorrectives.PreparePose(const Angles:TVector3List);
+var J,K:Integer;Changed:Boolean;
+begin
+  if(FPreparedExpressions=nil)or(FPreparedField=nil)then Exit;
+  for J:=0 to Angles.Count-1 do for K:=0 to 2 do FPrepareInputs[J*3+K]:=Angles[J].Data[K];
+  for K:=0 to 3 do FPrepareInputs[Length(FPrepareInputs)-4+K]:=FFaceValue.Data[K];
+  FPreparedExpressions.Evaluate(FPrepareInputs,FPrepareScratch,FPrepareWeights);
+  Changed:=not FPreparedValid;
+  for J:=0 to High(FPrepareWeights)do begin
+    if FPreparedList[J]<>FPrepareWeights[J]then Changed:=True;
+    FPreparedList[J]:=FPrepareWeights[J];
+  end;
+  if Changed then begin FPreparedField.Send(FPreparedList);FPreparedValid:=True end;
+end;
+
+function TRiderPoseCorrectives.ShaderSource(const Prepared:Boolean): string;
+var Weights:string;
 begin
   Result := '';
   if FBodyContact then Result := 'uniform vec3 uRiderPsdContact;' + LineEnding;
+  Weights:=FWeightsSource;
+  if Prepared and(FPreparedExpressions<>nil)then
+    Weights:='uniform float uRiderPreparedPsd['+IntToStr(FPreparedExpressions.Count)+'];'+LineEnding+
+      'float riderPsdWeight(int id){return uRiderPreparedPsd[id];}'+LineEnding;
   Result := Result + 'uniform vec4 uRiderFaceShape;' + LineEnding +
     'attribute vec3 riderPsdSpan;' + LineEnding +
     'uniform sampler2D uRiderPsdAtlas;' + LineEnding +
-    'uniform vec2 uRiderPsdSize;' + LineEnding + FWeightsSource +
+    'uniform vec2 uRiderPsdSize;' + LineEnding + Weights +
     'vec4 riderPsdTexel(float id) {' + LineEnding +
     '  return texture2D(uRiderPsdAtlas, (vec2(mod(id,uRiderPsdSize.x),floor(id/uRiderPsdSize.x))+0.5)/uRiderPsdSize);' + LineEnding +
     '}' + LineEnding +

@@ -54,6 +54,7 @@ begin
   ResetRiderRuntimeAudit;RiderRuntimeAuditActive:=True;
   ProfileSharedEffects:=True;
   SharedEffectCalls:=0;SharedEffectFields:=0;SharedEffectUploads:=0;
+  SharedDeformationSkips:=0;
   SharedEffectSeconds:=0;DynamicUniformSeconds:=0;
   RenderShapeSeconds:=0;MeshBeginSeconds:=0;MeshAttributesSeconds:=0;
   MeshPoseSeconds:=0;MeshDrawSeconds:=0;MeshEndSeconds:=0;
@@ -155,6 +156,7 @@ begin
   Work.Add('shared_effect_calls',Int64(SharedEffectCalls));
   Work.Add('shared_effect_fields',Int64(SharedEffectFields));
   Work.Add('shared_effect_uploads',Int64(SharedEffectUploads));
+  Work.Add('deformation_effects_skipped',Int64(SharedDeformationSkips));
   Work.Add('shared_effect_ms',SharedEffectSeconds*1000);
   Work.Add('dynamic_uniform_ms',DynamicUniformSeconds*1000);
   Work.Add('render_shape_ms',RenderShapeSeconds*1000);
@@ -171,6 +173,7 @@ begin
   Work.Add('shared_upload_ms',SharedUploadSeconds*1000);
   if Reset then begin
     SharedEffectCalls:=0;SharedEffectFields:=0;SharedEffectUploads:=0;
+    SharedDeformationSkips:=0;
     SharedEffectSeconds:=0;DynamicUniformSeconds:=0;
     RenderShapeSeconds:=0;MeshBeginSeconds:=0;MeshAttributesSeconds:=0;
     MeshPoseSeconds:=0;MeshDrawSeconds:=0;MeshEndSeconds:=0;

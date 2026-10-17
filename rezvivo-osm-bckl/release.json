@@ -1,7 +1,7 @@
 {
-  "version": "0.4.1-alpha.1",
-  "build": 16,
-  "file_version": "0.4.1.16",
+  "version": "0.4.2-alpha.1",
+  "build": 17,
+  "file_version": "0.4.2.17",
   "channel": "alpha",
-  "notes": "Add smooth offline 30 fps MP4 recording with hidden debug panels. Improve rider and bot bike fitting and choose an opposite-sex first companion. Fix blocked keyboard-powered starts on the rollerski route. Apply RTX Screen rider shadows to sunlight before tone mapping, preserving sky illumination and transparent overlays."
+  "notes": "Improve camera tracking and remove stepped turning between physics updates. Optimize world rendering, RTX shadows and vegetation, prepare more tile data in the background, and fix the rectangular branch-LOD artifact. Keep the world render cache off by default and explain its possible artifacts. Improve architectural details and rider interactions."
 }

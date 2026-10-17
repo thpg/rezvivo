@@ -23,7 +23,7 @@ interface
 uses
   RiderShaderSharing, Classes, SysUtils, Math,
   CastleUtils, CastleVectors, CastleScene, X3DNodes, X3DFields,
-  TripoRig, RiderTripo, RiderHandGrip, RiderMotion;
+  TripoRig, RiderTripo, RiderHandGrip, RiderMotion, RiderPosePreparation;
 
 type
   { ── этап 5: захваченные bind-константы для аналитической тени ── }
@@ -70,6 +70,15 @@ type
     FUHandRest: TMFMatrix4f;
     FUHandForward: array[0..1] of TSFVec3f;
     FUsePosePalette: Boolean;
+    FUsePreparedPose,FPreparedValid:Boolean;
+    FPreparedSourceRevision,FPreparedRevision,FPreparedFaceRevision,FPreparedBodyRevision:QWord;
+    FJointRouting:array of Integer;
+    FPreparedInputs:array of TRiderPoseJointInput;
+    FFinalList,FJointDeltaList,FPreparedBindRot:TMatrix4List;
+    FQuatList:TVector4List;
+    FAngleList:TVector3List;
+    FUFinal:TMFMatrix4f;
+    FUQuats:TMFVec4f;
     FUPose: TMFMatrix4f;
     FPoseList: TMatrix4List;
     FHandJointIndices: array of Integer;
@@ -127,6 +136,7 @@ type
     procedure SetPoseMatrix(Index: Integer; const Q: TTripoVec4;
       const P: TTripoVec3; const BindQ: TTripoVec4; const BindP: TTripoVec3);
     procedure UploadPosePalette;
+    procedure PreparePoseFrame(Sender:TObject);
   public
     constructor Create(ARider: TTripoRiderScene);
     { Сгенерировать GLSL из рига, создать эффект и навесить на шейпы скина. }
@@ -151,6 +161,9 @@ type
     procedure Detach;
     destructor Destroy; override;
     property Ready: Boolean read FReady;
+    { Read-only diagnostics report the instantiated backend, not an env request. }
+    property UsesPosePalette:Boolean read FUsePosePalette;
+    property UsesPreparedPose:Boolean read FUsePreparedPose;
     function Active: Boolean;
     { TEMP-DIAG: проставлена ли Scene у эффекта (корень «uniform не доходит») }
     function EffectSceneAssigned: Boolean;
@@ -250,11 +263,19 @@ begin
   FRestList := TMatrix4List.Create;
   FBindTList := TVector3List.Create;
   FUsePosePalette := GetEnvironmentVariable('REZVIVO_RIDER_POSE_PALETTE') <> '0';
+  { Full preparation reduces vertex arithmetic, but the measured 1/4-rider
+    whole-frame cost is higher on the reference machine. Retain the verified
+    experiment explicitly; the normal path keeps the compact pose palette. }
+  FUsePreparedPose:=FUsePosePalette and(GetEnvironmentVariable('REZVIVO_RIDER_PREPARED_POSE')='1');
   FPoseList := TMatrix4List.Create;
+  FFinalList:=TMatrix4List.Create;FJointDeltaList:=TMatrix4List.Create;FPreparedBindRot:=TMatrix4List.Create;
+  FQuatList:=TVector4List.Create;FAngleList:=TVector3List.Create;
 end;
 
 destructor TGpuRiderSkin.Destroy;
 begin
+  if(FRider<>nil)and(FRider.Lod<>nil)then FRider.Lod.SetBatchActive(False);
+  if(FRider<>nil)and(TMethod(FRider.PrepareGpuPose).Data=Pointer(Self))then FRider.PrepareGpuPose:=nil;
   if(FRider<>nil)and(FRider.Correctives<>nil)then FRider.Correctives.DetachGpu;
   if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
   { FEffect is parented to appearances — it dies with the rider scene.
@@ -276,6 +297,7 @@ begin
   FRestList.Free;
   FBindTList.Free;
   FPoseList.Free;
+  FFinalList.Free;FJointDeltaList.Free;FPreparedBindRot.Free;FQuatList.Free;FAngleList.Free;
   FShNameIdx.Free;
   inherited;
 end;
@@ -285,6 +307,8 @@ begin
   { Disable only. Extract/Free of TEffectNode while the scene is mounted
     races the renderer and raises EObjectCheck (often on rider-list click). }
   FReady := False;
+  if(FRider<>nil)and(FRider.Lod<>nil)then FRider.Lod.SetBatchActive(False);
+  if(FRider<>nil)and(TMethod(FRider.PrepareGpuPose).Data=Pointer(Self))then FRider.PrepareGpuPose:=nil;
   if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
   if(FRider<>nil)and(FRider.Correctives<>nil)then FRider.Correctives.DetachGpu;
   if FEffect = nil then Exit;
@@ -330,6 +354,7 @@ var
   begin Result := V3Len(V3Sub(BindPos(Child), BindPos(Parent))); end;
 begin
   if (FRider = nil) or (FRider.Rig = nil) then Exit;
+  Inc(FPreparedSourceRevision);FPreparedValid:=False;
   Rig := FRider.Rig;
   if (FRestCount <= 0) or (Rig.JointCount <> FRestCount) then Exit;
   if FUHandRest <> nil then
@@ -819,6 +844,12 @@ begin
   FEffect.Language := slGLSL;
   FEffect.X3DName := 'TripoGpuSkin';
   FEffect.InternalCacheVertexAnimation := True;
+  { All fields belong to this object-space deformation plug. When the renderer
+    has proved that its current posed VBO can be reused without capture, no
+    color-pass vertex or fragment stage consumes them. Other appearance
+    effects (cloth/material/skin) retain their normal uniform updates. }
+  FEffect.InternalDeformationOnlyUniforms :=
+    GetEnvironmentVariable('REZVIVO_RIDER_POSE_UNIFORM_PRUNE') <> '0';
   if FRider.Face<>nil then FRider.Face.AttachGpu(FEffect);
   { Static skeleton routing is data, not a separate IK call site for every
     joint. The driver otherwise inlines the full limb solver in dozens of
@@ -839,6 +870,17 @@ begin
     end else JointCode.Items.Add(Kind[J] * 8 + PPart[J]);
   end;
   FEffect.AddCustomField(JointCode);
+  SetLength(FJointRouting,NJ);
+  FFinalList.Count:=NJ;FJointDeltaList.Count:=NJ;FPreparedBindRot.Count:=NJ;FQuatList.Count:=NJ;FAngleList.Count:=NJ;
+  for I:=0 to NJ-1 do begin
+    FJointRouting[I]:=JointCode.Items[I];FFinalList[I]:=TMatrix4.Identity;
+    FJointDeltaList[I]:=TMatrix4.Identity;FQuatList[I]:=Vector4(0,0,0,1);FAngleList[I]:=TVector3.Zero;
+    FPreparedBindRot[I]:=RestToCastle(Mat4FromQuat(BindRot(I)));
+  end;
+  if FUsePreparedPose then begin
+    FUFinal:=TMFMatrix4f.Create(FEffect,True,'uGskSkin',[]);FUFinal.Items.Assign(FFinalList);FEffect.AddCustomField(FUFinal);
+    FUQuats:=TMFVec4f.Create(FEffect,True,'uGskSkinQuat',[]);FUQuats.Items.Assign(FQuatList);FEffect.AddCustomField(FUQuats);
+  end;
   { Uniform bounds preserve the solver iterations without driver unrolling. }
   Iterations := TMFInt32.Create(FEffect, True, 'uGskIterations', [4, 8, 4]);
   FEffect.AddCustomField(Iterations);
@@ -899,6 +941,10 @@ begin
   begin
     FRider.Correctives.SetGpuActive(True);
     FRider.Correctives.AddUniforms(FEffect);
+    if FUsePreparedPose then begin
+      FRider.Correctives.AddPreparedUniforms(FEffect);
+      if FRider.Correctives.Body<>nil then FRider.Correctives.Body.AddPreparedUniforms(FEffect);
+    end;
   end;
   if FRider.Face<>nil then FRider.Face.Gpu:=True;
 
@@ -936,6 +982,10 @@ begin
     SL.Add('uniform vec3 uVecs[8];');
     SL.Add('uniform mat4 uGskRest[' + IntToStr(NJ) + '];');
     SL.Add('uniform int uGskJointCode[' + IntToStr(NJ) + '];');
+    if FUsePreparedPose then begin
+      SL.Add('uniform mat4 uGskSkin['+IntToStr(NJ)+'];');
+      SL.Add('uniform vec4 uGskSkinQuat['+IntToStr(NJ)+'];');
+    end;
     SL.Add('uniform vec3 uBindT[' + IntToStr(NJ) + '];');
     SL.Add('#define uGripQ0 vec4(uScalars[45],uScalars[46],uScalars[47],uScalars[48])');
     SL.Add('#define uGripQ1 vec4(uScalars[49],uScalars[50],uScalars[51],uScalars[52])');
@@ -1295,6 +1345,10 @@ begin
     if FRider.Face<>nil then SL.Add(FRider.Face.ShaderSource)
     else SL.Add('mat4 riderFaceDelta(int j){return mat4(1.0);}');
     SL.Add('mat4 gskGetD(int j) {');
+    if FUsePreparedPose then begin
+      SL.Add('  return uGskSkin[j];');
+      SL.Add('#if 0');
+    end;
     SL.Add('  int routing = uGskJointCode[j]; int handSlot=routing/64; int code=routing-handSlot*64;');
     SL.Add('  if (code == 0) return gskRest(j);');
     SL.Add('  int kind = code / 8; int part = code - kind*8;');
@@ -1306,6 +1360,7 @@ begin
       wrist. The release is deliberately small (at most 18 percent). }
     SL.Add('  if (kind >= 4 && part == 3) { float grip=uScalars[33 + kind - 4]; hand=mat4(1.0)*(1.0-grip)+uGskHandRest[handSlot]*grip; }');
     SL.Add('  return gskDelta[slot + part] * hand * gskRest(j) * riderFaceDelta(j);');
+    if FUsePreparedPose then SL.Add('#endif');
     SL.Add('}');
 
     { ── plug: LBS по 4 влияниям ── }
@@ -1335,8 +1390,8 @@ begin
             PsdRotation(I) + ',' + PsdRotation(Rig.JointParent[I]) + ',' + S + '),axis);');
         end;
       SL.Add('  return 0.0;'); SL.Add('}');
-      SL.Add(FRider.Correctives.ShaderSource);
-      if FRider.Correctives.Body<>nil then SL.Add(FRider.Correctives.Body.ShaderSource('gskGetD'));
+      SL.Add(FRider.Correctives.ShaderSource(FUsePreparedPose));
+      if FRider.Correctives.Body<>nil then SL.Add(FRider.Correctives.Body.ShaderSource('gskGetD',FUsePreparedPose));
     end;
     SL.Add('void PLUG_vertex_object_space(inout vec4 vertex, inout vec3 normal) {');
     SL.Add('  vec4 W = castle_SkinWeights0;');
@@ -1477,6 +1532,8 @@ begin
   FReady := True;
   FLastValid := False;   { первый SendFrame после Build обязан послать все uniform'ы }
   UploadBindUniforms;    { fill uGskRest / uBindT now that Scene is set }
+  if FUsePreparedPose then FRider.PrepareGpuPose:=@PreparePoseFrame;
+  if FRider.Lod<>nil then begin FRider.Lod.BuildBatches;FRider.Lod.SetBatchActive(True)end;
   Result := True;
   if BikeDumpShaders then
     StartupLog(Format('[gpu-skin] built: %d joints, %d shape(s), GLSL -> logs%sgpu_skin.vs',
@@ -1547,6 +1604,7 @@ end;
 procedure TGpuRiderSkin.UploadPosePalette;
 var I, Slot: Integer;
 begin
+  Inc(FPreparedSourceRevision);
   for I := 0 to RiderSpineChainCount-1 do
     if FSpineEx[I] then
     begin
@@ -1556,6 +1614,45 @@ begin
   UpdateShadowLimbs;
   FShDirty := False; { contacts, helmet and AO reuse this frame's pose }
   FUPose.Send(FPoseList);
+end;
+
+procedure TGpuRiderSkin.PreparePoseFrame(Sender:TObject);
+var I,Code,HandSlot:Integer;M,Previous:TMatrix4;Grip:TVector2;
+  FaceRevision,BodyRevision:QWord;Changed:Boolean;
+begin
+  if not FUsePreparedPose or not FReady or not Active or not FLastValid then Exit;
+  FaceRevision:=0;BodyRevision:=0;
+  if FRider.Face<>nil then FaceRevision:=FRider.Face.Revision;
+  if(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil)then
+    BodyRevision:=FRider.Correctives.Body.PrepareRevision;
+  if FPreparedValid and(FPreparedRevision=FPreparedSourceRevision)and
+    (FPreparedFaceRevision=FaceRevision)and(FPreparedBodyRevision=BodyRevision)then Exit;
+  { Snapshot numeric inputs before computation. No worker can observe changing
+    rig nodes or X3D fields; the pure kernel only sees these owned values. }
+  if Length(FPreparedInputs)<>FRestCount then SetLength(FPreparedInputs,FRestCount);
+  for I:=0 to FRestCount-1 do begin
+    FPreparedInputs[I].Routing:=FJointRouting[I];FPreparedInputs[I].Rest:=FRestList[I];
+    FPreparedInputs[I].BindRotation:=FPreparedBindRot[I];FPreparedInputs[I].Parent:=FRider.Rig.JointParent[I];
+    FPreparedInputs[I].NeedAngles:=(FRider.Correctives<>nil)and FRider.Correctives.NeededJoints[I];
+    Code:=FJointRouting[I];HandSlot:=Code div 64;FPreparedInputs[I].HandRest:=FUHandRest.Items[HandSlot];
+    FPreparedInputs[I].Face:=TMatrix4.Identity;
+    if FRider.Face<>nil then FPreparedInputs[I].Face:=FRider.Face.PreparedDelta(I);
+  end;
+  Grip:=Vector2(FUScalars.Items[33],FUScalars.Items[34]);
+  RiderPoseJoints(FPreparedInputs,FPoseList,Grip,FFinalList,FJointDeltaList,FQuatList,FAngleList);
+  if FRider.Correctives<>nil then begin
+    FRider.Correctives.PreparePose(FAngleList);
+    if FRider.Correctives.Body<>nil then FRider.Correctives.Body.PreparePose(FFinalList);
+  end;
+  Changed:=not FPreparedValid;
+  if not Changed then for I:=0 to FRestCount-1 do begin
+    M:=FFinalList[I];Previous:=FUFinal.Items[I];if not CompareMem(@M,@Previous,SizeOf(M))then begin Changed:=True;Break end;
+  end;
+  { Publication alone touches X3D. Same-frame results are visible to the first
+    TF/depth/shadow consumer after current face/cloth/dynamics inputs. }
+  if Changed then begin FUFinal.Send(FFinalList);FUQuats.Send(FQuatList)end;
+  FPreparedRevision:=FPreparedSourceRevision;FPreparedFaceRevision:=FaceRevision;
+  FPreparedBodyRevision:=BodyRevision;FPreparedValid:=True;
 end;
 
 procedure TGpuRiderSkin.UpdateShadowLimbs;
@@ -1825,6 +1922,7 @@ end;
 
 procedure TGpuRiderSkin.SetActive(AOn: Boolean);
 begin
+  if FRider.Lod<>nil then FRider.Lod.SetBatchActive(AOn);
   if FRider.Correctives <> nil then FRider.Correctives.SetGpuActive(AOn);
   if FRider.Face<>nil then FRider.Face.Gpu:=AOn;
   if (FEffect <> nil) and (FEffect.Enabled <> AOn) then
@@ -1909,8 +2007,8 @@ begin
   end;
   FootYaw := RiderFootYawRotation(InvP, FRider.FootYawDeg);
   FScalarsList.Add(FootYaw.W);
-  FScalarsList.Add(Ord(Pose.HandPosR > 0)*(1-EnsureRange(Pose.HandRelax[0],0.0,0.2)));
-  FScalarsList.Add(Ord(Pose.HandPosL > 0)*(1-EnsureRange(Pose.HandRelax[1],0.0,0.2)));
+  FScalarsList.Add(Ord(Pose.HandPosR > 0)*(1-EnsureRange(Pose.HandRelax[0],0.0,1.0)));
+  FScalarsList.Add(Ord(Pose.HandPosL > 0)*(1-EnsureRange(Pose.HandRelax[1],0.0,1.0)));
   for I:=0 to 1 do begin
     FShClavicleDelta[I]:=RiderScapulaDelta(FRider.LeanAxis,
       Pose.ShoulderRoundDeg+Pose.ScapulaProtraction[I],
@@ -1992,6 +2090,9 @@ begin
   FShInFootYaw := FootYaw;
   FShDirty := True;
   if FUsePosePalette and (ChS or ChM or ChV) then UploadPosePalette;
+  { A model can be drawn directly after its very first SendFrame (resource
+    preparation/editor). Subsequent frames publish once after appearance. }
+  if FUsePreparedPose and not FPreparedValid then PreparePoseFrame(Self);
 end;
 
 end.

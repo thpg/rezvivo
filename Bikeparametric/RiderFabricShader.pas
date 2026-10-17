@@ -206,9 +206,9 @@ const
     '  float visibility=1.0/max(4.0*(nl+nv-nl*nv),1e-4);' + #10 +
     // Fibre reflection inherits the dyed cloth colour. A neutral additive
     // lobe turned dark fabric chalky; the base and fibre lobes share energy.
-    '  float strength=mix(0.055,0.12,smoothstep(0.70,0.90,rfProfile.z));' + #10 +
+    '  float strength=mix(0.75,0.90,smoothstep(0.50,0.85,rfProfile.z));' + #10 +
     '  vec3 fibre=sqrt(clamp(diff*3.14159265,vec3(0.0),vec3(1.0)));' + #10 +
-    '  diff*=1.0-strength;spec=spec*(1.0-strength)+fibre*(strength*D*visibility);' + #10 +
+    '  diff*=1.0-0.04*strength;spec=spec*(1.0-strength)+fibre*(0.45*strength*D*visibility);' + #10 +
     '}';
 procedure TRiderFabric.Visit(Node: TX3DNode);
 var Sh:TShapeNode; App:TAppearanceNode; Mat:TPhysicalMaterialNode;

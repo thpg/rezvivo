@@ -14,16 +14,17 @@ unit Osm3dArchitecture;
   This leaves ordinary UVs and the v3 tile container unchanged. }
 interface
 uses Classes, SysUtils, Math, fpjson, CastleVectors, Osm3dGeoMath, Osm3dGeomMesh,
-  Osm3dArchitectureVoids;
+  Osm3dArchitectureVoids, Osm3dArchitectureAtlas;
 const
   ARCHITECTURE_TAG = 'rezvivo:architecture';
-  ARCHITECTURE_GENERATOR = 9;
+  ARCHITECTURE_GENERATOR = 10;
   ARCHITECTURE_UV_MARKER = -1000000;
 type
   TArchProfile = array of TVector2; { height fraction, projection fraction }
   TArchComponentKind = (acBlock, acPilaster, acColumn, acCornice, acPediment,
     acCanopy, acSteps, acBalcony, acArch, acDrum, acDome, acSpire, acGableRoof,
-    acCapital, acPedimentFrame, acDentilCourse, acRosette, acWallPanel, acQuoins);
+    acCapital, acPedimentFrame, acDentilCourse, acRosette, acWallPanel, acQuoins,
+    acRailing, acDownpipe, acGutter, acShutter, acVent, acEntrance, acDamage);
   TArchComponent = record
     Kind: TArchComponentKind;
     X,Y,Z,W,H,D,Step: Single;
@@ -39,7 +40,8 @@ type
   TArchOpening = record
     X,Y,W,H,Rise,Recess,FrameWidth,FrameDepth: Single;
     MullionsX,MullionsY: Integer;
-    Door: Boolean;
+    Door, Glazed: Boolean;
+    Transom: Single;
     FrameColor,PaneColor: Cardinal;
   end;
   TArchOpenings = array of TArchOpening;
@@ -59,6 +61,9 @@ type
   TArchFacades = array of TArchFacade;
   TArchitectureRecipe = record
     Landmark: Boolean;
+    HasGroundAnchor: Boolean;
+    GroundAnchor: TLatLon;
+    GroundOffset: Single;
     Facades: TArchFacades;
     Passages: TArchitecturePassages;
   end;
@@ -84,7 +89,8 @@ function IsArchitectureUV(const UV:TVector2):Boolean; inline;
 implementation
 const KindNames:array[TArchComponentKind] of string = ('block','pilaster','column',
   'cornice','pediment','canopy','steps','balcony','arch','drum','dome','spire','gable_roof',
-  'capital','pediment_frame','dentil_course','rosette','wall_panel','quoins');
+  'capital','pediment_frame','dentil_course','rosette','wall_panel','quoins',
+  'railing','downpipe','gutter','shutter','vent','entrance','damage');
 type
   TPoints2 = array of TVector2;
   TFloats = array of Single;
@@ -104,7 +110,31 @@ type
     procedure Ring(const Outer,Inner:TPoints2; Z0,Z1:Single);
     procedure Medallion(X,Y,Z,W,H,D:Single; Segments,Lobes:Integer);
     procedure Decoration(const C:TArchComponent; X,Y,Z:Single);
+    procedure Tube(const A,B:TVector3; Radius:Single; Sides:Integer);
+    procedure Railing(X0,Z0,X1,Z1,Y,H:Single; Style:Integer; Color:Cardinal; Roughness:Single);
+    procedure AtlasPart(const C:TArchComponent; X,Y,Z:Single);
   end;
+
+function ComponentStyles(Kind:TArchComponentKind):string;
+begin
+  case Kind of
+    acCapital:Result:='doric|ionic|foliate';
+    acBalcony,acRailing:Result:='vertical|horizontal|solid|glass|timber';
+    acDownpipe:Result:='round|square';
+    acGutter:Result:='round|box';
+    acShutter:Result:='louver|board|panel';
+    acVent:Result:='louver|grid';
+    acEntrance:Result:='flat|pitched|porch|portal|glass';
+    acDamage:Result:='repair|brick|damp|crack|rust';
+    else Result:='';
+  end;
+end;
+function ComponentStyleName(Kind:TArchComponentKind; Index:Integer):string;
+var Names:TStringArray;
+begin
+  Names:=ComponentStyles(Kind).Split('|');Result:='';
+  if (Index>=0) and (Index<Length(Names)) then Result:=Names[Index];
+end;
 
 procedure Check(B:Boolean; const S:string);
 begin if not B then raise EConvertError.Create('building.architecture: '+S) end;
@@ -162,8 +192,10 @@ begin
     'decoration','capital: style doric/ionic/foliate (simplified leaf relief, not an exact sculptural copy), independent width/depth; column shaft_only=true omits its plain end blocks when adding a separate capital. pediment_frame: hollow triangular moulding; dentil_course: small blocks spaced horizontally by spacing_m; rosette: radial relief; wall_panel: raised rectangular frame with a recessed closed centre; quoins: alternating-width corner blocks spaced vertically by spacing_m. All use the same bounded component dimensions, colours and repetitions. Decoration stays in the building mesh.',
     'limits','16 facades, 32 row descriptions/facade, 512 expanded openings, 256 expanded parts/building; conservative cost budget 32768 triangles, 65536 for significance=landmark; rejects overlaps and excessive cost before activation.',
     'cache','Baked in ordinary building meshes with original OSM picking id; same material batch, culling, raster/RTX shadow geometry and compressed binary cache.',
+    'ground','Optional ground_anchor [lon,lat] within 8 m of a confirmed facade, plus ground_offset_m (0..3, default 0). Samples the common terrain at a photographed entrance/forecourt to set the building base, instead of raising every floor to the highest ground under a rear wing. Record the evidence and uncertainty; no terrain flattening or absolute survey height is implied. Omit when the ground contact is unknown.',
     'passages','Optional passages array (max 8): kind through/recess; start/end [lon,lat] at the entry/exit centre or niche back; width_m, height_m, bottom_m (default 0); shape rectangle/round_arch, arch_rise_m; wall_color, floor_color, roughness. Straight constant-section cavities, within the existing OSM envelope and below the eave. Actual wall, plinth and decoration geometry is cut; sides and vault are baked once. Ground-level passages use the retained terrain/road as their floor, extend jambs below it and remove only the corridor from building obstacles. Raised openings (bottom_m > 0) have their own floor/sill with floor_color. OSM endpoints and dimensions must be photo/OSM justified.',
     'not_supported','Free-form sculpture, damaged topology and unseen rooms. An arch component is a frame; use passages for a real hole. Window/door openings have real recesses and closed panes.']);
+  Result.Add('atlas',ArchitectureAtlasCatalog);
 end;
 
 function TArchFacade.LengthM:Single;
@@ -180,16 +212,22 @@ begin
     (Abs(TVector3.DotProduct(D,Normal))<0.25) and (X>=-0.25) and (X<=LengthM+0.25);
 end;
 
-function ParseArchitecture(J:TJSONData):TArchitectureRecipe;
+function ParseExpandedArchitecture(J:TJSONData):TArchitectureRecipe;
 var Root,F,O:TJSONObject; Faces,Rows,Parts,Profile,Point:TJSONArray; I,J0,K,C,V,T,Cost,OpenCount,PartCount:Integer;
     R:TArchOpening; P:TArchComponent; S:string; X,Step,L0,L1:Single; Proj:TLocalProjection; Delta:TVector3;
-    Kind:TArchComponentKind;
+    Kind:TArchComponentKind; AnchorPoint,Edge,Nearest:TVector3; Distance,T0:Single;
 begin
-  Result:=Default(TArchitectureRecipe);Root:=Obj(J);Keys(Root,'|version|significance|facades|passages|');
+  Result:=Default(TArchitectureRecipe);Root:=Obj(J);Keys(Root,'|version|significance|facades|passages|ground_anchor|ground_offset_m|');
   Check(Int(Root,'version',0,1,1)=1,'version 1 required');
   S:=Str(Root,'significance','ordinary');Check((S='ordinary') or (S='landmark'),'invalid significance');
   Result.Landmark:=S='landmark';Faces:=Arr(Root.Find('facades'),16);
   Result.Passages:=ParseArchitecturePassages(Root.Find('passages'));
+  Result.HasGroundAnchor:=Root.Find('ground_anchor')<>nil;
+  if Result.HasGroundAnchor then begin
+    Result.GroundAnchor:=Geo(Root.Find('ground_anchor'));
+    Result.GroundOffset:=Num(Root,'ground_offset_m',0,0,3);
+    Check(Faces.Count>0,'ground_anchor needs a confirmed facade');
+  end else Check(Root.Find('ground_offset_m')=nil,'ground_offset_m requires ground_anchor');
   Check((Faces.Count>0) or (Length(Result.Passages)>0),'at least one facade or passage is required');
   SetLength(Result.Facades,Faces.Count);
   Cost:=Length(Result.Passages)*2000;OpenCount:=0;PartCount:=0;
@@ -216,10 +254,14 @@ begin
     if F.Find('rows')<>nil then begin
       Rows:=Arr(F.Find('rows'),32);
       for K:=0 to Rows.Count-1 do begin
-        O:=Obj(Rows[K]);Keys(O,'|x_m|bottom_m|width_m|height_m|count|step_m|kind|shape|arch_rise_m|recess_m|frame_width_m|frame_depth_m|frame_color|pane_color|mullions_x|mullions_y|');
+        O:=Obj(Rows[K]);Keys(O,'|x_m|bottom_m|width_m|height_m|count|step_m|kind|shape|arch_rise_m|recess_m|frame_width_m|frame_depth_m|frame_color|pane_color|mullions_x|mullions_y|transom_at|glazed|');
         R:=Default(TArchOpening);X:=Num(O,'x_m',0,0,300);R.Y:=Num(O,'bottom_m',1,0,200);
         R.W:=Num(O,'width_m',1.4,0.3,12);R.H:=Num(O,'height_m',1.8,0.3,15);
         S:=Str(O,'kind','window');Check((S='window') or (S='door'),'invalid opening kind');R.Door:=S='door';
+        R.Glazed:=not R.Door;
+        if O.Find('glazed')<>nil then begin
+          Check(O.Find('glazed').JSONType=jtBoolean,'glazed must be boolean');R.Glazed:=O.Booleans['glazed'];
+        end;
         S:=Str(O,'shape','rectangle');Check((S='rectangle') or (S='round_arch'),'invalid opening shape');
         if S='round_arch' then R.Rise:=Num(O,'arch_rise_m',Min(R.W*0.5,R.H*0.5),0.1,Min(R.H-0.1,R.W));
         if S='rectangle' then Check(O.Find('arch_rise_m')=nil,'arch_rise_m requires round_arch');
@@ -227,6 +269,8 @@ begin
         R.FrameDepth:=Num(O,'frame_depth_m',0.045,0.008,0.25);
         R.FrameColor:=Color(O,'frame_color','#ded9cc');R.PaneColor:=Color(O,'pane_color','#26353d');
         R.MullionsX:=Int(O,'mullions_x',1,0,4);R.MullionsY:=Int(O,'mullions_y',0,0,4);
+        R.Transom:=Num(O,'transom_at',0,0,0.9);
+        Check((R.Transom=0) or ((R.Transom>=0.15) and (R.MullionsY=0)),'transom_at requires zero mullions_y and position 0.15..0.9');
         C:=Int(O,'count',1,1,64);Step:=Num(O,'step_m',R.W+1,0.4,100);
         Check((C=1) or (Step>R.W+2*R.FrameWidth+0.02),'row openings overlap');
         for V:=0 to C-1 do begin
@@ -262,14 +306,20 @@ begin
         Check(P.Z+P.D<=8,'component projects more than 8 m beyond OSM envelope');
         if P.Kind=acArch then Check(P.H>P.W*0.5,'arch must have positive-height piers');
         if P.Kind=acBalcony then Check((P.H>=0.5) and (P.D>=0.3),'balcony needs a usable railing and slab');
+        if P.Kind=acRailing then Check((P.W>=0.25) and (P.H>=0.35),'railing is too small');
+        if P.Kind=acDownpipe then Check((P.H>=0.6) and (P.W<=0.4) and (P.D>=P.W*1.6),'downpipe needs room for bends');
+        if P.Kind=acGutter then Check((P.W>=0.2) and (P.H<=0.8),'invalid gutter dimensions');
+        if P.Kind in [acShutter,acVent] then Check((P.W>=0.2) and (P.H>=0.2),'panel is too small');
+        if P.Kind=acEntrance then Check((P.W>=0.8) and (P.H>=1.8) and (P.D>=0.2),'entrance accessory is too small');
         if O.Find('shaft_only')<>nil then begin
           Check((P.Kind=acColumn) and (O.Find('shaft_only').JSONType=jtBoolean),'shaft_only is a column boolean');
           P.ShaftOnly:=O.Booleans['shaft_only'];
         end;
-        if O.Find('style')<>nil then Check(P.Kind=acCapital,'style is only supported by capital');
-        if P.Kind=acCapital then begin
-          S:=Str(O,'style','doric');Check((S='doric') or (S='ionic') or (S='foliate'),'invalid capital style');
-          if S='ionic' then P.Style:=1 else if S='foliate' then P.Style:=2;
+        if O.Find('style')<>nil then begin
+          Check(ComponentStyles(P.Kind)<>'','style unsupported for '+KindNames[P.Kind]);
+          S:=Str(O,'style','');V:=0;
+          while (ComponentStyleName(P.Kind,V)<>'') and (ComponentStyleName(P.Kind,V)<>S) do Inc(V);
+          Check(ComponentStyleName(P.Kind,V)=S,'invalid component style '+S);P.Style:=V;
         end;
         if O.Find('spacing_m')<>nil then Check(P.Kind in [acDentilCourse,acQuoins],'spacing_m requires dentil_course or quoins');
         if P.Kind in [acDentilCourse,acQuoins] then begin
@@ -294,6 +344,8 @@ begin
         end;
         Components[K]:=P;Inc(PartCount,P.Count);Inc(Cost,P.Count*(160+P.Segments*16));
         if P.Kind in [acDentilCourse,acQuoins] then Inc(Cost,P.Count*Ceil(X/P.Spacing)*12);
+        if P.Kind in [acBalcony,acRailing] then Inc(Cost,P.Count*12*(Min(64,Ceil(P.W/0.18))+2*Min(64,Ceil(P.D/0.18))+12));
+        if P.Kind in [acDownpipe,acShutter,acVent] then Inc(Cost,P.Count*1536);
         Check(PartCount<=256,'more than 256 expanded components');
       end;
     end;
@@ -302,15 +354,39 @@ begin
   Check(OpenCount<=512,'more than 512 openings');Check(PartCount<=256,'more than 256 expanded components');
   if Result.Landmark then Check(Cost<=65536,'landmark geometry cost exceeds budget')
   else Check(Cost<=32768,'geometry cost exceeds budget; reduce repetition or mark a real landmark');
+  if Result.HasGroundAnchor then begin
+    Proj:=TLocalProjection.Create(Result.Facades[0].Start,Result.Facades[0].Start.Lat);
+    try AnchorPoint:=Proj.Project(Result.GroundAnchor,0) finally Proj.Free end;
+    Distance:=1e20;
+    for I:=0 to High(Result.Facades) do with Result.Facades[I] do begin
+      Edge:=B-A;T0:=EnsureRange(TVector3.DotProduct(AnchorPoint-A,Edge)/Edge.LengthSqr,0,1);
+      Nearest:=A+Edge*T0;Distance:=Min(Distance,(AnchorPoint-Nearest).Length);
+    end;
+    Check(Distance<=8,'ground_anchor must be within 8 m of a facade');
+  end;
+end;
+
+function ParseArchitecture(J:TJSONData):TArchitectureRecipe;
+var Expanded:TJSONObject;
+begin
+  Expanded:=ExpandArchitectureAtlas(J);
+  try Result:=ParseExpandedArchitecture(Expanded) finally Expanded.Free end;
 end;
 
 function CanonicalArchitecture(J:TJSONData):string;
 var R:TArchitectureRecipe; Root,F,O,SourceRow:TJSONObject; Faces,Rows,Parts,SourceRows,ProfileJSON:TJSONArray;
-    I,K,V,Expanded,RepeatCount:Integer; RepeatStep:Single; S:string;
+    I,K,V,Expanded,RepeatCount:Integer; RepeatStep:Single; S:string; Resolved:TJSONObject;
 begin
-  R:=ParseArchitecture(J);Faces:=TJSONArray.Create;S:='ordinary';if R.Landmark then S:='landmark';
+  Resolved:=ExpandArchitectureAtlas(J);
+  try
+  J:=Resolved;
+  R:=ParseExpandedArchitecture(J);Faces:=TJSONArray.Create;S:='ordinary';if R.Landmark then S:='landmark';
   Root:=TJSONObject.Create(['version',1,'significance',S,'facades',Faces]);
   try
+    if R.HasGroundAnchor then begin
+      Root.Add('ground_anchor',TJSONArray.Create([R.GroundAnchor.Lon,R.GroundAnchor.Lat]));
+      Root.Add('ground_offset_m',Double(R.GroundOffset));
+    end;
     if Length(R.Passages)>0 then Root.Add('passages',CanonicalArchitecturePassages(Obj(J).Find('passages')));
     for I:=0 to High(R.Facades) do with R.Facades[I] do begin
       Rows:=TJSONArray.Create;Parts:=TJSONArray.Create;
@@ -334,6 +410,8 @@ begin
           'kind',S,'recess_m',Double(Recess),'frame_width_m',Double(FrameWidth),'frame_depth_m',Double(FrameDepth),
           'frame_color',Hex(FrameColor),'pane_color',Hex(PaneColor),'mullions_x',MullionsX,'mullions_y',MullionsY]);
         if Rise>0 then begin O.Add('shape','round_arch');O.Add('arch_rise_m',Double(Rise)) end;
+        if Transom>0 then O.Add('transom_at',Double(Transom));
+        if Glazed=Door then O.Add('glazed',Glazed);
         Rows.Add(O);Inc(Expanded,RepeatCount);
       end;
       for K:=0 to High(Components) do with Components[K] do begin
@@ -341,9 +419,7 @@ begin
         O:=TJSONObject.Create(['kind',KindNames[Kind],'x_m',Double(X),'bottom_m',Double(Y),'offset_m',Double(Z),
           'width_m',Double(W),'height_m',Double(H),'depth_m',Double(D),'color',Hex(Color),
           'roughness',Double(Roughness),'metallic',Double(Metallic),'anchor',S,'count',Count,'step_m',Double(Step),'segments',Segments]);
-        if Kind=acCapital then begin
-          S:='doric';if Style=1 then S:='ionic' else if Style=2 then S:='foliate';O.Add('style',S);
-        end;
+        if ComponentStyles(Kind)<>'' then O.Add('style',ComponentStyleName(Kind,Style));
         if Kind in [acDentilCourse,acQuoins] then O.Add('spacing_m',Double(Spacing));
         if ShaftOnly then O.Add('shaft_only',True);
         if Length(Profile)>0 then begin
@@ -356,6 +432,7 @@ begin
     end;
     Result:=Root.AsJSON;
   finally Root.Free end;
+  finally Resolved.Free end;
 end;
 
 procedure ProjectArchitecture(var R:TArchitectureRecipe; P:TLocalProjection;
@@ -363,7 +440,7 @@ procedure ProjectArchitecture(var R:TArchitectureRecipe; P:TLocalProjection;
 var I,J,K,C,V,Count:Integer; N,U,Q,MinP,MaxP:TVector3; Lo,Hi,X,Z:Single; Part:TArchComponent; Fits:Boolean;
     GeoPoint:TLatLon;
 begin
-  if Length(Footprint)<3 then begin R.Facades:=nil;R.Passages:=nil;Exit end;
+  if Length(Footprint)<3 then begin R.Facades:=nil;R.Passages:=nil;R.HasGroundAnchor:=False;Exit end;
   MinP:=Footprint[0];MaxP:=MinP;
   for I:=1 to High(Footprint) do for J:=0 to 2 do begin
     MinP.Data[J]:=Min(MinP.Data[J],Footprint[I].Data[J]);MaxP.Data[J]:=Max(MaxP.Data[J],Footprint[I].Data[J]);
@@ -414,6 +491,16 @@ begin
     end;
   end;
   SetLength(R.Facades,K);
+  if R.HasGroundAnchor then begin
+    { Reject stale photo placement when its facade no longer matches OSM.
+      Never use a distant terrain sample to shift an unrelated footprint. }
+    Q:=P.Project(R.GroundAnchor,0);Lo:=1e20;
+    for I:=0 to High(R.Facades) do with R.Facades[I] do begin
+      U:=B-A;X:=EnsureRange(TVector3.DotProduct(Q-A,U)/U.LengthSqr,0,1);
+      Lo:=Min(Lo,(Q-(A+U*X)).Length);
+    end;
+    R.HasGroundAnchor:=Lo<=8;
+  end;
   ProjectArchitecturePassages(R.Passages,P,Footprint,InnerRings);
 end;
 
@@ -641,6 +728,196 @@ begin
   end;
 end;
 
+procedure TArchEmitter.Tube(const A,B:TVector3; Radius:Single; Sides:Integer);
+var Axis,Tangent,Bitangent,N0,N1,P0,P1,Q0,Q1,NN:TVector3; I:Integer; A0,A1:Single;
+begin
+  if (B-A).Length<0.00001 then Exit;
+  Axis:=(B-A).Normalize;Tangent:=Vector3(0,1,0);
+  if Abs(Axis.Y)>0.9 then Tangent:=Vector3(1,0,0);
+  Tangent:=TVector3.CrossProduct(Axis,Tangent).Normalize;
+  Bitangent:=TVector3.CrossProduct(Axis,Tangent);
+  for I:=0 to Sides-1 do begin
+    A0:=2*Pi*I/Sides;A1:=2*Pi*(I+1)/Sides;
+    N0:=Tangent*Cos(A0)+Bitangent*Sin(A0);N1:=Tangent*Cos(A1)+Bitangent*Sin(A1);
+    P0:=A+N0*Radius;P1:=A+N1*Radius;Q0:=B+N0*Radius;Q1:=B+N1*Radius;
+    NN:=(N0+N1).Normalize;NN:=U*NN.X+Vector3(0,NN.Y,0)+N*NN.Z;
+    Quad(World(P0.X,P0.Y,P0.Z),World(P1.X,P1.Y,P1.Z),
+      World(Q1.X,Q1.Y,Q1.Z),World(Q0.X,Q0.Y,Q0.Z),NN);
+    NN:=U*Axis.X+Vector3(0,Axis.Y,0)+N*Axis.Z;
+    Tri(World(A.X,A.Y,A.Z),World(P1.X,P1.Y,P1.Z),World(P0.X,P0.Y,P0.Z),-NN);
+    Tri(World(B.X,B.Y,B.Z),World(Q0.X,Q0.Y,Q0.Z),World(Q1.X,Q1.Y,Q1.Z),NN);
+  end;
+end;
+
+procedure TArchEmitter.Railing(X0,Z0,X1,Z1,Y,H:Single; Style:Integer; Color:Cardinal; Roughness:Single);
+var I,Count:Integer; LengthM,Thickness,X,Z,T:Single; AlongX:Boolean;
+  procedure Bar(A,B,Y0,Y1,Width:Single);
+  var L,R,ZL,ZR:Single;
+  begin
+    if AlongX then begin L:=X0+A;R:=X0+B;ZL:=Z0-Width*0.5;ZR:=Z0+Width*0.5 end
+    else begin L:=X0-Width*0.5;R:=X0+Width*0.5;ZL:=Z0+A;ZR:=Z0+B end;
+    if (B-A<=Width+0.001) and (Y1-Y0>Width*2) then begin
+      { Post ends are buried in the slab/ground and handrail. Four visible
+        sides are sufficient; do not spend two invisible caps per bar. }
+      Quad(World(L,Y0,ZR),World(R,Y0,ZR),World(R,Y1,ZR),World(L,Y1,ZR),N);
+      Quad(World(R,Y0,ZL),World(L,Y0,ZL),World(L,Y1,ZL),World(R,Y1,ZL),-N);
+      Quad(World(L,Y0,ZL),World(L,Y0,ZR),World(L,Y1,ZR),World(L,Y1,ZL),-U);
+      Quad(World(R,Y0,ZR),World(R,Y0,ZL),World(R,Y1,ZL),World(R,Y1,ZR),U);
+    end else Box(L,Y0,R,Y1,ZL,ZR);
+  end;
+begin
+  AlongX:=Abs(X1-X0)>Abs(Z1-Z0);
+  LengthM:=Abs(X1-X0)+Abs(Z1-Z0);if LengthM<0.02 then Exit;
+  if AlongX and (X1<X0) then X0:=X1;
+  if not AlongX and (Z1<Z0) then Z0:=Z1;
+  Thickness:=0.035;if Style=4 then Thickness:=0.065;
+  UV:=ArchitectureUV(Color,Roughness,0);
+  Bar(0,LengthM,Y+H-0.045,Y+H,0.055);
+  if Style in [2,3] then begin
+    if Style=3 then UV:=ArchitectureUV($859597,0.24,0,4);
+    Bar(0.035,LengthM-0.035,Y+0.06,Y+H-0.05,0.045);
+    UV:=ArchitectureUV(Color,Roughness,0);
+    Bar(0,0.045,Y,Y+H,0.06);Bar(LengthM-0.045,LengthM,Y,Y+H,0.06);
+    Exit;
+  end;
+  if Style=1 then begin
+    for I:=1 to 3 do Bar(0,LengthM,Y+H*I*0.22,Y+H*I*0.22+0.035,0.035);
+    Count:=Max(1,Ceil(LengthM/1.2));
+  end else begin
+    Bar(0,LengthM,Y+0.08,Y+0.115,0.035);
+    Count:=Min(64,Max(1,Ceil(LengthM/0.20)));
+  end;
+  for I:=0 to Count do begin
+    T:=(LengthM-Thickness)*I/Count;
+    Bar(T,T+Thickness,Y,Y+H-0.04,Thickness);
+  end;
+end;
+
+procedure TArchEmitter.AtlasPart(const C:TArchComponent; X,Y,Z:Single);
+var I,K,Count:Integer; W,H,D,T,A0,A1,Radius,PX,PY:Single; P:TPoints2;
+  A,B,C0,D0,NN:TVector3; Section:array[0..4] of TVector2;
+begin
+  W:=C.W;H:=C.H;D:=C.D;
+  case C.Kind of
+    acRailing:Railing(X-W*0.5,Z+D*0.5,X+W*0.5,Z+D*0.5,Y,H,C.Style,C.Color,C.Roughness);
+    acBalcony:begin
+      UV:=ArchitectureUV($b4afa2,0.91,0);Box(X-W*0.5,Y,X+W*0.5,Y+0.14,Z,Z+D);
+      Railing(X-W*0.5+0.025,Z+D-0.03,X+W*0.5-0.025,Z+D-0.03,Y+0.14,H-0.14,C.Style,C.Color,C.Roughness);
+      Railing(X-W*0.5+0.025,Z+0.03,X-W*0.5+0.025,Z+D-0.03,Y+0.14,H-0.14,C.Style,C.Color,C.Roughness);
+      Railing(X+W*0.5-0.025,Z+0.03,X+W*0.5-0.025,Z+D-0.03,Y+0.14,H-0.14,C.Style,C.Color,C.Roughness);
+    end;
+    acDownpipe:begin
+      Radius:=W*0.5;T:=Min(H*0.15,0.25);
+      if C.Style=1 then begin
+        Box(X-Radius,Y,X+Radius,Y+H-T,Z+Radius,Z+3*Radius);
+        Box(X-Radius,Y+H-T,X+Radius,Y+H,Z+Radius,Z+D);
+        Box(X-Radius,Y,X+Radius,Y+T,Z+Radius,Z+D);
+      end else begin
+        Tube(Vector3(X,Y+T,Z+W),Vector3(X,Y+H-T,Z+W),Radius,6);
+        Tube(Vector3(X,Y+H-T,Z+W),Vector3(X,Y+H-Radius,Z+D-Radius),Radius,6);
+        Tube(Vector3(X,Y+T,Z+W),Vector3(X,Y+Radius,Z+D-Radius),Radius,6);
+      end;
+      Count:=Min(24,Max(1,Ceil(H/2.2)));
+      for I:=0 to Count-1 do begin
+        PY:=Y+H*(I+0.5)/Count;
+        Box(X-Radius-0.015,PY-0.018,X+Radius+0.015,PY+0.018,Z+0.005,Z+W+Radius+0.015);
+      end;
+    end;
+    acGutter:begin
+      { An open trough, not a solid rectangular tube. A tiny inner skin closes
+        the wall thickness, and end plates keep the silhouette watertight. }
+      if C.Style=0 then begin
+        Section[0]:=Vector2(0,H);Section[1]:=Vector2(0.05*D,0.35*H);
+        Section[2]:=Vector2(0.5*D,0);Section[3]:=Vector2(0.95*D,0.35*H);Section[4]:=Vector2(D,H);
+      end else begin
+        Section[0]:=Vector2(0,H);Section[1]:=Vector2(0,0);
+        Section[2]:=Vector2(0.5*D,0);Section[3]:=Vector2(D,0);Section[4]:=Vector2(D,H);
+      end;
+      for I:=0 to 3 do begin
+        A:=World(X-W*0.5,Y+Section[I].Y,Z+Section[I].X);
+        B:=World(X+W*0.5,Y+Section[I].Y,Z+Section[I].X);
+        C0:=World(X+W*0.5,Y+Section[I+1].Y,Z+Section[I+1].X);
+        D0:=World(X-W*0.5,Y+Section[I+1].Y,Z+Section[I+1].X);
+        NN:=TVector3.CrossProduct(B-A,C0-A).Normalize;
+        Quad(A,B,C0,D0,NN);
+        Quad(D0+Vector3(0,0.006,0),C0+Vector3(0,0.006,0),B+Vector3(0,0.006,0),A+Vector3(0,0.006,0),-NN);
+      end;
+      Box(X-W*0.5,Y,X-W*0.5+0.012,Y+H,Z,Z+D);
+      Box(X+W*0.5-0.012,Y,X+W*0.5,Y+H,Z,Z+D);
+    end;
+    acShutter,acVent:begin
+      T:=Min(0.045,Min(W,H)*0.12);
+      Box(X-W*0.5,Y,X-W*0.5+T,Y+H,Z,Z+D);Box(X+W*0.5-T,Y,X+W*0.5,Y+H,Z,Z+D);
+      Box(X-W*0.5+T,Y,X+W*0.5-T,Y+T,Z,Z+D);Box(X-W*0.5+T,Y+H-T,X+W*0.5-T,Y+H,Z,Z+D);
+      if (C.Kind=acShutter) and (C.Style=2) then begin
+        Box(X-W*0.5+T,Y+T,X+W*0.5-T,Y+H-T,Z,Z+D*0.45);
+        Box(X-W*0.5+T,Y+H*0.49,X+W*0.5-T,Y+H*0.52,Z,Z+D);
+      end else if (C.Kind=acShutter) and (C.Style=1) then begin
+        Count:=Min(20,Max(2,Ceil(W/0.14)));
+        for I:=0 to Count-1 do Box(X-W*0.5+T+(W-2*T)*I/Count,Y+T,
+          X-W*0.5+T+(W-2*T)*(I+1)/Count-0.008,Y+H-T,Z,Z+D*0.8);
+      end else begin
+        UV:=ArchitectureUV(C.Color,0.85,0);Box(X-W*0.5+T,Y+T,X+W*0.5-T,Y+H-T,Z,Z+0.008);
+        Count:=Min(32,Max(2,Ceil((H-2*T)/0.12)));
+        for I:=0 to Count-1 do begin
+          PY:=Y+T+(H-2*T)*I/Count;
+          A:=World(X-W*0.5+T,PY,Z+D);B:=World(X+W*0.5-T,PY,Z+D);
+          C0:=World(X+W*0.5-T,PY+(H-2*T)/Count*0.8,Z+0.01);
+          D0:=World(X-W*0.5+T,PY+(H-2*T)/Count*0.8,Z+0.01);
+          NN:=TVector3.CrossProduct(B-A,C0-A).Normalize;Quad(A,B,C0,D0,NN);Quad(D0,C0,B,A,-NN);
+        end;
+        if (C.Kind=acVent) and (C.Style=1) then
+          for I:=1 to 3 do begin PX:=X-W*0.5+W*I/4;Box(PX-0.014,Y+T,PX+0.014,Y+H-T,Z+D*0.9,Z+D+0.005) end;
+      end;
+    end;
+    acEntrance:begin
+      { Accessory group surrounds a separate, real door opening. No closed
+        box may seal that doorway or imitate an interior behind glazing. }
+      T:=Min(0.16,W*0.07);
+      if C.Style=3 then begin
+        Box(X-W*0.5,Y,X-W*0.5+T,Y+H,Z,Z+0.18);Box(X+W*0.5-T,Y,X+W*0.5,Y+H,Z,Z+0.18);
+        Cornice(X,Y+H-0.20,Z,W,0.20,Min(D,0.35),nil);
+      end else begin
+        if C.Style=4 then UV:=ArchitectureUV($879b9e,0.22,0,4);
+        if C.Style=1 then begin
+          SetLength(P,4);P[0]:=Vector2(X-W*0.5,Y+H-0.2);P[1]:=Vector2(X+W*0.5,Y+H-0.2);
+          P[2]:=Vector2(X+W*0.5,Y+H-0.12);P[3]:=Vector2(X,Y+H);
+          Prism(P,Z,Z+D);
+          SetLength(P,3);P[0]:=Vector2(X-W*0.5,Y+H-0.2);P[1]:=Vector2(X,Y+H);P[2]:=Vector2(X-W*0.5,Y+H-0.12);Prism(P,Z,Z+D);
+        end else Box(X-W*0.5,Y+H-0.09,X+W*0.5,Y+H,Z,Z+D);
+        UV:=ArchitectureUV(C.Color,C.Roughness,0);
+        if C.Style=2 then begin
+          Box(X-W*0.5,Y,X-W*0.5+0.11,Y+H-0.09,Z+D-0.11,Z+D);
+          Box(X+W*0.5-0.11,Y,X+W*0.5,Y+H-0.09,Z+D-0.11,Z+D);
+        end else begin
+          Box(X-W*0.5+0.08,Y+H-0.24,X-W*0.5+0.14,Y+H-0.09,Z,Z+Min(0.45,D));
+          Box(X+W*0.5-0.14,Y+H-0.24,X+W*0.5-0.08,Y+H-0.09,Z,Z+Min(0.45,D));
+        end;
+      end;
+    end;
+    acDamage:begin
+      Z:=Z+0.003;
+      if C.Style=3 then begin
+        { One branching seam with metric width; not black noise everywhere. }
+        for I:=0 to 5 do begin
+          PX:=X+W*0.24*Sin(I*2.1);PY:=Y+H*I/6;
+          SetLength(P,4);P[0]:=Vector2(PX-0.006,PY);P[1]:=Vector2(PX+0.006,PY);
+          PX:=X+W*0.24*Sin((I+1)*2.1);P[2]:=Vector2(PX+0.006,Y+H*(I+1)/6);P[3]:=Vector2(PX-0.006,Y+H*(I+1)/6);
+          Panel(P,Z,True);
+        end;
+      end else begin
+        if C.Style=1 then UV:=ArchitectureUV(C.Color,C.Roughness,0,3);
+        SetLength(P,12);
+        for I:=0 to 11 do begin
+          A0:=2*Pi*I/12;Radius:=0.85+0.15*Sin(I*7.1+X*0.13);
+          P[I]:=Vector2(X+Cos(A0)*W*0.5*Radius,Y+H*0.5+Sin(A0)*H*0.5*Radius);
+        end;
+        Panel(P,Z,True);
+      end;
+    end;
+  end;
+end;
+
 function OpeningPolygon(const R:TArchOpening; Expand:Single):TPoints2;
 var I,S:Integer; RX,RY,Y:Single;
 begin
@@ -686,10 +963,20 @@ begin
     if (R.Rise>0) and (Y>R.Y+R.H-R.Rise) then X:=X*Sqrt(Max(0,1-Sqr((Y-(R.Y+R.H-R.Rise))/R.Rise)));
     E.Box(R.X-X,Y-T*0.5,R.X+X,Y+T*0.5,-R.Recess,-R.Recess+0.045);
   end;
+  if R.Transom>0 then begin
+    Y:=R.Y+R.H*R.Transom;
+    E.Box(R.X-R.W*0.5,Y-T*0.5,R.X+R.W*0.5,Y+T*0.5,-R.Recess,-R.Recess+0.045);
+  end;
   if not R.Door then E.Box(R.X-R.W*0.5-R.FrameWidth-0.04,R.Y-0.055,
     R.X+R.W*0.5+R.FrameWidth+0.04,R.Y,0.003,R.FrameDepth+0.10);
-  E.UV:=ArchitectureUV(R.PaneColor,0.13,0,1);if R.Door then E.UV:=ArchitectureUV(R.PaneColor,0.6,0);
+  E.UV:=ArchitectureUV(R.PaneColor,0.13,0,1);if not R.Glazed then E.UV:=ArchitectureUV(R.PaneColor,0.6,0);
   E.Panel(P,-R.Recess,True);
+  if R.Door then begin
+    E.UV:=ArchitectureUV($92948f,0.4,0.6);
+    X:=R.X+R.W*0.34;if R.MullionsX>0 then X:=R.X+0.07;
+    E.Box(X-0.018,R.Y+R.H*0.44,X+0.018,R.Y+R.H*0.56,-R.Recess+0.018,-R.Recess+0.07);
+    if R.MullionsX>0 then E.Box(R.X-0.088,R.Y+R.H*0.44,R.X-0.052,R.Y+R.H*0.56,-R.Recess+0.018,-R.Recess+0.07);
+  end;
 end;
 
 function EmitArchitecturalWall(const Facades:TArchFacades; const A,B,N:TVector3;
@@ -798,14 +1085,8 @@ begin
               L:=Min(24,Max(1,Ceil(H/0.17)));
               for K:=0 to L-1 do E.Box(X-W*0.5,Y,X+W*0.5,Y+H*(L-K)/L,Z+D*K/L,Z+D*(K+1)/L);
             end;
-            acBalcony: begin
-              E.Box(X-W*0.5,Y,X+W*0.5,Y+0.14,Z,Z+D);
-              E.Box(X-W*0.5,Y+H-0.05,X+W*0.5,Y+H,Z+D-0.06,Z+D);
-              E.Box(X-W*0.5,Y+H-0.05,X-W*0.5+0.06,Y+H,Z,Z+D);
-              E.Box(X+W*0.5-0.06,Y+H-0.05,X+W*0.5,Y+H,Z,Z+D);
-              L:=Min(16,Max(2,Ceil(W/0.25)));
-              for K:=0 to L do begin T:=X-W*0.5+W*K/L;E.Box(T-0.02,Y+0.14,T+0.02,Y+H-0.05,Z+D-0.05,Z+D) end;
-            end;
+            acBalcony,acRailing,acDownpipe,acGutter,acShutter,acVent,acEntrance,acDamage:
+              E.AtlasPart(C,X,Y,Z);
             acArch: begin
               T:=Min(W*0.13,H*0.15);Rad:=W*0.5-T;
               E.Box(X-W*0.5,Y,X-Rad,Y+H-W*0.5,Z,Z+D);E.Box(X+Rad,Y,X+W*0.5,Y+H-W*0.5,Z,Z+D);
@@ -830,7 +1111,7 @@ begin
           end;
           { Legacy projected shadows use coarse envelopes; the normal shadow
             map / RTX use the same precise merged mesh as the colour pass. }
-          if Mesh.VertexCount>V0 then begin
+          if (Mesh.VertexCount>V0) and (C.Kind<>acDamage) then begin
             K:=Length(Casters);SetLength(Casters,K+1);
             Casters[K].Corners[0]:=Vector3(E.MinP.X,0,E.MinP.Z);Casters[K].Corners[1]:=Vector3(E.MinP.X,0,E.MaxP.Z);
             Casters[K].Corners[2]:=Vector3(E.MaxP.X,0,E.MaxP.Z);Casters[K].Corners[3]:=Vector3(E.MaxP.X,0,E.MinP.Z);

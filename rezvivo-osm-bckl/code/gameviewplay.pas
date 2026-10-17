@@ -2392,14 +2392,17 @@ end;
 
 procedure TViewPlay.AnimateBotBikes(const SecondsPassed: Single);
 var
-  I: Integer;
+  I,Slot: Integer;
+  Order:array[0..LocalBotCount]of Integer;
   BotDt: Single;
   BotBike: TBikeInstance;
   Ag: TPhysicalAgent;
 begin
   if not Assigned(FBotBikes) then Exit;
-  for I := 0 to FBotBikes.Count - 1 do
+  for Slot:=0 to FBotBikes.Count-1 do Order[Slot]:=FLocalBots.SocialAnimationIndex(Slot);
+  for Slot := 0 to FBotBikes.Count - 1 do
   begin
+    I:=Order[Slot];
     BotBike := TBikeInstance(FBotBikes[I]);
     if (BotBike=nil)or not TLocalBotAgent(FBotAgents[I]).Visible or not FPerfRiders then Continue;
     if not BotBike.Group.Exists then Continue;
@@ -2416,6 +2419,7 @@ begin
       Ag := TPhysicalAgent(FBotAgents[I]);
       ApplySteerFromPhysics(BotBike, Ag);
     end;
+    FLocalBots.PrepareSocialContact(I,FBikeInstance);
     BotBike.AnimateFrame(BotDt);
     if (BotBike.RiderScene<>nil) and
        (BotBike.RiderScene.RenderOptions.CachedAnimationRevision<>0) then
@@ -2497,6 +2501,8 @@ begin
       SetRiderLookTarget(Sit,Ag.State.WorldPosition,Ag.State.ForwardDir,
         FActiveAvatarAgent.State.WorldPosition+Vector3(0,1.45,0));
 
+    if FLocalBots<>nil then FLocalBots.ApplySocialLook(I+1,Sit);
+
     { Support must also be up to date when a bot enters the camera view. }
     if (Abs(Sit.SpeedKmh) < 1.2) or BotBike.BuildRiderPose('').Grounded then
     begin
@@ -2518,6 +2524,7 @@ begin
       DSq := DX * DX + DZ * DZ;
       Near := DSq <= PoseMaxDistSq;
     end;
+    if FLocalBots.SocialContactParticipant(I)then begin PM.Update(SecondsPassed,Sit);Continue end;
     if not Near then Continue;
 
     { Visible ≈ in front of camera and inside a wide view cone. }
@@ -5520,7 +5527,7 @@ begin
     begin
       if FFreeExplore and not FRouteExcursion then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
       else begin
-      if FLocalBots<>nil then FLocalBots.BeforePhysics(PhysDt);
+      if FLocalBots<>nil then FLocalBots.BeforePhysics(PhysDt,FBikeInstance);
       UpdateRiderTraffic(FLaneManager,PhysDt);
       if Assigned(FLoopbackSession) then
         FLoopbackSession.Update(PhysDt, FixedTimeStep, PhysSteps)
@@ -5785,6 +5792,7 @@ begin
           FActiveAvatarAgent.State.CurrentModelPitch)
       else FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,
         FActiveAvatarAgent.State.CurrentTurnAngle,FActiveAvatarAgent.State.CurrentModelPitch);
+      if FLocalBots<>nil then FLocalBots.ApplySocialLook(0,RiderSit);
       FPoseManager.Update(PhysDt, RiderSit);
     end;
     FBikeInstance.AnimateFrame(PhysDt);

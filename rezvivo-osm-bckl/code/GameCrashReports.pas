@@ -138,7 +138,11 @@ begin
     '========== machine diagnostics =========='+#10+Info+#10+
     '========== session log (tail, up to 768 KiB) =========='+#10+LogTail;
   J:=TJSONObject.Create(['report_id',Id,'build',Build,'version',Version,
-    'message',Copy(RedactClientLog(Message),1,1800),'log',Text]);
+    'message',Copy(RedactClientLog(Message),1,1800)]);
+  { The array-of-const JSON constructor treats an AnsiString as PChar in
+    this FPC version. USB device names can contain NUL: preserve the error
+    lines after it instead of silently cutting the report at startup. }
+  J.Add('log',Text);
   try SaveJson(Target,J);finally J.Free;end;
   if Worker<>nil then Worker.Wake;
 end;

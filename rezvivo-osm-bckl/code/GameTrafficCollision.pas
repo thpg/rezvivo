@@ -3,6 +3,11 @@ unit GameTrafficCollision;
 
 interface
 
+const
+  { Shared by passage reservations and passing plans; compare to Single road
+    widths at the same precision so an exact 1.9 m road has one definition. }
+  TrafficPassingWidth:Single=1.9;
+
 { The union of the two existing directional bicycle ellipses is a symmetric
   pair shape. Translation and rotation MUST use the same union: checking only
   the other bicycle's frame lets movement enter a state a yaw guard rejects. }

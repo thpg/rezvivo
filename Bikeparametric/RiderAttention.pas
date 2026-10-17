@@ -2,7 +2,10 @@ unit RiderAttention;
 {$mode objfpc}{$H+}
 { Replayable intentions, evaluated before contact dynamics and arm IK. }
 interface
-const RiderAttentionNeckYawLimit = 72;
+const
+  RiderAttentionNeckYawLimit = 64;
+  RiderAttentionMovingYawLimit = 80;
+  RiderAttentionWaitingYawLimit = 88;
 type
   TRiderAttentionAction = (raaNone, raaGlance, raaLookBack, raaRelax, raaRegrip);
   TRiderAttentionFrame = record
@@ -19,15 +22,18 @@ type
     GoalYaw, GoalPitch, GoalRoll, Variation: Single;
     Previous, Solved, Frame: TRiderAttentionFrame;
     Events, SmallEvents, Regrips: Cardinal;
+    PartnerSerial:Cardinal;
   end;
   TRiderAttentionInput = record
-    Waiting, TargetValid, Safe, CanRegrip: Boolean;
+    Waiting, TargetValid, Safe, CanRegrip, ContactSupport: Boolean;
+    PartnerSerial:Cardinal;
     TargetYaw, TargetPitch, Effort, SpeedKmh, LateralAccel, RoadYaw: Single;
   end;
 procedure ResetRiderAttention(var State: TRiderAttentionState; Seed: Cardinal);
 procedure StepRiderAttention(var State: TRiderAttentionState;
   const Input: TRiderAttentionInput; Dt: Single);
 function RiderAttentionTorsoYaw(Yaw: Single; Waiting: Boolean): Single;
+function RiderAttentionLookDuration(Waiting: Boolean; Variation: Single): Single;
 implementation
 uses Math, RiderMotion;
 const Step = 1/120;
@@ -38,6 +44,15 @@ begin
 end;
 procedure ResetRiderAttention(var State: TRiderAttentionState; Seed: Cardinal);
 begin State:=Default(TRiderAttentionState);State.Seed:=Seed end;
+function RiderAttentionLookDuration(Waiting: Boolean; Variation: Single): Single;
+begin
+  { Whole gesture, including turning out and returning. Natural mutual eye
+    contact averages about 1 s (Wohltjen & Wheatley, PNAS 2021,
+    doi:10.1073/pnas.2106645118); riding uses the shorter end of that cue.
+    This is animation timing, not a measured cycling-specific norm. }
+  if Waiting then Result:=1.8+0.4*EnsureRange(Variation,0.0,1.0)
+  else Result:=1.35+0.4*EnsureRange(Variation,0.0,1.0);
+end;
 function RiderAttentionTorsoYaw(Yaw: Single; Waiting: Boolean): Single;
 begin
   if Waiting then Result:=EnsureRange(Yaw*0.28,-28.0,28.0)
@@ -81,20 +96,25 @@ begin
       ((S.Action=raaRegrip)and not ComfortSafe))then begin
       S.Active:=False;S.Action:=raaNone;S.NextAction:=1.5;
     end;
+    if(U.PartnerSerial<>0)and(U.PartnerSerial<>S.PartnerSerial)and
+      U.TargetValid and LongSafe then begin
+      S.PartnerSerial:=U.PartnerSerial;S.ForceLook:=True;
+    end;
     if S.ForceLook and LongSafe then begin
       S.Active:=False;S.NextLook:=0;S.ForceLook:=False;
     end;
     if not S.Active and(Max(S.Solved.HandRelease[0],S.Solved.HandRelease[1])<0.01)then begin
       if LongSafe and(S.NextLook<=0)then begin
         S.Action:=raaLookBack;Inc(S.Events);
-        if U.Waiting then S.Duration:=2.4+RandomUnit(S.Seed)*0.9
-        else S.Duration:=1.75+RandomUnit(S.Seed)*0.5;
+        S.Duration:=RiderAttentionLookDuration(U.Waiting,RandomUnit(S.Seed));
         if U.TargetValid then begin S.GoalYaw:=U.TargetYaw;S.GoalPitch:=U.TargetPitch end
         else begin
-          S.GoalYaw:=90;if RandomUnit(S.Seed)<0.5 then S.GoalYaw:=-90;
+          S.GoalYaw:=RiderAttentionMovingYawLimit;
+          if RandomUnit(S.Seed)<0.5 then S.GoalYaw:=-S.GoalYaw;
           S.GoalPitch:=-2+4*RandomUnit(S.Seed);
         end;
-        if U.Waiting then Limit:=100 else Limit:=90;
+        if U.Waiting then Limit:=RiderAttentionWaitingYawLimit
+        else Limit:=RiderAttentionMovingYawLimit;
         S.GoalYaw:=EnsureRange(S.GoalYaw,-Limit,Limit);
         S.GoalPitch:=EnsureRange(S.GoalPitch,-12,14);
         S.GoalRoll:=-Sign(S.GoalYaw)*(1+RandomUnit(S.Seed)*2);
@@ -129,13 +149,17 @@ begin
   if U.Safe and not U.Waiting then Goal.Yaw:=EnsureRange(U.RoadYaw,-14,14);
   if S.Active then begin
     S.Timer:=S.Timer+Step;Ramp:=0.55;if U.Waiting then Ramp:=0.7;
+    if S.Action=raaLookBack then begin
+      Ramp:=0.4;if U.Waiting then Ramp:=0.5;
+    end;
     Envelope:=SmoothUnit(S.Timer/Ramp)*SmoothUnit((S.Duration-S.Timer)/Ramp);
     if (S.Action=raaLookBack)and U.TargetValid then begin
       { Keep the chosen side across atan2's rear +/-180 seam. }
       Yaw:=U.TargetYaw;
       while Yaw-S.GoalYaw>180 do Yaw:=Yaw-360;
       while Yaw-S.GoalYaw< -180 do Yaw:=Yaw+360;
-      if U.Waiting then Limit:=100 else Limit:=90;
+      if U.Waiting then Limit:=RiderAttentionWaitingYawLimit
+      else Limit:=RiderAttentionMovingYawLimit;
       S.GoalYaw:=Follow(S.GoalYaw,EnsureRange(Yaw,-Limit,Limit),0.3,45);
       S.GoalPitch:=Follow(S.GoalPitch,EnsureRange(U.TargetPitch,-12,14),0.3,20);
     end;
@@ -163,6 +187,10 @@ begin
     end;
     if S.Timer>=S.Duration then begin S.Active:=False;S.Action:=raaNone end;
   end;
+  { A hand-to-back contact is a shared support: the receiver also keeps
+    their thorax steady rather than twisting it out from under the palm.
+    The normal response filter makes entering/leaving this constraint smooth. }
+  if U.ContactSupport then Goal.TorsoYaw:=EnsureRange(Goal.TorsoYaw,-5.0,5.0);
   S.Solved.Yaw:=Follow(S.Solved.Yaw,Goal.Yaw,0.12,180);
   S.Solved.Pitch:=Follow(S.Solved.Pitch,Goal.Pitch,0.16,50);
   S.Solved.Roll:=Follow(S.Solved.Roll,Goal.Roll,0.20,30);

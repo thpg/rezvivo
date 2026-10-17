@@ -367,5 +367,7 @@
   "Run": "跑步",
   "Brake": "刹车",
   "+ W": "+ W",
-  "Trees: textured": "树木：贴图"
+  "Trees: textured": "树木：贴图",
+  "World image cache": "世界图像缓存",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "通过重复使用远处景物的图像提高性能，但可能产生画面瑕疵。占用额外显存。默认关闭。"
 }

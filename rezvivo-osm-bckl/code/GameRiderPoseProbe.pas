@@ -1,14 +1,16 @@
 unit GameRiderPoseProbe;
 {$mode objfpc}{$H+}
 interface
-uses CastleScene, fpjson;
+uses CastleScene, CastleViewport, fpjson;
 { Explicit MCP diagnostic only. No readback or work in the normal frame. }
-function DumpRiderPose(const Scene: TCastleScene; const Path: string): TJSONObject;
+function DumpRiderPose(const Scene: TCastleScene; const Viewport:TCastleViewport;
+  const Path: string): TJSONObject;
 implementation
 uses Classes, SysUtils, CastleShapes, CastleInternalRenderer, CastleTransform,
   CastleVectors, CastleGL;
 
-function DumpRiderPose(const Scene: TCastleScene; const Path: string): TJSONObject;
+function DumpRiderPose(const Scene: TCastleScene; const Viewport:TCastleViewport;
+  const Path: string): TJSONObject;
 {$ifndef OpenGLES}
 var Shapes: TShapeList; Shape: TX3DRendererShape; I: Integer;
   Coordinates, Indices, Stride, Count, IndexCount: Cardinal;
@@ -22,6 +24,7 @@ begin
   Result := nil;
   {$else}
   if (Scene=nil) or (Scene.Shapes=nil) then raise Exception.Create('No rider geometry');
+  if (Viewport=nil)or(Viewport.Camera=nil)then raise Exception.Create('No rider viewport camera');
   if not Assigned(glGetBufferSubData) then raise Exception.Create('No buffer readback');
   Items:=TJSONArray.Create;
   Result:=TJSONObject.Create;
@@ -29,11 +32,11 @@ begin
   Result.Add('layout','float32 position[3], normal[3], tangent[4]; local mesh space');
   Params:=TRenderParams.Create;
   Params.RenderingCamera:=TRenderingCamera.Create;
-  { Use the detail selected by the preceding draw, without asking the LOD
-    filter to evaluate an artificial screen projection. }
-  Params.RenderingCamera.Target:=rtShadowMap;
-  Params.RenderingCamera.Matrix:=TMatrix4.Identity;
-  Params.RenderingCamera.Projection:=TMatrix4.Identity;
+  { A shadow target deliberately bypasses facial visibility and can expose a
+    stale TF buffer belonging to a hidden mouth. Use the real colour camera:
+    the diagnostic compares only the source shapes selected by that draw. }
+  Params.RenderingCamera.Target:=rtScreen;
+  Params.RenderingCamera.FromCameraObject(Viewport.Camera);
   Transform:=IdentityTransformation;
   Transform.Transform:=Scene.WorldTransform;
   Transform.InverseTransform:=Scene.WorldInverseTransform;

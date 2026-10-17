@@ -1,5 +1,7 @@
 #version 460
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=0,binding=0) uniform accelerationStructureEXT world;
 layout(set=0,binding=2) uniform sampler2DArray silhouettes;
@@ -11,8 +13,12 @@ layout(std430,set=0,binding=4) readonly buffer Camera {
 layout(set=0,binding=5) uniform sampler2D normalImage;
 layout(set=0,binding=6) uniform sampler2D depthImage;
 layout(set=0,binding=7,rgba16f) uniform writeonly image2D reflectionImage;
-struct Surface { vec4 normal;vec4 color;vec4 uv0;vec4 uv1;vec4 uv2; };
-layout(std430,set=0,binding=8) readonly buffer Surfaces { Surface surfaces[]; };
+struct Surface { vec4 normal;vec4 color; };
+struct SurfaceUV { vec4 uv0;vec4 uv1;vec4 uv2; };
+struct SurfaceReference { uvec2 surface;uvec2 uv;uvec4 range; };
+layout(buffer_reference,std430,buffer_reference_align=16) readonly buffer Surfaces { Surface values[]; };
+layout(buffer_reference,std430,buffer_reference_align=16) readonly buffer SurfaceUVs { SurfaceUV values[]; };
+layout(std430,set=0,binding=8) readonly buffer References { SurfaceReference references[]; };
 layout(set=0,binding=9) uniform sampler2D buildingAtlas;
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(reflectionImage);
@@ -42,15 +48,19 @@ void main() {
     if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return;
     uint t=rayQueryGetIntersectionPrimitiveIndexEXT(q,true),g=rayQueryGetIntersectionGeometryIndexEXT(q,true);
     vec3 normal,albedo;
-    if(g!=1u){Surface s=surfaces[t+rayQueryGetIntersectionInstanceCustomIndexEXT(q,true)];normal=normalize(s.normal.xyz);albedo=s.color.rgb;
+    if(g!=1u){
+        SurfaceReference r=references[rayQueryGetIntersectionInstanceCustomIndexEXT(q,true)];
+        if(t>=r.range.y)return;
+        Surface s=Surfaces(r.surface).values[t+r.range.x];normal=normalize(s.normal.xyz);albedo=s.color.rgb;
         if(s.normal.w>0.){
+            SurfaceUV u=SurfaceUVs(r.uv).values[floatBitsToUint(s.color.w)];
             vec2 bary=rayQueryGetIntersectionBarycentricsEXT(q,true);
-            vec2 uv=s.uv0.xy*(1.-bary.x-bary.y)+s.uv1.xy*bary.x+s.uv2.xy*bary.y;
-            float mat=s.normal.w-1.;vec2 grid=s.uv0.zw;
+            vec2 uv=u.uv0.xy*(1.-bary.x-bary.y)+u.uv1.xy*bary.x+u.uv2.xy*bary.y;
+            float mat=s.normal.w-1.;vec2 grid=u.uv0.zw;
             vec2 cell=vec2(mod(mat,grid.x),floor(mat/grid.x));
             vec2 at=(cell+mix(vec2(.012),vec2(.988),fract(uv)))/grid;
             vec3 paint=textureLod(buildingAtlas,at,0.).rgb;
-            albedo=pow(paint*mix(vec3(1),albedo,s.color.w),vec3(2.2));
+            albedo=pow(paint*mix(vec3(1),albedo,u.uv1.z),vec3(2.2));
         }
     }
     else {normal=-ray;albedo=vec3(.16,.24,.085);}

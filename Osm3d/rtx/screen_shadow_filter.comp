@@ -1,14 +1,39 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
+layout(constant_id=0) const bool sharedFilter=true;
+shared vec2 localSamples[256];
+shared float localDepth[256];
+float filterDepth(ivec2 p,ivec2 size);
+#define SHADOW_DEPTH_FETCH(p,size) filterDepth(p,size)
 #include "screen_shadow_common.glsl"
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=0,binding=9) uniform sampler2D shadowSamples;
 layout(set=0,binding=7,r8) uniform writeonly image2D shadowImage;
+int localIndex(ivec2 p,ivec2 size) {
+    ivec2 q=clamp(p,ivec2(0),size-1)-(ivec2(gl_WorkGroupID.xy)*8-4);
+    return q.y*16+q.x;
+}
+float filterDepth(ivec2 p,ivec2 size) {
+    return sharedFilter?localDepth[localIndex(p,size)]:texelFetch(cameraDepth,clamp(p,ivec2(0),size-1),0).r;
+}
+vec2 filterSamples(ivec2 p,ivec2 size) {
+    return sharedFilter?localSamples[localIndex(p,size)]:texelFetch(shadowSamples,clamp(p,ivec2(0),size-1),0).rg;
+}
 void main() {
     ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(shadowImage);
+    if(sharedFilter){
+        ivec2 origin=ivec2(gl_WorkGroupID.xy)*8-4;
+        for(int i=int(gl_LocalInvocationIndex);i<256;i+=64){
+            ivec2 q=clamp(origin+ivec2(i%16,i/16),ivec2(0),size-1);
+            localSamples[i]=texelFetch(shadowSamples,q,0).rg;
+            localDepth[i]=texelFetch(cameraDepth,q,0).r;
+        }
+        // Uniform specialization branch; even out-of-viewport threads participate.
+        barrier();
+    }
     if(any(greaterThanEqual(p,size)))return;
-    vec2 center=texelFetch(shadowSamples,p,0).rg;
-    float z=texelFetch(cameraDepth,p,0).r;
+    vec2 center=filterSamples(p,size);
+    float z=filterDepth(p,size);
     float cached;
     // Already filtered when this slab was captured. Repeated filtering would
     // widen the penumbra and darken silhouettes on every reuse.
@@ -16,7 +41,7 @@ void main() {
     if(z>=1.||options.x<=0.){imageStore(shadowImage,p,vec4(center.r));return;}
     float lo=center.r,hi=center.r,radius=center.g;
     for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x) {
-        vec2 s=texelFetch(shadowSamples,clamp(p+ivec2(x,y)*2,ivec2(0),size-1),0).rg;
+        vec2 s=filterSamples(p+ivec2(x,y)*2,size);
         lo=min(lo,s.r);hi=max(hi,s.r);radius=max(radius,s.g);
     }
     if(hi-lo<.001&&(lo<.001||lo>.999)) {
@@ -31,12 +56,12 @@ void main() {
     for(int y=-2;y<=2;++y)for(int x=-2;x<=2;++x) {
         vec2 delta=vec2(x,y)*radius*.5;
         ivec2 q=clamp(p+ivec2(round(delta)),ivec2(0),size-1);
-        if(texelFetch(cameraDepth,q,0).r>=1.)continue;
+        if(filterDepth(q,size)>=1.)continue;
         vec3 other=eyePoint(q,size),diff=other-eye;
         float plane=abs(dot(diff,n))/tolerance;
         float weight=exp(-.4*float(x*x+y*y)-2.*plane*plane);
         if(abs(diff.z)>max(.05,abs(eye.z)*.025))continue;
-        sum+=texelFetch(shadowSamples,q,0).r*weight;weights+=weight;
+        sum+=filterSamples(q,size).r*weight;weights+=weight;
     }
     imageStore(shadowImage,p,vec4(weights>1e-6?sum/weights:center.r));
 }

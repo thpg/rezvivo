@@ -13,6 +13,18 @@ type
     Weight: Single;
   end;
 
+  { World-space intention, bike-space remembered return path. No pointer to
+    another rig: safe when a peer disappears and cheap to save in a replay. }
+  TRiderPartnerContact = record
+    Wanted:Boolean;
+    Side:Integer;
+    Phase,Blend:Single;
+    ReachDistance,ReachLimit:Single;
+    Rejected:Integer;
+    WorldPoint,LocalPoint:TVector3;
+    WorldFrame,LocalFrame:TRiderGripFrame;
+  end;
+
 function RiderGripFrame(Grip, Side: Integer): TRiderGripFrame;
 function BlendGripFrame(const A, B: TRiderGripFrame; T: Single): TRiderGripFrame;
 function TransformGripFrame(const F: TRiderGripFrame; const M: TMatrix4): TRiderGripFrame;

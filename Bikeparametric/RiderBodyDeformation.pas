@@ -7,7 +7,7 @@ unit RiderBodyDeformation;
   skeletal attachments; soft contact is bounded and independent of frame time. }
 interface
 uses Classes, SysUtils, Math, fpjson, CastleUtils, CastleVectors, X3DNodes, X3DFields,
-  TripoRig, RiderBodyParameters, RiderDynamics, BikeSeatSurface;
+  TripoRig, RiderBodyParameters, RiderDynamics, BikeSeatSurface, RiderPosePreparation;
 type
   TRiderBodyDeformation = class
   private
@@ -21,16 +21,12 @@ type
         Tissue: array of TVector4;
         Delta: array[0..4] of array of TVector3;
       end;
-      TMuscle = record
-        A,B: TVector3;
-        Response: TVector4;
-        JA,JB: Integer;
-        BroadAttachment: Boolean;
-        Channel: Integer;
-      end;
     var
       FShapes: array of TShape;
-      FMuscles: array of TMuscle;
+      FMuscles: array of TRiderPoseMuscle;
+      FPreparedThighs:array of TRiderPoseThigh;
+      FBellyCentre,FBellyRadii:TVector3;
+      FThighRadius:Single;
       FRig: TTripoRig;
       FBodyVertexCount: Integer;
       FInfo: TJSONObject;
@@ -47,6 +43,10 @@ type
       FLast: TRiderBodyParameters;
       FApplied: Boolean;
       FSurfaceGradients: Boolean;
+      FPreparedField:TMFVec4f;
+      FPreparedValues,FPreparedScratch:TVector4List;
+      FPreparedValid:Boolean;
+      FPrepareRevision:QWord;
     procedure SendConstants;
     procedure RefreshSurfaceGradients;
   public
@@ -61,13 +61,16 @@ type
       const ToBike:TMatrix4;const Saddle:TVector3;const Surface:TSeatSurface;ContactAmount:Single);
     property UseDynamics:Boolean read FUseDynamics write FUseDynamics;
     procedure SendActiveFrame;
-    function ShaderSource(const JointFunction:string):string;
+    procedure AddPreparedUniforms(Effect:TEffectNode);
+    procedure PreparePose(const Joints:TMatrix4List);
+    property PrepareRevision:QWord read FPrepareRevision;
+    function ShaderSource(const JointFunction:string;const Prepared:Boolean=False):string;
   end;
 implementation
 uses GltfCore, RiderCorrectiveData, RiderRuntimeAudit;
 
 destructor TRiderBodyDeformation.Destroy;
-begin FInfo.Free;FLengths.Free;FDynamicValues.Free;inherited end;
+begin FInfo.Free;FLengths.Free;FDynamicValues.Free;FPreparedValues.Free;FPreparedScratch.Free;inherited end;
 
 function TRiderBodyDeformation.Load(const Path:string;Skin:TSkinNode;Rig:TTripoRig):Boolean;
 var D:TMemoryStream; S,M,R:TJSONArray; O:TJSONObject; I,J,K,V,N,First:Integer;
@@ -183,10 +186,11 @@ begin
   Effect.AddCustomField(A);Effect.AddCustomField(B);Effect.AddCustomField(R);
 end;
 procedure TRiderBodyDeformation.DetachGpu;
-begin FEffects[1]:=nil;FFrameFields[1]:=nil;FDynamicFields[1]:=nil;FDynamicValid[1]:=False end;
+begin FEffects[1]:=nil;FFrameFields[1]:=nil;FDynamicFields[1]:=nil;FDynamicValid[1]:=False;FPreparedField:=nil;FPreparedValid:=False end;
 procedure TRiderBodyDeformation.SendConstants;
 var I:Integer;F:TX3DField;
 begin
+  Inc(FPrepareRevision);
   for I:=0 to 1 do if FEffects[I]<>nil then begin
     F:=FEffects[I].Field('uBodyProfile',False);if F is TSFVec4f then TSFVec4f(F).Send(FProfile);
     F:=FEffects[I].Field('uMuscleRestLength',False);if F is TMFFloat then TMFFloat(F).Send(FLengths);
@@ -223,6 +227,7 @@ begin
     M:=Mat4Mul(FRig.BindWorld[FMuscles[I].JB],FRig.NativeInvBind[FMuscles[I].JB]);
     B:=Mat4MulPoint(M,V3(FMuscles[I].B.X,FMuscles[I].B.Y,FMuscles[I].B.Z));
     FLengths.Add(Max(0.001,V3Len(V3Sub(A,B))));
+    FMuscles[I].RestLength:=FLengths[I];
   end;
   BellyJ:=FInfo.Get('bellyJoint',0);BellyInv:=Mat4Inverse(Palette[BellyJ]);
   C:=V3(ArrOf(FInfo,'bellyCentre').Floats[0],ArrOf(FInfo,'bellyCentre').Floats[1],
@@ -230,11 +235,15 @@ begin
   R:=V3(ArrOf(FInfo,'bellyRadii').Floats[0]*(1+0.35*FProfile.X),ArrOf(FInfo,'bellyRadii').Floats[1],
     ArrOf(FInfo,'bellyRadii').Floats[2]*(1+0.65*FProfile.X));
   Radius:=FInfo.Get('thighRadius',0.07)*(1+0.28*FProfile.X+0.24*FProfile.Y);
-  Thighs:=ArrOf(FInfo,'thighs');
+  for K:=0 to 2 do begin FBellyCentre.Data[K]:=ArrOf(FInfo,'bellyCentre').Floats[K];FBellyRadii.Data[K]:=ArrOf(FInfo,'bellyRadii').Floats[K]end;
+  FThighRadius:=FInfo.Get('thighRadius',0.07);
+  Thighs:=ArrOf(FInfo,'thighs');SetLength(FPreparedThighs,Thighs.Count);
   for Side:=0 to 1 do begin
     J:=Thighs.Arrays[Side].Integers[0];M:=Mat4Inverse(FRig.NativeInvBind[J]);
+    FPreparedThighs[Side].JA:=J;FPreparedThighs[Side].A:=Vector3(M[12],M[13],M[14]);
     ThighA[Side]:=Mat4MulPoint(Palette[J],V3(M[12],M[13],M[14]));
     J:=Thighs.Arrays[Side].Integers[1];M:=Mat4Inverse(FRig.NativeInvBind[J]);
+    FPreparedThighs[Side].JB:=J;FPreparedThighs[Side].B:=Vector3(M[12],M[13],M[14]);
     ThighB[Side]:=Mat4MulPoint(Palette[J],V3(M[12],M[13],M[14]));
   end;
   { Only a profile/bind edit computes neutral proxy overlap. Animation uploads
@@ -412,6 +421,7 @@ begin
       if (FFrameFields[I].Value.X<>FFrame.X) or (FFrameFields[I].Value.Y<>FFrame.Y) then
       begin
         CountRiderWork(rwBodyFrameSend);
+        Inc(FPrepareRevision);
         FFrameFields[I].Send(FFrame);
       end;
   for I:=0 to 1 do
@@ -419,6 +429,7 @@ begin
       Dirty:=not FDynamicValid[I];
       for J:=0 to 7+SeatSurfaceCount do if not TVector4.Equals(FDynamicSent[I,J],FDynamicValues[J])then Dirty:=True;
       if Dirty then begin
+        Inc(FPrepareRevision);
         FDynamicFields[I].Send(FDynamicValues);
         for J:=0 to 7+SeatSurfaceCount do FDynamicSent[I,J]:=FDynamicValues[J];
         FDynamicValid[I]:=True;
@@ -426,7 +437,34 @@ begin
     end;
 end;
 
-function TRiderBodyDeformation.ShaderSource(const JointFunction:string):string;
+procedure TRiderBodyDeformation.AddPreparedUniforms(Effect:TEffectNode);
+begin
+  if FPreparedValues=nil then FPreparedValues:=TVector4List.Create;
+  FPreparedValues.Count:=Length(FMuscles)*2+2+ArrOf(FInfo,'thighs').Count*2;
+  if FPreparedScratch=nil then FPreparedScratch:=TVector4List.Create;
+  FPreparedScratch.Count:=FPreparedValues.Count;
+  FPreparedField:=TMFVec4f.Create(Effect,True,'uBodyPrepared',[]);
+  FPreparedField.Items.Assign(FPreparedValues);Effect.AddCustomField(FPreparedField);
+  FPreparedValid:=False;
+end;
+
+procedure TRiderBodyDeformation.PreparePose(const Joints:TMatrix4List);
+var I:Integer;Changed:Boolean;
+begin
+  if FPreparedField=nil then Exit;
+  { Pure numeric preparation, no JSON parsing, inverse bind matrices, events or
+    GL calls. All immutable pivots/response data is refreshed with the bind. }
+  RiderPoseBody(Joints,FMuscles,FPreparedThighs,FProfile,FFrame,FDynamicValues,
+    FBellyCentre,FBellyRadii,FThighRadius,FPreparedScratch);
+  Changed:=not FPreparedValid;
+  for I:=0 to FPreparedValues.Count-1 do
+    if not TVector4.Equals(FPreparedValues[I],FPreparedScratch[I])then Changed:=True;
+  if Changed then begin
+    FPreparedValues.Assign(FPreparedScratch);FPreparedField.Send(FPreparedValues);FPreparedValid:=True;
+  end;
+end;
+
+function TRiderBodyDeformation.ShaderSource(const JointFunction:string;const Prepared:Boolean):string;
 var S:TStringList;I:Integer;A:TJSONArray;BroadCondition:string;
   function Num(X:Double):string;
   begin Str(X:0:9,Result) end;
@@ -442,6 +480,10 @@ begin
   S:=TStringList.Create;
   try
     S.Add('attribute vec4 riderCentre; attribute vec4 riderTissue;attribute vec4 riderContactRest;');
+    if Prepared then begin
+      S.Add('#define BODY_POSE_PREPARED');
+      S.Add('uniform vec4 uBodyPrepared['+IntToStr(Length(FMuscles)*2+2+ArrOf(FInfo,'thighs').Count*2)+'];');
+    end;
     if FSurfaceGradients then S.Add('#define BODY_NORMAL_GRADIENTS');
     S.Add('#ifdef BODY_NORMAL_GRADIENTS');
     S.Add('attribute vec4 riderGradient0,riderGradient1,riderGradient2;');
@@ -473,8 +515,9 @@ begin
       Normals follow both the longitudinal belly and the transverse envelope.
       Omitting the latter hid contraction at the gluteal/hip transition. }
     S.Add('void bodyMuscleDeform(inout vec3 p,inout vec3 n,vec3 envelopeGradient){');
-    S.Add(' if(riderTissue.y<0.0001)return; int id=int(riderTissue.x+0.5);vec3 a,b;bodyMuscle(id,a,b);');
-    S.Add(' vec3 axis=b-a;float len=max(length(axis),.001);axis/=len;');
+    S.Add(' if(riderTissue.y<0.0001)return; int id=int(riderTissue.x+0.5);vec3 a,axis;float len;');
+    S.Add('#ifndef BODY_POSE_PREPARED');
+    S.Add(' vec3 b;bodyMuscle(id,a,b);axis=b-a;len=max(length(axis),.001);axis/=len;');
     S.Add(' vec4 response=uMuscleResponse[id];float activation,tissue=0.0;');
     S.Add(' int channel=bodyMuscleChannel(id);if(uBodyDynamics[3].w>.5){');
     S.Add(' if(channel>=0){int side=channel/4,part=channel-4*side;activation=uBodyDynamics[side][part];');
@@ -482,6 +525,10 @@ begin
     S.Add(' }else{float wave=max(0.0,cos(6.2831853*(uBodyFrame.y-response.x)));activation=clamp(uBodyFrame.x*.5,0.0,1.0)*mix(1.0,.08+.92*wave*wave,response.y);}');
     S.Add(' float strain=(clamp(sqrt(uMuscleRestLength[id]/len),.90,1.12)-1.0)*response.w+response.z*activation;');
     S.Add(' float share=clamp(.28+.16*uBodyProfile.y-.12*uBodyProfile.x,.10,.52);');
+    S.Add(' float responseScale=strain*share+tissue;');
+    S.Add('#else');
+    S.Add(' a=uBodyPrepared[id*2].xyz;len=uBodyPrepared[id*2].w;axis=uBodyPrepared[id*2+1].xyz;float responseScale=uBodyPrepared[id*2+1].w;');
+    S.Add('#endif');
     S.Add(' vec3 d=p-a;float h=dot(d,axis);vec3 radial=d-axis*h;float along=clamp(h/len,0.0,1.0);');
     { The gluteal field spans the posterior pelvis. Reapplying a narrow
       longitudinal taper in posed coordinates suppressed its upper surface
@@ -489,7 +536,7 @@ begin
       and surface derivative supply the complete broad attachment taper. }
     { The solver's tissue mode is already a physical displacement divided by
       its radius. Do not attenuate it a second time with muscle surface share. }
-    S.Add(' bool broad=bodyBroadMuscle(id);float belly=broad?1.0:sin(3.14159265*along),responseScale=strain*share+tissue,k=responseScale*riderTissue.y,s=1.0+k*belly*belly;');
+    S.Add(' bool broad=bodyBroadMuscle(id);float belly=broad?1.0:sin(3.14159265*along),k=responseScale*riderTissue.y,s=1.0+k*belly*belly;');
     S.Add(' float ds=broad?0.0:k*3.14159265*sin(6.2831853*along)/len;p+=(s-1.0)*radial;');
     S.Add(' vec3 grad=axis*ds+envelopeGradient*(responseScale*belly*belly);');
     S.Add(' vec3 base=n/s+axis*(dot(n,axis)*(1.0-1.0/s));');
@@ -504,13 +551,20 @@ begin
     S.Add(' float edge=1.0-smoothstep(.83,1.0,lateral);float bottom=smoothstep(-.09,-.06,seat.y);');
     S.Add(' return uBodyDynamics[7].xyz*(depth*edge*bottom*uBodyDynamics[3].z); }');
     S.Add('vec3 bodySoftPush(vec3 p){float w=riderTissue.z;if(w>2.0)return vec3(0);vec3 push=bodySeatPush(p);if(abs(w)<.0001)return push;');
-    S.Add(' float soft=clamp(.45+.22*uBodyProfile.x-.12*uBodyProfile.y,.25,.8);');
+    if Prepared then S.Add(' float soft=uBodyPrepared['+IntToStr(Length(FMuscles)*2)+'].w;')
+    else S.Add(' float soft=clamp(.45+.22*uBodyProfile.x-.12*uBodyProfile.y,.25,.8);');
     S.Add(' if(w<0.0){mat4 m=bodyJoint('+IntToStr(FInfo.Get('bellyJoint',0))+');');
-    S.Add(' vec3 c='+JsonVec('bellyCentre')+'+vec3(0.0,0.0,.035*uBodyProfile.x);vec3 r='+JsonVec('bellyRadii')+';r*=vec3(1.0+.35*uBodyProfile.x,1.0,1.0+.65*uBodyProfile.x);');
+    if Prepared then S.Add(' vec3 c=uBodyPrepared['+IntToStr(Length(FMuscles)*2)+'].xyz,r=uBodyPrepared['+IntToStr(Length(FMuscles)*2+1)+'].xyz;')
+    else S.Add(' vec3 c='+JsonVec('bellyCentre')+'+vec3(0.0,0.0,.035*uBodyProfile.x);vec3 r='+JsonVec('bellyRadii')+';r*=vec3(1.0+.35*uBodyProfile.x,1.0,1.0+.65*uBodyProfile.x);');
     S.Add(' vec3 local=transpose(mat3(m))*(p-m[3].xyz)-c;float d=length(local/r);if(d<1.0){vec3 grad=mat3(m)*(local/(r*r));float gl=max(length(grad),.0001);float depth=max(0.0,(1.0-d)/gl-riderContactRest.x);float limit=.006*(1.0-soft);push+=grad/gl*(depth/(1.0+depth/max(limit,.001)))*(-w);}');
     S.Add(' }else{');
     A:=ArrOf(FInfo,'thighs');
     for I:=0 to A.Count-1 do begin
+      if Prepared then begin
+        S.Add('{vec4 pa=uBodyPrepared['+IntToStr(Length(FMuscles)*2+2+I*2)+'];vec3 a=pa.xyz,ab=uBodyPrepared['+IntToStr(Length(FMuscles)*2+3+I*2)+'].xyz;');
+        S.Add('float t=clamp(dot(p-a,ab)/pa.w,.12,.90);vec3 d=p-(a+t*ab);float l=length(d);float radius=uBodyPrepared['+IntToStr(Length(FMuscles)*2+1)+'].w;float penetration=max(0.0,radius-l-riderContactRest['+IntToStr(I)+']);float limit=.010*soft;push+=d/max(l,.0001)*(penetration/(1.0+penetration/max(limit,.001)))*w;}');
+        Continue;
+      end;
       S.Add('{vec3 a=(bodyJoint('+IntToStr(A.Arrays[I].Integers[0])+')*vec4('+Pivot(A.Arrays[I].Integers[0])+',1.0)).xyz;');
       S.Add('vec3 b=(bodyJoint('+IntToStr(A.Arrays[I].Integers[1])+')*vec4('+Pivot(A.Arrays[I].Integers[1])+',1.0)).xyz;');
       S.Add('vec3 ab=b-a;float t=clamp(dot(p-a,ab)/max(dot(ab,ab),.0001),.12,.90);vec3 d=p-(a+t*ab);float l=length(d);float radius='+Num(FInfo.Get('thighRadius',0.07))+'*(1.0+.28*uBodyProfile.x+.24*uBodyProfile.y);float penetration=max(0.0,radius-l-riderContactRest['+IntToStr(I)+']);float limit=.010*soft;push+=d/max(l,.0001)*(penetration/(1.0+penetration/max(limit,.001)))*w;}');
@@ -532,8 +586,13 @@ begin
     S.Add(' vec3 pu=vec3(0),pv=vec3(0),gradientPoint=mix(p,riderCentre.xyz,riderCentre.w);vec4 qu=vec4(0.0),qv=vec4(0.0);');
     S.Add('#endif');
     S.Add(' int dominant=0;for(int i=1;i<4;i++)if(w[i]>w[dominant])dominant=i;');
-    S.Add(' mat4 dominantMatrix=bodyJoint(j[dominant]);ref=bodyQuat(mat3(dominantMatrix));');
-    S.Add(' for(int i=0;i<4;i++)if(w[i]>0.0){mat4 b=i==dominant?dominantMatrix:bodyJoint(j[i]);m+=w[i]*b;vec4 qi=i==dominant?ref:bodyQuat(mat3(b));if(dot(qi,ref)<0.0)qi=-qi;q+=qi*w[i];');
+    if Prepared then begin
+      S.Add(' mat4 dominantMatrix=bodyJoint(j[dominant]);ref=uGskSkinQuat[j[dominant]];');
+      S.Add(' for(int i=0;i<4;i++)if(w[i]>0.0){mat4 b=i==dominant?dominantMatrix:bodyJoint(j[i]);m+=w[i]*b;vec4 qi=i==dominant?ref:uGskSkinQuat[j[i]];if(dot(qi,ref)<0.0)qi=-qi;q+=qi*w[i];');
+    end else begin
+      S.Add(' mat4 dominantMatrix=bodyJoint(j[dominant]);ref=bodyQuat(mat3(dominantMatrix));');
+      S.Add(' for(int i=0;i<4;i++)if(w[i]>0.0){mat4 b=i==dominant?dominantMatrix:bodyJoint(j[i]);m+=w[i]*b;vec4 qi=i==dominant?ref:bodyQuat(mat3(b));if(dot(qi,ref)<0.0)qi=-qi;q+=qi*w[i];');
+    end;
     S.Add('#ifdef BODY_NORMAL_GRADIENTS');
     S.Add(' vec3 point=(b*vec4(gradientPoint,1)).xyz;pu+=point*wu[i];pv+=point*wv[i];qu+=qi*wu[i];qv+=qi*wv[i];');
     S.Add('#endif');

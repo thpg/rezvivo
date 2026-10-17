@@ -356,5 +356,7 @@
   "Run": "جري",
   "Brake": "فرامل",
   "+ W": "+ W",
-  "Trees: textured": "الأشجار: صور"
+  "Trees: textured": "الأشجار: صور",
+  "World image cache": "ذاكرة التخزين المؤقت لصورة العالم",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "يحسّن الأداء بإعادة استخدام المشاهد البعيدة، لكنه قد يسبب عيوبًا بصرية. يستخدم ذاكرة رسومية إضافية. معطّل افتراضيًا."
 }

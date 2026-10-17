@@ -19,6 +19,8 @@ function RenderProfileRevision: Cardinal;
 
 implementation
 
+uses CastleInternalSpatialIndexStream;
+
 var
   Current: TOsmRenderProfile = {$ifdef OpenGLES}orpUniversal{$else}orpFull{$endif};
   Revision: Cardinal = 1;
@@ -31,6 +33,7 @@ var Effective: TOsmRenderProfile;
 begin
   Effective := Value;
   if not FullRendererSupported then Effective := orpUniversal;
+  SpatialRenderAllowed:=Effective=orpFull;
   if Current = Effective then Exit;
   Current := Effective;
   Inc(Revision);
@@ -42,4 +45,6 @@ begin Result := Current; end;
 function RenderProfileRevision: Cardinal;
 begin Result := Revision; end;
 
+initialization
+  SpatialRenderAllowed:=Current=orpFull;
 end.

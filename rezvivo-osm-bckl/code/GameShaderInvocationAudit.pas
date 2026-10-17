@@ -68,7 +68,7 @@ type
 
 implementation
 uses SysUtils,Math,CastleApplicationProperties
-  {$ifndef OpenGLES},GL,GLExt,GrassRenderer{$endif};
+  {$ifndef OpenGLES},GL,GLExt,GrassRenderer,TreeDistantArena{$endif};
 const
   Targets:array[0..ShaderAuditCounters-1]of Cardinal=($82EE,$82EF,$82F0,$82F4,$82F5);
   Names:array[0..ShaderAuditCounters-1]of string=(
@@ -185,6 +185,7 @@ begin
   if Assigned(OldElementBase)then CastleGL.glDrawElementsInstancedBaseInstance:=@HookElementBase;
   if Assigned(OldDispatch)then CastleGL.glDispatchCompute:=@HookDispatch;
   GrassDiagnosticRawDraw:=@RawGrassDraw;
+  TreeArenaDiagnosticRawDraw:=@RawGrassDraw;
   GrassDiagnosticDrawMode:=@GrassDrawMode;
   FInstalled:=True;
   {$endif}
@@ -204,6 +205,7 @@ begin
   CastleGL.glDrawRangeElements:=OldRange;CastleGL.glDrawElementsBaseVertex:=OldBase;
   CastleGL.glDrawArraysInstancedBaseInstance:=OldArrayBase;CastleGL.glDrawElementsInstancedBaseInstance:=OldElementBase;
   CastleGL.glDispatchCompute:=OldDispatch;GrassDiagnosticRawDraw:=nil;GrassDiagnosticDrawMode:=nil;
+  TreeArenaDiagnosticRawDraw:=nil;
   Audit:=nil;FInstalled:=False;
   {$endif}
 end;

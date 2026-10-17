@@ -32,6 +32,7 @@ type
     ShoulderIntent: array[0..1] of Double; { preferred protraction in degrees }
     LateralAccel, ForwardAccel, UpAccel, ExternalLeanDeg: Double;
     RoadPitchRad, RoadNormalAccel: Double;
+    DriftBlend, CornerSlipRad: Double;
     Grounded: Boolean;
   end;
   TRiderDynamicsFrame = record
@@ -143,6 +144,8 @@ begin
   Result.ExternalLeanDeg:=Safe(Value.ExternalLeanDeg,-60,60,0);
   Result.RoadPitchRad:=Safe(Value.RoadPitchRad,-0.7,0.7,0);
   Result.RoadNormalAccel:=Safe(Value.RoadNormalAccel,-8,8,0);
+  Result.DriftBlend:=Safe(Value.DriftBlend,0,1,0);
+  Result.CornerSlipRad:=Safe(Value.CornerSlipRad,-0.6,0.6,0);
   Result.HandR:=Safe(Value.HandR,0,1,0);Result.HandL:=Safe(Value.HandL,0,1,0);
   Result.FootR:=Safe(Value.FootR,0,1,0);Result.FootL:=Safe(Value.FootL,0,1,0);
   Result.Profile.Standing:=Safe(Value.Profile.Standing,0,1,0);
@@ -330,8 +333,11 @@ begin
   Spring(BR,LeanTarget,600*(1-Stand)+260*Stand);
   { Balance and bar reach couple the articulations. These are shared
     constraints, not independent post-solve counter-rotation curves. }
-  Add([PR,LR,TR,BR],[1.0,1.0,1.0,1.0],LeanTarget,800*Grip+200);
-  Add([PA,LA,TA],[1.0,1.0,1.0],0,260*Grip+30);
+  { In a skid the bike moves beneath a comparatively upright body. These
+    support constraints drive pelvis, spine and shoulder response together. }
+  Add([PR,LR,TR,BR],[1.0,1.0,1.0,1.0],
+    LeanTarget*(1-0.40*U.DriftBlend),800*Grip+200);
+  Add([PA,LA,TA],[1.0,1.0,1.0],-U.CornerSlipRad*0.35,260*Grip+30);
   Add([PX,PP,LP,TP],[1.0,-U.TorsoLength,-U.TorsoLength*0.68,-U.TorsoLength*0.33],
     U.GoalX,1600*Grip+100);
   Add([PZ,PR,LR,TR],[1.0,U.TorsoLength,U.TorsoLength*0.68,U.TorsoLength*0.33],

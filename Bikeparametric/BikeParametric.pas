@@ -29,7 +29,7 @@ uses
   CastleScene, CastleTransform,
   X3DNodes, X3DFields, Generics.Collections,
   fpjson,
-  RiderMotion, RiderDynamics, RiderAttention, RiderHandGrip, AvatarGait, RiderGroundTurn,
+  RiderMotion, RiderDynamics, RiderAttention, RiderHandGrip, AvatarGait, RiderGroundTurn, RiderDrift,
   RiderTripo, RiderBodyParameters, RiderCorrectiveData, GltfCore,   { authored Tripo rig + CGE native skinning (TTripoRiderScene) }
   BikeGpuSkin,  { GPU-скин райдера: процедурная поза в вершинном шейдере (этап 2) }
   BikeGpuSpin;  { GPU-вращение колёс/шатунов/педалей в шейдере (этап 4) }
@@ -361,6 +361,7 @@ type
   {$M+}  { generate RTTI for the published section of this plain class }
   TBikePlaybackState = record
     Attention: TRiderAttentionFrame;
+    PartnerContact:TRiderPartnerContact;
     BodyDynamics: TRiderDynamicsState;
     BodyDynamicsInput: TRiderDynamicsInput;
     BodyDynamicsEnabled, BodyDynamicsSituation: Boolean;
@@ -370,6 +371,7 @@ type
     AnimElapsed: Double;
     TripoPrevElapsed: Double;
     GroundTurn: TGroundTurnFrame;
+    Drift: TRiderDriftState;
     Phase: Single;
     WheelPhase: Single;
     AccumTime: Double;
@@ -463,9 +465,11 @@ type
     FFrameContacts: array[0..3] of TVector3;
     FFrameContactsValid: Boolean;
     FFrameHandR,FFrameHandL,FHandAnchorFrameR,FHandAnchorFrameL:TRiderGripFrame;
+    FPartnerContact:TRiderPartnerContact;
     FRiderEffort, FRiderEffortTarget, FMotionCadence: Single;
     FBodyDynamics: TRiderDynamicsState;
     FBodyDynamicsInput: TRiderDynamicsInput;
+    FDrift: TRiderDriftState;
     FAttention: TRiderAttentionFrame;
     FBodyDynamicsEnabled, FBodyDynamicsSituation: Boolean;
     procedure SetBodyDynamicsEnabled(Value:Boolean);
@@ -494,6 +498,7 @@ type
     FSteerAngleApplied: Single;
     FPedalLeanApplied: Single;
     FRearTrackApplied: Single;
+    FDriftOffsetApplied: TVector3;
     FSteerNodesValid: Boolean;
     FBuildDepth: Integer;
     FSteerRots: TList;
@@ -805,12 +810,20 @@ type
     property GroundTurn: TGroundTurnFrame read FGroundTurn write FGroundTurn;
     procedure SetRiderEffort(Intensity: Single);
     procedure SetRiderAttention(const Value: TRiderAttentionFrame);
+    function RiderBackContact(const HelperWorld:TVector3;out Point:TVector3;
+      out Frame:TRiderGripFrame):Boolean;
+    function SetPartnerContact(Wanted:Boolean;const WorldPoint:TVector3;
+      const Frame:TRiderGripFrame):Boolean;
+    function PartnerContactActive:Boolean;
+    procedure ResetPartnerContact;
+    property PartnerContact:TRiderPartnerContact read FPartnerContact;
     function RiderContactsChanging: Boolean;
     procedure SetRiderDynamicsSituation(PowerW,LateralAccel,ExternalLeanDeg:Single;
       RoadPitchDeg:Single=0);
     procedure SampleRiderDynamics;
     function RiderTotalLeanDeg:Single;
     property BodyDynamicsEnabled:Boolean read FBodyDynamicsEnabled write SetBodyDynamicsEnabled;
+    property DriftState:TRiderDriftState read FDrift;
     property RiderEffortTarget: Single read FRiderEffortTarget;
     function RiderCadenceRpm: Single;
     function RiderMotionDebugJson: TJSONObject;
@@ -2532,7 +2545,7 @@ const
 
 function TBikeInstance.CaptureReplay: TBikePlaybackState;
 begin
-  Result.Attention:=FAttention;
+  Result.Attention:=FAttention;Result.PartnerContact:=FPartnerContact;
   Result.BodyDynamics:=FBodyDynamics;
   Result.BodyDynamicsInput:=FBodyDynamicsInput;
   Result.BodyDynamicsEnabled:=FBodyDynamicsEnabled;
@@ -2543,6 +2556,7 @@ begin
   Result.AnimElapsed:=FAnimElapsed;
   Result.TripoPrevElapsed:=FTripoPrevElapsed;
   Result.GroundTurn:=FGroundTurn;
+  Result.Drift:=FDrift;
   Result.Phase:=FPhase;
   Result.WheelPhase:=FWheelPhase;
   Result.AccumTime:=FAccumTime;
@@ -2582,7 +2596,7 @@ end;
 
 procedure TBikeInstance.RestoreReplay(const Saved: TBikePlaybackState);
 begin
-  FAttention:=Saved.Attention;
+  FAttention:=Saved.Attention;FPartnerContact:=Saved.PartnerContact;
   ApplyRiderPose(Saved.Pose,0);
   FSteerAngleDeg:=Saved.SteerAngleDeg;
   FPedalSteerDeg:=Saved.PedalSteerDeg;
@@ -2592,6 +2606,7 @@ begin
   FAnimElapsed:=Saved.AnimElapsed;
   FTripoPrevElapsed:=Saved.TripoPrevElapsed;
   FGroundTurn:=Saved.GroundTurn;
+  FDrift:=Saved.Drift;
   FPhase:=Saved.Phase;
   FWheelPhase:=Saved.WheelPhase;
   FAccumTime:=Saved.AccumTime;
@@ -2978,10 +2993,12 @@ end;
 procedure TBikeInstance.SetOnFoot(Value: Boolean);
 begin
   if FOnFoot=Value then Exit;
-  FOnFoot:=Value;
+  FOnFoot:=Value;ResetPartnerContact;
   FGroundTurn:=Default(TGroundTurnFrame);
+  FDrift:=Default(TRiderDriftState);
   FOnFootDynamics:=Default(TGaitDynamicsState);
   ResetRiderDynamics(FBodyDynamics);
+  FPedalLeanDeg:=0;DrivePedalLean;
   if Value then begin
     FOnFootSavedGpu:=FGpuAnim;SetGpuAnim(False);FOnFootPhase:=0;
     if FTripoRider<>nil then FTripoRider.SetSkinnedAnimationShaders(True);
@@ -3081,12 +3098,21 @@ begin
   else P := BuildRiderPose('');
   { A fixed drive cannot coast while a foot is being placed on its pedal.
     Free-foot IK still handles the departure; the crank remains driven. }
-  if FGroundTurn.Active then FPedalRate:=0
+  AdvanceRiderDrift(FDrift,Dt,FForwardSpeedMps,FBodyDynamicsInput.LateralAccel,
+    FBodyDynamicsSituation and not FGroundTurn.Active and not P.Grounded);
+  if FGroundTurn.Active or FDrift.Frame.HoldCrank then FPedalRate:=0
   else if IsFixedGear then FPedalRate := RequestedRate
   else FPedalRate := AdvancePedalRate(FPedalRate, RequestedRate, Dt,
     PedalContactsReady(P.Motion.Pedalling, P.LegFreeR, P.LegFreeL,
       FBaseRiderPose.Grounded));
   FPhase := Frac(FPhase + Dt * FPedalRate);
+  if FDrift.Frame.HoldCrank then begin
+    EnsureAnimationAnchors;
+    if FAnimAnchorsHaveBB then
+      FPhase:=ParkDriftCrank(FDrift,FPhase,
+        ArcTan2(FAnimCrankR.Y,FAnimCrankR.X)/(2*Pi),
+        FTripoPedalDir,RequestedRate,Dt);
+  end;
   if WheelIntv > 0.01 then FWheelPhase := Frac(FWheelPhase + Dt / WheelIntv);
   { bsmCGE: карта обновляется каждый кадр (колёса/кости двигаются всегда) }
   if FVisualDetailRequired and (FShadowMode = bsmCGE) and (FShadowMapLight <> nil)
@@ -3762,6 +3788,10 @@ begin
       Result.Add('native_skinning_mode', Ord(FTripoRider.SkinNode.InternalMeshCalculation));
   end;
   Result.Add('gpu_skin_active', (FGpuSkin <> nil) and FGpuSkin.Active);
+  if FGpuSkin<>nil then begin
+    Result.Add('gpu_pose_palette',FGpuSkin.UsesPosePalette);
+    Result.Add('gpu_prepared_pose',FGpuSkin.UsesPreparedPose);
+  end;
   if FGpuSpin <> nil then
     Result.Add('gpu_spin_active_effects', FGpuSpin.ActiveEffectCount)
   else
@@ -4534,9 +4564,84 @@ begin
   FAttention:=Value;
 end;
 
+procedure TBikeInstance.ResetPartnerContact;
+begin FPartnerContact:=Default(TRiderPartnerContact) end;
+
+function TBikeInstance.PartnerContactActive:Boolean;
+begin Result:=FPartnerContact.Wanted or(FPartnerContact.Phase>0) end;
+
+function TBikeInstance.RiderBackContact(const HelperWorld:TVector3;
+  out Point:TVector3;out Frame:TRiderGripFrame):Boolean;
+var Upper,Lower,R,L,Up,Side,Normal,Helper:TVector3;Thickness,NearSide:Single;
+begin
+  Result:=False;Point:=TVector3.Zero;Frame:=Default(TRiderGripFrame);
+  if(FGroup=nil)or not FGroup.HasWorldTransform then Exit;
+  if not(RiderJointPos('Spine02',Upper)and RiderJointPos('Spine01',Lower)and
+    RiderJointPos('R_Upperarm',R)and RiderJointPos('L_Upperarm',L))then Exit;
+  Up:=Upper-Lower;Side:=R-L;
+  if(Up.LengthSqr<1e-6)or(Side.LengthSqr<1e-6)then Exit;
+  Up:=Up.Normalize;Side:=Side.Normalize;
+  Normal:=TVector3.CrossProduct(Side,Up).Normalize;
+  if Normal.X>0 then Normal:=-Normal; { bike +X is forward }
+  Helper:=FGroup.WorldInverseTransform.MultPoint(HelperWorld);
+  NearSide:=Sign(TVector3.DotProduct(Helper-(R+L)*0.5,Side));
+  Thickness:=EnsureRange(0.085*FBodyParameters.HeightCm/178+
+    (FBodyParameters.WeightKg-75)*0.0004,0.07,0.12);
+  Point:=Upper*0.6+Lower*0.4+Normal*Thickness+Side*(NearSide*0.145);
+  Point:=FGroup.WorldTransform.MultPoint(Point);
+  Frame.Forward:=Up;Frame.Palm:=-Normal;Frame.Weight:=1;
+  Frame:=TransformGripFrame(Frame,FGroup.WorldTransform);
+  Result:=True;
+end;
+
+function TBikeInstance.SetPartnerContact(Wanted:Boolean;const WorldPoint:TVector3;
+  const Frame:TRiderGripFrame):Boolean;
+var P,Shoulder,Elbow,Wrist,R,L,Marker:TVector3;Side:Integer;Prefix:string;Reach:Single;
+begin
+  Result:=False;
+  if not Wanted then begin FPartnerContact.Wanted:=False;Exit end;
+  FPartnerContact.Rejected:=1;
+  if(FGroup=nil)or not FGroup.HasWorldTransform or FGroundTurn.Active or
+    FDrift.Frame.Active or FOnFoot or FHandAnimating then begin
+    FPartnerContact.Wanted:=False;Exit;
+  end;
+  P:=FGroup.WorldInverseTransform.MultPoint(WorldPoint);FPartnerContact.Rejected:=2;
+  if not(RiderJointPos('R_Upperarm',R)and RiderJointPos('L_Upperarm',L))then Exit;
+  Side:=Ord((P-L).LengthSqr<(P-R).LengthSqr);
+  FPartnerContact.Rejected:=3;
+  if(FPartnerContact.Phase>0.01)and(Side<>FPartnerContact.Side)then begin
+    FPartnerContact.Wanted:=False;Exit;
+  end;
+  if Side=0 then begin Prefix:='R_';Shoulder:=R end
+  else begin Prefix:='L_';Shoulder:=L end;
+  if not(RiderJointPos(Prefix+'Forearm',Elbow)and RiderJointPos(Prefix+'Hand',Wrist))then Exit;
+  Reach:=(Shoulder-Elbow).Length+(Elbow-Wrist).Length;
+  { The target is the palm marker, not the wrist. Use this fitted body's
+    actual hand length instead of an assumed 45 mm allowance. }
+  if FTripoRider.ContactLocalOffset(Side+2,Marker)then
+    Reach:=Reach+FTripoRider.Scene.Transform.MultDirection(Marker).Length
+  else Reach:=Reach+0.045;
+  FPartnerContact.Rejected:=4;
+  FPartnerContact.ReachDistance:=(P-Shoulder).Length;
+  FPartnerContact.ReachLimit:=Reach+0.18*(1-FPartnerContact.Blend);
+  if FPartnerContact.ReachDistance>FPartnerContact.ReachLimit then begin FPartnerContact.Wanted:=False;Exit end;
+  if FPartnerContact.Blend>0.95 then begin
+    if FGpuAnim and(FGpuSkin<>nil)and FGpuSkin.Ready then
+      Result:=FGpuSkin.ShadowContact(Side+2,Marker)
+    else Result:=FTripoRider.PosedContactParent(Side+2,Marker);
+    if Result and((Marker-FFrameContacts[Side+2]).Length>0.025)then begin
+      FPartnerContact.Wanted:=False;FPartnerContact.Rejected:=5;Exit(False);
+    end;
+  end;
+  FPartnerContact.Rejected:=0;
+  FPartnerContact.Side:=Side;FPartnerContact.Wanted:=True;
+  FPartnerContact.WorldPoint:=WorldPoint;FPartnerContact.WorldFrame:=Frame;
+  Result:=True;
+end;
+
 function TBikeInstance.RiderContactsChanging: Boolean;
 begin
-  Result:=FGroundTurn.Active or FHandAnimating or
+  Result:=FGroundTurn.Active or FDrift.Frame.Active or FHandAnimating or
     ((FTripoRider<>nil)and FTripoRider.PoseAnimating);
 end;
 
@@ -4557,7 +4662,7 @@ begin
   { Explicit MCP sample only: reconstruct the preceding two seconds at fixed
     inputs. Ordinary updates and replay never do this warm-up work. }
   UpdateTripoRider(FTripoPrevElapsed);
-  U:=FBodyDynamicsInput;ResetRiderDynamics(FBodyDynamics);
+  U:=FBodyDynamics.LastInput;ResetRiderDynamics(FBodyDynamics);
   for I:=1 to 240 do begin
     U.Phase:=FBodyDynamicsInput.Phase-U.CrankRate*(240-I)*RIDER_DYNAMICS_STEP;
     AdvanceRiderDynamics(FBodyDynamics,U,RIDER_DYNAMICS_STEP);
@@ -4571,6 +4676,11 @@ function TBikeInstance.BodyDynamicsDebugJson:TJSONObject;
 var I:Integer;A:TJSONArray;
 begin
   Result:=TJSONObject.Create;Result.Add('enabled',FBodyDynamicsEnabled);
+  Result.Add('drift_active',FDrift.Frame.Active);
+  Result.Add('drift_blend',FDrift.Frame.Blend);
+  Result.Add('drift_slip_deg',RadToDeg(FDrift.Frame.SlipRad));
+  Result.Add('corner_demand',FDrift.Frame.Demand);
+  Result.Add('drift_holds_crank',FDrift.Frame.HoldCrank);
   Result.Add('on_foot',FOnFoot);
   if FOnFoot then begin
     Result.Add('phase',FOnFootPhase);
@@ -4637,6 +4747,10 @@ begin
   Result.Add('breaths_per_minute',RiderBreathsPerMinute(FBreathLoad)); Result.Add('effort', FRiderEffort); Result.Add('cadence', FMotionCadence);
   if(FTripoRider<>nil)and(FTripoRider.Lod<>nil)then Result.Add('lod',FTripoRider.Lod.DebugJson);
   Result.Add('gpu', FGpuAnim); Result.Add('last_error', FUtrLastError);
+  Result.Add('partner_contact',TJSONObject.Create(['wanted',FPartnerContact.Wanted,
+    'side',FPartnerContact.Side,'blend',FPartnerContact.Blend,
+    'rejected',FPartnerContact.Rejected,'reach_distance',FPartnerContact.ReachDistance,
+    'reach_limit',FPartnerContact.ReachLimit]));
   Result.Add('look_yaw',FAttention.Yaw);
   Result.Add('look_torso_yaw',FAttention.TorsoYaw);
   Result.Add('look_pitch',FAttention.Pitch);Result.Add('look_roll',FAttention.Roll);
@@ -4823,7 +4937,8 @@ var
   AnkleR, AnkleL, Pelvis, PelvisRot, LiveOffset, Support: TVector3;
   BoneA, BoneB: TVector3;   { scratch для TryGetBone-резолвов }
   Rot4: TVector4;                          { rider orientation (axis+angle), for P^-1 }
-  LivePose, GoalPose, TurnPose: TRiderPose;
+  LivePose, GoalPose, TurnPose, DriftPose: TRiderPose;
+  DynamicsInput:TRiderDynamicsInput;
   TurnGrip,TurnFoot,TurnBar: TVector3;
   TurnStance:Single;
   GoalTransform: TMatrix4;
@@ -5001,6 +5116,14 @@ begin
   T1u := Timer;
   FDiagPoseApply := FDiagPoseApply * 0.95 + TimerSeconds(T1u, T0u) * 1000 * 0.05;
   LivePose   := FTripoRider.CurrentPose;
+  if FDrift.Frame.Blend>0 then begin
+    DriftPose:=BuiltinRiderPose(DriftRiderPoseIndex);
+    { Hands blend separately below, with their orientation, rather than
+      snapping integer grip indices. Keep individual bike-fit adjustments. }
+    DriftPose.KneeFlare:=LivePose.KneeFlare;
+    DriftPose.AnkleFlex:=LivePose.AnkleFlex;
+    LivePose:=LerpRiderPose(LivePose,DriftPose,FDrift.Frame.Blend);
+  end;
   if FGroundTurn.Active then begin
     { The support is measured from this rig's legs, independent of saddle
       height. Both feet straddle the top tube; the saddle stays behind. }
@@ -5038,13 +5161,31 @@ begin
     LivePose:=LerpRiderPose(LivePose,TurnPose,FGroundTurn.Blend);
   end;
   LiveOffset := Vector3(LivePose.OffsetX, LivePose.OffsetY, LivePose.OffsetZ);
+  { An interrupted support gesture retracts using the last local target;
+    it never chases a departed peer or swaps hands half-way through. }
+  if LivePose.Grounded or(LivePose.Motion.Standing>0.1)or
+    FGroundTurn.Active or FDrift.Frame.Active or FHandAnimating then
+    FPartnerContact.Wanted:=False;
+  if FPartnerContact.Wanted then FPartnerContact.Phase:=Min(1,FPartnerContact.Phase+Dt/0.65)
+  else FPartnerContact.Phase:=Max(0,FPartnerContact.Phase-Dt/0.5);
+  FPartnerContact.Blend:=SmoothUnit((FPartnerContact.Phase-0.20)/0.80);
   ContactAttention:=FAttention;
+  if FDrift.Frame.Active then ContactAttention:=Default(TRiderAttentionFrame);
+  { With one hand supporting on the companion, the thorax cannot freely
+    rotate away from that support. Keep the look (with the usual neck limit)
+    but let the contact constrain its torso contribution. }
+  ContactAttention.TorsoYaw:=ContactAttention.TorsoYaw*(1-0.7*FPartnerContact.Blend);
   for i:=0 to 1 do begin
-    if FHandAnimating or FGroundTurn.Active or
+    if FHandAnimating or FGroundTurn.Active or FDrift.Frame.Active or
       (LivePose.HandPosR<=0)or(LivePose.HandPosL<=0)then begin
       ContactAttention.HandRelease[i]:=0;ContactAttention.HandSlide[i]:=0;
     end;
+    if PartnerContactActive then begin
+      ContactAttention.HandRelease[i]:=0;ContactAttention.HandSlide[i]:=0;
+    end;
     LivePose.HandRelax[i]:=0.18*ContactAttention.HandRelease[i];
+    if PartnerContactActive and(i=FPartnerContact.Side)then
+      LivePose.HandRelax[i]:=0.96*FPartnerContact.Blend;
   end;
   Alpha := 1 - Exp(-Dt / 0.65);
   FRiderEffort := FRiderEffort + (FRiderEffortTarget - FRiderEffort) * Alpha;
@@ -5104,6 +5245,9 @@ begin
     FBodyDynamicsInput.HandL:=Ord(LivePose.HandPosL>0);
     FBodyDynamicsInput.HandR:=FBodyDynamicsInput.HandR*(1-0.65*ContactAttention.HandRelease[0]);
     FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*(1-0.65*ContactAttention.HandRelease[1]);
+    if FPartnerContact.Side=0 then FBodyDynamicsInput.HandR:=
+      FBodyDynamicsInput.HandR*(1-FPartnerContact.Blend)
+    else FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*(1-FPartnerContact.Blend);
     for i:=0 to 1 do FBodyDynamicsInput.ShoulderIntent[i]:=ContactAttention.Shoulder[i];
     if FHandAnimating and(FHandAnimDur>0)then begin
       Alpha:=Min(1.0,(FHandAnimElapsed+Dt)/FHandAnimDur);
@@ -5131,11 +5275,27 @@ begin
     end;
     FBodyDynamicsInput.GoalX:=Support.X;FBodyDynamicsInput.GoalY:=Support.Y;
     FBodyDynamicsInput.GoalZ:=Support.Z;
-    AdvanceRiderDynamics(FBodyDynamics,FBodyDynamicsInput,Dt);
+    DynamicsInput:=FBodyDynamicsInput;
+    { The trainer does not stop when the animated crank coasts or restarts.
+      Its torque must use the requested cadence, not the temporarily slower
+      visual cadence: P / visualOmega otherwise produces an artificial
+      torque surge and lifts the pelvis beyond the leg's reach on recovery.
+      Scale only the solver copy; recording/HUD keep the original watts. }
+    if RiderCadenceRpm>1 then
+      DynamicsInput.PowerW:=DynamicsInput.PowerW*
+        Min(1.0,FMotionCadence/RiderCadenceRpm);
+    DynamicsInput.LateralAccel:=DriftLateralAccel(FDrift,DynamicsInput.LateralAccel);
+    DynamicsInput.DriftBlend:=FDrift.Frame.Blend;
+    DynamicsInput.CornerSlipRad:=FDrift.Frame.SlipRad;
+    if FDrift.Frame.Active then DynamicsInput.WeaveEnabled:=False;
+    AdvanceRiderDynamics(FBodyDynamics,DynamicsInput,Dt);
     Motion:=FBodyDynamics.Frame.Motion;
   end else
     Motion := EvaluateRiderMotion(LivePose.Motion, FRiderCrankPhase, FBreathPhase,
       FMotionCadence, FRiderEffort, LivePose.PedalSway, LivePose.TorsoBobAmp);
+  if FDrift.Frame.Active and not FBodyDynamicsEnabled then
+    Motion.BikeLean:=RadToDeg(ArcTan2(DriftLateralAccel(FDrift,
+      FBodyDynamicsInput.LateralAccel),9.80665))-FBodyDynamicsInput.ExternalLeanDeg;
   if BikeDebugDisableSteer then
   begin
     Motion.Roll := Motion.Roll + Motion.BikeLean;
@@ -5144,6 +5304,14 @@ begin
   Sway := Motion.Z; Bob := Motion.Y;
   LiveOffset.X := LiveOffset.X + Motion.X;
   LivePose:=FTripoRider.MotionPose(LivePose,Motion);
+  if PartnerContactActive then begin
+    { Shift the thorax towards the companion before extending the arm.
+      The pelvis stays on the saddle; both feet and the other hand retain IK. }
+    Alpha:=(1-2*FPartnerContact.Side)*SmoothUnit(FPartnerContact.Phase)*22;
+    LivePose.SpineRoll[0]:=LivePose.SpineRoll[0]+Alpha*0.8;
+    LivePose.SpineRoll[2]:=LivePose.SpineRoll[2]+Alpha*0.2;
+    LivePose.SpineRoll[4]:=LivePose.SpineRoll[4]-Alpha*0.65;
+  end;
   if not FBodyDynamicsEnabled then
     for i:=0 to 1 do LivePose.ScapulaProtraction[i]:=
       LivePose.ScapulaProtraction[i]+ContactAttention.Shoulder[i];
@@ -5217,6 +5385,16 @@ begin
   end;
   AdjustGrip(GripR,FTripoHandPosR,0,LivePose.HandFrameR);
   AdjustGrip(GripL,FTripoHandPosL,1,LivePose.HandFrameL);
+  if FDrift.Frame.Blend>0 then begin
+    BoneA:=SteerPoint(GripPlace('r',DriftPose.HandPosR,TVector3.Zero,0));
+    BoneB:=SteerPoint(GripPlace('l',DriftPose.HandPosL,TVector3.Zero,0));
+    GripR:=GripR+(BoneA-GripR)*FDrift.Frame.Blend;
+    GripL:=GripL+(BoneB-GripL)*FDrift.Frame.Blend;
+    LivePose.HandFrameR:=BlendGripFrame(LivePose.HandFrameR,
+      GripFrame(DriftPose.HandPosR,0),FDrift.Frame.Blend);
+    LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,
+      GripFrame(DriftPose.HandPosL,1),FDrift.Frame.Blend);
+  end;
   if FGroundTurn.Active then begin
     GripR:=GripR*(1-FGroundTurn.Blend)+O(TurnGrip)*FGroundTurn.Blend;
     TurnBar:=SteerPoint(GripPlace('l',1,TVector3.Zero,0));
@@ -5226,6 +5404,22 @@ begin
     FromFrameR.Weight:=1;
     LivePose.HandFrameR:=BlendGripFrame(LivePose.HandFrameR,FromFrameR,FGroundTurn.Blend);
     LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,GripFrame(1,1),FGroundTurn.Blend);
+  end;
+  if PartnerContactActive then begin
+    if FPartnerContact.Wanted and FGroup.HasWorldTransform then begin
+      FPartnerContact.LocalPoint:=FGroup.WorldInverseTransform.MultPoint(FPartnerContact.WorldPoint);
+      FPartnerContact.LocalFrame:=TransformGripFrame(FPartnerContact.WorldFrame,FGroup.WorldInverseTransform);
+    end;
+    Alpha:=FPartnerContact.Blend;
+    if FPartnerContact.Side=0 then begin
+      GripR:=GripR*(1-Alpha)+FPartnerContact.LocalPoint*Alpha;
+      GripR.Y:=GripR.Y+0.10*Sin(Pi*Alpha);
+      LivePose.HandFrameR:=BlendGripFrame(LivePose.HandFrameR,FPartnerContact.LocalFrame,Alpha);
+    end else begin
+      GripL:=GripL*(1-Alpha)+FPartnerContact.LocalPoint*Alpha;
+      GripL.Y:=GripL.Y+0.10*Sin(Pi*Alpha);
+      LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,FPartnerContact.LocalFrame,Alpha);
+    end;
   end;
   FFrameHandR:=LivePose.HandFrameR;FFrameHandL:=LivePose.HandFrameL;
   FFrameContacts[2] := GripR; FFrameContacts[3] := GripL;
@@ -5246,9 +5440,10 @@ begin
   PelvisRot := Vector3(SeatV.X, SeatV.Y, SeatV.Z);
   Rot4 := FTripoRider.OrientedRotationVec4(YawRad);
   BodyQ := QuatNormalize(QuatMul(RootQ, QuatFromAxisAngle(Rot4.X, Rot4.Y, Rot4.Z, Rot4.W)));
-  if Abs(FAttention.Yaw)+Abs(FAttention.Pitch)+Abs(FAttention.Roll)+Abs(FAttention.TorsoYaw)>0.00001 then begin
+  if not FDrift.Frame.Active and
+    (Abs(FAttention.Yaw)+Abs(FAttention.Pitch)+Abs(FAttention.Roll)+Abs(FAttention.TorsoYaw)>0.00001)then begin
     SeatV:=QuatRotateV3(QuatConj(BodyQ),V3(0,1,0));
-    LivePose:=RiderAttentionPose(LivePose,FTripoRider.LeanAxis,FAttention,
+    LivePose:=RiderAttentionPose(LivePose,FTripoRider.LeanAxis,ContactAttention,
       Vector3(SeatV.X,SeatV.Y,SeatV.Z));
   end;
   Rot4 := Vector4(BodyQ.X, BodyQ.Y, BodyQ.Z, 2 * ArcCos(EnsureRange(BodyQ.W, -1.0, 1.0)));
@@ -5323,7 +5518,7 @@ begin
     the shoulder line toward the leading hand. Zero when the grips are level (settled
     symmetric pose), so it appears only in the asymmetric intermediate position.
     Gain is deg per metre of fore-aft (X) asymmetry; flip its sign to mirror. }
-  twistDeg := (GripR.X - GripL.X) * 220.0;
+  twistDeg := (GripR.X - GripL.X) * 220.0*(1-FPartnerContact.Blend);
   if twistDeg >  22.0 then twistDeg :=  22.0;
   if twistDeg < -22.0 then twistDeg := -22.0;
   FTripoRider.AdaptPoseReach(LivePose, GripR, GripL);
@@ -5615,6 +5810,10 @@ begin
   if BikeDebugDisableSteer then Exit(0);
   Result := FSteerAngleDeg;
   if FBodyDynamicsEnabled then Result:=Result+FPedalSteerDeg;
+  { Slip points the frame inside the curve; counter-steer keeps the front
+    tyre pointing along its velocity. Hands consume this same angle. }
+  if FDrift.Frame.Active then
+    Result:=Result+RadToDeg(FDrift.Frame.SlipRad)/Max(0.5,Abs(FSteerAxis.Y));
   if Result > 45 then Result := 45
   else if Result < -45 then Result := -45;
 end;
@@ -5697,6 +5896,7 @@ end;
 procedure TBikeInstance.DrivePedalLean;
 var
   Ang,Yaw,RearShift: Single;
+  DriftOffset:TVector3;
   Q:TTripoVec4;
 begin
   if FGroup = nil then Exit;
@@ -5704,6 +5904,18 @@ begin
   if FBodyDynamicsEnabled and FAnimationEnabled and not BikeDebugDisableSteer then begin
     Yaw:=FBodyDynamics.Frame.HeadingRad;
     RearShift:=FBodyDynamics.Frame.RearTrackM;
+  end;
+  DriftOffset:=TVector3.Zero;
+  if FAnimationEnabled and not BikeDebugDisableSteer and
+    (FDrift.Frame.SlipRad<>0)then begin
+    Yaw:=Yaw+FDrift.Frame.SlipRad;
+    { Preserve front contact and move the rear outside the turn. }
+    DriftOffset:=Vector3(2*GetAxleHalfSpanM*(1-Cos(FDrift.Frame.SlipRad)),0,
+      -2*GetAxleHalfSpanM*Sin(FDrift.Frame.SlipRad));
+  end;
+  if (DriftOffset-FDriftOffsetApplied).LengthSqr>1e-14 then begin
+    FGroup.Translation:=FGroup.Translation+DriftOffset-FDriftOffsetApplied;
+    FDriftOffsetApplied:=DriftOffset;
   end;
   { Public Group.Translation is also used to place editor comparison bikes.
     Change only our own previous displacement, preserving their base position. }

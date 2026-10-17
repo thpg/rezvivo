@@ -13,7 +13,7 @@ See https://castle-engine.io/project_manifest for documentation of this file.
   qualified_name="com.rezvivo.client"
   screen_orientation="landscape"
 >
-  <version value="0.4.1-alpha.1" code="16" />
+  <version value="0.4.2-alpha.1" code="17" />
   <android compile_sdk_version="35" target_sdk_version="35" min_sdk_version="23">
     <services>
       <service name="rezvivo" />

@@ -35,6 +35,8 @@ type
     LateralAccel: Single; { cornering load, m/s² (|v²/r|); large -> a sharp turn }
     LookTargetValid: Boolean;
     LookYaw, LookPitch: Single;
+    PartnerLookSerial:Cardinal;
+    CompanySupport:Boolean;
   end;
 
   TPoseManagerReplay = record
@@ -355,6 +357,12 @@ begin
     Exit;
   end;
   FBike.SetRiderEffort(IntensityOf(S));
+  if FBike.DriftState.Frame.Active then begin
+    { Cornering support takes precedence even while the real trainer still
+      reports sprint power. Resume the normal selector after the recovery. }
+    FBike.SetRiderAttention(Default(TRiderAttentionFrame));
+    Exit;
+  end;
   Grounded := (FCurIdx >= 0) and (FCurIdx < FPoses.Count) and FPoses[FCurIdx].Grounded;
   WantsStop := (Abs(S.SpeedKmh) < 0.5) and (S.CadenceRpm < 4) and (S.PowerW < 10);
   WantsStart := (Abs(S.SpeedKmh) > 1.2) or (S.CadenceRpm >= 5) or (S.PowerW >= 12);
@@ -389,6 +397,9 @@ begin
   Look.CanRegrip:=(FCurIdx>=0)and(FCurIdx<FPoses.Count)and
     (FPoses[FCurIdx].HandPosR>0)and(FPoses[FCurIdx].HandPosL>0)and
     (FPoses[FCurIdx].Motion.Standing<0.1);
+  Look.PartnerSerial:=S.PartnerLookSerial;
+  Look.ContactSupport:=S.CompanySupport or FBike.PartnerContactActive;
+  if Look.ContactSupport then Look.CanRegrip:=False;
   Look.TargetValid:=S.LookTargetValid;Look.TargetYaw:=S.LookYaw;Look.TargetPitch:=S.LookPitch;
   StepRiderAttention(FAttention,Look,Dt);
   FBike.SetRiderAttention(FAttention.Frame);
@@ -425,6 +436,10 @@ begin
     end;
     Exit;
   end;
+
+  { Keep the support posture during a social reach, unless a stop, start
+    or sprint above has taken priority. }
+  if S.CompanySupport or FBike.PartnerContactActive then Exit;
 
   { hold a special (event) pose until its timer runs out or it is cleared }
   if FSpecialActive then

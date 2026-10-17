@@ -41,7 +41,7 @@ const
      'Full keeps detailed road relief. Lower modes use cached normals and remove parallax. Road layout and markings stay unchanged.',
      'Changes branches, needles, blade geometry and wind at the same distance. LOD distance is controlled separately.',
      'Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.',
-     'Reuses distant scenery between frames. Nearby scenery and riders stay live. Works with RTX screen shadows. Uses additional GPU memory.');
+     'Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.');
   GraphicsPresetTitles: array[TGraphicsPreset] of String =
     ('Battery saver', 'Lightweight', 'Balanced', 'High');
   GraphicsPresetHints: array[TGraphicsPreset] of String =
@@ -49,6 +49,8 @@ const
      'Baked vegetation, small hard shadows and light materials.',
      'Procedural vegetation, soft shadows and detailed materials.',
      'Dense vegetation, detailed materials and longer soft shadows.');
+  { World image caching is opt-in on every platform because reprojection can
+    produce visual artifacts. Preserve this default in presets and Auto. }
   GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0){$endif};
   GraphicsDisplayOrder: array[TGraphicsOption] of TGraphicsOption =
     (goRenderer,goFrameLimit,goAntialiasing,goWorldCache,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,

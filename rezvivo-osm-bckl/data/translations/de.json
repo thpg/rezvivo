@@ -359,5 +359,7 @@
   "Run": "Laufen",
   "Brake": "Bremse",
   "+ W": "+ W",
-  "Trees: textured": "Bäume: Texturen"
+  "Trees: textured": "Bäume: Texturen",
+  "World image cache": "Bildcache der Spielwelt",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Verbessert die Leistung durch Wiederverwendung entfernter Landschaft, kann aber Bildfehler verursachen. Benötigt zusätzlichen Grafikspeicher. Standardmäßig ausgeschaltet."
 }

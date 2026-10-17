@@ -6,7 +6,8 @@ unit Osm3dBuildingFacade;
 interface
 
 uses SysUtils, Math, FGL, CastleVectors, X3DNodes,
-  Osm3dGroundComposite, Osm3dStaticGeometry, Osm3dGpuGround, Osm3dFacadeLayout, Osm3dArchitecture;
+  Osm3dGroundComposite, Osm3dStaticGeometry, Osm3dGpuGround, Osm3dFacadeLayout, Osm3dArchitecture,
+  Osm3dGeomMesh, Osm3dArchitectureAtlas;
 
 const
   BUILDING_DETAIL_MAX_TRIANGLES = 65536;
@@ -26,6 +27,11 @@ type
   end;
   TBuildingDetailVertices = array of TBuildingDetailVertex;
   TBuildingDetailIndices = array of LongInt;
+  TBuildingDetailSpan = record
+    FirstVertex,VertexCount,FirstIndex,IndexCount:Integer;
+    Center:TVector3;
+    Permanent:Boolean;
+  end;
   TBuildingFacadeFrame = record
     Origin, U, V, Normal: TVector3;
     MinUV, MaxUV: TVector2;
@@ -40,15 +46,21 @@ type
   TBuildingFacadeFrames = array of TBuildingFacadeFrame;
   TBuildingDetailGeometryArray = array of TIndexedFaceSetNode;
   TBuildingFacadeData = class
+  private
+    FDetailSpans:array of TBuildingDetailSpan;
+    FDetailSpanCount:Integer;
+    procedure AddDetailSpan(V,VC,I,IC:Integer;const Center:TVector3;Permanent:Boolean);
   public
     { Wall: metres above footing / below eaves, house seed, facade seed.
-      Roof: building-local X/Z, house seed, zero. No world-coordinate hash. }
+      Roof: building-local X/Z, house seed, zero. Authored walls: local U/Y,
+      house seed, eave height. Authored panes: local UV, pane seed, aspect.
+      No world-coordinate hash. }
     Info: TBuildingFloats;
     Frames: TBuildingFacadeFrames;
     DetailVertices: TBuildingDetailVertices;
     DetailIndices: TBuildingDetailIndices;
     HouseCount: Integer;
-    AuthoredBalconies, AuthoredCornices:Integer;
+    AuthoredBalconies, AuthoredCornices, AuthoredPanes:Integer;
     PhotoTintColors:array of TVector3;
     constructor Create(Mesh: TGroundCompositeMesh; BuildDetails: Boolean;
       Ground:TGpuGroundTile=nil; GroundX:Single=0; GroundZ:Single=0;
@@ -75,7 +87,7 @@ type
     EntranceFace: Integer;
     EntranceRise: Single;
     FacadeCount: Integer;
-    BaseY, EaveY: Single;
+    BaseY, EaveY, RoofBaseY: Single;
     Authored:Boolean;
     TintSlot:Integer;
   end;
@@ -139,6 +151,15 @@ begin
   Result := (M < 6) or (M >= 12);
 end;
 
+procedure TBuildingFacadeData.AddDetailSpan(V,VC,I,IC:Integer;const Center:TVector3;Permanent:Boolean);
+begin
+  if FDetailSpanCount=Length(FDetailSpans) then SetLength(FDetailSpans,Max(64,FDetailSpanCount*2));
+  FDetailSpans[FDetailSpanCount].FirstVertex:=V;FDetailSpans[FDetailSpanCount].VertexCount:=VC;
+  FDetailSpans[FDetailSpanCount].FirstIndex:=I;FDetailSpans[FDetailSpanCount].IndexCount:=IC;
+  FDetailSpans[FDetailSpanCount].Center:=Center;FDetailSpans[FDetailSpanCount].Permanent:=Permanent;
+  Inc(FDetailSpanCount);
+end;
+
 constructor TBuildingFacadeData.Create(Mesh: TGroundCompositeMesh; BuildDetails: Boolean;
   Ground:TGpuGroundTile; GroundX:Single; GroundZ:Single; const Layouts:TFacadeLayouts; const Tints:TBuildingTints);
 var
@@ -157,8 +178,70 @@ var
   Key: string;
   Frame: TBuildingFacadeFrame;
   DV, DI, DVCapacity, DICapacity: Integer;
-  HouseLimit, HasDoor: Boolean;
+  HouseLimit, HasDoor, HasAuthoredGlass: Boolean;
   TintCount, FrameCount:Integer;
+  AtlasMesh:TMesh;
+  AtlasRecipe:TArchitectureRecipe;
+  AtlasPart:TArchComponent;
+
+  procedure PrepareAuthoredPanes;
+  type TPane=record Parent:Integer; Lo,Hi:TVector2; Identity:Single end;
+  var Panes:array of TPane; Count,V,T,A,B,C,PIndex,R,Q,K:Integer;
+      UV,Size,Point:TVector2; Kind:Integer; Seed:Single;
+    function Root(Index:Integer):Integer;
+    var Next:Integer;
+    begin
+      Result:=Index;
+      while Panes[Result].Parent<>Result do Result:=Panes[Result].Parent;
+      while Index<>Result do begin Next:=Panes[Index].Parent;Panes[Index].Parent:=Result;Index:=Next end;
+    end;
+    procedure Join(X,Y:Integer);
+    begin
+      X:=Root(X);Y:=Root(Y);if X<>Y then Panes[Y].Parent:=X;
+    end;
+  begin
+    { The house/face lookup arrays are no longer needed after Info is filled.
+      Reuse them for pane connectivity; only actual glazing needs records.
+      Pool indices join duplicated fan vertices without a string/spatial hash. }
+    Count:=0;
+    for V:=0 to Mesh.VertexCount-1 do begin
+      VertexFace[V]:=-1;UV:=Mesh.UVOf(V);
+      if not IsArchitectureUV(UV) then Continue;
+      Kind:=Trunc((-UV.Y+ARCHITECTURE_UV_MARKER+0.25)/65536);
+      if (Kind<>1) or (Abs(Mesh.NormalOf(V).Y)>0.65) then Continue;
+      VertexFace[V]:=Count;Inc(Count);
+    end;
+    if Count=0 then Exit;
+    SetLength(Panes,Count);SetLength(VertexHouse,Mesh.Pool.Count);
+    for V:=0 to High(VertexHouse) do VertexHouse[V]:=-1;
+    for V:=0 to Mesh.VertexCount-1 do begin
+      K:=VertexFace[V];if K<0 then Continue;
+      Panes[K].Parent:=K;Panes[K].Lo:=Vector2(1e30,1e30);Panes[K].Hi:=-Panes[K].Lo;
+      PIndex:=Mesh.Verts[V].PoolIdx;Q:=VertexHouse[PIndex];
+      if Q>=0 then Join(K,Q) else VertexHouse[PIndex]:=K;
+    end;
+    for T:=0 to Mesh.TriangleCount-1 do begin
+      A:=VertexFace[Mesh.Indices[T*3]];if A<0 then Continue;
+      B:=VertexFace[Mesh.Indices[T*3+1]];C:=VertexFace[Mesh.Indices[T*3+2]];
+      if (B>=0) and (C>=0) then begin Join(A,B);Join(A,C) end;
+    end;
+    for V:=0 to Mesh.VertexCount-1 do begin
+      K:=VertexFace[V];if K<0 then Continue;R:=Root(K);
+      Point:=Vector2(Info[V*4],Info[V*4+1]);
+      Panes[R].Lo.X:=Min(Panes[R].Lo.X,Point.X);Panes[R].Lo.Y:=Min(Panes[R].Lo.Y,Point.Y);
+      Panes[R].Hi.X:=Max(Panes[R].Hi.X,Point.X);Panes[R].Hi.Y:=Max(Panes[R].Hi.Y,Point.Y);
+      Panes[R].Identity:=Info[V*4+2];
+    end;
+    for K:=0 to Count-1 do if (Panes[K].Parent=K) and (Panes[K].Hi.X>Panes[K].Lo.X) then Inc(AuthoredPanes);
+    for V:=0 to Mesh.VertexCount-1 do begin
+      K:=VertexFace[V];if K<0 then Continue;R:=Root(K);Size:=Panes[R].Hi-Panes[R].Lo;
+      if (Size.X<0.001) or (Size.Y<0.001) then begin Info[V*4+3]:=0;Continue end;
+      Point:=Vector2(Info[V*4],Info[V*4+1])-Panes[R].Lo;
+      Seed:=Panes[R].Identity+Round(Panes[R].Lo.X*31+Panes[R].Lo.Y*127);
+      Info[V*4]:=Point.X/Size.X;Info[V*4+1]:=Point.Y/Size.Y;
+      Info[V*4+2]:=Seed-Floor(Seed/65536)*65536;Info[V*4+3]:=Size.X/Size.Y;
+    end;
+  end;
 
   function TintSlotFor(AnId:Int64):Integer;
   var I,J:Integer; C:TVector3; D,Best:Single;
@@ -181,9 +264,11 @@ var
 
   procedure Box(const Facade:TBuildingFacadeFrame; X0,Y0,X1,Y1,Z0,Z1:Single;
     const Col:TVector3; Rough:Single; Permanent:Boolean=False); forward;
+  function AddAtlasPart(const Facade:TBuildingFacadeFrame; const Part:TArchComponent;
+    Permanent:Boolean=False):Boolean; forward;
 
   procedure AuthoredDetails(LayoutIndex:Integer);
-  var L:TFacadeLayout; Face:TBuildingFacadeFrame;
+  var L:TFacadeLayout; Face:TBuildingFacadeFrame; Component:TArchComponent;
       I,J,Bay,FloorIndex:Integer; LeftU,RightU,StartU,EndU,Cursor,FH,Base,Top,Y,X,HalfW,Depth,PostX:Single;
       Found:Boolean; Pos,Ax,Low,High:TVector3;
   begin
@@ -220,15 +305,11 @@ var
           Y:=(FloorIndex-L.Bays[Bay].FloorShift+0.224609375)*FH-0.08;
           if (Base+Y+0.85>=Top) then Continue;
           if (Houses[H].DetailTriangles+120>Houses[H].DetailBudget) or (DI div 4+120>BUILDING_DETAIL_MAX_TRIANGLES) then Exit;
-          Box(Face,X-HalfW,Y-0.14,X+HalfW,Y,0.006,Depth,Vector3(0.57,0.54,0.47),0.9,True);
-          Box(Face,X-HalfW-0.025,Y+0.78,X+HalfW+0.025,Y+0.84,Depth-0.11,Depth+0.025,Vector3(0.63,0.60,0.53),0.7,True);
-          Box(Face,X-HalfW-0.025,Y+0.78,X-HalfW+0.11,Y+0.84,0.006,Depth,Vector3(0.63,0.60,0.53),0.7,True);
-          Box(Face,X+HalfW-0.11,Y+0.78,X+HalfW+0.025,Y+0.84,0.006,Depth,Vector3(0.63,0.60,0.53),0.7,True);
-          for J:=0 to 5 do begin
-            PostX:=X-HalfW+0.055+(2*HalfW-0.11)*J/5;
-            Box(Face,PostX-0.055,Y,PostX+0.055,Y+0.78,Depth-0.10,Depth,Vector3(0.52,0.49,0.43),0.85,True);
-          end;
-          Inc(AuthoredBalconies);
+          Component:=Default(TArchComponent);Component.Kind:=acBalcony;
+          Component.X:=X;Component.Y:=Y-0.14;Component.Z:=0.006;
+          Component.W:=HalfW*2;Component.H:=0.98;Component.D:=Depth;
+          Component.Count:=1;Component.Color:=$a19987;Component.Roughness:=0.8;
+          if AddAtlasPart(Face,Component,True) then Inc(AuthoredBalconies);
         end;
       Cursor:=EndU;
     end;
@@ -301,7 +382,54 @@ var
     Quad(4,5,7,6,NZ); Quad(1,0,2,3,-NZ);
     Quad(0,4,6,2,-NX); Quad(5,1,3,7,NX);
     Quad(2,6,7,3,NY); Quad(0,1,5,4,-NY);
+    AddDetailSpan(DV-24,24,DI-48,48,Anchor,Permanent);
     Inc(Houses[H].DetailTriangles,12);
+  end;
+
+  function AddAtlasPart(const Facade:TBuildingFacadeFrame; const Part:TArchComponent;
+    Permanent:Boolean):Boolean;
+  var Casters:TArchCasters; V:TMeshVertex; I,T,Base,RGB,Bits:Integer;
+      Anchor,Axis:TVector3;
+  begin
+    Result:=False;
+    if AtlasMesh=nil then begin
+      AtlasMesh:=TMesh.Create;SetLength(AtlasRecipe.Facades,1);
+      SetLength(AtlasRecipe.Facades[0].Components,1);
+    end;
+    AtlasMesh.Clear;
+    AtlasRecipe.Facades[0].A:=Facade.Origin;
+    AtlasRecipe.Facades[0].B:=Facade.Origin+Facade.U.Normalize;
+    AtlasRecipe.Facades[0].Components[0]:=Part;
+    EmitArchitecturalParts(AtlasRecipe,Facade.Origin.Y,Facade.Origin.Y+Facade.MaxUV.Y*Facade.V.Y,
+      Facade.Origin.Y+Facade.MaxUV.Y*Facade.V.Y,AtlasMesh,Casters);
+    T:=AtlasMesh.TriangleCount;
+    { Atomic acceptance; never leave a floating half-balcony when the budget
+      is exhausted. Existing per-house and per-tile limits are unchanged. }
+    if (Houses[Facade.House].DetailTriangles+T>Houses[Facade.House].DetailBudget) or
+       (DI div 4+T>BUILDING_DETAIL_MAX_TRIANGLES) then Exit;
+    if DV+AtlasMesh.VertexCount>DVCapacity then begin
+      DVCapacity:=Max(DV+AtlasMesh.VertexCount,Max(256,DVCapacity*2));SetLength(DetailVertices,DVCapacity);
+    end;
+    if DI+T*4>DICapacity then begin
+      DICapacity:=Max(DI+T*4,Max(512,DICapacity*2));SetLength(DetailIndices,DICapacity);
+    end;
+    Anchor:=Facade.Origin+Facade.U.Normalize*Part.X+Vector3(0,Part.Y+Part.H*0.5,0);
+    Axis:=Facade.U.Normalize;if Part.H>Part.W then Axis:=Vector3(0,1,0);
+    Base:=DV;
+    for I:=0 to AtlasMesh.VertexCount-1 do begin
+      V:=AtlasMesh.VertexAt[I];RGB:=Round(V.UV.X);Bits:=Round(-V.UV.Y+ARCHITECTURE_UV_MARKER);
+      DetailVertices[DV].Position:=V.Position;DetailVertices[DV].Normal:=V.Normal;
+      DetailVertices[DV].Anchor:=Anchor+Axis*TVector3.DotProduct(V.Position-Anchor,Axis);
+      if Permanent then DetailVertices[DV].Anchor:=V.Position;
+      DetailVertices[DV].Color:=Vector3(((RGB shr 16) and 255)/255,((RGB shr 8) and 255)/255,(RGB and 255)/255);
+      DetailVertices[DV].Roughness:=(Bits and 255)/255;Inc(DV);
+    end;
+    for I:=0 to T-1 do begin
+      DetailIndices[DI]:=Base+AtlasMesh.IndexAt[I*3];DetailIndices[DI+1]:=Base+AtlasMesh.IndexAt[I*3+1];
+      DetailIndices[DI+2]:=Base+AtlasMesh.IndexAt[I*3+2];DetailIndices[DI+3]:=-1;Inc(DI,4);
+    end;
+    AddDetailSpan(Base,AtlasMesh.VertexCount,DI-T*4,T*4,Anchor,Permanent);
+    Inc(Houses[Facade.House].DetailTriangles,T);Result:=True;
   end;
 
   procedure EntranceSteps(const Facade:TBuildingFacadeFrame);
@@ -355,7 +483,8 @@ begin
   SetLength(PhotoTintColors,32); TintCount:=1;
   if Mesh=nil then Exit;
   Houses:=nil;
-  HouseCount:=0; FrameCount:=0;
+  HouseCount:=0; FrameCount:=0; HasAuthoredGlass:=False;
+  AtlasMesh:=nil;AtlasRecipe:=Default(TArchitectureRecipe);
   Ids:=TIdMap.Create; Faces:=TFaceMap.Create;
   Ids.Sorted:=True; Faces.Sorted:=True;
   try
@@ -373,6 +502,7 @@ begin
           SetLength(Houses,Max(64,Length(Houses)*2));
         Houses[H].MinP:=Mesh.PositionOf(I); Houses[H].MaxP:=Houses[H].MinP;
         Houses[H].BaseY:=1e30; Houses[H].EaveY:=-1e30;
+        Houses[H].RoofBaseY:=1e30;
         Houses[H].PrimaryFace:=-1;
         Houses[H].EntranceFace:=-1; Houses[H].EntranceRise:=1e30;
         Houses[H].Seed:=BuildingStableSeed(Id);
@@ -382,6 +512,8 @@ begin
         Ids.Add(Id,H);
       end else H:=Ids.Data[J];
       VertexHouse[I]:=H; P:=Mesh.PositionOf(I);
+      if not IsWall(Mesh.MatIdOf(I)) and (Mesh.NormalOf(I).Y>0.1) then
+        Houses[H].RoofBaseY:=Min(Houses[H].RoofBaseY,P.Y);
       for K:=0 to 2 do
       begin
         Houses[H].MinP.Data[K]:=Min(Houses[H].MinP.Data[K],P.Data[K]);
@@ -509,16 +641,25 @@ begin
     end;
     for H:=0 to High(Houses) do
       if Houses[H].FacadeCount=0 then
-      begin Houses[H].BaseY:=Houses[H].MinP.Y; Houses[H].EaveY:=Houses[H].MaxP.Y end;
+      begin
+        Houses[H].BaseY:=Houses[H].MinP.Y;
+        { Architectural walls do not create automatic facade frames. Their
+          contact weathering still starts under the roof, not at its ridge. }
+        Houses[H].EaveY:=Min(Houses[H].MaxP.Y,Houses[H].RoofBaseY);
+      end;
     for I:=0 to Mesh.VertexCount-1 do
     begin
       H:=VertexHouse[I]; P:=Mesh.PositionOf(I); F:=VertexFace[I];
-      if IsArchitectureUV(Mesh.UVOf(I)) then begin
+      UV0:=Mesh.UVOf(I);
+      if IsArchitectureUV(UV0) then begin
         { Stable local metric coordinates for architectural paint/stone.
           Payload is forwarded directly by the vertex shader. No automatic
           windows, invented entrance or duplicate near-detail geometry. }
         NN:=Mesh.NormalOf(I);Rel:=P-Houses[H].MinP;
-        SetInfo(I,Rel.X*NN.Z-Rel.Z*NN.X,Rel.Y,Houses[H].Seed,0);
+        if (Trunc((-UV0.Y+ARCHITECTURE_UV_MARKER+0.25)/65536)=1) and
+           (Abs(NN.Y)<=0.65) then HasAuthoredGlass:=True;
+        SetInfo(I,Rel.X*NN.Z-Rel.Z*NN.X,Rel.Y,Houses[H].Seed,
+          Max(0.0,Houses[H].EaveY-Houses[H].MinP.Y));
       end else if not IsWall(Mesh.MatIdOf(I)) then
         SetInfo(I,P.X-Houses[H].MinP.X,P.Z-Houses[H].MinP.Z,Houses[H].Seed,0)
       else if F>=0 then
@@ -536,6 +677,7 @@ begin
       else
         SetInfo(I,P.Y-Houses[H].BaseY,Houses[H].EaveY-P.Y,Houses[H].Seed,0);
     end;
+    if HasAuthoredGlass then PrepareAuthoredPanes;
     if not BuildDetails then Exit;
     { Dense city tiles can contain thousands of houses. Allocate before emitting
       anything: the first few houses must not exhaust the entire tile budget.
@@ -589,9 +731,20 @@ begin
         Box(Frame,DoorHi.X+0.07,MinY+0.06,MaxX,MinY+0.26,0.006,0.075,Vector3(0.40,0.39,0.36),0.93);
       end else
         Box(Frame,MinX,MinY+0.06,MaxX,MinY+0.26,0.006,0.075,Vector3(0.40,0.39,0.36),0.93);
-      { One narrow square downpipe near each facade edge. No per-frame simulation. }
-      if MaxX-MinX>4 then
-        Box(Frame,MinX+0.10,MinY+0.16,MinX+0.18,MaxY-0.12,0.03,0.11,Vector3(0.31,0.32,0.31),0.56);
+      { The primary elevation gets the shared bent pipe with wall brackets.
+        Short/secondary walls retain the cheap fallback; the detail budget
+        must not be consumed by pipes at the expense of all window trim. }
+      if MaxX-MinX>4 then begin
+        AtlasPart:=Default(TArchComponent);AtlasPart.Kind:=acDownpipe;
+        AtlasPart.X:=MinX+0.16;AtlasPart.Y:=MinY+0.16;AtlasPart.Z:=0.01;
+        AtlasPart.W:=0.08;AtlasPart.H:=Height-0.30;AtlasPart.D:=0.22;
+        AtlasPart.Count:=1;AtlasPart.Segments:=6;AtlasPart.Color:=$626962;AtlasPart.Roughness:=0.56;
+        AtlasPart.Style:=Trunc(Houses[H].Seed) mod 2;
+        if (Houses[H].PrimaryFace<>F) or
+          (Houses[H].DetailBudget-Houses[H].DetailTriangles<300) then
+          Box(Frame,MinX+0.10,MinY+0.16,MinX+0.18,MaxY-0.12,0.03,0.11,Vector3(0.31,0.32,0.31),0.56)
+        else AddAtlasPart(Frame,AtlasPart);
+      end;
       { No sill across the entrance. Reserve both jambs, lintel and canopy
         together; dense tiles can use just the material's complete doorway. }
       if HasDoor and (Houses[H].DetailTriangles+48<=Houses[H].DetailBudget) and
@@ -601,8 +754,13 @@ begin
         Box(Frame,DoorLo.X-0.07,0,DoorLo.X,DoorHi.Y+0.07,0.006,0.09,P,0.58);
         Box(Frame,DoorHi.X,0,DoorHi.X+0.07,DoorHi.Y+0.07,0.006,0.09,P,0.58);
         Box(Frame,DoorLo.X,DoorHi.Y,DoorHi.X,DoorHi.Y+0.07,0.006,0.09,P,0.58);
-        Box(Frame,DoorLo.X-0.18,DoorHi.Y+0.08,DoorHi.X+0.18,DoorHi.Y+0.18,
-          0.008,0.62,Vector3(0.34,0.35,0.34),0.65);
+        AtlasPart:=Default(TArchComponent);AtlasPart.Kind:=acEntrance;
+        AtlasPart.X:=(DoorLo.X+DoorHi.X)*0.5;AtlasPart.Y:=0;AtlasPart.Z:=0.008;
+        AtlasPart.W:=DoorHi.X-DoorLo.X+0.36;AtlasPart.H:=DoorHi.Y+0.28;AtlasPart.D:=0.62;
+        AtlasPart.Count:=1;AtlasPart.Color:=$696b67;AtlasPart.Roughness:=0.65;
+        AtlasPart.Style:=Trunc(Houses[H].Seed) mod 2;
+        if not AddAtlasPart(Frame,AtlasPart) then
+          Box(Frame,DoorLo.X-0.18,DoorHi.Y+0.08,DoorHi.X+0.18,DoorHi.Y+0.18,0.008,0.62,Vector3(0.34,0.35,0.34),0.65);
       end;
       AddedWindows:=0;
       { Reserve cornices/pipes for every facade before distributing window trim.
@@ -625,16 +783,20 @@ begin
         (DI div 4+60<=BUILDING_DETAIL_MAX_TRIANGLES) then
       begin
         P:=Vector3((Ceil(Frame.MinUV.X)+1.5)*Width,FloorHeight+0.18*FloorHeight,0);
-        Box(Frame,P.X-0.85,P.Y-0.12,P.X+0.85,P.Y,0.006,0.78,Vector3(0.48,0.47,0.44),0.9);
-        Box(Frame,P.X-0.85,P.Y,P.X+0.85,P.Y+0.74,0.70,0.78,Vector3(0.38,0.39,0.37),0.8);
-        Box(Frame,P.X-0.85,P.Y,P.X-0.78,P.Y+0.74,0.006,0.70,Vector3(0.38,0.39,0.37),0.8);
-        Box(Frame,P.X+0.78,P.Y,P.X+0.85,P.Y+0.74,0.006,0.70,Vector3(0.38,0.39,0.37),0.8);
-        Box(Frame,P.X-0.88,P.Y+0.74,P.X+0.88,P.Y+0.78,0.68,0.80,Vector3(0.26,0.27,0.26),0.5);
+        { A normal window receives a French guard, not an inaccessible deep
+          platform. Prepared balcony doors can request complete balconies. }
+        AtlasPart:=Default(TArchComponent);AtlasPart.Kind:=acRailing;
+        AtlasPart.X:=P.X;AtlasPart.Y:=P.Y;AtlasPart.Z:=0.008;
+        AtlasPart.W:=1.7;AtlasPart.H:=0.9;AtlasPart.D:=0.16;
+        AtlasPart.Count:=1;AtlasPart.Color:=$606861;AtlasPart.Roughness:=0.65;
+        AtlasPart.Style:=1;AddAtlasPart(Frame,AtlasPart);
       end;
       if DI div 4+12>BUILDING_DETAIL_MAX_TRIANGLES then Break;
     end;
     SetLength(DetailVertices,DV); SetLength(DetailIndices,DI);
+    SetLength(FDetailSpans,FDetailSpanCount);
   finally
+    AtlasMesh.Free;
     Ids.Free; Faces.Free;
   end;
 end;
@@ -692,52 +854,53 @@ begin
 end;
 
 function TBuildingFacadeData.DetailGeometries: TBuildingDetailGeometryArray;
-var Cells:TIdMap; Heads,Next,Counts:array of Integer;
+var Cells:TIdMap; Heads,Next,VertexCounts,IndexCounts:array of Integer;
     V:TBuildingDetailVertices; IX:TBuildingDetailIndices;
     I,J,C,N,B,AtV,AtI,CX,CZ:Integer; Key:Int64; Center:TVector3; Permanent:Boolean;
+    Span:TBuildingDetailSpan;
 begin
   Result:=nil;
-  Heads:=nil; Counts:=nil;
-  N:=Length(DetailVertices) div 24;
+  Heads:=nil;VertexCounts:=nil;IndexCounts:=nil;
+  N:=FDetailSpanCount;
   if N=0 then Exit;
   Cells:=TIdMap.Create; Cells.Sorted:=True;
   try
     SetLength(Next,N);
     for B:=0 to N-1 do
     begin
-      Center:=Vector3(0,0,0);
-      for I:=0 to 23 do Center:=Center+DetailVertices[B*24+I].Anchor;
-      Center:=Center/24;
+      Center:=FDetailSpans[B].Center;
       CX:=Floor(Center.X/BUILDING_DETAIL_CELL);
       CZ:=Floor(Center.Z/BUILDING_DETAIL_CELL);
       Key:=(Int64(CX) shl 32) or Int64(LongWord(CZ));
-      Permanent:=TVector3.Equals(DetailVertices[B*24].Position,DetailVertices[B*24].Anchor);
+      Permanent:=FDetailSpans[B].Permanent;
       Key:=Key*2+Ord(Permanent);
       J:=Cells.IndexOf(Key);
       if J<0 then
       begin
-        C:=Length(Heads); SetLength(Heads,C+1); SetLength(Counts,C+1);
+        C:=Length(Heads); SetLength(Heads,C+1);SetLength(VertexCounts,C+1);SetLength(IndexCounts,C+1);
         Heads[C]:=-1; Cells.Add(Key,C);
       end else C:=Cells.Data[J];
-      Next[B]:=Heads[C]; Heads[C]:=B; Inc(Counts[C]);
+      Next[B]:=Heads[C]; Heads[C]:=B;
+      Inc(VertexCounts[C],FDetailSpans[B].VertexCount);Inc(IndexCounts[C],FDetailSpans[B].IndexCount);
     end;
     SetLength(Result,Length(Heads));
     for C:=0 to High(Heads) do
     begin
-      SetLength(V,Counts[C]*24); SetLength(IX,Counts[C]*48);
+      SetLength(V,VertexCounts[C]); SetLength(IX,IndexCounts[C]);
       AtV:=0; AtI:=0; B:=Heads[C];
       while B>=0 do
       begin
-        for I:=0 to 23 do V[AtV+I]:=DetailVertices[B*24+I];
-        for I:=0 to 47 do
+        Span:=FDetailSpans[B];
+        for I:=0 to Span.VertexCount-1 do V[AtV+I]:=DetailVertices[Span.FirstVertex+I];
+        for I:=0 to Span.IndexCount-1 do
         begin
-          J:=DetailIndices[B*48+I];
-          if J<0 then IX[AtI+I]:=-1 else IX[AtI+I]:=J-B*24+AtV;
+          J:=DetailIndices[Span.FirstIndex+I];
+          if J<0 then IX[AtI+I]:=-1 else IX[AtI+I]:=J-Span.FirstVertex+AtV;
         end;
-        Inc(AtV,24); Inc(AtI,48); B:=Next[B];
+        Inc(AtV,Span.VertexCount);Inc(AtI,Span.IndexCount);B:=Next[B];
       end;
       Result[C]:=MakeDetailGeometry(V,IX);
-      if TVector3.Equals(V[0].Position,V[0].Anchor) then Result[C].X3DName:='BuildingStructure';
+      if FDetailSpans[Heads[C]].Permanent then Result[C].X3DName:='BuildingStructure';
     end;
   finally Cells.Free end;
 end;

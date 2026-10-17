@@ -11,6 +11,7 @@ procedure PlaceTrafficStartSlot(Manager:TLaneManager;Agent:TPhysicalAgent;Slot:I
 function FindCompanionStartBehind(Path:TGamePath;const Start:TPathPosition;
   MaxBehind:Single;out Position:TPathPosition;out Behind:Single):Boolean;
 procedure UpdateRiderTraffic(Manager: TLaneManager; Dt: Single);
+procedure ClearTrafficConstraints(Agent:TPhysicalAgent);
 implementation
 uses Math, CastleVectors;
 
@@ -53,6 +54,7 @@ begin
   Agent.State.TrafficMoveConstraint:=nil;
   Agent.State.TrafficHeadingConstraint:=nil;
   Agent.State.TrafficSpeedLimit:=MaxSpeed;
+  Agent.State.TrafficLookAhead:=0;
 end;
 
 procedure PlaceTrafficStartSlot(Manager:TLaneManager;Agent:TPhysicalAgent;Slot:Integer);
@@ -136,6 +138,7 @@ begin
     BindTrafficConstraints(Manager,A);
     A.State.LaneOffset:=Manager.GetSmoothOffset(I,A.Path.RoadWidthAt(A.Path.Position));
     A.State.TrafficSpeedLimit:=Manager.TrafficLimit(I);
+    A.State.TrafficLookAhead:=Manager.TrafficLookAhead(I);
   end;
 end;
 end.

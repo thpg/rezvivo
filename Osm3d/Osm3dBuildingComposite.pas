@@ -113,7 +113,7 @@ implementation
 
 uses
   Osm3dRiderShadow,
-  Osm3dBuildingFacade,
+  Osm3dBuildingFacade, Osm3dArchitectureAtlas,
   Osm3dStudioSettings,   { EnableShaderAtomicCounters gate }
   Osm3dProfiler,         { PROF_COUNTER_HOUSES / _HOUSES_VS slots }
   Osm3dRtxMaterials, Osm3dSceneEffects;     { AttachCounterEffectFS / AttachCounterEffectVS }
@@ -320,6 +320,10 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1358);{$ENDIF}
   { Solid=True: building shapes are single-sided (wound outward before the merge). }
   Result := BuildCompositeIFS(Composite, 'bldUV', 'bldNormal', True, Osm3dStudioSettings.BuildingShadowsActive);
+  if Result<>nil then begin
+    Result.MetadataBoolean['castle.spatialIndexStream']:=True;
+    Result.MetadataDouble['castle.staticIndexRangePadding']:=0.25;
+  end;
 end;
 
 function BuildBuildingDetailShape(Geo: TIndexedFaceSetNode;
@@ -430,6 +434,7 @@ var
   UseUrl:     Boolean;
   FallbackArr: array of TVector3;
   PhotoTints: array of TVector3;
+  WindowPatterns:TArchitectureWindowPatterns;
   MetalArr:   array of Single;
   TintArr:    array of Single;
   I:          Integer;
@@ -501,6 +506,8 @@ begin
   else
     PF.Contents := BuildingShadowGLSL + BUILDING_COMPOSITE_FS;
   PF.Contents:=RTX_MATERIAL_GLSL+PF.Contents;
+  if GetEnvironmentVariable('REZVIVO_LEGACY_BUILDING_CAPTURE')='1' then
+    PF.Contents := '#define RZ_LEGACY_BUILDING_CAPTURE' + #10 + PF.Contents;
   AttachRtxMaterial(Effect);
   AttachSceneLighting(Effect);
   Effect.SetParts([PV, PF]);
@@ -539,6 +546,11 @@ begin
     'u_bld_grid_cols', Atlas.Layout.GridCols));
   Effect.AddCustomField(TSFInt32.Create(Effect, True,
     'u_bld_grid_rows', Atlas.Layout.GridRows));
+  { RTX snapshots read the atlas and its addressing independently of raster
+    uniforms. Mark only these static inputs; time/view/capture remain transient. }
+  Effect.Field('u_bld_atlas').InternalSnapshotDependency := True;
+  Effect.Field('u_bld_grid_cols').InternalSnapshotDependency := True;
+  Effect.Field('u_bld_grid_rows').InternalSnapshotDependency := True;
   { '/' is real division here, so e.g. 8/512 = 0.015625 (not integer 0). }
   Effect.AddCustomField(TSFFloat.Create(Effect, True,
     'u_bld_cell_inset', BLD_CELL_GUTTER / Atlas.Layout.TilePixels));
@@ -561,6 +573,8 @@ begin
   Effect.AddCustomField(TMFFloat.Create(Effect, True,
     'u_bld_tint_amount', TintArr));
   Effect.AddCustomField(TMFVec3f.Create(Effect, True,'u_bld_photo_tints',PhotoTints));
+  WindowPatterns:=ArchitectureWindowPatterns;
+  Effect.AddCustomField(TMFVec4f.Create(Effect, True,'u_bld_window_patterns',WindowPatterns));
 
   Sun := SunDirToward;
   if (Sun.X = 0) and (Sun.Y = 0) and (Sun.Z = 0) then

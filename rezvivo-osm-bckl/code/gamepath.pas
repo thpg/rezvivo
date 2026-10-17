@@ -4,7 +4,7 @@ interface
 
 uses
   Classes, SysUtils, Math,
-  CastleVectors, CastleScene, GameFitLoadProfile;
+  CastleVectors, CastleScene, GameFitLoadProfile, GameTrafficCollision;
 
 type
   TPathNarrowPassage = record
@@ -208,7 +208,7 @@ type
     function GetSmartRouteDirection(const WorldPosition: TVector3;
       const CurrentSpeed, DeltaTime: Single;
       const ALaneOffset: Single = 0.0;
-      const ResetDirection: Boolean = False): TVector3;
+      const ResetDirection: Boolean = False; const TrafficLookAhead:Single=0): TVector3;
 
     property PointCount: Integer read GetPointCount;
     property Position: TPathPosition read FPosition write FPosition;
@@ -756,7 +756,6 @@ begin
 end;
 
 procedure TGamePath.BuildNarrowPassages;
-const PassingWidth=1.9;
 var I,J,N,C,Turn:Integer; W0,W1,A,B,L,D:Single; P:TPathPosition;
     Q:array[0..5]of Int64; T:Int64; H:QWord;
 begin
@@ -767,13 +766,13 @@ begin
     L:=(GetFollowPointWorld(I+1)-GetFollowPointWorld(I)).Length;
     D:=FPassageDistances[I];FPassageDistances[I+1]:=D+L;
     W0:=PointWidth(I);W1:=PointWidth(Min(I+1,C-1));
-    if (L<0.001)or((W0>=PassingWidth)and(W1>=PassingWidth))then Continue;
+    if (L<0.001)or((W0>=TrafficPassingWidth)and(W1>=TrafficPassingWidth))then Continue;
     A:=0;B:=1;
-    if W0>=PassingWidth then begin
-      if W1=0 then A:=0.5 else A:=(W0-PassingWidth)/(W0-W1);
+    if W0>=TrafficPassingWidth then begin
+      if W1=0 then A:=0.5 else A:=(W0-TrafficPassingWidth)/(W0-W1);
     end;
-    if W1>=PassingWidth then begin
-      if W0=0 then B:=0.5 else B:=(PassingWidth-W0)/(W1-W0);
+    if W1>=TrafficPassingWidth then begin
+      if W0=0 then B:=0.5 else B:=(TrafficPassingWidth-W0)/(W1-W0);
     end;
     N:=Length(FPassages);
     { A short wide gap cannot hold both an exiting bicycle and the next
@@ -799,7 +798,7 @@ begin
       and return span occupied until this one bicycle has returned outside. }
     if FOutAndBack then for Turn:=0 to 1 do begin
       J:=Turn*(C div 2);D:=FPassageDistances[J];
-      if(PointWidth(J)<PassingWidth)and
+      if(PointWidth(J)<TrafficPassingWidth)and
         (((D>=FPassages[I].StartDistance)and(D<=FPassages[I].EndDistance))or
          ((D+FPassageDistances[C]>=FPassages[I].StartDistance)and
           (D+FPassageDistances[C]<=FPassages[I].EndDistance)))then FPassages[I].Exclusive:=True;
@@ -1220,7 +1219,7 @@ end;
 
 function TGamePath.GetSmartRouteDirection(const WorldPosition: TVector3;
   const CurrentSpeed, DeltaTime: Single;
-  const ALaneOffset: Single; const ResetDirection: Boolean): TVector3;
+  const ALaneOffset: Single; const ResetDirection: Boolean; const TrafficLookAhead:Single): TVector3;
 const
   { Below this speed, blend carrot direction with path tangent.
     On steep climbs the carrot's XZ projection shrinks → unreliable direction.
@@ -1246,6 +1245,7 @@ begin
   SteeringSpeedLimit:=Sqrt(4.0+6.0*Max(0.0,
     FCornerDistance[FPosition.Segment]-FPosition.T*FollowTangent(FPosition).Length-2.0));
   LookAhead := MinLookAhead + CurrentSpeed * LookAheadPerSpeed;
+  if TrafficLookAhead>0 then LookAhead:=Min(LookAhead,TrafficLookAhead);
   CarrotPos := FPosition;
   { Prepared detours contain mandatory bends. Do not aim through the next
     wall by skipping a bend with the ordinary speed-dependent look-ahead.
@@ -1298,7 +1298,7 @@ begin
   LastWobbleOffsetM := 0;
   { Test periodic L/R sway (meters) — overrides micro-wobble while on.
     Sine on the carrot forces continuous yaw → lean + handlebar steer. }
-  if AllowLateral and PathTestWobbleEnabled and (DeltaTime > 0)
+  if(TrafficLookAhead<=0)and AllowLateral and PathTestWobbleEnabled and (DeltaTime > 0)
      and (PathTestWobbleAmplitudeM > 0) and (PathTestWobblePeriodS > 0.1) then
   begin
     FWobblePhase := FWobblePhase + DeltaTime;
@@ -1312,7 +1312,7 @@ begin
   end
   { Wobble — smooth random lateral micro-drift for lifelike movement.
     Pick a new random target every 1.5–3.5 s, smoothly interpolate toward it. }
-  else if AllowLateral and CarrotWobbleEnabled and (DeltaTime > 0) and (CarrotWobbleAmplitude > 0) then
+  else if(TrafficLookAhead<=0)and AllowLateral and CarrotWobbleEnabled and (DeltaTime > 0) and (CarrotWobbleAmplitude > 0) then
   begin
     FWobbleTimer := FWobbleTimer - DeltaTime;
     if FWobbleTimer <= 0 then
@@ -1341,7 +1341,7 @@ begin
   { At low speed, blend toward path tangent to prevent oscillation on steep climbs.
     The carrot's XZ projection degrades when path is mostly vertical —
     path tangent is always stable regardless of slope angle. }
-  if (CurrentSpeed < LowSpeedThreshold) and (not KeepCorner) and
+  if(TrafficLookAhead<=0)and (CurrentSpeed < LowSpeedThreshold) and (not KeepCorner) and
      ((not FPreparedBuildingRoute) or (PointWidth(FPosition.Segment)>0)) then
   begin
     PathTangent := FollowDirectionXZ(FPosition);
@@ -1356,6 +1356,7 @@ begin
   OldSmoothed := FSmoothedRouteDir;
 
   Blend := DeltaTime / DirectionSmoothTime;
+  if TrafficLookAhead>0 then Blend:=DeltaTime/Min(0.15,DirectionSmoothTime);
   if Blend > 1.0 then Blend := 1.0;
   if ResetDirection then FSmoothedRouteDir := RawDir
   else FSmoothedRouteDir := LerpDirXZ(FSmoothedRouteDir, RawDir, Blend);

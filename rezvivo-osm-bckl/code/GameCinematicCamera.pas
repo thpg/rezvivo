@@ -74,6 +74,10 @@ type
     Subject:TCameraRider;
     EncounterKind:TCameraEncounterKind;
     CloseSide:Single;
+    { Composition belongs to the shot, including its pending/replay copy.
+      Filter only group framing, never the rider's forward travel. }
+    GroupReady:Boolean;
+    GroupYaw,GroupPitch,GroupPull:Single;
   end;
 
   TCameraReplayState = record
@@ -524,6 +528,7 @@ begin
   FShot.CameraGround.Valid := False;
   FShot.LookGround.Valid := False;
   FShot.FrameGround.Valid := False;
+  FShot.GroupReady := False;
   FHeightReady := False;
   FPending := False;
   FStillTime := 0;
@@ -1171,15 +1176,38 @@ end;
 procedure TCinematicCamera.AdjustForGroup(var P, D: TVector3);
 var
   I: Integer;
-  Center, CamRight, ToR: TVector3;
-  MaxSide, SD, Pull, TotalWeight, Weight: Single;
+  Center, CamRight, ToR, GroupDirection: TVector3;
+  MaxSide, SD, Pull, TotalWeight, Weight, BaseYaw, BasePitch,
+    GroupYaw, GroupPitch, Alpha, Pitch: Single;
+
+  function Fade(const A,B,Value:Single):Single;
+  begin
+    Result:=EnsureRange((Value-A)/(B-A),0.0,1.0);
+    Result:=Result*Result*(3-2*Result);
+  end;
 
   function RiderWeight(const Pos: TVector3): Single;
+  var ToLens:TVector3; Depth, Distance:Single;
   begin
     Result := EnsureRange((30.0 - (Pos - FTarget.Translation).Length) / 10.0, 0.0, 1.0);
+    if Result<=0 then Exit;
+    ToLens:=Pos+Vector3(0,1.2,0)-P;
+    Depth:=TVector3.DotProduct(ToLens,D);
+    if Depth<=0.8 then Exit(0);
+    Distance:=ToLens.Length;
+    { Use the unadjusted shot, not the previous displayed frame. A drafting
+      rider behind the lens must never pull the group centroid through the
+      camera and fight KeepRiderInFrame. Feather near/peripheral subjects
+      instead of flicking them in and out at the view boundary. }
+    Result:=Result*Fade(0.8,4.0,Depth)*Fade(0.35,0.8,Depth/Max(0.01,Distance));
+  end;
+
+  procedure Follow(var Value:Single;const Wanted,MaxRate:Single);
+  begin
+    if FPreparingShot or not FShot.GroupReady then Value:=Wanted
+    else Value:=Value+EnsureRange((Wanted-Value)*Alpha,-MaxRate*FFrameDT,MaxRate*FFrameDT);
   end;
 begin
-  if FNearbyCount = 0 then Exit;
   Center := FTarget.Translation;
   TotalWeight := 1;
   for I := 0 to FNearbyCount - 1 do
@@ -1188,8 +1216,6 @@ begin
     Center := Center + FNearby[I] * Weight;
     TotalWeight := TotalWeight + Weight;
   end;
-  { A rider crossing the 30 m collection boundary must not shift the frame. }
-  if TotalWeight <= 1.0001 then Exit;
   Center := Center * (1.0 / TotalWeight);
 
   CamRight := TVector3.CrossProduct(D, Vector3(0, 1, 0));
@@ -1203,22 +1229,35 @@ begin
     if SD > MaxSide then MaxSide := SD;
   end;
 
-  { Pull camera back to fit group }
-  if MaxSide > 3 then
-  begin
-    Pull := (MaxSide - 3) * 0.8;
-    P := P - D * Pull;
-    ClampAboveGround(P, True);
-  end;
-
-  { Re-aim at group center }
-  ToR := (Center + Vector3(0, 1.2, 0)) - P;
-  if ToR.Length > 0.001 then
+  Pull:=Max(0,MaxSide-3)*0.8;
+  GroupDirection:=D;
+  ToR := (Center + Vector3(0, 1.2, 0)) - (P-D*Pull);
+  if (TotalWeight>1.0001) and (ToR.Length > 0.001) then
   begin
     Weight := Min(1.0, TotalWeight - 1.0);
-    D := D * (1 - Weight) + ToR.Normalize * Weight;
-    if D.Length > 0.001 then D := D.Normalize;
+    GroupDirection := D * (1 - Weight) + ToR.Normalize * Weight;
+    if GroupDirection.Length > 0.001 then GroupDirection:=GroupDirection.Normalize
+    else GroupDirection:=D;
   end;
+
+  BaseYaw:=ArcTan2(D.X,D.Z);BasePitch:=ArcSin(EnsureRange(D.Y,-1.0,1.0));
+  GroupYaw:=ArcTan2(GroupDirection.X,GroupDirection.Z)-BaseYaw;
+  while GroupYaw>Pi do GroupYaw:=GroupYaw-2*Pi;
+  while GroupYaw< -Pi do GroupYaw:=GroupYaw+2*Pi;
+  GroupPitch:=ArcSin(EnsureRange(GroupDirection.Y,-1.0,1.0))-BasePitch;
+  Alpha:=1-Exp(-3*FFrameDT);
+  Follow(FShot.GroupYaw,GroupYaw,DegToRad(25));
+  Follow(FShot.GroupPitch,GroupPitch,DegToRad(15));
+  Follow(FShot.GroupPull,Pull,3);
+  FShot.GroupReady:=True;
+  if FShot.GroupPull>0.0001 then begin
+    P:=P-D*FShot.GroupPull;ClampAboveGround(P,True);
+  end;
+  { Live follow stays attached to the rider. Only the relative composition
+    eases when company appears/disappears; real shot cuts remain immediate. }
+  Pitch:=EnsureRange(BasePitch+FShot.GroupPitch,-Pi*0.49,Pi*0.49);
+  D:=Vector3(Sin(BaseYaw+FShot.GroupYaw)*Cos(Pitch),Sin(Pitch),
+    Cos(BaseYaw+FShot.GroupYaw)*Cos(Pitch));
 end;
 
 { ── Mode switching ── }

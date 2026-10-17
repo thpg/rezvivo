@@ -2,7 +2,7 @@ unit GrassRenderer;
 {$mode objfpc}{$H+}
 {$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
-uses SysUtils, Classes, Math, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}GL, GLExt{$endif}, TreeMath, TreeLOD, GrassModel;
+uses SysUtils, Classes, Math, {$ifdef OpenGLES}CastleGLES, RenderGLES{$else}GL, GLExt{$endif}, TreeMath, TreeLOD, GrassModel,VegetationAtlas;
 type
   TDrawArraysBaseInstance = procedure(Mode:GLenum;First:GLint;Count,Instances:GLsizei;Base:GLuint); {$ifdef Windows}stdcall{$else}cdecl{$endif};
   TDrawElementsBaseInstance = procedure(Mode:GLenum;Count:GLsizei;Kind:GLenum;Indices:Pointer;Instances:GLsizei;Base:GLuint); {$ifdef Windows}stdcall{$else}cdecl{$endif};
@@ -12,6 +12,9 @@ type
     FDrawArraysBase:TDrawArraysBaseInstance;
     FDrawElementsBase:TDrawElementsBaseInstance;
     FIndices:array[0..1,0..2,0..1]of GLuint;
+    FRootVAO:GLuint;
+    FRootIndices:array[0..2]of GLuint;
+    FAcceptedRoots,FAcceptedHead,FAcceptedWeedsOnly,FPatchTable,FPatchTableWidth:GLint;
     FIndexCounts:array[0..1,0..2,0..1]of Integer;
     FWeedIndices:array[0..1]of GLuint;
     FVertexTemplates:array[0..1]of GLuint;
@@ -23,12 +26,18 @@ type
     FProj,FView,FModel,FCamera,FSun,FTime,FWind,FMode,FBake,FDistance,FGrid,FSlice,FProfile,FColors,FSampler: GLint;
     FLodDistances,FTopDistances,FBladeViewGain,FGrowth,FVariation,FWeeds: GLint;
     FProfiles: TGrassProfiles;
+    FUploadedProfiles:TGrassProfiles;
+    FProfilesUploaded:Boolean;
+    FCheapRejects:GLint;
     FLodSettings:TGrassLodSettings;
     FDensityDistances:GLint;
     FGeometryDetail,FComplexity:GLint;
     FVertexCache,FViewModel:GLint;
     FFrameComplexity:Integer;
     FAtlasReady: Boolean;
+    FEnvelopes:array[0..GRASS_SPECIES_COUNT-1]of TCardEnvelope;
+    FEnvelopeMode,FEnvelopePoints,FEnvelopeViewport:GLint;
+    FEnvelopeKind,FFrameBake:Integer;
   public
     constructor Create;
     destructor Destroy; override;
@@ -38,9 +47,11 @@ type
       const Camera,Sun: TTreeVec3; Seconds,Wind: Single; Bake: Integer=0; DistanceOverride: Single=-1);
     function DrawSignature(Distant:Boolean;Kind:Integer;NearestDepth,RadialDistance:Single;GroundOnly:Boolean=False):Integer;
     procedure Draw(Buffer: GLuint; First,Count: Integer; Distant: Boolean; Kind:Integer=-1; NearestDepth:Single=0; GroundOnly:Boolean=False;RadialDistance:Single=-1);
+    function DrawAccepted(PatchTexture,Roots,Heads:GLuint;TableWidth,First,Count,StableCount,HeadFirst,HeadCount,WeedCount,Kind:Integer;NearestDepth,RadialDistance:Single):Integer;
     procedure EndFrame;
     function BladeDistance(Kind:Integer):Single;
-    procedure BakeKind(const Directory: string; Kind: Integer);
+    procedure BakeKind(const Directory: string; Kind: Integer;
+      const GroundSource: string='');
     procedure SaveProfiles(const Path: string);
     procedure LoadProfiles(const Path: string);
     property Profiles:TGrassProfiles read FProfiles write FProfiles;
@@ -64,7 +75,7 @@ var GrassDrawBlades:Boolean=True;
     GrassDiagnosticRawDraw:procedure=nil;
     GrassDiagnosticDrawMode:procedure(Mode:Integer)=nil;
 implementation
-uses fpjson, jsonparser, TreeShaderSource;
+uses fpjson, jsonparser, TreeShaderSource,VegetationRenderOptions;
 const GrassReferenceLight:array[0..2]of Single=((0.55+2.55*0.68)*0.55,(0.64+0.96*2.55*0.68)*0.55,(0.50+0.9*2.55*0.68)*0.55);
 function GrassHeadIndexCount(Grid,Detail:Integer):Integer;
 begin
@@ -104,6 +115,8 @@ destructor TGrassPatchRenderer.Destroy;
 begin
   if FProgram<>0 then glDeleteProgram(FProgram);
   if FVAO<>0 then glDeleteVertexArrays(1,@FVAO);
+  if FRootVAO<>0 then glDeleteVertexArrays(1,@FRootVAO);
+  glDeleteBuffers(3,@FRootIndices[0]);
   glDeleteBuffers(12,@FIndices[0,0,0]);
   glDeleteBuffers(2,@FWeedIndices[0]);
   glDeleteBuffers(2,@FVertexTemplates[0]);
@@ -185,7 +198,25 @@ begin
     glBufferData(GL_ARRAY_BUFFER,Length(Templates)*SizeOf(TGrassVertexTemplate),@Templates[0],GL_STATIC_DRAW);
   end;
   glBindVertexArray(0);
+  if VegetationAcceptedRoots then begin
+    glGenVertexArrays(1,@FRootVAO);glBindVertexArray(FRootVAO);
+    glEnableVertexAttribArray(5);glVertexAttribDivisor(5,1);
+    glGenBuffers(3,@FRootIndices[0]);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,FRootIndices[0]);glBufferData(GL_ELEMENT_ARRAY_BUFFER,SizeOf(Tri),@Tri[0],GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,FRootIndices[1]);glBufferData(GL_ELEMENT_ARRAY_BUFFER,SizeOf(MediumTri),@MediumTri[0],GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,FRootIndices[2]);glBufferData(GL_ELEMENT_ARRAY_BUFFER,SizeOf(SmallTri),@SmallTri[0],GL_STATIC_DRAW);
+    glBindVertexArray(0);
+  end;
+  FAcceptedRoots:=glGetUniformLocation(FProgram,'uAcceptedRoots');
+  FAcceptedHead:=glGetUniformLocation(FProgram,'uAcceptedHead');
+  FAcceptedWeedsOnly:=glGetUniformLocation(FProgram,'uAcceptedWeedsOnly');
+  FPatchTable:=glGetUniformLocation(FProgram,'uPatchTable');
+  FPatchTableWidth:=glGetUniformLocation(FProgram,'uPatchTableWidth');
   FComplexity:=glGetUniformLocation(FProgram,'uComplexity');
+  FCheapRejects:=glGetUniformLocation(FProgram,'uCheapRejects');
+  FEnvelopeMode:=glGetUniformLocation(FProgram,'uCardEnvelope');FEnvelopePoints:=glGetUniformLocation(FProgram,'uEnvelopePoints[0]');
+  FEnvelopeViewport:=glGetUniformLocation(FProgram,'uEnvelopeViewport');FEnvelopeKind:=-1;
+  FProfilesUploaded:=False;
   FProj:=glGetUniformLocation(FProgram,'uProjection');FView:=glGetUniformLocation(FProgram,'uView');FModel:=glGetUniformLocation(FProgram,'uModel');
   FCamera:=glGetUniformLocation(FProgram,'uCamera');FSun:=glGetUniformLocation(FProgram,'uSun');FTime:=glGetUniformLocation(FProgram,'uTime');
   FWind:=glGetUniformLocation(FProgram,'uWind');FMode:=glGetUniformLocation(FProgram,'uMode');FBake:=glGetUniformLocation(FProgram,'uBake');
@@ -205,7 +236,8 @@ end;
 procedure TGrassPatchRenderer.LoadAtlas(const Directory:string;Rebuild:Boolean);
 const Header:array[0..4]of LongWord=($47535A52,GRASS_MODEL_VERSION,GRASS_BAKE_SIZE,GRASS_ATLAS_LAYERS,2);
 var K,I,Slice,Offset:Integer;Pixels:TLODPixels;Path,BinaryPath:string;
-    Raw:array of Byte;CheckHeader:array[0..4]of LongWord;Stream:TFileStream;Loaded:Boolean;Alpha,Lit:Single;
+    Raw:TAtlasBytes;CheckHeader:array[0..4]of LongWord;Stream:TFileStream;Loaded:Boolean;Alpha,Lit:Single;
+    Mips:TAtlasLevels;
     Background:TTreeVec3;Weight:Double;MaxAnisotropy:GLfloat;
 begin
   FAtlasReady:=False;Loaded:=False;BinaryPath:=IncludeTrailingPathDelimiter(Directory)+'grass.rgba';
@@ -261,6 +293,12 @@ begin
       try Stream.WriteBuffer(Header,SizeOf(Header));Stream.WriteBuffer(Raw[0],Length(Raw));finally Stream.Free;end;
     end;
   end;
+  for K:=0 to GRASS_SPECIES_COUNT-1 do FEnvelopes[K]:=FullCardEnvelope;
+  if VegetationCardEnvelopes then begin
+    Mips:=AtlasMipLevels(Raw,GRASS_BAKE_SIZE,GRASS_ATLAS_LAYERS,VEGETATION_ENVELOPE_MIN_SIZE);
+    for K:=0 to GRASS_SPECIES_COUNT-1 do FEnvelopes[K]:=CardEnvelope(Mips,K*GRASS_ATLAS_VIEWS,3,1);
+  end;
+  FEnvelopeKind:=-1;Mips:=nil;
   if FAtlas=0 then glGenTextures(1,@FAtlas);glBindTexture(GL_TEXTURE_2D_ARRAY,FAtlas);
   glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,GRASS_BAKE_SIZE,GRASS_BAKE_SIZE,GRASS_ATLAS_LAYERS,0,GL_RGBA,GL_UNSIGNED_BYTE,@Raw[0]);
   glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
@@ -288,6 +326,8 @@ begin
     Max(UpLength*0.35,Sqrt(Sqr(VerticalX)+Sqr(VerticalY)));
   FPerspective:=Abs(Projection[15])<0.5;
   glUseProgram(FProgram);glUniform1i(FComplexity,FFrameComplexity);glBindVertexArray(FVAO);
+  FFrameBake:=Bake;glUniform2f(FEnvelopeViewport,Viewport[2],Viewport[3]);
+  glUniform1i(FCheapRejects,Ord(VegetationCheapRejects));
   for J:=0 to 3 do begin glEnableVertexAttribArray(J);glVertexAttribDivisor(J,1);end;
   glEnableVertexAttribArray(4);glVertexAttribDivisor(4,0);
   FLastBuffer:=0;FLastIndex:=0;FLastFirst:=-1;FLastGrid:=-1;FLastMode:=-1;FLastDetail:=-1;
@@ -303,6 +343,9 @@ begin
   glUniform4f(FLodDistances,FLodSettings.BladeStart,FLodSettings.BladeEnd,FLodSettings.ViewFade,FLodSettings.ViewEnd);
   glUniform2f(FTopDistances,FLodSettings.TopStart,FLodSettings.TopEnd);
   glUniform2f(FDensityDistances,FLodSettings.DensityStart,FLodSettings.DensityEnd);
+  if not VegetationProfileCache or not FProfilesUploaded or
+    not CompareMem(@FProfiles,@FUploadedProfiles,SizeOf(FProfiles)) then begin
+  Inc(VegetationGrassProfileUploads);
   for K:=0 to 7 do begin
     P[K*4]:=FProfiles[K].Height;P[K*4+1]:=FProfiles[K].Width;P[K*4+2]:=FProfiles[K].Density;P[K*4+3]:=FProfiles[K].Flowers;
     Growth[K*4]:=FProfiles[K].Broadleaf;Growth[K*4+1]:=FProfiles[K].Rosettes;
@@ -318,6 +361,8 @@ begin
   glUniform4fv(FGrowth,8,@Growth[0]);glUniform1fv(FVariation,8,@Variation[0]);
   glUniform2fv(FWeeds,8,@Weeds[0]);
   glUniform3fv(FBladeViewGain,32,@ViewGain[0]);
+  FUploadedProfiles:=FProfiles;FProfilesUploaded:=True;
+  end else Inc(VegetationGrassProfileHits);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,FAtlas);glUniform1i(FSampler,0);
   glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);
 end;
@@ -358,7 +403,7 @@ begin
   Result:=Mode+5*(Detail+3*(Sparse+2*EnsureRange(Kind,0,7)));
 end;
 procedure TGrassPatchRenderer.Draw(Buffer:GLuint;First,Count:Integer;Distant:Boolean;Kind:Integer;NearestDepth:Single;GroundOnly:Boolean;RadialDistance:Single);
-var I,Grid,Detail,Sparse,IndexCount,Signature,Mode,ShaderMode,AttributeFirst:Integer;Index:GLuint;UseBase:Boolean;
+var I,Grid,Detail,Sparse,IndexCount,Signature,Mode,ShaderMode,AttributeFirst,CardVertices:Integer;Index:GLuint;UseBase,Envelope:Boolean;
   procedure DrawCards(Start,Vertices:Integer);
   begin
     if UseBase and Assigned(GrassDiagnosticRawDraw)then GrassDiagnosticRawDraw;
@@ -367,9 +412,16 @@ var I,Grid,Detail,Sparse,IndexCount,Signature,Mode,ShaderMode,AttributeFirst:Int
   end;
 begin
   if (Count=0)or(Buffer=0)or(Distant and not FAtlasReady) then Exit;
+  glUniform1i(FAcceptedRoots,0);glBindVertexArray(FVAO);
   Signature:=DrawSignature(Distant,Kind,NearestDepth,RadialDistance,GroundOnly);
   if Signature<0 then Exit;
   Mode:=Signature mod 5;Detail:=(Signature div 5)mod 3;Sparse:=(Signature div 15)mod 2;
+  Envelope:=False;
+  if Distant and VegetationCardEnvelopes and(FFrameBake=0)and(Kind>=0)and(Kind<GRASS_SPECIES_COUNT)and not(Mode in[3,4])then
+    Envelope:=FEnvelopes[Kind].Enabled;
+  glUniform1i(FEnvelopeMode,Ord(Envelope));
+  if Envelope and(FEnvelopeKind<>Kind)then begin glUniform2fv(FEnvelopePoints,8,@FEnvelopes[Kind].Points[0]);FEnvelopeKind:=Kind end;
+  CardVertices:=6;if Envelope then CardVertices:=18;
   Grid:=16;if Kind in [4,6]then Grid:=32;
   if Grid<>FLastGrid then begin
     glUniform1i(FGrid,Grid);FLastGrid:=Grid;
@@ -391,9 +443,9 @@ begin
   end;
   if Assigned(GrassDiagnosticDrawMode)then GrassDiagnosticDrawMode(Mode);
   if Distant then begin
-    if Mode in [3,4]then begin DrawCards(6*GRASS_CARDS,6);Inc(FTriangles,Int64(2)*Count);end
-    else if not GrassDrawCarpet then begin DrawCards(0,6*GRASS_CARDS);Inc(FTriangles,Int64(2*GRASS_CARDS)*Count);end
-    else begin DrawCards(0,6*(GRASS_CARDS+1));Inc(FTriangles,Int64(2*(GRASS_CARDS+1))*Count);end;
+    if Mode in [3,4]then begin DrawCards(CardVertices*GRASS_CARDS,CardVertices);Inc(FTriangles,Int64(CardVertices div 3)*Count);end
+    else if not GrassDrawCarpet then begin DrawCards(0,CardVertices*GRASS_CARDS);Inc(FTriangles,Int64(CardVertices div 3*GRASS_CARDS)*Count);end
+    else begin DrawCards(0,CardVertices*(GRASS_CARDS+1));Inc(FTriangles,Int64(CardVertices div 3*(GRASS_CARDS+1))*Count);end;
   end else begin
     if Mode=1 then begin Index:=FWeedIndices[Ord(Grid=32)];IndexCount:=60 end
     else begin
@@ -412,6 +464,39 @@ begin
     else glDrawElementsInstanced(GL_TRIANGLES,IndexCount,GL_UNSIGNED_SHORT,nil,Count);
     Inc(FTriangles,Int64(IndexCount div 3)*Count);
   end;
+end;
+function TGrassPatchRenderer.DrawAccepted(PatchTexture,Roots,Heads:GLuint;TableWidth,First,Count,StableCount,HeadFirst,HeadCount,WeedCount,Kind:Integer;NearestDepth,RadialDistance:Single):Integer;
+var Signature,Mode,Detail,Sparse,Grid,Indices:Integer;
+begin
+  Result:=0;if PatchTexture=0 then Exit;
+  Signature:=DrawSignature(False,Kind,NearestDepth,RadialDistance);
+  if Signature<0 then Exit;
+  Mode:=Signature mod 5;Detail:=(Signature div 5)mod 3;Sparse:=(Signature div 15)mod 2;
+  Grid:=16;if Kind in[4,6]then Grid:=32;
+  if Assigned(GrassDiagnosticDrawMode)then GrassDiagnosticDrawMode(Mode);
+  if Sparse<>0 then Count:=StableCount;
+  if Mode=1 then begin Count:=0;HeadCount:=WeedCount end;
+  glUniform1i(FMode,0);glUniform1i(FGrid,Grid);glUniform1i(FGeometryDetail,Detail);
+  glUniform1i(FAcceptedRoots,1);glUniform1i(FAcceptedWeedsOnly,Ord(Mode=1));
+  glUniform1i(FPatchTable,2);glUniform1i(FPatchTableWidth,TableWidth);
+  glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,PatchTexture);glActiveTexture(GL_TEXTURE0);
+  glBindVertexArray(FRootVAO);
+  if(Count>0)and(Roots<>0)then begin
+    glBindBuffer(GL_ARRAY_BUFFER,Roots);glVertexAttribIPointer(5,2,GL_UNSIGNED_INT,8,Pointer(PtrUInt(First)*8));
+    glUniform1i(FAcceptedHead,0);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,FRootIndices[Detail]);
+    Indices:=15;if Detail=1 then Indices:=9 else if Detail=2 then Indices:=3;
+    glDrawElementsInstanced(GL_TRIANGLES,Indices,GL_UNSIGNED_SHORT,nil,Count);
+    Inc(Result);
+    Inc(FTriangles,Int64(Indices div 3)*Count);
+  end;
+  if(HeadCount>0)and(Heads<>0)then begin
+    glBindBuffer(GL_ARRAY_BUFFER,Heads);glVertexAttribIPointer(5,2,GL_UNSIGNED_INT,8,Pointer(PtrUInt(HeadFirst)*8));
+    glUniform1i(FAcceptedHead,1);glDrawArraysInstanced(GL_TRIANGLES,0,30,HeadCount);
+    Inc(Result);
+    Inc(FTriangles,Int64(10)*HeadCount);
+  end;
+  glUniform1i(FAcceptedRoots,0);glBindVertexArray(FVAO);
+  FLastBuffer:=0;FLastIndex:=0;FLastFirst:=-1;FLastGrid:=-1;FLastMode:=-1;FLastDetail:=-1;
 end;
 procedure TGrassPatchRenderer.EndFrame;
 begin glBindVertexArray(0);glBindBuffer(GL_ARRAY_BUFFER,0);glBindTexture(GL_TEXTURE_2D_ARRAY,0);glUseProgram(0);end;
@@ -465,8 +550,39 @@ begin
       for J:=0 to 3 do FProfiles[K].BladeViewGain[J]:=Vec(EnsureRange(Gains.Items[J*3].AsFloat,0.5,1.6),EnsureRange(Gains.Items[J*3+1].AsFloat,0.5,1.6),EnsureRange(Gains.Items[J*3+2].AsFloat,0.5,1.6));
   end;finally Root.Free;end;
 end;
-procedure TGrassPatchRenderer.BakeKind(const Directory:string;Kind:Integer);
-const S=GRASS_BAKE_SIZE*2; TOP_LAYERS=32;
+procedure BlendWoodlandGround(const Directory, Source:string);
+const SourceSize=1024; RepeatedSize=SourceSize*3;
+var Litter,Canopy:TLODPixels;Pass,X,Y,C,SX,SY,DX,DY,Footprint:Integer;
+    Suffix,Path:string;Filtered:Single;
+begin
+  { An offline mixture shared by the editor and command-line baker. It has
+    no runtime sampler/pass. Three 1.3 m repeats cover the 4 m grass tile;
+    area filtering keeps the photographed leaves from aliasing in the atlas. }
+  Litter:=LoadLODPng(Source,SourceSize,SourceSize);
+  Footprint:=RepeatedSize div GRASS_BAKE_SIZE;
+  for Pass:=0 to 1 do begin
+    if Pass=0 then Suffix:='-top.png' else Suffix:='-ground.png';
+    Path:=IncludeTrailingPathDelimiter(Directory)+GrassName(1)+Suffix;
+    Canopy:=LoadLODPng(Path,GRASS_BAKE_SIZE,GRASS_BAKE_SIZE);
+    for Y:=0 to GRASS_BAKE_SIZE-1 do for X:=0 to GRASS_BAKE_SIZE-1 do begin
+      SX:=(X*RepeatedSize div GRASS_BAKE_SIZE) mod SourceSize;
+      SY:=(Y*RepeatedSize div GRASS_BAKE_SIZE) mod SourceSize;
+      for C:=0 to 2 do begin
+        Filtered:=0;
+        for DY:=0 to Footprint-1 do for DX:=0 to Footprint-1 do
+          Filtered:=Filtered+Litter[(((SY+DY) mod SourceSize)*SourceSize+(SX+DX) mod SourceSize)*4+C];
+        Filtered:=Filtered/(Footprint*Footprint);
+        Canopy[(Y*GRASS_BAKE_SIZE+X)*4+C]:=
+          0.80*Canopy[(Y*GRASS_BAKE_SIZE+X)*4+C]+0.20*Filtered;
+      end;
+      Canopy[(Y*GRASS_BAKE_SIZE+X)*4+3]:=1;
+    end;
+    SaveLODPng(Path,Canopy,GRASS_BAKE_SIZE,GRASS_BAKE_SIZE);
+  end;
+end;
+procedure TGrassPatchRenderer.BakeKind(const Directory:string;Kind:Integer;
+  const GroundSource:string);
+const S=GRASS_BAKE_SIZE*2; TOP_LAYERS=64;
 var FBO,Color,Depth,Buffer:GLuint;OldFBO,OldViewport:array[0..3]of GLint;
     Patches:TGrassPatches;Pixels,Small:TLODPixels;Projection,View:TTreeMat4;Eye:TTreeVec3;
     Pass,X,Z,I,C,DX,DZ,N,Layer:Integer;Path:string;Coverage:Double;
@@ -492,6 +608,8 @@ var FBO,Color,Depth,Buffer:GLuint;OldFBO,OldViewport:array[0..3]of GLint;
     Result:=EnsureRange((T/(1-T))/Max(0.000001,S/(1-S)),0.25,4.0);
   end;
 begin
+  if (Kind=1) and (GroundSource<>'') and not FileExists(GroundSource) then
+    raise Exception.Create('Woodland atlas source is missing: '+GroundSource);
   Path:=IncludeTrailingPathDelimiter(Directory);ForceDirectories(Path);
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,@OldFBO[0]);glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,@OldFBO[1]);glGetIntegerv(GL_VIEWPORT,@OldViewport[0]);
   FBO:=0;Color:=0;Depth:=0;Buffer:=0;
@@ -584,5 +702,6 @@ begin
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldFBO[0]);glBindFramebuffer(GL_READ_FRAMEBUFFER,OldFBO[1]);
     glViewport(OldViewport[0],OldViewport[1],OldViewport[2],OldViewport[3]);
   end;
+  if (Kind=1) and (GroundSource<>'') then BlendWoodlandGround(Directory,GroundSource);
 end;
 end.

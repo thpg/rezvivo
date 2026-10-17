@@ -7,7 +7,9 @@ interface
 
 uses RiderTripo;
 
-const BuiltinRiderPoseCount = 19;
+const
+  DriftRiderPoseIndex = 19;
+  BuiltinRiderPoseCount = 20;
 
 function BuiltinRiderPose(Index: Integer): TRiderPose;
 procedure LoadBuiltinRiderPoses(List: TRiderPoseList);
@@ -350,6 +352,20 @@ begin
       Result.SpineAngles[0]:=-8;
       Result.SpineAngles[4]:=0;
       Result.ShoulderRoundDeg:=3;
+    end;
+    DriftRiderPoseIndex: begin { Braced skid, supported by pedals and bars }
+      Result.Name:='Drift';
+      Result.Special:=True;Result.TurnSuitable:=True;
+      Result.SelPriority:=0;
+      Result.OffsetX:=0.10;Result.OffsetY:=0.045;
+      Result.HandPosR:=3;Result.HandPosL:=3;
+      Result.SpineAngles[0]:=-36;Result.SpineAngles[1]:=-3;
+      Result.SpineAngles[2]:=-3;Result.SpineAngles[3]:=-2;
+      Result.SpineAngles[4]:=12;
+      Result.ShoulderRoundDeg:=8;
+      Result.Motion.Standing:=1;Result.Motion.Pedalling:=0;
+      Result.Motion.Sprint:=0;Result.Motion.AnkleDeg:=0;
+      Result.PedalSway:=0;Result.TorsoBobAmp:=0;
     end;
     else raise ERangeError.CreateFmt('Unknown rider pose %d', [Index]);
   end;

@@ -70,6 +70,33 @@ uses UiTranslations,
 
 type
   TCacheBatch = class;
+  TGroundPositionArray = array of TVector3;
+  TGroundIndexArray = array of Cardinal;
+  TGroundBinArray = array of array of Integer;
+  TPreparedTileGround = record
+    HasMarineWater, GroundHasField: Boolean;
+    GroundCurbFirst: Integer;
+    GroundMinX, GroundMaxX, GroundMinZ, GroundMaxZ: Single;
+    GroundVertices: TGroundPositionArray;
+    GroundIndices: TGroundIndexArray;
+    GroundBin: TGroundBinArray;
+  end;
+  { Numeric side-products belong to one exclusively job-owned tile model.
+    Mesh array getters may trim capacity; no other worker may read the model.
+    These products are not serialized and contain no live scene. }
+  TPreparedTileCpu = record
+    Ready, GroundWasCpu, GrassPrepared: Boolean;
+    JobSerial: QWord;
+    Model: TTileModel;
+    TileId: TGeoTileId;
+    ModelGenHash: string;
+    Origin: TLatLon;
+    CenterX, CenterZ: Single;
+    ScaleX: Double;
+    Ground: TPreparedTileGround;
+    Grass: TPreparedGrassSources;
+  end;
+  TPreparedTileCpuArray = array of TPreparedTileCpu;
 
   { One assembled tile — a leaf of the cache tree.
 
@@ -163,11 +190,11 @@ type
     GroundHasField: Boolean;
     GroundMinX, GroundMaxX: Single;   { tile-local XZ extent }
     GroundMinZ, GroundMaxZ: Single;
-    GroundVertices: array of TVector3; { tile-local positions }
-    GroundIndices: array of Cardinal; { source triangle order }
+    GroundVertices: TGroundPositionArray; { tile-local positions }
+    GroundIndices: TGroundIndexArray; { source triangle order }
     { GroundGridN*GroundGridN ячеек; каждая — динамический массив
       индексов треугольников (индекс i → GroundVertices[GroundIndices[i*3..i*3+2]]). }
-    GroundBin:  array of array of Integer;
+    GroundBin: TGroundBinArray;
     { Мировые координаты граничных вершин композита этого тайла (после
       сварки). Сосед, монтируемый позже, ищет в них совпадения и
       подменяет ими свои граничные вершины — щель исчезает. }
@@ -177,7 +204,7 @@ type
     AccTimer: Single;
     AccPhase: Integer;   { traffic-light phase: 0=green, 1=yellow, 2=red }
     { Advance this tile's batch accessory sprites one frame (traffic-light
-      blink: toggles the atlas cell of every registered TextureTransform). }
+      phase changes only the atlas-cell uniform, never shape membership). }
     function SampleGround(const LX,LZ,ReferenceY:Single; out AY:Single):Boolean;
     procedure AnimateAccessories(SecondsPassed: Single);
   end;
@@ -230,6 +257,16 @@ type
     TAsm0:       QWord;
     TAsmMs:      QWord;
     Failed:      Boolean;
+    CpuSerial:   QWord;
+    CpuEnabled, CpuGrass: Boolean;
+    CpuMode:     TGpuGroundMode;
+    CpuOrigin:   TLatLon;
+    CpuScaleX:   array of Double;
+    CpuResident: array of Boolean;
+    CpuGrassRules: TGrassSourceRules;
+    CpuData:     TPreparedTileCpuArray;
+    CpuMs:       QWord;
+    CpuError:    string;
   end;
 
   TOsm3dStreamingMap = class(TCastleScene)
@@ -482,6 +519,7 @@ type
     FAsmLock:        TRTLCriticalSection;
     FAsmWake:        PRTLEvent;
     FAsmPending:     Integer;
+    FAsmSerial:      QWord;
     FSnapCancel:   Boolean;
     { Route-snap tile hold. The worker publishes the route's tiles and
       raises FSnapHoldEviction; the main-thread Update then WantTiles them
@@ -628,7 +666,8 @@ type
     procedure MountAssembled(Assembled: TAssembledScenes;
       const Trees: TTileTreeRecArray; BatchBorder: TBorderWorldMap;
       const AModels: array of TTileModel; const AIds: array of TGeoTileId;
-      TAsmMs: QWord);
+      TAsmMs: QWord; var CpuData: TPreparedTileCpuArray; CpuSerial: QWord;
+      const CpuGrassRules: TGrassSourceRules);
     procedure EnqueueAssembleBatch(const AIds: array of TGeoTileId;
       const AModels: array of TTileModel);
     procedure DrainAssembled;
@@ -1061,6 +1100,8 @@ type
       AOn=False: free sphere scenes immediately. }
     procedure SetFitPointOverlays(AOn: Boolean);
     function FitPointOverlaysOn: Boolean;
+    { Read-only diagnostic of actual mounted overlays, not just their flags. }
+    function FitPointOverlaySceneCount: Integer;
     { Строить FIT-слой высот в снап/light-воркере (физика + голубой профиль).
       Страница маршрутов на простом клике ставит False: только голубые
       высоты выбранного заезда, датум всей папки не гоняем. }
@@ -1124,6 +1165,19 @@ type
   public
     constructor Create(AMap: TOsm3dStreamingMap; AllowNetworkDEM: Boolean = True);
   end;
+
+{ Numeric-only extraction. Callers own Model/Curbs for the duration. }
+function PrepareTileGround(AModel: TTileModel; const Curbs: TCurbMesh;
+  ScaleX: Double; CpuFieldRequired: Boolean): TPreparedTileGround;
+function PrepareTileGrass(Model: TTileModel; CenterX,CenterZ: Single;
+  ScaleX: Double; const Rules: TGrassSourceRules): TPreparedGrassSources;
+function PreparedTileCpuMatches(const Data:TPreparedTileCpu; Model:TTileModel;
+  const TileId:TGeoTileId; Serial:QWord;const Origin:TLatLon;
+  CenterX,CenterZ:Single;ScaleX:Double):Boolean;
+procedure AdoptTileGround(Tile:TCacheTile; var Data:TPreparedTileGround);
+function PrepareTileCpu(Model:TTileModel;const Curbs:TCurbMesh;Serial:QWord;
+  const Origin:TLatLon;CenterX,CenterZ:Single;ScaleX:Double;
+  CpuFieldRequired,WithGrass:Boolean;const Rules:TGrassSourceRules):TPreparedTileCpu;
 
 implementation
 
@@ -1245,40 +1299,28 @@ begin
   CZ          := 0.0;
 end;
 
-{ Traffic-light cycle: advance every registered accessory Switch through
-  green(0) -> yellow(1) -> red(2) (each held for its own duration) by flipping
-  WhichChoice. The switches belong to this tile's batch (USE-shared); driving
-  them from the current tile only keeps the per-frame work to the batch the
-  camera sits in. FdWhichChoice.Send sets the value AND notifies CGE -> live. }
+{ Traffic-light cycle: one immutable head mesh, green(0) -> yellow(1) -> red(2).
+  Only appearance uniforms change. A Switch forced RTX to recollect the entire
+  tile even though all three head meshes had the same positions and normals.
+  The borrowed fields belong to this tile's assembled batch; no global list
+  survives its removal. }
 procedure TCacheTile.AnimateAccessories(SecondsPassed: Single);
 var
   I:   Integer;
-  Dur: Single;
-  Sws: array of TSwitchNode;
+  Phases: array of TSFVec4f;
+  Cells: TVector4;
 begin
   if not AnimateTrafficSignalsActive then Exit;
   if (Batch = nil) or (Batch.Assembled = nil) then Exit;
-  Sws := Batch.Assembled.AccessorySwitches;
-  if Length(Sws) = 0 then Exit;
-
-  { hold the current phase for its own duration }
-  case AccPhase of
-    0: Dur := ACCESSORY_TL_GREEN_S;
-    1: Dur := ACCESSORY_TL_YELLOW_S;
-  else Dur := ACCESSORY_TL_RED_S;
-  end;
-
-  AccTimer := AccTimer + SecondsPassed;
-  if AccTimer < Dur then Exit;
-  AccTimer := 0;
-
-  { advance the cycle and show it — Switch child index == phase }
-  AccPhase := (AccPhase + 1) mod 3;
-  for I := 0 to High(Sws) do
-    if Sws[I] <> nil then
+  Phases := Batch.Assembled.AccessoryPhaseFields;
+  if Length(Phases) = 0 then Exit;
+  if not AdvanceTrafficSignalCycle(AccPhase, AccTimer, SecondsPassed) then Exit;
+  Cells := TrafficSignalCells(AccPhase);
+  for I := 0 to High(Phases) do
+    if Phases[I] <> nil then
     begin
-      Sws[I].FdWhichChoice.Send(AccPhase);
-      Inc(TrafficSignalSwitchChanges);
+      Phases[I].Send(Cells);
+      Inc(TrafficSignalSwitchChanges); { existing diagnostic counts phase changes }
     end;
 end;
 
@@ -2679,7 +2721,8 @@ end;
 procedure TOsm3dStreamingMap.MountAssembled(Assembled: TAssembledScenes;
   const Trees: TTileTreeRecArray; BatchBorder: TBorderWorldMap;
   const AModels: array of TTileModel; const AIds: array of TGeoTileId;
-  TAsmMs: QWord);
+  TAsmMs: QWord; var CpuData:TPreparedTileCpuArray;CpuSerial:QWord;
+  const CpuGrassRules:TGrassSourceRules);
 var
   Batch:     TCacheBatch;
   Root:      TX3DRootNode;
@@ -2703,7 +2746,18 @@ var
   ShAffected: Boolean;
   BWArr:       TBorderWorldArray;
   TestSun:   TDirectionalLightNode;   { TEST: per-tile shadow-casting sun }
+  CpuReady,CpuGroundNeeded,GrassRulesMatch:Boolean;
+  GrassSourceIndex:Integer;
+  CurrentGrassRules:TGrassSourceRules;
+  GroundAdopted,GrassAdopted,GroundFallback,GrassFallback,GpuGroundOnly:Integer;
 begin
+  MountProfile:=GetEnvironmentVariable('REZVIVO_TILE_MOUNT_PROFILE')='1';
+  GroundAdopted:=0;GrassAdopted:=0;GroundFallback:=0;GrassFallback:=0;GpuGroundOnly:=0;
+  GrassRulesMatch:=False;
+  if Length(CpuData)>0 then begin
+    CurrentGrassRules:=CaptureGrassSourceRules;
+    GrassRulesMatch:=SameGrassSourceRules(CpuGrassRules,CurrentGrassRules);
+  end;
   N := Length(AModels);
   if (Assembled = nil) or (Length(Assembled.Tiles) = 0) then
   begin
@@ -2877,9 +2931,35 @@ begin
          AModels[J].TileId.Equals(CT.Tile) then
       begin
         CT.TravelRoads:=TTravelRoadIndex.Create(AModels[J],CT.CenterX,CT.CenterZ,TileScaleX(CT.Tile));
-        BuildGroundField(CT, AModels[J], Assembled.Tiles[I].CurbVertices);
+        CpuReady:=(I<Length(CpuData))and PreparedTileCpuMatches(CpuData[I],
+          AModels[J],CT.Tile,CpuSerial,FOrigin,CT.CenterX,CT.CenterZ,TileScaleX(CT.Tile));
+        CpuGroundNeeded:=not((GpuGroundMode=ggGpu)and(CT.GpuGround<>nil));
+        if CpuReady and(not CpuGroundNeeded or CpuData[I].GroundWasCpu)then begin
+          if not CpuGroundNeeded then begin
+            { A runtime CPU->GPU switch does not retain an unused CPU grid. }
+            CpuData[I].Ground.GroundVertices:=nil;CpuData[I].Ground.GroundIndices:=nil;
+            CpuData[I].Ground.GroundBin:=nil;CpuData[I].Ground.GroundHasField:=True;
+            Inc(GpuGroundOnly);
+          end;
+          AdoptTileGround(CT,CpuData[I].Ground);
+          Inc(GroundAdopted);
+        end else begin
+          { GPU->CPU, origin/model/recipe revision mismatch, disabled worker,
+            or synchronous assembly: use the same numeric builder on main. }
+          BuildGroundField(CT, AModels[J], Assembled.Tiles[I].CurbVertices);
+          Inc(GroundFallback);
+        end;
         Assembled.Tiles[I].CurbVertices:=Default(TCurbMesh);
-        MountTileGrass(CT, AModels[J]);
+        if(FGrassRenderer<>nil)and CpuReady and CpuData[I].GrassPrepared and GrassRulesMatch then begin
+          FGrassRenderer.RemoveTile(CT.CenterX,CT.CenterZ);
+          for GrassSourceIndex:=0 to High(CpuData[I].Grass)do
+            FGrassRenderer.AdoptSource(CpuData[I].Grass[GrassSourceIndex],CT.CenterX,CT.CenterZ);
+          Inc(GrassAdopted);
+        end else begin
+          MountTileGrass(CT, AModels[J]);
+          if FGrassRenderer<>nil then Inc(GrassFallback);
+        end;
+        if I<Length(CpuData)then CpuData[I]:=Default(TPreparedTileCpu);
 
         { BUILDING_OBSTACLE: register tile-local footprints in world space
           (offset by tile centre). Key = geo-tile ToKey for RemoveTile. }
@@ -2907,6 +2987,9 @@ begin
   { Мировые границы пачки уже разложены по CT.BorderWorld. }
   FreeAndNil(BatchBorder);
   TLoadMs := GetTickCount64 - TAsm0;
+  if MountProfile then
+    LogMain(Format('tile derived adopt: serial=%d ground=%d grass=%d ground_fallback=%d grass_fallback=%d gpu_only=%d',
+      [CpuSerial,GroundAdopted,GrassAdopted,GroundFallback,GrassFallback,GpuGroundOnly]));
 
   { Cross-pack shadows are NOT applied synchronously here. The off-thread
     pass below enqueues a mask snapshot for every tile this pack affects —
@@ -3125,6 +3208,8 @@ var
   ShAffected: Boolean;
   BatchBorder: TBorderWorldMap;   { мировые границы моделей этой пачки }
   BWArr:       TBorderWorldArray;
+  CpuData:TPreparedTileCpuArray;
+  CpuRules:TGrassSourceRules;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(834);{$ENDIF}
   N := Length(AModels);
@@ -3161,7 +3246,9 @@ begin
   for I := 0 to High(Previews) do FreeAndNil(Previews[I]);
   TAsmMs := GetTickCount64 - TAsm0;
 
-  MountAssembled(Assembled, Trees, BatchBorder, AModels, AIds, TAsmMs);
+  CpuData:=nil;CpuRules:=Default(TGrassSourceRules);
+  MountAssembled(Assembled, Trees, BatchBorder, AModels, AIds, TAsmMs,
+    CpuData,0,CpuRules);
 end;
 
 procedure TOsm3dStreamingMap.MountTileTrees(const ACenter: TVector3;
@@ -3177,69 +3264,6 @@ begin
   if MountProfile then
     LogMain(Format('TILE_MOUNT_PROFILE trees c=(%.1f,%.1f) count=%d mount=%d ms',
       [ACenter.X,ACenter.Z,Length(ATrees),GetTickCount64-ProfileStarted]));
-end;
-
-{ true, если materialId — травяной (в id-пространстве композита земли).
-  Whitelist задаёт ПЕРИМЕТР (какие материалы в принципе могут нести траву),
-  а конфиг GROUND_MATERIALS[..].Grasses — включатель: пустой (в т.ч.
-  закомментированный) Grasses гасит траву материала уже здесь, на
-  экстракции — ни подмешей, ни джобов разброса. Включить траву материалу
-  ВНЕ периметра конфигом нельзя — расширяйте whitelist осознанно. }
-function GrassMatIsGrass(Id: Integer): Boolean;
-begin
-  Result := ((Id = GROUND_MAT_TERRAIN) or
-             (Id = GROUND_MAT_FOREST_FLOOR) or
-             (Id = GROUND_MAT_GRASS) or (Id = GROUND_MAT_MANIC_GRASS) or
-             (Id = GROUND_MAT_GARDEN) or (Id = GROUND_MAT_PITCH_GENERIC) or
-             (Id = GROUND_MAT_PITCH_FOOT))
-            and (GrassMatDensity(Id) > 0.0);
-end;
-
-{ Extract grass in the same world frame as the rendered ground and roads:
-  X = tile-local X * TileFrameScaleX + center X; Z = local Z + center Z.
-  Y is already an absolute elevation. The latitude scale matters when the
-  camera travels away from the session origin. Empty MatIds denotes a
-  legacy smkGrass mesh; otherwise all three vertices must be grass. }
-function ExtractGrassMeshWorld(Src: TMesh; const MatIds: TTileMatIdArray;
-  OffX, OffZ: Single; ScaleX: Double; out TriMat: TTileMatIdArray;
-  LegacyMaterial: Integer = GROUND_MAT_GRASS): TMesh;
-var
-  Verts: TMeshVertexArray;
-  Idx:   TMeshIndexArray;
-  I, TriCount, a, b, c, na, nb, nc, outN: Integer;
-  V: TMeshVertex;
-  Legacy: Boolean;
-begin
-  Result := TMesh.Create('grass-sub');
-  TriMat := nil;
-  TriCount := Src.TriangleCount;
-  if TriCount = 0 then Exit;
-  Verts := Src.Vertices;
-  Idx   := Src.Indices;
-  Legacy := Length(MatIds) = 0;
-  SetLength(TriMat, TriCount);   { максимум; ужмём в конце }
-  outN := 0;
-  for I := 0 to TriCount - 1 do
-  begin
-    a := Idx[I * 3 + 0]; b := Idx[I * 3 + 1]; c := Idx[I * 3 + 2];
-    if Legacy or (GrassMatIsGrass(MatIds[a]) and GrassMatIsGrass(MatIds[b]) and
-       GrassMatIsGrass(MatIds[c])) then
-    begin
-      V := Verts[a]; V.Position.X := V.Position.X * ScaleX + OffX;
-                     V.Position.Z := V.Position.Z + OffZ; na := Result.AddVertex(V);
-      V := Verts[b]; V.Position.X := V.Position.X * ScaleX + OffX;
-                     V.Position.Z := V.Position.Z + OffZ; nb := Result.AddVertex(V);
-      V := Verts[c]; V.Position.X := V.Position.X * ScaleX + OffX;
-                     V.Position.Z := V.Position.Z + OffZ; nc := Result.AddVertex(V);
-      Result.AddTriangle(na, nb, nc);
-      { материал треугольника = материал его 1-й вершины (все три травяные) —
-        по нему рендер выберет вид/ячейку атласа и плотность }
-      if Legacy then TriMat[outN] := LegacyMaterial
-      else TriMat[outN] := MatIds[a];
-      Inc(outN);
-    end;
-  end;
-  SetLength(TriMat, outN);
 end;
 
 var
@@ -3479,58 +3503,69 @@ begin
   Result := Result + #10 + '  => ' + verdict;
 end;
 
-procedure TOsm3dStreamingMap.MountTileGrass(ACT: TCacheTile; AModel: TTileModel);
-var
-  MeshI, LegacyMaterial: Integer;
-  Rec:   TTileMeshRec;
-  GrassMesh: TMesh;
-  GrassTriMat: TTileMatIdArray;
-  Kx: Double;
+function PrepareTileGrass(Model:TTileModel;CenterX,CenterZ:Single;
+  ScaleX:Double;const Rules:TGrassSourceRules):TPreparedGrassSources;
+var I,N,LegacyMaterial:Integer;Rec:TTileMeshRec;
 begin
-  if FGrassRenderer = nil then Exit;
-  if (ACT = nil) or (AModel = nil) then Exit;
-  { Visibility is a live render switch. Keep the tile's grass data while
-    hidden, so re-enabling it also restores tiles loaded in the meantime. }
-
-  { идемпотентность ре-монтажа: сначала снять прежние записи этого центра }
-  FGrassRenderer.RemoveTile(ACT.CenterX, ACT.CenterZ);
-  Kx := TileScaleX(AModel.TileId);
-
-  for MeshI := 0 to AModel.MeshCount - 1 do
-  begin
-    Rec := AModel.Meshes[MeshI];   { GetMesh отдаёт запись по значению; Mesh/MatIds — ссылки }
-    if Rec.Mesh = nil then Continue;
-
-    { (1) Земля — композитный меш smkSurface с per-vertex MatIds: травинки
-      сажаем на травяные треугольники (id из MatIds), смещённые в мир. }
-    if (Rec.Material = smkSurface) and (Rec.Mesh.TriangleCount > 0) and
-       (Length(Rec.MatIds) = Rec.Mesh.VertexCount) then
-    begin
-      if CARVE_DIAG then
-        LogMain(CompositeCarveDiag(Rec.Mesh, Rec.MatIds, ACT.CenterX, ACT.CenterZ));
-      GrassMesh := ExtractGrassMeshWorld(Rec.Mesh, Rec.MatIds,
-        ACT.CenterX, ACT.CenterZ, Kx, GrassTriMat);
-      { Разброс — в фоне: ExtractGrassMeshWorld отдал САМОСТОЯТЕЛЬНЫЙ меш (копия
-        треугольников, не связан с AModel), поэтому владение можно передать
-        воркеру. EnqueueTile сам освободит меш (после разброса или сразу, если
-        треугольников нет). НИКАКОГО free здесь — иначе use-after-free в воркере. }
-      FGrassRenderer.EnqueueTile(GrassMesh, GrassTriMat, ACT.CenterX, ACT.CenterZ);
-    end
-    { Legacy grass and undergrowth still share the same world transform. }
-    else if (Rec.Material in [smkGrass, smkForest, smkScrub]) and
-      (Rec.Mesh.TriangleCount > 0) then
-    begin
-      if Rec.Material = smkGrass then LegacyMaterial := GROUND_MAT_GRASS
-      else LegacyMaterial := GROUND_MAT_FOREST_FLOOR;
-      GrassMesh := ExtractGrassMeshWorld(Rec.Mesh, [],
-        ACT.CenterX, ACT.CenterZ, Kx, GrassTriMat, LegacyMaterial);
-      FGrassRenderer.EnqueueTile(GrassMesh, GrassTriMat, ACT.CenterX, ACT.CenterZ);
-    end;
+  Result:=nil;if Model=nil then Exit;
+  SetLength(Result,Model.MeshCount);N:=0;
+  for I:=0 to Model.MeshCount-1 do begin
+    Rec:=Model.Meshes[I];
+    if(Rec.Mesh=nil)or(Rec.Mesh.TriangleCount=0)then Continue;
+    if(Rec.Material=smkSurface)and(Length(Rec.MatIds)=Rec.Mesh.VertexCount)then
+      Result[N]:=PrepareGrassTileSource(Rec.Mesh,Rec.MatIds,CenterX,CenterZ,
+        ScaleX,Rules,GROUND_MAT_GRASS)
+    else if Rec.Material in[smkGrass,smkForest,smkScrub]then begin
+      if Rec.Material=smkGrass then LegacyMaterial:=GROUND_MAT_GRASS
+      else LegacyMaterial:=GROUND_MAT_FOREST_FLOOR;
+      Result[N]:=PrepareGrassTileSource(Rec.Mesh,[],CenterX,CenterZ,ScaleX,Rules,LegacyMaterial);
+    end else Continue;
+    Inc(N);
   end;
+  SetLength(Result,N);
+end;
+function PreparedTileCpuMatches(const Data:TPreparedTileCpu;Model:TTileModel;
+  const TileId:TGeoTileId;Serial:QWord;const Origin:TLatLon;
+  CenterX,CenterZ:Single;ScaleX:Double):Boolean;
+begin
+  Result:=Data.Ready and(Model<>nil)and(Data.Model=Model)and
+    (Data.JobSerial=Serial)and(Serial<>0)and Data.TileId.Equals(TileId)and
+    (Data.Origin.Lat=Origin.Lat)and(Data.Origin.Lon=Origin.Lon)and
+    (Data.CenterX=CenterX)and(Data.CenterZ=CenterZ)and(Data.ScaleX=ScaleX);
+  if Result then Result:=Model.TileId.Equals(TileId)and(Data.ModelGenHash=Model.GenHash);
+end;
+function PrepareTileCpu(Model:TTileModel;const Curbs:TCurbMesh;Serial:QWord;
+  const Origin:TLatLon;CenterX,CenterZ:Single;ScaleX:Double;
+  CpuFieldRequired,WithGrass:Boolean;const Rules:TGrassSourceRules):TPreparedTileCpu;
+begin
+  Result:=Default(TPreparedTileCpu);if Model=nil then Exit;
+  Result.JobSerial:=Serial;Result.Model:=Model;Result.TileId:=Model.TileId;
+  Result.ModelGenHash:=Model.GenHash;Result.Origin:=Origin;
+  Result.CenterX:=CenterX;Result.CenterZ:=CenterZ;Result.ScaleX:=ScaleX;
+  Result.GroundWasCpu:=CpuFieldRequired;
+  Result.Ground:=PrepareTileGround(Model,Curbs,ScaleX,CpuFieldRequired);
+  if WithGrass then Result.Grass:=PrepareTileGrass(Model,CenterX,CenterZ,ScaleX,Rules);
+  Result.GrassPrepared:=WithGrass;Result.Ready:=True;
 end;
 
-procedure TOsm3dStreamingMap.BuildGroundField(ACT: TCacheTile;
-  AModel: TTileModel; const Curbs: TCurbMesh);
+procedure TOsm3dStreamingMap.MountTileGrass(ACT:TCacheTile;AModel:TTileModel);
+var Prepared:TPreparedGrassSources;I:Integer;Rec:TTileMeshRec;
+begin
+  if(FGrassRenderer=nil)or(ACT=nil)or(AModel=nil)then Exit;
+  if CARVE_DIAG then for I:=0 to AModel.MeshCount-1 do begin
+    Rec:=AModel.Meshes[I];
+    if(Rec.Mesh<>nil)and(Rec.Material=smkSurface)and
+      (Rec.Mesh.TriangleCount>0)and(Length(Rec.MatIds)=Rec.Mesh.VertexCount)then
+      LogMain(CompositeCarveDiag(Rec.Mesh,Rec.MatIds,ACT.CenterX,ACT.CenterZ));
+  end;
+  Prepared:=PrepareTileGrass(AModel,ACT.CenterX,ACT.CenterZ,
+    TileScaleX(AModel.TileId),CaptureGrassSourceRules);
+  FGrassRenderer.RemoveTile(ACT.CenterX,ACT.CenterZ);
+  for I:=0 to High(Prepared)do FGrassRenderer.AdoptSource(Prepared[I],ACT.CenterX,ACT.CenterZ);
+end;
+
+function PrepareTileGround(AModel: TTileModel; const Curbs: TCurbMesh;
+  ScaleX: Double; CpuFieldRequired: Boolean): TPreparedTileGround;
 const
   GROUND_MESH_KINDS = [smkTerrain, smkGrass, smkSurface, smkSand,
                        smkFarmland, smkForest];
@@ -3549,17 +3584,13 @@ var
   Verts: TMeshVertexArray;
   Kx: Double;
 begin
-  {$IFDEF IAM_LIVE}IamLiveTrack(1720);{$ENDIF}
-  if ACT = nil then Exit;
-  ACT.GroundHasField := False;
+  Result := Default(TPreparedTileGround);
   if AModel = nil then Exit;
 
   { 1) Tile-local XZ bounds + общее число треугольников терраина. }
-  ACT.HasMarineWater:=TileHasMarineWater(AModel);
-  if (GpuGroundMode=ggGpu) and (ACT.GpuGround<>nil) then begin
-    ACT.GroundHasField:=True;Exit;
-  end;
-  Kx := TileScaleX(AModel.TileId);
+  Result.HasMarineWater:=TileHasMarineWater(AModel);
+  if not CpuFieldRequired then begin Result.GroundHasField:=True;Exit;end;
+  Kx := ScaleX;
   HaveAny := False;
   MinX := 0; MaxX := 0; MinZ := 0; MaxZ := 0;
   TriCount := 0;
@@ -3595,8 +3626,8 @@ begin
 
   { Preserve source indices: adjacent triangles share their positions.
     The triangle sequence and all coordinates remain unchanged. }
-  SetLength(ACT.GroundVertices, VertexCount + Length(Curbs.Positions));
-  SetLength(ACT.GroundIndices, TriCount * 3 + Length(Curbs.Indices));
+  SetLength(Result.GroundVertices, VertexCount + Length(Curbs.Positions));
+  SetLength(Result.GroundIndices, TriCount * 3 + Length(Curbs.Indices));
   OutTri := 0;
   OutVertex := 0;
   for MeshI := 0 to AModel.MeshCount - 1 do
@@ -3609,30 +3640,30 @@ begin
     for K := 0 to Msh.VertexCount - 1 do
     begin
       A := Verts[K].Position; A.X := A.X * Kx;
-      ACT.GroundVertices[OutVertex + K] := A;
+      Result.GroundVertices[OutVertex + K] := A;
     end;
     for K := 0 to Msh.TriangleCount * 3 - 1 do
-      ACT.GroundIndices[OutTri * 3 + K] := OutVertex + Idxs[K];
+      Result.GroundIndices[OutTri * 3 + K] := OutVertex + Idxs[K];
     Inc(OutVertex, Msh.VertexCount);
     Inc(OutTri, Msh.TriangleCount);
   end;
-  ACT.GroundCurbFirst := OutTri;
+  Result.GroundCurbFirst := OutTri;
   for K := 0 to High(Curbs.Positions) do
   begin
     A := Curbs.Positions[K];
-    ACT.GroundVertices[OutVertex + K] := A;
+    Result.GroundVertices[OutVertex + K] := A;
     MinX:=Min(MinX,A.X); MaxX:=Max(MaxX,A.X);
     MinZ:=Min(MinZ,A.Z); MaxZ:=Max(MaxZ,A.Z);
   end;
   for K := 0 to High(Curbs.Indices) do
-    ACT.GroundIndices[OutTri * 3 + K] := OutVertex + Curbs.Indices[K];
+    Result.GroundIndices[OutTri * 3 + K] := OutVertex + Curbs.Indices[K];
   TriCount := OutTri + Length(Curbs.Indices) div 3;
 
   { 3) Bin-сетка GroundGridN x GroundGridN: треугольник попадает во все
        ячейки, которые пересекает его XZ-AABB. GroundYAt перебирает
        только треугольники своей ячейки. }
   N := GroundGridN;
-  SetLength(ACT.GroundBin, N * N);
+  SetLength(Result.GroundBin, N * N);
   SetLength(BinCount, N * N);   { нули — ячейки пусты }
   CellW := (MaxX - MinX) / N;
   CellH := (MaxZ - MinZ) / N;
@@ -3641,9 +3672,9 @@ begin
 
   for T := 0 to TriCount - 1 do
   begin
-    A := ACT.GroundVertices[ACT.GroundIndices[T * 3    ]];
-    B := ACT.GroundVertices[ACT.GroundIndices[T * 3 + 1]];
-    C := ACT.GroundVertices[ACT.GroundIndices[T * 3 + 2]];
+    A := Result.GroundVertices[Result.GroundIndices[T * 3    ]];
+    B := Result.GroundVertices[Result.GroundIndices[T * 3 + 1]];
+    C := Result.GroundVertices[Result.GroundIndices[T * 3 + 2]];
     TMinX := A.X; if B.X < TMinX then TMinX := B.X; if C.X < TMinX then TMinX := C.X;
     TMaxX := A.X; if B.X > TMaxX then TMaxX := B.X; if C.X > TMaxX then TMaxX := C.X;
     TMinZ := A.Z; if B.Z < TMinZ then TMinZ := B.Z; if C.Z < TMinZ then TMinZ := C.Z;
@@ -3663,23 +3694,45 @@ begin
         { Capacity-doubling — не SetLength на каждый треугольник (O(n^2)
           реаллокаций на ячейку). Length() ячейки здесь — ёмкость,
           BinCount — фактическое число индексов. }
-        if BinCount[Idx] >= Length(ACT.GroundBin[Idx]) then
-          SetLength(ACT.GroundBin[Idx], BinCount[Idx] * 2 + 16);
-        ACT.GroundBin[Idx][BinCount[Idx]] := T;
+        if BinCount[Idx] >= Length(Result.GroundBin[Idx]) then
+          SetLength(Result.GroundBin[Idx], BinCount[Idx] * 2 + 16);
+        Result.GroundBin[Idx][BinCount[Idx]] := T;
         Inc(BinCount[Idx]);
       end;
   end;
 
   { Обрезать ёмкости до фактических счётчиков — GroundYAt итерирует Length(). }
   for Idx := 0 to N * N - 1 do
-    if Length(ACT.GroundBin[Idx]) <> BinCount[Idx] then
-      SetLength(ACT.GroundBin[Idx], BinCount[Idx]);
+    if Length(Result.GroundBin[Idx]) <> BinCount[Idx] then
+      SetLength(Result.GroundBin[Idx], BinCount[Idx]);
 
-  ACT.GroundMinX := MinX;
-  ACT.GroundMaxX := MaxX;
-  ACT.GroundMinZ := MinZ;
-  ACT.GroundMaxZ := MaxZ;
-  ACT.GroundHasField := True;
+  Result.GroundMinX := MinX;
+  Result.GroundMaxX := MaxX;
+  Result.GroundMinZ := MinZ;
+  Result.GroundMaxZ := MaxZ;
+  Result.GroundHasField := True;
+end;
+
+procedure AdoptTileGround(Tile:TCacheTile; var Data:TPreparedTileGround);
+begin
+  if Tile=nil then Exit;
+  Tile.HasMarineWater:=Data.HasMarineWater;Tile.GroundHasField:=Data.GroundHasField;
+  Tile.GroundCurbFirst:=Data.GroundCurbFirst;
+  Tile.GroundMinX:=Data.GroundMinX;Tile.GroundMaxX:=Data.GroundMaxX;
+  Tile.GroundMinZ:=Data.GroundMinZ;Tile.GroundMaxZ:=Data.GroundMaxZ;
+  Tile.GroundVertices:=Data.GroundVertices;Tile.GroundIndices:=Data.GroundIndices;
+  Tile.GroundBin:=Data.GroundBin;
+  Data:=Default(TPreparedTileGround);
+end;
+procedure TOsm3dStreamingMap.BuildGroundField(ACT:TCacheTile;
+  AModel:TTileModel;const Curbs:TCurbMesh);
+var Data:TPreparedTileGround;
+begin
+  {$IFDEF IAM_LIVE}IamLiveTrack(1720);{$ENDIF}
+  if ACT=nil then Exit;
+  Data:=PrepareTileGround(AModel,Curbs,TileScaleX(ACT.Tile),
+    not((GpuGroundMode=ggGpu)and(ACT.GpuGround<>nil)));
+  AdoptTileGround(ACT,Data);
 end;
 
 function TOsm3dStreamingMap.NearestCurbPoint(WorldX,WorldZ:Single; out P:TVector3):Boolean;
@@ -4700,6 +4753,14 @@ end;
 function TOsm3dStreamingMap.FitPointOverlaysOn: Boolean;
 begin
   Result := FShowFitPoints or FShowFitPointsSnapped;
+end;
+
+function TOsm3dStreamingMap.FitPointOverlaySceneCount: Integer;
+var I: Integer;
+begin
+  Result := 0;
+  for I := Low(FSphereScene) to High(FSphereScene) do
+    if FSphereScene[I] <> nil then Inc(Result);
 end;
 
 procedure TOsm3dStreamingMap.SetFitPointOverlays(AOn: Boolean);
@@ -8235,7 +8296,8 @@ procedure TAssembleWorker.Execute;
 var
   Job: TAssembleJob;
   Got: Boolean;
-  k:   Integer;
+  k,I,J: Integer;
+  CpuStarted:QWord;
 begin
   while not Terminated do
   begin
@@ -8259,6 +8321,35 @@ begin
           Job.Models, FMap.FOrigin, FMap.FHeightmapZoom, FMap.FSunDir,
           Job.Trees, Job.Previews, nil, FMap.FAsmCache,
           False, FMap.FManualScaleLat);
+        { The same owned models and baked curbs that main used to scan again.
+          Read numeric assembled metadata only; never touch a live scene. }
+        if Job.CpuEnabled and(Job.Assembled<>nil)and not Terminated then begin
+          CpuStarted:=GetTickCount64;
+          try
+          SetLength(Job.CpuData,Length(Job.Assembled.Tiles));
+          for I:=0 to High(Job.Assembled.Tiles)do begin
+            if Terminated then Break;
+            if not Job.Assembled.Tiles[I].HasTileId then Continue;
+            for J:=0 to High(Job.Models)do
+              if(Job.Models[J]<>nil)and Job.Models[J].TileId.Equals(Job.Assembled.Tiles[I].TileId)then begin
+                if Job.CpuResident[J]then Break;
+                Job.CpuData[I]:=PrepareTileCpu(Job.Models[J],Job.Assembled.Tiles[I].CurbVertices,
+                  Job.CpuSerial,Job.CpuOrigin,Job.Assembled.Tiles[I].CenterX,
+                  Job.Assembled.Tiles[I].CenterZ,Job.CpuScaleX[J],
+                  not((Job.CpuMode=ggGpu)and(Job.Assembled.Tiles[I].GpuGround<>nil)),
+                  Job.CpuGrass,Job.CpuGrassRules);
+                Break;
+              end;
+          end;
+          except on E:Exception do begin
+            { Numeric preparation is optional; preserve the completed graph
+              and let main use the same synchronous extraction on adoption. }
+            Job.CpuData:=nil;
+            Job.CpuError:=E.Message;
+          end;end;
+          Job.CpuMs:=GetTickCount64-CpuStarted;
+        end;
+        if Terminated then Job.Failed:=True;
       except
         on E: Exception do
         begin
@@ -8274,6 +8365,8 @@ begin
       EnterCriticalSection(FMap.FAsmLock);
       try
         FMap.FAsmDoneQueue.Enqueue(Job);
+        { Transfer the outer managed array before main may adopt its contents. }
+        Job.CpuData:=nil;
       finally
         LeaveCriticalSection(FMap.FAsmLock);
       end;
@@ -8312,6 +8405,7 @@ var
 begin
   N := Length(AModels);
   if N = 0 then Exit;
+  Job:=Default(TAssembleJob);
   { Общий с MountBatch пролог: красные сферы, превью земли, сшивка границ,
     альфа-маски деревьев. }
   PrepareBatchForAssemble(AIds, AModels, Previews, Border);
@@ -8325,6 +8419,18 @@ begin
   Job.BatchBorder := Border;
   Job.Assembled := nil; SetLength(Job.Trees, 0);
   Job.TAsm0 := GetTickCount64; Job.TAsmMs := 0; Job.Failed := False;
+  Inc(FAsmSerial);Job.CpuSerial:=FAsmSerial;
+  Job.CpuEnabled:=GetEnvironmentVariable('REZVIVO_TILE_DERIVED_WORKER')<>'0';
+  Job.CpuMode:=GpuGroundMode;Job.CpuGrass:=FGrassRenderer<>nil;Job.CpuOrigin:=FOrigin;
+  if Job.CpuEnabled then begin
+    Job.CpuGrassRules:=CaptureGrassSourceRules;
+    SetLength(Job.CpuScaleX,N);
+    SetLength(Job.CpuResident,N);
+    for I:=0 to N-1 do if AModels[I]<>nil then begin
+      Job.CpuScaleX[I]:=TileScaleX(AModels[I].TileId);
+      Job.CpuResident[I]:=FTileIndex.ContainsKey(AModels[I].TileId.ToKey);
+    end;
+  end;
   { забрать владение моделями у стримера — чтобы эвикт/перезагрузка не тронули
     их, пока воркер читает (модель теперь живёт в job). }
   for I := 0 to N - 1 do
@@ -8342,7 +8448,7 @@ end;
 procedure TOsm3dStreamingMap.DrainAssembled;
 var Job: TAssembleJob; Got: Boolean; I, Budget: Integer;
 begin
-  if FAsmDoneQueue = nil then Exit;
+  if(FAsmDoneQueue=nil)or FDestroying then Exit;
   { не монтировать несколько тяжёлых load-фаз за один кадр — тот же бюджет,
     что и у синхронного дренажа, иначе фризы стакаются. Во время прогрева
     (под оверлеем фризы не видны) — ×4, как в Update. }
@@ -8360,15 +8466,22 @@ begin
       LeaveCriticalSection(FAsmLock);
     end;
     if not Got then Break;
+    try
+    if Job.CpuError<>'' then LogMain('tile derived preparation fallback: '+Job.CpuError);
+    try
     if not Job.Failed then
       { MountAssembled владеет и освобождает Assembled + BatchBorder }
       MountAssembled(Job.Assembled, Job.Trees, Job.BatchBorder,
-                     Job.Models, Job.Ids, Job.TAsmMs)
+                     Job.Models, Job.Ids, Job.TAsmMs,Job.CpuData,Job.CpuSerial,Job.CpuGrassRules)
     else
     begin
-      if Job.BatchBorder <> nil then Job.BatchBorder.Free;
-      if Job.Assembled  <> nil then Job.Assembled.Free;
+      FreeAndNil(Job.BatchBorder);
+      FreeAndNil(Job.Assembled);
     end;
+    finally Job.CpuData:=nil;end;
+    if Job.CpuEnabled and(GetEnvironmentVariable('REZVIVO_TILE_MOUNT_PROFILE')='1')then
+      LogMain(Format('tile derived worker: serial=%d tiles=%d cpu_ms=%d failed=%d',
+        [Job.CpuSerial,Length(Job.Ids),Job.CpuMs,Ord(Job.Failed)]));
     { Модели MountAssembled не освобождает. Обычно отдаём их в
       фон-сохранение (монтаж закончил, модель стабильна). НО прогревный
       тайл уже записан в кэш сразу при генерации (ждущий тайл) —
@@ -8376,13 +8489,22 @@ begin
     for I := 0 to High(Job.Models) do
       if Job.Models[I] <> nil then
         if FStreamer.AlreadyOnDisk(Job.Ids[I]) then
-          Job.Models[I].Free            { уже на диске — не переписываем }
-        else
+          FreeAndNil(Job.Models[I])     { уже на диске — не переписываем }
+        else begin
           FStreamer.EnqueueSave(Job.Ids[I], Job.Models[I]);
+          Job.Models[I]:=nil;           { ownership moved to the save queue }
+        end;
     for I := 0 to High(Job.Ids) do
       SwapGreenToDetail(Job.Ids[I]);
     Inc(FDiagMounted, Length(Job.Ids));
     Dec(Budget);
+    finally
+      { A failed mount must not leak the models retained by its job. The
+        assembled graph belongs to MountAssembled/Batch already; do not
+        free it here. Successfully queued models were nilled above. }
+      Job.CpuData:=nil;
+      for I:=0 to High(Job.Models)do FreeAndNil(Job.Models[I]);
+    end;
   end;
 end;
 

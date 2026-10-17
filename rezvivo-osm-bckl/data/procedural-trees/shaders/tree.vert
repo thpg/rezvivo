@@ -10,6 +10,11 @@ uniform int uKind, uSlices, uSegments, uNeedlePairs, uNeedlesPerFascicle;
 uniform int uNeedleVertices;
 uniform int uComplexity;
 uniform int uPreparedFrames;
+uniform int uDistantArena;
+uniform vec3 uDistantOrigin;
+uniform int uCardEnvelope;
+uniform vec2 uEnvelopePoints[8],uEnvelopeViewport;
+/*__VEGETATION_CARD_ENVELOPE__*/
 uniform float uQuality, uTime, uWind, uViewportHeight;
 uniform float uSeasonLeaf;
 uniform float uFruitAmount;
@@ -67,6 +72,8 @@ vec3 wind(vec3 p, float phase) {
 }
 void main() {
     vec3 p=vec3(0), n=vec3(0,1,0);
+    vec3 farRoot=a.xyz;
+    if(uKind==3 && uDistantArena!=0)farRoot+=c.yzw-uDistantOrigin;
     vPhase=d.x; vTreeCode=aTreeCode; vSpecies=int(aTreeCode & 255u); vMaturity=d.z;
     vIrregularity=d.w;
     vSeasonVisible=1.0; vNeedleCoverage=1.0;
@@ -83,7 +90,7 @@ void main() {
         vWorld=vec3(0);vNormal=vec3(0,1,0);vShadowMask=vec2(0);
         gl_Position=vec4(2,2,2,1);return;
     }
-    if(uKind==9) {
+    if(uKind==9 || uKind==10) {
         vPhase=uTime;vSpecies=uSpecies;vShoot=uLeafSpray;
         vNormal=vec3(0,0,1);vNeedleAxis=vec3(0,1,0);
         vWorld=vec3(0);vShadowMask=vec2(0);vObject=vec3(0);
@@ -318,12 +325,19 @@ void main() {
             right=dot(right,right)>.00001 ? normalize(right) : vec3(1,0,0);
         }
         float width=b.x*b.z*1.18;
-        p=a.xyz+right*(vUV.x-.5)*width+vec3(0,vUV.y*b.x*1.32,0);
+        p=farRoot+right*(vUV.x-.5)*width+vec3(0,vUV.y*b.x*1.32,0);
         if(uUseBakedLOD==1) {
             int age=vMaturity<.55 ? 0 : vMaturity<1.8 ? 1 : 2;
             vec3 frame=uLODFrames[age];
-            p=a.xyz+right*(vUV.x-.5)*b.x*frame.x+vec3(0,mix(frame.y,frame.z,vUV.y)*b.x,0);
-            vec3 toEye=uDepthOnly==1 ? uSunDirection : uEye-(uModel*vec4(a.xyz,1)).xyz;
+            if(uCardEnvelope!=0){
+                vec3 origin=farRoot-right*.5*b.x*frame.x+vec3(0,frame.y*b.x,0);
+                mat4 clip=uProjection*uView*uModel;
+                bool tight=envelopeFootprint(clip*vec4(origin,1),clip*vec4(right*b.x*frame.x,0),
+                    clip*vec4(0,(frame.z-frame.y)*b.x,0,0),uEnvelopeViewport,256.0);
+                vUV=tight?uEnvelopePoints[envelopeIndex(gl_VertexID)]:fullEnvelopeUV(gl_VertexID);
+            }
+            p=farRoot+right*(vUV.x-.5)*b.x*frame.x+vec3(0,mix(frame.y,frame.z,vUV.y)*b.x,0);
+            vec3 toEye=uDepthOnly==1 ? uSunDirection : uEye-(uModel*vec4(farRoot,1)).xyz;
             float azimuth=atan(toEye.x,toEye.z)/(2.0*PI);
             // Seed selects a stable quarter turn; each age has four actual views.
             float viewPhase=fract(azimuth+d.x)*4.0;
@@ -367,6 +381,10 @@ void main() {
         p=center+along*((t*2.0-1.0)*radius)+widthAxis*(across*rasterRadius);
         n=facing;vNeedleAxis=normalize(mat3(uModel)*along);
         float opticalDepth=float(uNeedlePairs*uNeedlesPerFascicle)*c.w*.32/max(shootLength,b.w);
+        // Pine fascicles overlap inside a compact descriptor. Expanding its
+        // rectangle cannot preserve that overlap: compensate its integrated
+        // optical depth, rather than making retained needles oversized.
+        if(vSpecies==2)opticalDepth*=.68*inversesqrt(groupExtent);
         vShoot.xyz=vec3((shootLength*groupExtent+2.0*radius)/radius,
             1.0-exp(-1.0*opticalDepth),clamp(shootLength*groupExtent/max(c.w*2.0,.004),6.0,256.0));
         vSeasonVisible=uSeasonLeaf;vNeedleCoverage=radius/rasterRadius;
@@ -450,7 +468,7 @@ void main() {
         // Tree-local coordinates keep shadow transition masks attached to the
         // caster across atlas scrolling, origin rebasing and wind. Project along
         // sunlight so the far card and detailed tree share a coverage pattern.
-        vec3 relative=mat3(uModel)*(p-(uKind==3 ? a.xyz : vec3(0)));
+        vec3 relative=mat3(uModel)*(p-(uKind==3 ? farRoot : vec3(0)));
         vec3 sun=normalize(uSunDirection);
         vec3 right=cross(sun,abs(sun.y)>.95 ? vec3(1,0,0) : vec3(0,1,0));
         right=normalize(right);
@@ -467,7 +485,7 @@ void main() {
         // One projected metre-space plane through the tree root. Both LODs
         // meet at the same ray/plane coordinate, keeping their masks exactly
         // complementary. Unlike FragCoord the origin moves WITH the tree.
-        vec3 root=(uView*uModel*vec4(uKind==3 ? a.xyz : vec3(0),1)).xyz;
+        vec3 root=(uView*uModel*vec4(uKind==3 ? farRoot : vec3(0),1)).xyz;
         vec3 point=(uView*world).xyz;
         vTransitionFootprint=2.0*(abs(uProjection[3][3]-1.0)<.001 ? 1.0 : abs(root.z))/(uProjection[1][1]*uViewportHeight);
         vTransitionCoord=abs(uProjection[3][3]-1.0)<.001 ? vec3(point.xy-root.xy,1) :

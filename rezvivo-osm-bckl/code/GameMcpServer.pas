@@ -50,13 +50,13 @@ uses GameVideoCapture, GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3d
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe, GameRiderPoseProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
-  CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages,
+  CastleWindow, CastleUIControls, CastleControls, CastleApplicationProperties, CastleImages, CastleTimeUtils,
   CastleVectors, CastleCameras, CastleGLShaders, CastleGLUtils, CastleLog, CastleRendererInternalShader,
   CastleScene, CastleShapes, CastleTransform, X3DNodes, X3DFields, CastleRenderOptions, CastleInternalRenderer, Osm3dRtxScreenState,
   McpRegistry, McpStdio, McpLocalPipe, McpPhotoTools, McpPhotoViewTools, Osm3dStreamingLauncher, CastleViewport,
   AppSettings, GameDeviceService, GameDeviceTypes, GameDeviceSensor, TrainerData,
   GameSimCameraTrack, GameMotionTrace, GameCinematicCamera, Osm3dRoadPuddles,
-  BikeParametric, RiderScreenLighting, RiderPoseCatalog, RiderAttention, RiderLod, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
+  BikeParametric, RiderShaderSharing, RiderScreenLighting, RiderPoseCatalog, RiderAttention, RiderLod, RiderDynamics, RiderGroundTurn, RiderDrift, GameBikeAvatar, GamePath, GamePhysicsCommon, GamePhysicsBase, Osm3dRiderShadow, Osm3dRenderInstanced, Osm3dStudioSettings,
   Osm3dProceduralVegetation, Osm3dWorldVisibility, TreeSeason, TreeRenderer, TreeGPUData, GrassRenderer,
   GameViewMenu, GameViewPlay,GameViewTrainingOnly,
   GameViewFreeRide,
@@ -1243,9 +1243,10 @@ var
   BotIndex, PoseIndex: Integer;
   State: TBikePlaybackState;
   Anchor, Facing: TJSONArray;
-  Paused, SavedVisualDetail: Boolean;
+  Paused, SavedVisualDetail, Deterministic: Boolean;
   CurSec, TotalSec: Integer;
   Cadence: Single;
+  FaceStateJson:TJSONObject;
 begin
   if (not Assigned(ViewPlay)) or (ViewPlay.Bike = nil) then
     raise Exception.Create('Start a ride before sampling its rider');
@@ -1274,6 +1275,27 @@ begin
   { Explicit MCP diagnostic only. Keep the live GPU animation/deformation
     path; a paused simulation already prevents the normal clock advancing. }
   State := Bike.CaptureReplay;
+  Deterministic:=AParams.Get('deterministic',False);
+  if Deterministic then begin
+    { Explicit diagnostic samples must not inherit acceleration, road impacts,
+      face time or a half-completed ground turn from unequal startup durations
+      in two processes. Ordinary replay/live animation never uses this reset. }
+    State.BodyDynamics:=Default(TRiderDynamicsState);
+    State.BodyDynamicsInput:=DefaultRiderDynamicsInput;
+    State.GroundTurn:=Default(TGroundTurnFrame);
+    State.Drift:=Default(TRiderDriftState);
+    { The image comparison includes the bicycle. A frozen crank alone leaves
+      the wheel phase inherited from unequal startup/replay histories. }
+    State.WheelPhase:=Frac(AParams.Get('wheel_phase',0.0));
+    State.AccumTime:=AParams.Get('time',10.0);
+    State.PhaseStarted:=True;State.PhaseSynced:=True;
+    State.ForwardSpeedMps:=EnsureRange(AParams.Get('speed',6.0),0.0,40.0);
+    State.Rider.FaceTime:=AParams.Get('face_time',AParams.Get('time',10.0));
+    State.Rider.Face.Visibility:=EnsureRange(AParams.Get('face_visibility',1.0),0.0,1.0);
+    State.Rider.Face.Manual:=AParams.Get('manual_face',True);
+    State.Rider.Face.Requested:=Vector3(EnsureRange(AParams.Get('jaw',0.35),0.0,1.0),
+      EnsureRange(AParams.Get('smile',0.0),0.0,1.0),EnsureRange(AParams.Get('strain',0.6),0.0,1.0));
+  end;
   if AParams.Find('look_yaw')<>nil then begin
     State.Attention:=Default(TRiderAttentionFrame);
     State.Attention.Yaw:=EnsureRange(AParams.Get('look_yaw',0.0),-100.0,100.0);
@@ -1336,6 +1358,9 @@ begin
   try
   Bike.RestoreReplay(State);
   Bike.SampleRiderDynamics;
+  { The explicit pose sample may rotate the parent outside the live update.
+    Recompute the local light direction from the same world-space sun. }
+  Bike.ShadowSunWorldDir := Bike.ShadowSunWorldDir;
   if BotIndex>=0 then
   begin
     Bike.RiderScene.RenderOptions.CachedAnimationRevision:=
@@ -1343,6 +1368,15 @@ begin
     ViewPlay.LocalBots.InvalidateShadowPose(BotIndex);
   end;
   AResult.Add('sample', Bike.RiderMotionDebugJson);
+  if Deterministic then begin
+    AResult.Add('sample_speed_mps',State.ForwardSpeedMps);
+    AResult.Add('sample_wheel_phase',Bike.AnimWheelPhase);
+    AResult.Add('sample_face_time',State.Rider.FaceTime);
+    if(Bike.TripoRider<>nil)and(Bike.TripoRider.Face<>nil)then begin
+      FaceStateJson:=TJSONObject.Create;Bike.TripoRider.Face.DebugJson(FaceStateJson);
+      AResult.Add('sample_face',FaceStateJson);
+    end;
+  end;
   AResult.Add('gpu', Bike.GpuAnim);
   finally
     Bike.VisualDetailRequired:=SavedVisualDetail;
@@ -2192,18 +2226,34 @@ end;
 type
   TMcpEffectParts = class(TX3DNodeList)
     Stage: TShaderType;
+    SharedEffectsRefreshed: Integer;
+    SharedCodeKey: String;
     procedure Collect(Node: TX3DNode);
+    procedure RefreshSharedCode(Node: TX3DNode);
   end;
 
 procedure TMcpEffectParts.Collect(Node: TX3DNode);
 var I: Integer; Part: TEffectPartNode;
 begin
+  SharedCodeKey := TEffectNode(Node).InternalSharedCodeKey;
   for I := 0 to TEffectNode(Node).FdParts.Count-1 do
     if TEffectNode(Node).FdParts[I] is TEffectPartNode then
     begin
       Part := TEffectPartNode(TEffectNode(Node).FdParts[I]);
       if Part.ShaderType = Stage then AddIfNotExists(Part);
     end;
+end;
+
+procedure TMcpEffectParts.RefreshSharedCode(Node: TX3DNode);
+begin
+  if TEffectNode(Node).InternalSharedCodeKey <> '' then
+  begin
+    { ChangedAll alone retains the old shared shader program. The key must
+      describe the new code before the renderer looks up that program. }
+    ShareRiderEffect(TEffectNode(Node));
+    SharedCodeKey := TEffectNode(Node).InternalSharedCodeKey;
+    Inc(SharedEffectsRefreshed);
+  end;
 end;
 
 procedure CmdRiderRender(const AParams: TJSONObject; AResult: TJSONObject);
@@ -2213,7 +2263,8 @@ var
   SunWorld: TVector3;
   Stats: TRenderStatistics;
   Part: TEffectPartNode;
-  ShaderText: TStringList;
+  ShaderStream: TFileStream;
+  ShaderCode: String;
   Parts: TMcpEffectParts;
   EffectName, StageName: String;
   I: Integer;
@@ -2228,7 +2279,7 @@ begin
   if AParams.Find('pose_capture')<>nil then
     RequireDeformedMeshBuffers:=AParams.Get('pose_capture',False);
   if AParams.Find('pose_dump') <> nil then
-    AResult.Add('pose_dump',DumpRiderPose(S,AParams.Get('pose_dump','')));
+    AResult.Add('pose_dump',DumpRiderPose(S,ViewPlay.MainViewport,AParams.Get('pose_dump','')));
   N := S.RootNode.FindNode(TEffectNode, 'TripoGpuSkin', [fnNilOnMissing]);
   if (N <> nil) and (N.Field('uMuscleResponse', False) is TMFVec4f) then
   begin
@@ -2264,7 +2315,6 @@ begin
     EffectName := AParams.Get('shader_effect', 'TripoGpuSkin');
     StageName := AParams.Get('shader_stage', 'vertex');
     Parts := TMcpEffectParts.Create(False);
-    ShaderText := TStringList.Create;
     try
       if StageName = 'vertex' then Parts.Stage := stVertex
       else if StageName = 'fragment' then Parts.Stage := stFragment
@@ -2273,22 +2323,37 @@ begin
       if Parts.Count = 0 then raise Exception.Create('Rider shader effect/stage not found');
       if AParams.Find('shader_file') <> nil then
       begin
-        ShaderText.LoadFromFile(AParams.Get('shader_file', ''));
+        ShaderStream := TFileStream.Create(AParams.Get('shader_file', ''), fmOpenRead or fmShareDenyWrite);
+        try
+          SetLength(ShaderCode, ShaderStream.Size);
+          if Length(ShaderCode) > 0 then
+            ShaderStream.ReadBuffer(ShaderCode[1], Length(ShaderCode));
+        finally ShaderStream.Free end;
         for I := 0 to Parts.Count-1 do
         begin
           Part := TEffectPartNode(Parts[I]);
           Part.Scene := S;
-          Part.Contents := ShaderText.Text;
+          Part.Contents := ShaderCode;
         end;
+        S.RootNode.EnumerateNodes(TEffectNode, EffectName,
+          @Parts.RefreshSharedCode, False);
         S.ChangedAll;
       end;
       if AParams.Find('save_shader_file') <> nil then
       begin
-        ShaderText.Text := TEffectPartNode(Parts[0]).Contents;
-        ShaderText.SaveToFile(AParams.Get('save_shader_file', ''));
+        { Preserve line endings too: exporting and restoring an unchanged
+          effect must recover the same shared program key. }
+        ShaderCode := TEffectPartNode(Parts[0]).Contents;
+        ShaderStream := TFileStream.Create(AParams.Get('save_shader_file', ''), fmCreate);
+        try
+          if Length(ShaderCode) > 0 then
+            ShaderStream.WriteBuffer(ShaderCode[1], Length(ShaderCode));
+        finally ShaderStream.Free end;
       end;
       AResult.Add('shader_parts', Parts.Count);
-    finally ShaderText.Free; Parts.Free end;
+      AResult.Add('shader_shared_effects_refreshed', Parts.SharedEffectsRefreshed);
+      AResult.Add('shader_shared_code_key', Parts.SharedCodeKey);
+    finally Parts.Free end;
   end;
   if AParams.Find('lighting') <> nil then
     S.RenderOptions.Lighting := AParams.Get('lighting', True);
@@ -2415,6 +2480,13 @@ begin
   D:=ViewPlay.LocalBots.Diagnostics;
   try while D.Count>0 do begin Name:=D.Names[0];AResult.Add(Name,D.Extract(0)) end;finally D.Free end;
   AResult.Add('probe_animate_paused',ViewPlay.PerfAnimatePausedBots);
+  if AParams.Get('motion',False)then begin
+    Rows:=TJSONArray.Create;AResult.Add('motion',Rows);
+    for I:=0 to ViewPlay.LocalBots.Bikes.Count-1 do
+      if ViewPlay.LocalBots.Bikes[I]<>nil then
+        Rows.Add(TBikeInstance(ViewPlay.LocalBots.Bikes[I]).RiderMotionDebugJson)
+      else Rows.Add(TJSONNull.Create);
+  end;
   if AParams.Get('shaders',False) then begin
     AResult.Add('avatar_shaders',BikeShaderDiagnostics(ViewPlay.Bike));
     Rows:=TJSONArray.Create;AResult.Add('bot_shaders',Rows);
@@ -2434,6 +2506,7 @@ var
 begin
   if not Assigned(ViewPlay) then
     raise Exception.Create('ViewPlay not available');
+  AResult.Add('render_frame_id',TJSONInt64Number.Create(TFramesPerSecond.RenderFrameId));
   AResult.Add('osm_tile_px', GEO_TILE_EDGE_PX);
   AResult.Add('osm_block_size', GEO_BLOCK_SIZE);
   AResult.Add('osm_grid_radius', GlobalLODConfig.StreamGridRadius);
@@ -2995,8 +3068,8 @@ begin
     '{"type":"object","properties":{"look_back":{"type":"boolean"},"lod":{"type":"integer","minimum":-1,"maximum":2}}}',
     @CmdBikeAnimDebug);
   RegisterMcpCommand('bike.motion_sample',
-    'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation.',
-    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"look_yaw":{"type":"number","minimum":-100,"maximum":100},"look_pitch":{"type":"number"},"look_roll":{"type":"number"},"regrip_side":{"type":"integer","minimum":0,"maximum":1},"regrip":{"type":"number","minimum":0,"maximum":1},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
+    'Sample the live rider at exact crank, breath and effort values. Requires a paused FIT simulation; preserves GPU animation. deterministic resets transient dynamics, wheel phase and face inputs for cross-process shader comparisons.',
+    '{"type":"object","properties":{"bot_index":{"type":"integer","minimum":-1},"pose_index":{"type":"integer"},"look_yaw":{"type":"number","minimum":-100,"maximum":100},"look_pitch":{"type":"number"},"look_roll":{"type":"number"},"regrip_side":{"type":"integer","minimum":0,"maximum":1},"regrip":{"type":"number","minimum":0,"maximum":1},"body_dynamics":{"type":"boolean"},"lateral_accel":{"type":"number"},"phase":{"type":"number"},"wheel_phase":{"type":"number"},"breath":{"type":"number"},"breath_load":{"type":"number"},"effort":{"type":"number"},"cadence":{"type":"number"},"time":{"type":"number"},"deterministic":{"type":"boolean"},"speed":{"type":"number"},"face_time":{"type":"number"},"face_visibility":{"type":"number"},"manual_face":{"type":"boolean"},"jaw":{"type":"number"},"smile":{"type":"number"},"strain":{"type":"number"},"anchor":{"type":"array","items":{"type":"number"}},"facing":{"type":"array","items":{"type":"number"}}}}',
     @CmdBikeMotionSample);
   RegisterMcpCommand('bike.set_gpu_anim',
     'Switch avatar bike/rider animation between the GPU path (true) and ' +
@@ -3073,7 +3146,7 @@ begin
     '{"type":"object","properties":{"count":{"type":"integer","minimum":0,"maximum":15},"zones":{"type":"boolean"}}}',
     @CmdShadowTestRiders);
   RegisterMcpCommand('bots.local','Local companion roster and visibility/performance diagnostics; session-only render limit.',
-    '{"type":"object","properties":{"limit":{"type":"integer","minimum":0,"maximum":3},"render":{"type":"boolean"},"shaders":{"type":"boolean"},"probe_animate_paused":{"type":"boolean"},"probe_mask":{"type":"integer"},"probe_revision_cache":{"type":"boolean"},"probe_pose_cache_policy":{"type":"integer","minimum":-1,"maximum":1}}}',@CmdLocalBots);
+    '{"type":"object","properties":{"limit":{"type":"integer","minimum":0,"maximum":3},"render":{"type":"boolean"},"shaders":{"type":"boolean"},"motion":{"type":"boolean"},"probe_animate_paused":{"type":"boolean"},"probe_mask":{"type":"integer"},"probe_revision_cache":{"type":"boolean"},"probe_pose_cache_policy":{"type":"integer","minimum":-1,"maximum":1}}}',@CmdLocalBots);
   RegisterMcpCommand('perf.state',
     'Current perf toggles + fps mode + route prep done + live FPS ' +
     '(real / only-render). geometry=true also counts resident OSM tiles, vertices and triangles.',

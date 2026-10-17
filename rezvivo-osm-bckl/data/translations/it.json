@@ -356,5 +356,7 @@
   "Run": "Corri",
   "Brake": "Freno",
   "+ W": "+ W",
-  "Trees: textured": "Alberi: texture"
+  "Trees: textured": "Alberi: texture",
+  "World image cache": "Cache dell’immagine del mondo",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Migliora le prestazioni riutilizzando lo scenario distante, ma può causare artefatti visivi. Usa memoria video aggiuntiva. Disattivata per impostazione predefinita."
 }

@@ -2,7 +2,7 @@ unit TreeRenderer;
 {$mode objfpc}{$H+}
 {$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
-uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, TreeGPUData, {$ifdef OpenGLES}CastleGLES{$else}GL, GLExt{$endif};
+uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, TreeGPUData, TreeDistantArena, VegetationAtlas, VegetationAtlasUpload, {$ifdef OpenGLES}CastleGLES{$else}GL, GLExt{$endif};
 type
   TTreeGPUItem = TreeGPUData.TTreeGPUItem;
   TTreeGPUItems = TreeGPUData.TTreeGPUItems;
@@ -14,6 +14,8 @@ type
     Frames: TLODFrames;
     Seasonal, FruitLayer, Relight: Boolean;
     Pixels, NormalPixels: array of Byte;
+    ColorMips,NormalMips:TAtlasLevels;
+    Envelope:TCardEnvelope;
   end;
   TTreeRenderEnvironment = record
     Enabled, DepthOnly, DirectBranches: Boolean;
@@ -36,6 +38,9 @@ type
     FPreparedFrames:Boolean;
     FPreparedFrameBytes:Int64;
     FShared: TTreeRenderer;
+    FArena:TTreeArena;
+    FArenaOrigin:TTreeWorldPosition;
+    UDistantArena,UDistantOrigin:GLint;
     FVAO, FVBO: array[0..5] of GLuint;
     FNeedleVAO: array[0..NEEDLE_DENSITY_GROUPS-1] of GLuint;
     FCardIndices,FNeedleIndices:GLuint;
@@ -61,6 +66,13 @@ type
     FEnvironment: TTreeRenderEnvironment;
     USunDirection,UBillboardRight,UFogColor,UFogDensity,UOutputGamma,UDepthOnly,UDirectBranches,ULeafSpray,ULeafBudget,ULeafSprays,UNeedleScale: GLint;
     FLODTextures, FLODNormals: array[TTreeSpecies] of GLuint;
+    FLODEnvelopes:array[TTreeSpecies]of TCardEnvelope;
+    FEnvelopeDraw,FEnvelopeValid:Boolean;
+    FUploadedEnvelope:TCardEnvelope;
+    UCardEnvelope,UEnvelopePoints,UEnvelopeViewport:GLint;
+    FPendingAtlas:TAtlasUpload;
+    FPendingPrepared:TPreparedTreeLOD;
+    FAtlasUploadLatency:Single;
     FLODFrames: array[TTreeSpecies] of TLODFrames;
     FLODKeys: array[TTreeSpecies] of string;
     FBarkDefault:array[TTreeSpecies]of TTreeVec3;
@@ -71,6 +83,13 @@ type
     FLODSeasonParts, FLODRelight: array[TTreeSpecies] of Boolean;
     FLODFruitLayer: array[TTreeSpecies] of Boolean;
     FSeason: Single;
+    FSeasonCache:array[TTreeSpecies]of record
+      Valid,Bake:Boolean;
+      Season:Single;
+      Color:TTreeVec3;
+      State:TTreeSeasonState;
+      Fruit:Single;
+    end;
     FBakeOutput: Integer;
     FBakePart: Integer; { 0 complete, 1 wood, 2 foliage, 3 fruit }
     USeasonLeaf,ULeafRatio,ULODSeasonParts: GLint;
@@ -112,6 +131,11 @@ type
       const Profile: TTreeParams; const WorldOrigin: TTreeWorldPosition): TTreeGPUItems; static;
     procedure UploadDistantItems(const Items: TTreeGPUItems);
     procedure UpdateDistantItems(First: Integer; const Items: TTreeGPUItems);
+    procedure EnsureDistantCell(ID:Int64;Version:QWord;const Origin:TTreeWorldPosition;const Items:TTreeGPUItems);
+    procedure RemoveDistantCell(ID:Int64);
+    procedure SelectDistantCells(const IDs:TTreeCellIDs;Count:Integer;const Origin:TTreeWorldPosition);
+    function DistantArenaBytes:Int64;
+    function DistantArenaUploadBytes:QWord;
     procedure UploadForest(const Center: TTreeInstance; const P: TTreeParams; Count: Integer);
     function VerifyPackedType(Expected: TTreeTypeCode): Boolean; { smoke only; synchronous GPU readback }
     procedure BeginBatch(const Projection,View:TTreeMat4; const Eye:TTreeVec3;
@@ -125,6 +149,12 @@ type
     class function PrepareLODAtlas(const Directory: string;
       const Profile: TTreeParams): TPreparedTreeLOD; static;
     procedure UploadLODAtlas(const Prepared: TPreparedTreeLOD);
+    procedure BeginLODAtlas(const Prepared:TPreparedTreeLOD);
+    procedure CancelLODAtlas;
+    function StepLODAtlas(ByteBudget:Integer;TimeBudgetMS:Double):Boolean;
+    function AtlasPending:Boolean;
+    function AtlasPendingBytes:Int64;
+    function AtlasUploadLatency:Single;
     function HasLODAtlas(const Profile: TTreeParams): Boolean;
     function HasSeasonLOD(const Profile: TTreeParams): Boolean;
     function LODTextureBytes: Int64;
@@ -156,7 +186,7 @@ var TreePassBatching:Boolean=True;
       generated data or atlas baking. All draw kinds enabled in normal use. }
     TreeDiagnosticDrawMask:Cardinal=$FFFFFFFF;
 implementation
-uses Classes, Math, TreeFruits, TreeShaderSource, TreeBark;
+uses Classes, Math, TreeFruits, TreeShaderSource, TreeBark,VegetationRenderOptions;
 function TTreeRenderer.ShadowLOD(const Profile: TTreeParams; out Texture: Cardinal;
   out Frames: TLODFrames; out Seasonal, Fruit: Boolean): Boolean;
 begin
@@ -183,6 +213,7 @@ procedure TTreeRenderer.Initialize(const ShaderDirectory: string; SharedWith: TT
 var VS,FS: GLuint; OK,Len,I,J: GLint; Log: string;S:TTreeSpecies;P:TTreeParams;
 begin
   if FReady then Exit;
+  FEnvelopeValid:=False;
   FShared:=SharedWith;
   if Assigned(FShared) then begin
     if not FShared.Ready or Assigned(FShared.FShared) then raise Exception.Create('Shared renderer must be a ready resource owner');
@@ -202,6 +233,8 @@ begin
     end;
     if FShared<>nil then begin
       UComplexity:=FShared.UComplexity;
+      UDistantArena:=FShared.UDistantArena;UDistantOrigin:=FShared.UDistantOrigin;
+      UCardEnvelope:=FShared.UCardEnvelope;UEnvelopePoints:=FShared.UEnvelopePoints;UEnvelopeViewport:=FShared.UEnvelopeViewport;
       UPreparedFrames:=FShared.UPreparedFrames;
       UFragmentWorkReuse:=FShared.UFragmentWorkReuse;
       UCoverageSamples:=FShared.UCoverageSamples;
@@ -254,6 +287,8 @@ begin
       FBarkDefault:=FShared.FBarkDefault;
     end else begin
     UComplexity:=glGetUniformLocation(FProgram,'uComplexity');
+    UDistantArena:=glGetUniformLocation(FProgram,'uDistantArena');UDistantOrigin:=glGetUniformLocation(FProgram,'uDistantOrigin');
+    UCardEnvelope:=glGetUniformLocation(FProgram,'uCardEnvelope');UEnvelopePoints:=glGetUniformLocation(FProgram,'uEnvelopePoints[0]');UEnvelopeViewport:=glGetUniformLocation(FProgram,'uEnvelopeViewport');
     UPreparedFrames:=glGetUniformLocation(FProgram,'uPreparedFrames');
     UFragmentWorkReuse:=glGetUniformLocation(FProgram,'uFragmentWorkReuse');
     UCoverageSamples:=glGetUniformLocation(FProgram,'uCoverageSamples');
@@ -352,19 +387,27 @@ begin
     if ErrorCode<>GL_NO_ERROR then raise Exception.CreateFmt('Cannot upload bark library (GL $%x)',[ErrorCode]);
   finally glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture);end;
 end;
+function LeafTextureIndex(S:TTreeSpecies):Integer;
+begin
+  Result:=LeafSprayIndex(S);
+  { The two compound-leaf families share the same physical leaflet mask.
+    Their close-up procedural blades and generated bounds stay unchanged. }
+  if S in [tsRowan,tsAcacia] then Result:=9;
+end;
 procedure TTreeRenderer.CreateLeafSprays(const ShaderDirectory:string);
-const N=256;Variants=8;Layers=9*Variants;
-var FBO,VAO,BakeProgram,VS,FS:GLuint;OldDraw,OldRead,OldProgram,OldVAO,OldTexture:GLint;
+const N=256;Variants=8;SpeciesLayers=10;Layers=SpeciesLayers*(Variants+1);
+var FBO,VAO,BakeProgram,VS,FS,GroupTarget:GLuint;OldDraw,OldRead,OldProgram,OldVAO,OldTexture,OldActive:GLint;
   OldViewport:array[0..3]of GLint;OldClear:array[0..3]of GLfloat;
   WasDepth,WasBlend,WasCull,WasScissor:GLboolean;OldColorMask:array[0..3]of GLboolean;S:TTreeSpecies;Variant,Layer:Integer;
   BakeSpecies,BakeSpray,BakeTime,OK:GLint;Source:string;
 begin
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,@OldDraw);glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,@OldRead);
   glGetIntegerv(GL_CURRENT_PROGRAM,@OldProgram);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@OldVAO);
+  glGetIntegerv(GL_ACTIVE_TEXTURE,@OldActive);glActiveTexture(GL_TEXTURE0);
   glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@OldTexture);glGetIntegerv(GL_VIEWPORT,@OldViewport[0]);
   glGetFloatv(GL_COLOR_CLEAR_VALUE,@OldClear[0]);glGetBooleanv(GL_COLOR_WRITEMASK,@OldColorMask[0]);
   WasDepth:=glIsEnabled(GL_DEPTH_TEST);WasBlend:=glIsEnabled(GL_BLEND);WasCull:=glIsEnabled(GL_CULL_FACE);WasScissor:=glIsEnabled(GL_SCISSOR_TEST);
-  FBO:=0;VAO:=0;BakeProgram:=0;VS:=0;FS:=0;
+  FBO:=0;VAO:=0;BakeProgram:=0;VS:=0;FS:=0;GroupTarget:=0;
   try
   try
     { Keep the one-time procedural mask generator out of the live shader:
@@ -380,10 +423,10 @@ begin
     BakeTime:=glGetUniformLocation(BakeProgram,'uTime');
     glGenTextures(1,@FLeafSprays);glBindTexture(GL_TEXTURE_2D_ARRAY,FLeafSprays);
     glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,N,N,Layers,0,GL_RGBA,GL_UNSIGNED_BYTE,nil);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_S,GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_WRAP_T,GL_REPEAT);
     glGenFramebuffers(1,@FBO);glBindFramebuffer(GL_FRAMEBUFFER,FBO);
     glGenVertexArrays(1,@VAO);glBindVertexArray(VAO);glUseProgram(BakeProgram);
     glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);
@@ -391,24 +434,43 @@ begin
     glViewport(0,0,N,N);glClearColor(0,0,0,0);
     glUniform1i(glGetUniformLocation(BakeProgram,'uKind'),9);
     glUniform1f(glGetUniformLocation(BakeProgram,'uQuality'),4);
-    for S:=Low(S) to High(S) do if LeafSprayIndex(S)>=0 then begin
-      glUniform1i(BakeSpecies,Ord(S));glUniform4f(BakeSpray,LeafSprayRows(S),LeafSprayAspect(S),LeafSprayIndex(S)*Variants,1);
+    for S:=Low(S) to High(S) do if (LeafTextureIndex(S)>=0) and (S<>tsAcacia) then begin
+      glUniform1i(BakeSpecies,Ord(S));glUniform4f(BakeSpray,LeafSprayRows(S),LeafSprayAspect(S),LeafTextureIndex(S)*Variants,1);
       for Variant:=0 to Variants-1 do begin
-        Layer:=LeafSprayIndex(S)*Variants+Variant;
+        Layer:=LeafTextureIndex(S)*Variants+Variant;
         glFramebufferTextureLayer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,FLeafSprays,0,Layer);
         if glCheckFramebufferStatus(GL_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Leaf spray target incomplete');
         glClear(GL_COLOR_BUFFER_BIT);glUniform1f(BakeTime,(Variant+0.5)/Variants);
         glDrawArrays(GL_TRIANGLES,0,6);
       end;
     end;
+    { One shared patch per species, not per tree. Read the individual sprigs
+      into a separate attachment: sampling an attached layer of the same array
+      would be a framebuffer feedback loop, even for different layer numbers. }
+    glGenTextures(1,@GroupTarget);glBindTexture(GL_TEXTURE_2D_ARRAY,GroupTarget);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY,0,GL_RGBA8,N,N,1,0,GL_RGBA,GL_UNSIGNED_BYTE,nil);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GroupTarget,0,0);
+    if glCheckFramebufferStatus(GL_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Leaf group target incomplete');
+    glBindTexture(GL_TEXTURE_2D_ARRAY,FLeafSprays);
+    glUniform1i(glGetUniformLocation(BakeProgram,'uKind'),10);
+    glUniform1i(glGetUniformLocation(BakeProgram,'uLeafSprays'),0);
+    for S:=Low(S) to High(S) do if (LeafTextureIndex(S)>=0) and (S<>tsAcacia) then begin
+      glUniform1i(BakeSpecies,Ord(S));
+      glUniform4f(BakeSpray,LeafSprayRows(S),LeafSprayAspect(S),LeafTextureIndex(S)*Variants,1);
+      glDrawArrays(GL_TRIANGLES,0,6);
+      Layer:=SpeciesLayers*Variants+LeafTextureIndex(S);
+      glCopyTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,0,0,Layer,0,0,N,N);
+    end;
     glBindFramebuffer(GL_FRAMEBUFFER,OldDraw);glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
   except
     if FLeafSprays<>0 then glDeleteTextures(1,@FLeafSprays);FLeafSprays:=0;raise;
   end;
   finally
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,OldDraw);glBindFramebuffer(GL_READ_FRAMEBUFFER,OldRead);
     if FBO<>0 then glDeleteFramebuffers(1,@FBO);if VAO<>0 then glDeleteVertexArrays(1,@VAO);
-    glUseProgram(OldProgram);glBindVertexArray(OldVAO);glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture);
+    if GroupTarget<>0 then glDeleteTextures(1,@GroupTarget);
+    glUseProgram(OldProgram);glBindVertexArray(OldVAO);glBindTexture(GL_TEXTURE_2D_ARRAY,OldTexture);glActiveTexture(OldActive);
     if BakeProgram<>0 then glDeleteProgram(BakeProgram);if VS<>0 then glDeleteShader(VS);if FS<>0 then glDeleteShader(FS);
     glViewport(OldViewport[0],OldViewport[1],OldViewport[2],OldViewport[3]);glClearColor(OldClear[0],OldClear[1],OldClear[2],OldClear[3]);
     glColorMask(OldColorMask[0],OldColorMask[1],OldColorMask[2],OldColorMask[3]);
@@ -419,6 +481,8 @@ procedure TTreeRenderer.Release;
 var S: TTreeSpecies;I:Integer;
 begin
   if not FReady then Exit;
+  FreeAndNil(FPendingAtlas);FPendingPrepared:=Default(TPreparedTreeLOD);
+  FreeAndNil(FArena);
   for S:=Low(TTreeSpecies) to High(TTreeSpecies) do begin
     if FLODTextures[S]<>0 then glDeleteTextures(1,@FLODTextures[S]); FLODTextures[S]:=0; FLODKeys[S]:='';
     if FLODNormals[S]<>0 then glDeleteTextures(1,@FLODNormals[S]);FLODNormals[S]:=0;
@@ -457,7 +521,7 @@ function TTreeRenderer.LODTextureBytes:Int64;
 var S:TTreeSpecies;Parts,N:Integer;LayerPixels,Bytes:Int64;
 begin
   if Assigned(FShared) then Exit(FShared.LODTextureBytes);
-  Result:=0;if FLeafSprays<>0 then Result:=Int64(256*256*4*72)*4 div 3;
+  Result:=0;if FLeafSprays<>0 then Result:=Int64(256*256*4*90)*4 div 3;
   if FBarkTextures<>0 then Inc(Result,Int64(BARK_TEXTURE_SIZE)*BARK_TEXTURE_SIZE*BARK_TEXTURE_LAYERS*4*4 div 3);
   for S:=Low(S) to High(S) do if FLODTextures[S]<>0 then begin
     Parts:=1;
@@ -481,10 +545,11 @@ begin
 end;
 class function TTreeRenderer.PrepareLODAtlas(const Directory: string;
   const Profile: TTreeParams): TPreparedTreeLOD;
-var Path: string; Atlas: TLODPixels;
+var Path: string; Atlas: TLODPixels;EnvelopeMips:TAtlasLevels;
     G,V,X,Y,C,Src,Dst,Part,Parts,LayerSize,N: Integer;
 begin
   Result:=Default(TPreparedTreeLOD); Result.Species:=Profile.Species;
+  Result.Envelope:=FullCardEnvelope;
   Path:=IncludeTrailingPathDelimiter(Directory)+SpeciesName(Profile.Species);
   if not ReadLODMetadata(Path+'.json',Profile,Result.Frames) then Exit;
   Result.Key:=LODProfileKey(Profile);
@@ -521,9 +586,66 @@ begin
         end;
     end;
   end;
+  if VegetationAtlasBudget then begin
+    Result.ColorMips:=AtlasMipLevels(Result.Pixels,LOD_SIZE,LOD_VIEWS*LOD_AGES*Parts);
+    if Result.Relight then Result.NormalMips:=AtlasMipLevels(Result.NormalPixels,LOD_SIZE div 2,LOD_VIEWS*LOD_AGES*Parts);
+    if VegetationCardEnvelopes then
+      Result.Envelope:=CardEnvelope(Result.ColorMips,0,LOD_VIEWS*LOD_AGES*Parts,1);
+  end else if VegetationCardEnvelopes then begin
+    { Ordinary upload uses original pixels and driver mips. The card envelope
+      still needs the exact colour-alpha levels down to 16x16, but no smaller
+      colour levels or normal mip chain. Do not retain this temporary chain
+      in the queued job. The process-lifetime flag is also used by PollJob. }
+    EnvelopeMips:=AtlasMipLevels(Result.Pixels,LOD_SIZE,LOD_VIEWS*LOD_AGES*Parts,VEGETATION_ENVELOPE_MIN_SIZE);
+    Result.Envelope:=CardEnvelope(EnvelopeMips,0,LOD_VIEWS*LOD_AGES*Parts,1);
+  end;
 end;
+procedure TTreeRenderer.BeginLODAtlas(const Prepared:TPreparedTreeLOD);
+begin
+  if FShared<>nil then begin FShared.BeginLODAtlas(Prepared);Exit end;
+  if FPendingAtlas<>nil then raise EInvalidOp.Create('Atlas upload already pending');
+  FPendingAtlas:=TAtlasUpload.Create(Prepared.ColorMips,Prepared.NormalMips);
+  FPendingPrepared:=Prepared;
+end;
+function TTreeRenderer.StepLODAtlas(ByteBudget:Integer;TimeBudgetMS:Double):Boolean;
+var Tex,Normal:GLuint;S:TTreeSpecies;
+begin
+  if FShared<>nil then Exit(FShared.StepLODAtlas(ByteBudget,TimeBudgetMS));
+  Result:=False;if FPendingAtlas=nil then Exit;
+  try
+    if not FPendingAtlas.Step(ByteBudget,TimeBudgetMS)then Exit;
+    S:=FPendingPrepared.Species;FPendingAtlas.Take(Tex,Normal);
+  except
+    { Keep the complete, currently visible atlas. A failed fence/allocation
+      must never publish a partial replacement or block the next species. }
+    CancelLODAtlas;raise;
+  end;
+  Inc(VegetationAtlasPublished);
+  if FLODTextures[S]<>0 then glDeleteTextures(1,@FLODTextures[S]);
+  if FLODNormals[S]<>0 then glDeleteTextures(1,@FLODNormals[S]);
+  FLODTextures[S]:=Tex;FLODNormals[S]:=Normal;
+  FLODKeys[S]:=FPendingPrepared.Key;FLODFrames[S]:=FPendingPrepared.Frames;
+  FLODSeasonParts[S]:=FPendingPrepared.Seasonal;FLODFruitLayer[S]:=FPendingPrepared.FruitLayer;
+  FLODRelight[S]:=FPendingPrepared.Relight;FLODEnvelopes[S]:=FPendingPrepared.Envelope;
+  FAtlasUploadLatency:=Max(FPendingAtlas.ElapsedSeconds,FAtlasUploadLatency*0.85);
+  FreeAndNil(FPendingAtlas);FPendingPrepared:=Default(TPreparedTreeLOD);Result:=True;
+end;
+procedure TTreeRenderer.CancelLODAtlas;
+begin
+  if FShared<>nil then begin FShared.CancelLODAtlas;Exit end;
+  FreeAndNil(FPendingAtlas);FPendingPrepared:=Default(TPreparedTreeLOD);
+end;
+function TTreeRenderer.AtlasPending:Boolean;
+begin if FShared<>nil then Result:=FShared.AtlasPending else Result:=FPendingAtlas<>nil;end;
+function TTreeRenderer.AtlasPendingBytes:Int64;
+begin
+  if FShared<>nil then Exit(FShared.AtlasPendingBytes);
+  if FPendingAtlas<>nil then Result:=FPendingAtlas.PendingBytes else Result:=0;
+end;
+function TTreeRenderer.AtlasUploadLatency:Single;
+begin if FShared<>nil then Result:=FShared.AtlasUploadLatency else Result:=Max(0.35,FAtlasUploadLatency);end;
 procedure TTreeRenderer.UploadLODAtlas(const Prepared: TPreparedTreeLOD);
-var OldTexture: GLint; Tex, NormalTex, ErrorCode: GLuint; S: TTreeSpecies; Parts: Integer;
+var OldTexture: GLint; Tex, NormalTex, ErrorCode: GLuint; S: TTreeSpecies; Parts, I: Integer;
 begin
   if Assigned(FShared) then begin FShared.UploadLODAtlas(Prepared); Exit; end;
   S:=Prepared.Species; Parts:=1; if Prepared.Seasonal then Parts:=2;
@@ -532,7 +654,12 @@ begin
     raise EArgumentException.Create('Invalid prepared tree atlas');
   { Attribute/texture setup in another renderer can leave a stale GL error.
     Attribute an upload failure only to calls in this operation. }
-  while glGetError()<>GL_NO_ERROR do ;
+  for I:=0 to 15 do begin
+    ErrorCode:=glGetError();
+    if ErrorCode=GL_NO_ERROR then Break;
+  end;
+  if ErrorCode<>GL_NO_ERROR then
+    raise Exception.CreateFmt('Tree atlas GL error state did not clear (GL $%x)',[ErrorCode]);
   if Prepared.Relight and (Length(Prepared.NormalPixels)<>Length(Prepared.Pixels) div 4) then
     raise EArgumentException.Create('Invalid prepared normal atlas');
   Tex:=0;NormalTex:=0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@OldTexture);
@@ -560,6 +687,7 @@ begin
     if FLODTextures[S]<>0 then glDeleteTextures(1,@FLODTextures[S]);
     FLODTextures[S]:=Tex; Tex:=0; FLODFrames[S]:=Prepared.Frames; FLODKeys[S]:=Prepared.Key; FLODSeasonParts[S]:=Prepared.Seasonal;
     FLODFruitLayer[S]:=Prepared.FruitLayer;
+    FLODEnvelopes[S]:=Prepared.Envelope;
   finally
     if Tex<>0 then glDeleteTextures(1,@Tex);
     if NormalTex<>0 then glDeleteTextures(1,@NormalTex);
@@ -712,6 +840,22 @@ begin
   end;
   Result:=Items;
 end;
+procedure TTreeRenderer.EnsureDistantCell(ID:Int64;Version:QWord;const Origin:TTreeWorldPosition;const Items:TTreeGPUItems);
+begin
+  if FArena=nil then FArena:=TTreeArena.Create;
+  FArena.Ensure(ID,Version,Origin,Items);
+end;
+procedure TTreeRenderer.RemoveDistantCell(ID:Int64);
+begin if FArena<>nil then FArena.Remove(ID);end;
+procedure TTreeRenderer.SelectDistantCells(const IDs:TTreeCellIDs;Count:Integer;const Origin:TTreeWorldPosition);
+begin
+  FArenaOrigin:=Origin;
+  if FArena<>nil then begin FArena.Select(IDs,Count);FForestCount:=FArena.VisibleCount;end else FForestCount:=0;
+end;
+function TTreeRenderer.DistantArenaBytes:Int64;
+begin if FArena<>nil then Result:=FArena.MemoryBytes else Result:=0;end;
+function TTreeRenderer.DistantArenaUploadBytes:QWord;
+begin if FArena<>nil then Result:=FArena.UploadBytes else Result:=0;end;
 procedure TTreeRenderer.UploadDistantItems(const Items:TTreeGPUItems);
 var I:Integer;
 begin
@@ -802,6 +946,10 @@ begin
   if Count<=0 then Exit;
   if not FBakeMode and ((TreeDiagnosticDrawMask and (Cardinal(1) shl Kind))=0) then Exit;
   glUniform1i(UKind,Kind);
+  if(Kind=3)and FEnvelopeDraw then begin Vertices:=18;IndexBuffer:=0 end;
+  if(Kind=3)and(FArena<>nil)then begin
+    Inc(FStats.DrawCalls,FArena.Draw(Vertices));Inc(FStats.Triangles,Vertices div 3*Count);Exit;
+  end;
   if VertexArray=0 then VertexArray:=FVAO[BufferIndex];
   glBindVertexArray(VertexArray);
   { Ground uses only gl_VertexID. A scene may have zero forest descriptors;
@@ -836,10 +984,11 @@ begin
   finally glBindVertexArray(OldVAO); glBindBuffer(GL_ARRAY_BUFFER,OldBuffer); end;
 end;
 procedure TTreeRenderer.SetPassUniforms(const Projection,View:TTreeMat4; const Eye:TTreeVec3; Seconds:Single);
-var Samples:GLint;
+var Samples:GLint;Viewport:array[0..3]of GLint;
 begin
     glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
     glUseProgram(FProgram);
+    glGetIntegerv(GL_VIEWPORT,@Viewport[0]);glUniform2f(UEnvelopeViewport,Viewport[2],Viewport[3]);
     glUniform1i(UFragmentWorkReuse,Ord(TreeFragmentWorkReuse));
     if UCoverageSamples>=0 then begin
       { Read the currently bound target once per pass: shadow/atlas FBOs may
@@ -929,10 +1078,20 @@ begin
   DirectBranches:=(FEnvironment.Enabled and FEnvironment.DirectBranches) or
     (P.Species in [tsBamboo,tsPalm,tsFanPalm,tsCactus,tsPricklyPear]);
   Resources:=Self; if Assigned(FShared) then Resources:=FShared;
-  SeasonState:=EvaluateTreeSeason(P.Species,P.LeafColor,Resources.FSeason);
-  if FBakeMode then SeasonState:=EvaluateTreeSeason(P.Species,P.LeafColor,TREE_SUMMER);
-  FruitAmount:=TreeFruitAmount(P.Species,Resources.FSeason);
-  if FBakeMode then FruitAmount:=1;
+  with Resources.FSeasonCache[P.Species] do begin
+    if not VegetationProfileCache or not Valid or (Bake<>FBakeMode) or
+      (Season<>Resources.FSeason) or not CompareMem(@Color,@P.LeafColor,SizeOf(Color)) then begin
+      Inc(VegetationTreeSeasonBuilds);
+      if FBakeMode then begin
+        State:=EvaluateTreeSeason(P.Species,P.LeafColor,TREE_SUMMER);Fruit:=1;
+      end else begin
+        State:=EvaluateTreeSeason(P.Species,P.LeafColor,Resources.FSeason);
+        Fruit:=TreeFruitAmount(P.Species,Resources.FSeason);
+      end;
+      Color:=P.LeafColor;Season:=Resources.FSeason;Bake:=FBakeMode;Valid:=True;
+    end else Inc(VegetationTreeSeasonHits);
+    SeasonState:=State;FruitAmount:=Fruit;
+  end;
   { Fully detailed trees do not draw an atlas: avoid two texture binds and
     atlas frame/normal state for every tree in every shadow cascade. }
   UseAtlas:=((Quality<0.95) or (ShowForest and (FForestCount>1))) and
@@ -958,7 +1117,16 @@ begin
     if FBakeMode then Resources.Uniform1i(UBakeMode,Max(1,FBakeOutput)) else Resources.Uniform1i(UBakeMode,0); Resources.Uniform1i(UUseBakedLOD,Ord(UseAtlas));
     Resources.Uniform1i(UDirectBranches,Ord(DirectBranches));
     Resources.Uniform1i(UPreparedFrames,Ord(TreePreparedFrames and FPreparedFrames));
-    Resources.Uniform4f(ULeafSpray,LeafSprayRows(P.Species),LeafSprayAspect(P.Species),LeafSprayIndex(P.Species)*8,1);
+    Resources.Uniform1i(UDistantArena,Ord(FArena<>nil));
+    if FArena<>nil then Resources.Uniform3f(UDistantOrigin,FArenaOrigin.X,FArenaOrigin.Y,FArenaOrigin.Z);
+    FEnvelopeDraw:=VegetationCardEnvelopes and UseAtlas and Resources.FLODEnvelopes[P.Species].Enabled;
+    Resources.Uniform1i(UCardEnvelope,Ord(FEnvelopeDraw));
+    if FEnvelopeDraw and(not Resources.FEnvelopeValid or
+      not CompareMem(@Resources.FUploadedEnvelope,@Resources.FLODEnvelopes[P.Species],SizeOf(TCardEnvelope)))then begin
+      glUniform2fv(UEnvelopePoints,8,@Resources.FLODEnvelopes[P.Species].Points[0]);
+      Resources.FUploadedEnvelope:=Resources.FLODEnvelopes[P.Species];Resources.FEnvelopeValid:=True;
+    end;
+    Resources.Uniform4f(ULeafSpray,LeafSprayRows(P.Species),LeafSprayAspect(P.Species),LeafTextureIndex(P.Species)*8,1);
     Resources.Uniform1i(ULeafSprays,0);
     Resources.Uniform1f(UNeedleScale,1);
     NeedleDetail:=1;
@@ -1104,8 +1272,8 @@ begin
               Sqrt(FSourceLeafCount/Max(1,FLeafCount)),0);
             { Group subpixel foliage on fewer cards. UVs repeat in world units:
               the card grows, the blades do not. Full geometry stays nearby. }
-            Resources.Uniform4f(ULeafSpray,LeafSprayRows(P.Species),LeafSprayAspect(P.Species),LeafSprayIndex(P.Species)*8,LeafGroup);
-            if LeafSprayIndex(P.Species)>=0 then glBindTexture(GL_TEXTURE_2D_ARRAY,Resources.FLeafSprays);
+            Resources.Uniform4f(ULeafSpray,LeafSprayRows(P.Species),LeafSprayAspect(P.Species),LeafTextureIndex(P.Species)*8,LeafGroup);
+            if LeafTextureIndex(P.Species)>=0 then glBindTexture(GL_TEXTURE_2D_ARRAY,Resources.FLeafSprays);
             Draw(1,1,6,Count,0,CardIndices);FStats.Leaves:=Count;
           end;
         end;

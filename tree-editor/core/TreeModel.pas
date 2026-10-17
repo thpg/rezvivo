@@ -6,6 +6,7 @@ const
   TREE_GENERATOR_VERSION = 4;
   TREE_LEAF_SPRAY_VERSION = 3;
   TREE_WOOD_VERSION = 1; { physical bark and structural branch geometry }
+  TREE_CONIFER_ARCHITECTURE_VERSION = 1;
   TREE_BIRCH_GEOMETRY_VERSION = 1; { invalidate only birch LOD atlases }
   TREE_FRUIT_GEOMETRY_VERSION = 1;
   TREE_ROWAN_GEOMETRY_VERSION = 2; { open pinnate foliage and terminal bunches }
@@ -285,6 +286,10 @@ begin
       Result.Height:=16; Result.TrunkRadius:=0.23; Result.CrownSpread:=0.66;
       Result.CrownStart:=0.14; Result.BranchAngle:=82; Result.PrimaryBranches:=34;
       Result.LeafSize:=0.25; Result.LeafDensity:=2.6; Result.Droop:=0.03;
+      { Scots pine: two needles per fascicle, normally 2.5--8 cm, not the
+        generic 12 cm pine fallback. The same dimensions drive near needles
+        and the integrated shoot footprint. }
+      Result.NeedleLength:=0.065; Result.NeedleWidth:=0.002;
       Result.BarkColor:=Vec(0.35,0.20,0.12);
     end;
     tsWillow: begin
@@ -452,6 +457,15 @@ begin
   Result.NeedleLength:=Profile.NeedleLength*(0.75+0.25*Min(1,Growth));
   if IsConifer(Profile.Species) and not IsShrub(Profile.Species) then
     Result.CrownStart:=Min(0.55,Result.CrownStart+Old*0.13);
+  if Profile.Species=tsPine then begin
+    { Juvenile Scots pines keep their conical, low crown. Mature trees lose
+      shaded lower boughs and carry an irregular crown above a clear trunk.
+      Keep the user's crown-start profile as the juvenile baseline. }
+    Growth:=Clamp((Ratio-0.22)/0.85,0,1);
+    Growth:=Growth*Growth*(3-2*Growth);
+    Result.CrownStart:=Min(0.69,Result.CrownStart+
+      Growth*(0.29+0.08*HashUnit(Result.Seed,8701)));
+  end;
   if Profile.Species=tsOak then begin
     Result.CrownSpread:=Result.CrownSpread*(1+Old*0.12);
     Result.BranchAngle:=Min(93,Result.BranchAngle+Old*12);
@@ -484,6 +498,7 @@ var Data: TTreeData; BC,LC,CC,NC,I,J,N,First,Last,Dep,ParentIndex: Integer;
     B,Parent: TTreeBranch; Leaf: TTreeLeaf; Crown: TTreeCrown;
     Shoot: TTreeNeedleShoot;
     Seed: LongWord; T,A,Len,Envelope,Pitch,R,Size,Tw,BendAngle,CrownBase: Single;
+    CrownT,Adult,BranchVigor,BranchRise,HorizontalScale:Single;
     Dir,Side,Up,Center: TTreeVec3;
   procedure Bounds(const V: TTreeVec3; Radius: Single);
   begin
@@ -510,7 +525,7 @@ var Data: TTreeData; BC,LC,CC,NC,I,J,N,First,Last,Dep,ParentIndex: Integer;
   end;
   function MakeBranch(AParent, Depth: Integer; ID: LongWord; Attach: Single;
     const Start,Direction: TTreeVec3; LengthM,RadiusM: Single): TTreeBranch;
-  var Bend: TTreeVec3;
+  var Bend: TTreeVec3; Clearance,Drop,GroundScale:Single;
   begin
     Result:=Default(TTreeBranch); Result.ID:=ID; Result.Parent:=AParent;
     Result.Depth:=Depth; Result.Attach:=Attach; Result.Start:=Start;
@@ -530,8 +545,20 @@ var Data: TTreeData; BC,LC,CC,NC,I,J,N,First,Last,Dep,ParentIndex: Integer;
     if (P.Species in [tsSpruce,tsLarch]) and (Depth>0) then
       Result.Control.Y:=Result.Control.Y-LengthM*(0.30+(HashUnit(ID,22)-0.5)*0.30*P.Irregularity);
     if Depth>=2 then Result.Tip.Y:=Result.Tip.Y-P.Droop*LengthM*(0.45+Depth*0.15);
-    Result.Tip.Y:=Max(Min(0.18,P.Height*0.035),Result.Tip.Y);
-    if P.Species in [tsSpruce,tsLarch] then Result.Control.Y:=Max(P.Height*0.006,Result.Control.Y);
+    if (P.Species=tsSpruce) and (Depth>0) then begin
+      { Reduce downward curvature continuously near the soil. Clamping every
+        tip to the same height produced a horizontal shelf of needles. }
+      Clearance:=Max(0.01,Start.Y-0.025);
+      Drop:=Max(0,Start.Y-Min(Result.Tip.Y,Result.Control.Y));
+      GroundScale:=Clearance/Max(Clearance,Drop+Clearance*0.20);
+      if Result.Tip.Y<Start.Y then
+        Result.Tip.Y:=Start.Y+(Result.Tip.Y-Start.Y)*GroundScale;
+      if Result.Control.Y<Start.Y then
+        Result.Control.Y:=Start.Y+(Result.Control.Y-Start.Y)*GroundScale;
+    end else begin
+      Result.Tip.Y:=Max(Min(0.18,P.Height*0.035),Result.Tip.Y);
+      if P.Species=tsLarch then Result.Control.Y:=Max(P.Height*0.006,Result.Control.Y);
+    end;
     Result.Radius:=RadiusM; Result.TipRadius:=RadiusM*0.18;
   end;
   procedure FingerprintValue(V: Single);
@@ -595,6 +622,8 @@ begin
   end;
   PrimaryFirst:=BC;
   CrownBase:=P.CrownStart;
+  Adult:=Clamp((P.Maturity-0.22)/0.85,0,1);
+  Adult:=Adult*Adult*(3-2*Adult);
   if StemCount>1 then CrownBase:=CrownBase*0.72;
   for I:=0 to P.PrimaryBranches-1 do begin
     { Share the tree's branch budget between stems, keeping a breadth-first
@@ -603,7 +632,13 @@ begin
     BranchesOnStem:=(P.PrimaryBranches-1-ParentIndex) div StemCount+1;
     Parent:=Data.Branches[ParentIndex]; Seed:=HashChild(Parent.ID,BranchIndex);
     T:=CrownBase+(0.97-CrownBase)*(BranchIndex+0.5)/BranchesOnStem;
-    if P.Species=tsPine then T:=P.CrownStart+(0.95-P.CrownStart)*(I div 5+0.3)/(P.PrimaryBranches div 5+0.3);
+    if P.Species=tsPine then begin
+      { A whorl shares its growth history, but surviving boughs are not five
+        perfectly level copies. The offset is tied to the whorl, not the LOD. }
+      CrownT:=((I div 4)+0.30+0.38*HashUnit(P.Seed,8750+I div 4)+
+        (HashUnit(Seed,23)-0.5)*0.55)/((P.PrimaryBranches-1) div 4+1);
+      T:=P.CrownStart+(0.97-P.CrownStart)*Clamp(CrownT,0.01,0.99);
+    end;
     if P.Species in [tsSpruce,tsLarch] then begin
       { Uneven whorls, rather than identical rings sampled from a cone. }
       T:=P.CrownStart+(0.96-P.CrownStart)*(I div 3+0.28)/((P.PrimaryBranches-1) div 3+0.5);
@@ -617,7 +652,17 @@ begin
     if P.Species=tsMaple then A:=(I div 2)*1.57079633+(I mod 2)*Pi+(HashUnit(Seed,1)-0.5)*0.32;
     Pitch:=DegToRad(P.BranchAngle)*(0.85+HashUnit(Seed,2)*0.3);
     Envelope:=Power(Max(0.06,Sin(Pi*0.85*(T-CrownBase)/(1-CrownBase)+0.35)),0.7);
-    if P.Species=tsPine then Envelope:=Power(1-T,0.85)*1.6;
+    if P.Species=tsPine then begin
+      CrownT:=Clamp((T-CrownBase)/Max(0.01,1-CrownBase),0,1);
+      { Retain the juvenile cone, then move the widest part into the crown.
+        Correlated vigour gives adjacent boughs a common exposed/sheltered
+        side instead of independent random blobs. }
+      BranchVigor:=0.82+0.18*Cos(A-BendAngle)+
+        (HashUnit(P.Seed,8750+I div 4)-0.5)*0.22;
+      Envelope:=(1-Adult)*Power(1-T,0.85)*1.6+
+        Adult*Power(Max(0.04,Sin(Pi*(0.15+CrownT*0.80))),0.70)*BranchVigor;
+      Pitch:=DegToRad(93-34*CrownT)+(HashUnit(Seed,2)-0.5)*0.28;
+    end;
     if P.Species in [tsSpruce,tsLarch] then begin
       Envelope:=Power(1-T,0.82)*1.65;
       Envelope:=Envelope*(1+(HashUnit(Seed,24)-0.5)*0.70*P.Irregularity)*
@@ -626,6 +671,8 @@ begin
         Envelope:=Envelope*(1-0.45*P.Irregularity);
       Pitch:=DegToRad(P.BranchAngle)*(1+(HashUnit(Seed,2)-0.5)*0.30*P.Irregularity)+
         (HashUnit(Seed,26)-0.5)*0.32*P.Irregularity;
+      if P.Species=tsSpruce then
+        Pitch:=Pitch+Adult*DegToRad(12-25*T);
     end;
     if P.Species=tsOak then Envelope:=Envelope*(0.76+0.52*HashUnit(Seed,27));
     if P.Species=tsAcacia then begin
@@ -682,6 +729,8 @@ begin
       for I:=0 to N-1 do begin
         Seed:=HashChild(Parent.ID,I);
         T:=0.36+(I+0.4)/N*0.59;
+        if P.Species=tsSpruce then
+          T:=0.16+(I+0.25+HashUnit(Seed,8713)*0.35)/N*0.79;
         Dir:=Tangent(Parent.Start,Parent.Control,Parent.Tip,T);
         Side:=Normalize(Cross(Dir,Vec(0.01,1,0.02))); Up:=Normalize(Cross(Side,Dir));
         A:=I*2.39996323+HashUnit(Seed,4)*1.8;
@@ -690,12 +739,23 @@ begin
         Dir:=Normalize(Add(Scale(Dir,0.75),Add(Scale(Side,Cos(A)*Tw),Scale(Up,Sin(A)*Tw))));
         if IsConifer(P.Species) then begin
           { Lateral sprays along whorled boughs, with upward terminal shoots. }
+          BranchRise:=0.16;
+          if P.Species=tsPine then
+            BranchRise:=0.12+Adult*(0.12+0.32*HashUnit(Parent.ID,8711));
           Dir:=Normalize(Add(Scale(Tangent(Parent.Start,Parent.Control,Parent.Tip,T),0.85),
-            Add(Scale(Side,(Ord(Odd(I))*2-1)*0.68),Vec(0,0.16,0))));
+            Add(Scale(Side,(Ord(Odd(I))*2-1)*0.68),Vec(0,BranchRise,0))));
         end;
         if P.Species in [tsSpruce,tsLarch] then begin
           if Dep=2 then Dir.Y:=Dir.Y-(0.44+(HashUnit(Seed,28)-0.5)*0.40*P.Irregularity)
           else Dir.Y:=Dir.Y-(0.15+(HashUnit(Seed,28)-0.5)*0.18*P.Irregularity);
+          if (P.Species=tsSpruce) and (Dep>=3) then begin
+            { The outer branchlets form hanging curtains below a bough, not
+              a broad horizontal pad. Older lower boughs droop together;
+              new shoots near the leader stay more upright. }
+            BranchVigor:=Clamp(Parent.Start.Y/Max(P.Height,0.01),0,1);
+            Dir.Y:=Dir.Y-Adult*(0.32+0.38*(1-BranchVigor))*
+              (0.65+0.35*HashUnit(Parent.ID,8712));
+          end;
         end;
         if P.Species=tsMountainPine then Dir.Y:=Dir.Y+0.15*HashUnit(Seed,15);
         if (P.Species=tsBirch) and (Dep>=3) then
@@ -714,6 +774,23 @@ begin
     First:=Last+1; Last:=BC-1;
   end;
   SetLength(Data.Branches,BC);
+  if P.Species=tsSpruce then begin
+    { CrownSpread describes the whole crown. Applying it only to primary
+      boughs allowed all subsequent generations to make a wider-than-tall
+      spruce, diluting its existing needles over that oversized volume. }
+    { Depend on the profile's full hierarchy, never the requested LOD depth:
+      a primary branch must keep exactly the same curve in every prefix. }
+    HorizontalScale:=1/(1+0.20*(P.MaxDepth-1));
+    Data.BoundsMin:=Vec(0,0,0);Data.BoundsMax:=Vec(0,0,0);
+    for I:=0 to BC-1 do begin
+      B:=Data.Branches[I];
+      B.Start.X:=B.Start.X*HorizontalScale;B.Start.Z:=B.Start.Z*HorizontalScale;
+      B.Control.X:=B.Control.X*HorizontalScale;B.Control.Z:=B.Control.Z*HorizontalScale;
+      B.Tip.X:=B.Tip.X*HorizontalScale;B.Tip.Z:=B.Tip.Z*HorizontalScale;
+      Data.Branches[I]:=B;
+      Bounds(B.Start,B.Radius*1.7);Bounds(B.Control,B.Radius);Bounds(B.Tip,B.Radius);
+    end;
+  end;
   { Proxies depend only on primary branches, so a far request does not expand
     the hierarchy or enumerate leaves. They remain identical at every LOD. }
   SetLength(Data.Crowns,P.PrimaryBranches);

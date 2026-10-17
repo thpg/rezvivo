@@ -16,7 +16,7 @@ const
   GRASS_CARDS = 4; { scattered volume cards, plus the continuous ground carpet }
   GRASS_ATLAS_LAYERS = GRASS_SPECIES_COUNT * GRASS_ATLAS_VIEWS;
   GRASS_BLADES = 256;
-  GRASS_MODEL_VERSION = 8;
+  GRASS_MODEL_VERSION = 9;
   GRASS_VIEW_ELEVATIONS:array[0..3]of Single=(0.125,0.25,0.5,0.98);
 type
   TGrassLodSettings = record
@@ -120,24 +120,24 @@ begin Result:=Descriptions[EnsureRange(Kind,0,7)];end;
 function DefaultGrassProfile(Kind: Integer): TGrassProfile;
 var I:Integer;
 begin
-  Result:=Default(TGrassProfile);Result.Height:=0.34;Result.Width:=0.012;
+  Result:=Default(TGrassProfile);Result.Height:=0.34;Result.Width:=0.006;
   Result.Density:=1;Result.Color:=Vec(0.09,0.22,0.028);
-  Result.Broadleaf:=0.17;Result.Rosettes:=0.12;Result.SeedHeads:=0.12;
+  Result.Broadleaf:=0.07;Result.Rosettes:=0.06;Result.SeedHeads:=0.12;
   Result.Dryness:=0.14;Result.Variation:=0.72;Result.Flowers:=0.012;
-  Result.Weeds:=0.12;Result.WeedHeight:=0.95;
+  Result.Weeds:=0.04;Result.WeedHeight:=0.80;
   for I:=0 to 3 do Result.BladeViewGain[I]:=Vec(1,1,1);
   case Kind of
-    1:begin Result.Height:=0.45;Result.Width:=0.020;Result.Color:=Vec(0.065,0.18,0.024);
-      Result.Broadleaf:=0.48;Result.Rosettes:=0.23;Result.SeedHeads:=0.015;Result.Dryness:=0.035;Result.Flowers:=0;Result.Weeds:=0.08;Result.WeedHeight:=0.78;end;
+    1:begin Result.Height:=0.38;Result.Width:=0.010;Result.Color:=Vec(0.065,0.18,0.024);
+      Result.Broadleaf:=0.35;Result.Rosettes:=0.12;Result.SeedHeads:=0.015;Result.Dryness:=0.035;Result.Flowers:=0;Result.Weeds:=0.08;Result.WeedHeight:=0.78;end;
     2:begin Result.Height:=0.38;Result.Color:=Vec(0.23,0.20,0.060);
       Result.Broadleaf:=0.06;Result.Rosettes:=0.09;Result.SeedHeads:=0.25;Result.Dryness:=0.65;Result.Flowers:=0;Result.Weeds:=0.04;end;
     3:begin Result.Height:=0.39;Result.Flowers:=0.075;Result.Broadleaf:=0.24;Result.Rosettes:=0.17;Result.Dryness:=0.06;end;
-    4:begin Result.Height:=0.09;Result.Width:=0.009;Result.Color:=Vec(0.080,0.205,0.030);
+    4:begin Result.Height:=0.09;Result.Width:=0.0045;Result.Color:=Vec(0.080,0.205,0.030);
       Result.Broadleaf:=0.015;Result.Rosettes:=0.055;Result.SeedHeads:=0;Result.Dryness:=0.025;Result.Variation:=0.25;Result.Flowers:=0;Result.Weeds:=0;end;
-    5:begin Result.Height:=0.62;Result.Width:=0.014;Result.Color:=Vec(0.24,0.19,0.050);
+    5:begin Result.Height:=0.62;Result.Width:=0.007;Result.Color:=Vec(0.24,0.19,0.050);
       Result.Broadleaf:=0.035;Result.Rosettes:=0.045;Result.SeedHeads:=0.42;Result.Dryness:=0.78;Result.Variation:=0.9;Result.Flowers:=0;Result.Weeds:=0.04;end;
-    6:begin Result.Height:=0.12;Result.Width:=0.009;Result.Color:=Vec(0.07,0.20,0.025);
-      Result.Broadleaf:=0.16;Result.Rosettes:=0.38;Result.SeedHeads:=0;Result.Dryness:=0.04;Result.Variation:=0.5;Result.Flowers:=0;Result.Weeds:=0.09;Result.WeedHeight:=0.85;end;
+    6:begin Result.Height:=0.12;Result.Width:=0.0045;Result.Color:=Vec(0.07,0.20,0.025);
+      Result.Broadleaf:=0.04;Result.Rosettes:=0.08;Result.SeedHeads:=0;Result.Dryness:=0.04;Result.Variation:=0.5;Result.Flowers:=0;Result.Weeds:=0.025;Result.WeedHeight:=0.65;end;
     7:begin Result.Height:=0.37;Result.Flowers:=0.10;Result.Broadleaf:=0.30;Result.Rosettes:=0.22;Result.Dryness:=0.06;Result.Weeds:=0.025;Result.WeedHeight:=0.70;end;
   end;
 end;
@@ -159,12 +159,16 @@ begin Result:=GrassHash(LongWord(X) xor GrassHash(LongWord(Z)+$9e3779b9)) and $f
 function GrassHabitatAt(X,Z: Integer): Single;
 var CX,CZ:Integer;FX,FZ,A,B:Double;
   function Value(DX,DZ:Integer):Double;
-  begin Result:=(GrassCellSeed(CX+DX,CZ+DZ)and $ffff)/65535;end;
+  begin
+    Result:=(GrassHash((LongWord(CX+DX)and 15)*$9e3779b9 xor
+      (LongWord(CZ+DZ)and 15)*$85ebca6b)and $ffff)/65535;
+  end;
 begin
-  { Twelve-metre communities, continuous across tiles and camera rebuilds.
-    Evaluate once per compact patch instead of noise for every blade vertex. }
-  CX:=Floor((X+0.5)/12);CZ:=Floor((Z+0.5)/12);
-  FX:=(X+0.5)/12-CX;FZ:=(Z+0.5)/12-CZ;
+  { Match gcGrassNoise(p / 16, 15) exactly, including negative positions and
+    the 256-metre phase used by the composite ground. One evaluation per
+    compact patch; no extra per-blade noise or descriptors. }
+  CX:=Floor((X+0.5)/16);CZ:=Floor((Z+0.5)/16);
+  FX:=(X+0.5)/16-CX;FZ:=(Z+0.5)/16-CZ;
   FX:=FX*FX*(3-2*FX);FZ:=FZ*FZ*(3-2*FZ);
   A:=Value(0,0)*(1-FX)+Value(1,0)*FX;B:=Value(0,1)*(1-FX)+Value(1,1)*FX;
   Result:=A*(1-FZ)+B*FZ;

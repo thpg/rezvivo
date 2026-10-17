@@ -33,6 +33,8 @@ begin
   H:=Hash32(H xor (TREE_WOOD_VERSION shl 4));
   if LeafSprayIndex(Profile.Species)>=0 then H:=Hash32(H xor (TREE_LEAF_SPRAY_VERSION shl 20));
   if IsConifer(Profile.Species) then H:=Hash32(H xor (NEEDLE_COVERAGE_VERSION shl 24));
+  if Profile.Species in [tsPine,tsSpruce] then
+    H:=Hash32(H xor (TREE_CONIFER_ARCHITECTURE_VERSION shl 18));
   if Profile.Species=tsBirch then H:=Hash32(H xor (TREE_BIRCH_GEOMETRY_VERSION shl 16));
   if HasTreeFruit(Profile.Species) then H:=Hash32(H xor (TREE_FRUIT_GEOMETRY_VERSION shl 12));
   if Profile.Species=tsRowan then H:=Hash32(H xor (TREE_ROWAN_GEOMETRY_VERSION shl 8));

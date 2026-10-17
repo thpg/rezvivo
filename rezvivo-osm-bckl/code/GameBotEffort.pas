@@ -7,6 +7,8 @@ type
     SustainableWatts,CapacitySeconds,RecoverySeconds,Aggression:Single;
     Gap,Speed,RiderSpeed:Single; { gap positive = ahead of the rider }
     Racing,UnderPressure:Boolean;
+    CompanyControl:Boolean;
+    CompanyPower:Single;
   end;
   TBotEffortState=record
     Mode:TBotEffortMode;
@@ -92,9 +94,14 @@ begin
       if V.Gap< -120 then Ratio:=0.72*S.Variation;
     end;
   end;
-  Target:=Min(CP*Ratio,CP*(1+0.95*Sqrt(Max(0,S.Energy))));
+  Target:=CP*Ratio;
+  if V.CompanyControl then Target:=Max(0,V.CompanyPower);
+  Target:=Min(Target,CP*(1+0.95*Sqrt(Max(0,S.Energy))));
   { Small control cadence, gradual power changes; no per-frame random work. }
-  S.PowerWatts:=S.PowerWatts+EnsureRange((Target-S.PowerWatts)*(1-Exp(-Dt/2.5)),Single(-10),Single(10));
+  if V.CompanyControl then
+    S.PowerWatts:=S.PowerWatts+EnsureRange((Target-S.PowerWatts)*(1-Exp(-Dt/0.7)),Single(-45),Single(45))
+  else
+    S.PowerWatts:=S.PowerWatts+EnsureRange((Target-S.PowerWatts)*(1-Exp(-Dt/2.5)),Single(-10),Single(10));
   S.PowerWatts:=EnsureRange(S.PowerWatts,Single(0),Single(1000));
   Capacity:=Max(1,V.SustainableWatts*V.CapacitySeconds);
   if S.PowerWatts>CP then S.Energy:=S.Energy-(S.PowerWatts-CP)*Dt/Capacity

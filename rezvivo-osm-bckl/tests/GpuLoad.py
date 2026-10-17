@@ -32,7 +32,7 @@ class GpuLoad:
         else:
             self.pdh.PdhCollectQueryData(self.query)
 
-    def sample(self, own_pid):
+    def _values(self):
         if self.error:
             return {'available': False, 'error': self.error}
         status = self.pdh.PdhCollectQueryData(self.query)
@@ -48,15 +48,27 @@ class GpuLoad:
             C.byref(size), C.byref(count), buf)
         if status:
             return {'available': False, 'status': hex(status & 0xffffffff)}
-        own, others = [], []
+        values = []
         for item in C.cast(buf, C.POINTER(Item))[:count.value]:
-            if item.value.status not in (0, 1) or item.value.value < .05:
+            if item.value.status not in (0, 1):
                 continue
             match = re.search(r'pid_(\d+)_', item.name)
             if not match:
                 continue
             pid = int(match.group(1))
-            row = dict(pid=pid, engine=item.name, percent=round(item.value.value, 2))
+            values.append(dict(pid=pid, instance=item.name, value=item.value.value))
+        return {'available': True, 'values': values}
+
+    def sample(self, own_pid):
+        result = self._values()
+        if not result['available']:
+            return result
+        own, others = [], []
+        for item in result['values']:
+            if item['value'] < .05:
+                continue
+            pid = item['pid']
+            row = dict(pid=pid, engine=item['instance'], percent=round(item['value'], 2))
             (own if pid == own_pid else others).append(row)
         return {'available': True, 'own': own, 'other': others,
                 'contended': any(v['percent'] > 5 for v in others)}
@@ -65,3 +77,32 @@ class GpuLoad:
         if self.query:
             self.pdh.PdhCloseQuery(self.query)
             self.query = None
+
+
+class GpuMemory:
+    """WDDM per-process allocations, not GPU heap usage or a VRAM budget."""
+    def __init__(self):
+        self.counters = {
+            'dedicated_bytes': GpuLoad(r'\GPU Process Memory(*)\Dedicated Usage'),
+            'shared_bytes': GpuLoad(r'\GPU Process Memory(*)\Shared Usage'),
+        }
+
+    def sample(self, own_pid):
+        result = {'source': 'WDDM GPU Process Memory', 'available': True}
+        for name, counter in self.counters.items():
+            values = counter._values()
+            if not values['available']:
+                result['available'] = False
+                result[name] = None
+                result[name+'_error'] = values
+                continue
+            own = [row for row in values['values'] if row['pid'] == own_pid]
+            result[name] = int(sum(row['value'] for row in own)) if own else None
+            result[name+'_instances'] = own
+            if not own:
+                result['available'] = False
+        return result
+
+    def close(self):
+        for counter in self.counters.values():
+            counter.close()

@@ -4,7 +4,7 @@ unit Osm3dRtxShadow;
 interface
 uses Classes, SysUtils, Dynlibs, Generics.Collections, CastleVectors, CastleBoxes,
   CastleTriangles, CastleShapes, CastleTransform, TreeRenderer, TreeModel,
-  fpjson, X3DNodes{$ifndef OpenGLES}, Osm3dRtxDynamic{$endif};
+  fpjson, X3DNodes{$ifndef OpenGLES}, Osm3dRtxDynamic, Osm3dGpuTimer{$endif};
 const
   RTX_SCREEN_MAX_RAY_DISTANCE = 1000000;
 type
@@ -17,6 +17,7 @@ type
     Sun,Horizon,Zenith,DepthRange:TVector4;
   end;
   TRtxDrawReflectors=procedure(const Params:TRenderParams) of object;
+  TRtxReflectionPreflight=function(const Params:TRenderParams):Boolean of object;
   TRtxStats = packed record
     SceneID,Triangles,Cards,Bytes,Frames,Builds:QWord;
     TraceMS,BuildMS:Double;
@@ -25,6 +26,11 @@ type
     Layer:Integer;
     Origin,U,V:TVector3;
     Used:QWord;
+  end;
+  TRtxMeshIdentity = record
+    Revision,Token:QWord;
+    Transform:TMatrix4;
+    Origin:TVector3;
   end;
   TRtxShapeFilter = function(const Shape:TShape):Boolean of object;
   { Optional ray-query backend. Static world snapshots are collected in bounded
@@ -41,8 +47,15 @@ type
     FErrorText:function:PChar;cdecl;
     FDeviceName:function(Context:Pointer):PChar;cdecl;
     FAlphaTexture,FOutputTexture:function(Context:Pointer):Cardinal;cdecl;
-    FSetScene:function(Context:Pointer;Vertices:Pointer;Triangles:Cardinal;Cards:Pointer;Count:Cardinal;ID:QWord):LongInt;cdecl;
-    FSetSceneMaterials:function(Context:Pointer;Vertices:Pointer;Triangles:Cardinal;Cards:Pointer;Count:Cardinal;ID:QWord;Surfaces:Pointer):LongInt;cdecl;
+    FImageWrite:function(Context:Pointer;Image:Cardinal):LongInt;cdecl;
+    FSceneBegin:function(Context:Pointer;ReuseStatic:LongInt):LongInt;cdecl;
+    FMeshBegin:function(Context:Pointer;Capacity,UVCapacity,GroundCapacity:Cardinal):LongInt;cdecl;
+    FMeshBeginIdentity:function(Context:Pointer;Capacity,UVCapacity,GroundCapacity:Cardinal;Identity:QWord):LongInt;cdecl;
+    FMeshReuse:function(Context:Pointer;Identity:QWord):LongInt;cdecl;
+    FMeshEnd:function(Context:Pointer):LongInt;cdecl;
+    FSceneChunk:function(Context:Pointer;Vertices:Pointer;Triangles:Cardinal;Surfaces:Pointer):LongInt;cdecl;
+    FSceneCommit:function(Context:Pointer;Cards:Pointer;Count:Cardinal;ID:QWord):LongInt;cdecl;
+    FCacheStat:function(Context:Pointer;Field:Cardinal):QWord;cdecl;
     FReflectionSize:function(Context:Pointer;Shader:PWideChar;W,H:Cardinal):LongInt;cdecl;
     FReflectionTexture:function(Context:Pointer;Index:LongInt):Cardinal;cdecl;
     FReflect:function(Context:Pointer;Camera:Pointer;Scene:QWord):LongInt;cdecl;
@@ -54,10 +67,22 @@ type
     FScreenMS:function(Context:Pointer):Double;cdecl;
     FScreenBytes:function(Context:Pointer):QWord;cdecl;
     FDynamicBuffer:function(Context:Pointer;Triangles:Cardinal):Cardinal;cdecl;
+    FDynamicBufferIndexed:function(Context:Pointer;Triangles,Vertices:Cardinal;Topology:QWord;
+      out IndexBuffer,IndicesDirty:Cardinal):Cardinal;cdecl;
+    FDynamicActors:function(Context,Actors:Pointer;Count:Cardinal):LongInt;cdecl;
+    FDynamicActorRevisions:function(Context,Revisions:Pointer;Count:Cardinal):LongInt;cdecl;
     FDynamicStat:function(Context:Pointer;Field:Cardinal):QWord;cdecl;
+    FStageMS:function(Context:Pointer;Stage:Cardinal):Double;cdecl;
+    FDiagnostic:function(Context:Pointer;Field:Cardinal):QWord;cdecl;
     FDynamicCasters:TCastleTransformList;
     {$ifndef OpenGLES}FDynamicMeshes:TRtxDynamicMeshes;{$endif}
+    {$ifndef OpenGLES}
+    FStageTimers:array[0..3]of TAsyncGpuTimer;
+    FStageGpuMS:array[0..3]of Double;
+    FStageDiagnostics:Boolean;
+    {$endif}
     FScreenComposite:Cardinal;
+    FScreenStrengthUniform:Integer;
     FScreenStrength:Single;
     FScreenFilter:Integer;
     FScreenCamera:TRtxReflectionCamera;
@@ -73,19 +98,27 @@ type
     FFrameWaits:function(Context:Pointer):QWord;cdecl;
     FGroundTriangles:function(Context:Pointer):Cardinal;cdecl;
     FSlots:specialize TDictionary<string,TRtxProjection>;
+    FMeshIdentities:specialize TDictionary<QWord,TRtxMeshIdentity>;
+    FMeshIdentitySerial,FCurrentMeshIdentity:QWord;
+    FEarlyMeshReuse,FFixedLodSnapshots:Boolean;
     FActiveLayers,FBuildLayers:array[0..1023]of Boolean;
     FVertices:array of TVector3;
     FSurfaces:array of TRtxSurface;
+    FGroundColors:array of TVector4;
+    FReuseStatic,FMeshOpen:Boolean;
+    FCollectedTriangles,FPeakCollectionBytes:QWord;
     FSurfaceColor:TVector3;
     FShapeIFS:TIndexedFaceSetNode;
     FGroundShape:Boolean;
     FGroundIndex:Integer;
     FBldUV,FBldMat:TFloatVertexAttributeNode;
-    FBuildingAtlas:TAbstractTextureNode;
+    FBuildingAtlas,FBuildBuildingAtlas:TAbstractTextureNode;
     FBuildingGrid:TVector2;
     FUploadedAtlas,FRgbaCopyProgram:Cardinal;
     FReflectionFBO:Cardinal;
+    FReflectionWidth,FReflectionHeight:Integer;
     FReflections:Boolean;
+    FReflectionPreflight:TRtxReflectionPreflight;
     FScreenShadows:Boolean;
     FScreenFBO:Cardinal;
     FScreenError:string;
@@ -98,7 +131,7 @@ type
     FDebugTracedReflections,FDebugCachedReflections:Integer;
     FCards:array of TRtxCard;
     FVertexCount,FCardCount,FSource,FShape,FCell,FEntry,FAtlasSize:Integer;
-    FBuildOrigin,FActiveOrigin,FLastFocus,FActiveFocus,FSun,FSide,FUp:TVector3;
+    FBuildOrigin,FActiveOrigin,FLastFocus,FActiveFocus,FSun,FActiveSun,FSide,FUp:TVector3;
     FPrefetchOffset:TVector3;
     FRevision,FBuildID,FSubmittedID:QWord;
     FCollectionSerial:QWord;
@@ -120,11 +153,15 @@ type
     FRasterCards:Integer;
     FLastZones:TRtxZones;
     {$ifndef OpenGLES}
+    procedure BeginStage(Index:Integer);
+    procedure EndStage(Index:Integer);
     procedure Initialize(Size:Integer);
     procedure Release;
     procedure Fail(const Msg:string);
     procedure AddTriangle(Shape:TObject;const Triangle,Normal:TTriangle3;
       const TexCoord:TTriangle4;const Face:TFaceIndex);
+    procedure FlushChunk;
+    procedure PublishBuildingAtlas;
     function CollectGround:Boolean;
     procedure CopyLOD(const Layer:Integer;Texture:Cardinal;Source:Integer;
       Seasonal,Fruit:Boolean;Leaf,FruitAmount:Single);
@@ -171,6 +208,7 @@ type
     property RasterComparison:Boolean read FRasterComparison write FRasterComparison;
     property Reflections:Boolean read FReflections write SetReflections;
     property ReflectionsReady:Boolean read GetReflectionsReady;
+    property ReflectionPreflight:TRtxReflectionPreflight read FReflectionPreflight write FReflectionPreflight;
     property ScreenShadows:Boolean read FScreenShadows write SetScreenShadows;
     property ScreenReady:Boolean read GetScreenReady;
     property ScreenReuseActive:Boolean read FScreenReuseActive write FScreenReuseActive;
@@ -190,44 +228,36 @@ uses Math, {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif}, CastleLog, Castle
   CastleUriUtils, TreeMath, TreeLOD, TreeSeason, Osm3dProceduralVegetation,
   Osm3dStudioSettings, Osm3dRenderInstanced, Osm3dRtxMaterials,
   CastleRenderContext, CastleRectangles, CastleRenderOptions, X3DFields,
-  CastleInternalRenderer, Osm3dBuildingComposite, Osm3dGroundComposite, Osm3dRtxScreenState;
+  CastleInternalRenderer, Osm3dBuildingComposite, Osm3dGroundComposite, Osm3dRtxScreenState,
+  Osm3dRawGLScope;
 const
   ALPHA_SIZE=256;
   ALPHA_LAYERS=1024;
   GL_FRAMEBUFFER_SRGB_RTX=$8DB9;
   CARD_COVERAGE_GLSL = 'float threshold(vec2 uv,float phase){vec2 p=floor(uv*256.)+phase*vec2(971.,613.);return max(.003,fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453));}';
 type
-  { Every direct GL change is restored: CGE caches these states. }
+  { Share the world's CGE/raw-GL ownership; only RTX-specific state is extra. }
   TGLState = record
-    DrawFBO,ReadFBO,Viewport:array[0..3]of GLint;
-    ProgramID,VAO,ActiveTexture,Texture2D,TextureArray,DepthFunc:GLint;
-    DepthMask,ColorMask:array[0..3]of GLBoolean;
+    Core:TOsmRawGLScope;
+    TextureArray:GLint;
     ClearColor:array[0..3]of GLfloat;
     DepthRange:array[0..1]of GLdouble;
-    Depth,Cull,Blend,Scissor,SRGB:GLBoolean;
+    SRGB:GLBoolean;
   end;
 procedure SaveGL(out S:TGLState);
 begin
-  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,@S.DrawFBO[0]);glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,@S.ReadFBO[0]);
-  glGetIntegerv(GL_VIEWPORT,@S.Viewport[0]);glGetIntegerv(GL_CURRENT_PROGRAM,@S.ProgramID);
-  glGetIntegerv(GL_VERTEX_ARRAY_BINDING,@S.VAO);glGetIntegerv(GL_ACTIVE_TEXTURE,@S.ActiveTexture);
-  glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_TEXTURE_BINDING_2D,@S.Texture2D);glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@S.TextureArray);
-  glGetIntegerv(GL_DEPTH_FUNC,@S.DepthFunc);glGetBooleanv(GL_DEPTH_WRITEMASK,@S.DepthMask[0]);
-  glGetBooleanv(GL_COLOR_WRITEMASK,@S.ColorMask[0]);glGetFloatv(GL_COLOR_CLEAR_VALUE,@S.ClearColor[0]);glGetDoublev(GL_DEPTH_RANGE,@S.DepthRange[0]);
-  S.Depth:=glIsEnabled(GL_DEPTH_TEST);S.Cull:=glIsEnabled(GL_CULL_FACE);S.Blend:=glIsEnabled(GL_BLEND);
-  S.Scissor:=glIsEnabled(GL_SCISSOR_TEST);S.SRGB:=glIsEnabled(GL_FRAMEBUFFER_SRGB_RTX);
+  S.Core.Capture(1);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,@S.TextureArray);
+  glGetFloatv(GL_COLOR_CLEAR_VALUE,@S.ClearColor[0]);glGetDoublev(GL_DEPTH_RANGE,@S.DepthRange[0]);
+  S.SRGB:=glIsEnabled(GL_FRAMEBUFFER_SRGB_RTX);
 end;
-procedure RestoreGL(const S:TGLState);
-  procedure Enable(Cap:GLenum;Value:GLBoolean);
-  begin if Value=GL_TRUE then glEnable(Cap) else glDisable(Cap);end;
+procedure RestoreGL(var S:TGLState);
 begin
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER,S.DrawFBO[0]);glBindFramebuffer(GL_READ_FRAMEBUFFER,S.ReadFBO[0]);
-  glViewport(S.Viewport[0],S.Viewport[1],S.Viewport[2],S.Viewport[3]);glUseProgram(S.ProgramID);glBindVertexArray(S.VAO);
-  glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,S.Texture2D);glBindTexture(GL_TEXTURE_2D_ARRAY,S.TextureArray);glActiveTexture(S.ActiveTexture);
-  glDepthFunc(S.DepthFunc);glDepthMask(S.DepthMask[0]);glDepthRange(S.DepthRange[0],S.DepthRange[1]);
-  glColorMask(S.ColorMask[0],S.ColorMask[1],S.ColorMask[2],S.ColorMask[3]);glClearColor(S.ClearColor[0],S.ClearColor[1],S.ClearColor[2],S.ClearColor[3]);
-  Enable(GL_DEPTH_TEST,S.Depth);Enable(GL_CULL_FACE,S.Cull);Enable(GL_BLEND,S.Blend);
-  Enable(GL_SCISSOR_TEST,S.Scissor);Enable(GL_FRAMEBUFFER_SRGB_RTX,S.SRGB);
+  S.Core.Restore;
+  glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,S.TextureArray);glActiveTexture(S.Core.Active);
+  glDepthRange(S.DepthRange[0],S.DepthRange[1]);
+  glClearColor(S.ClearColor[0],S.ClearColor[1],S.ClearColor[2],S.ClearColor[3]);
+  if S.SRGB=GL_TRUE then glEnable(GL_FRAMEBUFFER_SRGB_RTX) else glDisable(GL_FRAMEBUFFER_SRGB_RTX);
 end;
 function ProgramFor(const Fragment:string;const Vertex:string='#version 330'#10'out vec2 uv;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0,1);}'):Cardinal;
 var V,F:Cardinal;OK,L:GLint;P:PChar;Log:string;
@@ -244,8 +274,14 @@ begin
   finally glDeleteShader(V);if F<>0 then glDeleteShader(F);end;
 end;
 constructor TRtxShadow.Create;
+var I:Integer;
 begin
   inherited;FSlots:=specialize TDictionary<string,TRtxProjection>.Create;
+  FMeshIdentities:=specialize TDictionary<QWord,TRtxMeshIdentity>.Create;
+  FEarlyMeshReuse:=GetEnvironmentVariable('REZVIVO_RTX_EARLY_MESH_REUSE')<>'0';
+  FFixedLodSnapshots:=GetEnvironmentVariable('REZVIVO_RTX_FIXED_LOD_SNAPSHOT')<>'0';
+  FStageDiagnostics:=GetEnvironmentVariable('REZVIVO_RENDER_DIAGNOSTICS')='1';
+  if FStageDiagnostics then for I:=0 to High(FStageTimers) do FStageTimers[I]:=TAsyncGpuTimer.Create;
   FDynamicCasters:=TCastleTransformList.Create(False);FDynamicMeshes:=TRtxDynamicMeshes.Create;FScreenStrength:=1;FScreenFilter:=16;
 end;
 procedure TRtxShadow.SetDynamicCasters(const Casters:TCastleTransformList);
@@ -284,7 +320,18 @@ begin
   Result:=2; { Neighbouring disk samples are reconstructed spatially. }
 end;
 destructor TRtxShadow.Destroy;
-begin Release;FDynamicMeshes.Free;FDynamicCasters.Free;FSlots.Free;inherited;end;
+var I:Integer;
+begin Release;for I:=0 to High(FStageTimers) do FStageTimers[I].Free;
+  FDynamicMeshes.Free;FDynamicCasters.Free;FSlots.Free;FMeshIdentities.Free;inherited;end;
+procedure TRtxShadow.BeginStage(Index:Integer);
+var NS:QWord;
+begin
+  if not FStageDiagnostics then Exit;
+  while FStageTimers[Index].ReadSample(NS) do FStageGpuMS[Index]:=NS/1000000;
+  FStageTimers[Index].BeginSample;
+end;
+procedure TRtxShadow.EndStage(Index:Integer);
+begin if FStageDiagnostics then FStageTimers[Index].EndSample;end;
 procedure TRtxShadow.Fail(const Msg:string);
 begin
   Release;
@@ -294,24 +341,38 @@ begin
   else WritelnLog('RTX','Falling back to raster shadows: '+Msg);
 end;
 procedure TRtxShadow.Initialize(Size:Integer);
-var Version:function:Cardinal;cdecl;Shader:UnicodeString;OldTexture:GLint;
+var Version:function:Cardinal;cdecl;Shader:UnicodeString;OldTexture:GLint;I:Integer;C:TVector3;
   function Proc(const Name:string):Pointer;
   begin Result:=GetProcedureAddress(FLibrary,Name);if Result=nil then raise Exception.Create('Missing RTX entry point '+Name);end;
 begin
+  SetLength(FGroundColors,GROUND_MAT_COUNT);
+  for I:=0 to High(FGroundColors) do begin
+    C:=GROUND_MATERIALS[I].FallbackColor;
+    FGroundColors[I]:=Vector4(Power(C.X,2.2),Power(C.Y,2.2),Power(C.Z,2.2),0);
+  end;
   FStandaloneRaster:=FRasterComparison;FBuiltRasterComparison:=FRasterComparison;
   if not FStandaloneRaster then begin
   FLibrary:=LoadLibrary(IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))+'rezvivo_rtx.dll');
   if FLibrary=NilHandle then raise Exception.Create('Optional rezvivo_rtx.dll is not installed');
-  Pointer(Version):=Proc('rzrt_version');if Version()<>9 then raise Exception.Create('Incompatible RTX bridge');
+  Pointer(Version):=Proc('rzrt_version');if Version()<>11 then raise Exception.Create('Incompatible RTX bridge');
   Pointer(FFrameWaits):=Proc('rzrt_frame_waits');Pointer(FGroundTriangles):=Proc('rzrt_ground_triangles');
   Pointer(FCreate):=Proc('rzrt_create');Pointer(FDestroy):=Proc('rzrt_destroy');Pointer(FErrorText):=Proc('rzrt_error');Pointer(FDeviceName):=Proc('rzrt_device');
-  Pointer(FAlphaTexture):=Proc('rzrt_alpha');Pointer(FOutputTexture):=Proc('rzrt_output');Pointer(FSetScene):=Proc('rzrt_scene');Pointer(FTrace):=Proc('rzrt_trace');Pointer(FReadStats):=Proc('rzrt_stats');
-  Pointer(FSetSceneMaterials):=Proc('rzrt_scene_materials');Pointer(FReflectionSize):=Proc('rzrt_reflection_size');
+  Pointer(FAlphaTexture):=Proc('rzrt_alpha');Pointer(FOutputTexture):=Proc('rzrt_output');Pointer(FTrace):=Proc('rzrt_trace');Pointer(FReadStats):=Proc('rzrt_stats');
+  Pointer(FImageWrite):=Proc('rzrt_image_write');
+  Pointer(FSceneBegin):=Proc('rzrt_scene_begin');Pointer(FSceneChunk):=Proc('rzrt_scene_chunk');
+  Pointer(FMeshBegin):=Proc('rzrt_mesh_begin');Pointer(FMeshEnd):=Proc('rzrt_mesh_end');
+  Pointer(FMeshBeginIdentity):=Proc('rzrt_mesh_begin_identity');Pointer(FMeshReuse):=Proc('rzrt_mesh_reuse');
+  Pointer(FSceneCommit):=Proc('rzrt_scene_commit');Pointer(FCacheStat):=Proc('rzrt_cache_stat');
+  Pointer(FReflectionSize):=Proc('rzrt_reflection_size');
   Pointer(FReflectionTexture):=Proc('rzrt_reflection_texture');Pointer(FReflect):=Proc('rzrt_reflect');Pointer(FReflectionMS):=Proc('rzrt_reflection_ms');
   Pointer(FScreenSize):=Proc('rzrt_screen_size');Pointer(FScreenTexture):=Proc('rzrt_screen_texture');
   Pointer(FScreenReuseTexture):=Proc('rzrt_screen_reuse_texture');
   Pointer(FScreenTrace):=Proc('rzrt_screen_trace');Pointer(FScreenMS):=Proc('rzrt_screen_ms');Pointer(FScreenBytes):=Proc('rzrt_screen_bytes');
   Pointer(FDynamicBuffer):=Proc('rzrt_dynamic_buffer');Pointer(FDynamicStat):=Proc('rzrt_dynamic_stat');
+  Pointer(FDynamicBufferIndexed):=Proc('rzrt_dynamic_buffer_indexed');
+  Pointer(FDynamicActors):=Proc('rzrt_dynamic_actors');
+  Pointer(FDynamicActorRevisions):=Proc('rzrt_dynamic_actor_revisions');
+  Pointer(FStageMS):=Proc('rzrt_stage_ms');Pointer(FDiagnostic):=Proc('rzrt_diagnostic');
   Shader:=UTF8Decode(UriToFilenameSafe('castle-data:/shaders/rtx/shadow.spv'));
   FContext:=FCreate(PWideChar(Shader),IfThen(FScreenShadows,1,Size),ALPHA_SIZE,ALPHA_LAYERS);
   if FContext=nil then raise Exception.Create(string(FErrorText()));
@@ -352,8 +413,10 @@ begin
   FScreenError:='';FScreenWidth:=0;FScreenHeight:=0;
   SetRtxMaterialPass(False,0,Vector4(0,0,1,1));
   if FReflectionFBO<>0 then glDeleteFramebuffers(1,@FReflectionFBO);FReflectionFBO:=0;
+  FReflectionWidth:=0;FReflectionHeight:=0;
   FReflectionError:='';FSurfaces:=nil;
   if FBuildingAtlas<>nil then FBuildingAtlas.KeepExistingEnd;FBuildingAtlas:=nil;FUploadedAtlas:=0;
+  if FBuildBuildingAtlas<>nil then FBuildBuildingAtlas.KeepExistingEnd;FBuildBuildingAtlas:=nil;
   if FRgbaCopyProgram<>0 then glDeleteProgram(FRgbaCopyProgram);FRgbaCopyProgram:=0;
   if FCardVAO<>0 then glDeleteVertexArrays(1,@FCardVAO);FCardVAO:=0;
   if FCardBuffer<>0 then glDeleteBuffers(1,@FCardBuffer);FCardBuffer:=0;
@@ -366,6 +429,7 @@ begin
   if (FContext<>nil) and Assigned(FDestroy) then FDestroy(FContext);FContext:=nil;
   if FLibrary<>NilHandle then UnloadLibrary(FLibrary);FLibrary:=NilHandle;
   FSlots.Clear;FVertices:=nil;FCards:=nil;FActive:=False;FCollecting:=False;FWaiting:=False;
+  FMeshIdentities.Clear;FCurrentMeshIdentity:=0;
   FillChar(FActiveLayers,SizeOf(FActiveLayers),0);FillChar(FBuildLayers,SizeOf(FBuildLayers),0);
   FStats:=Default(TRtxStats);FSubmittedID:=0;FRevision:=0;
   FDeferredTrees:=0;FActiveDeferredTrees:=0;
@@ -385,8 +449,25 @@ begin
   H:=FHalfExtent;if FReflections or FScreenShadows then H:=Max(H,600);
   Result:=(MaxX>=-H-48) and (MinX<=H+48) and (MaxY>=-H-48) and (MinY<=H+48);
 end;
+procedure TRtxShadow.PublishBuildingAtlas;
+begin
+  if FBuildBuildingAtlas=nil then Exit; { all meshes reused the active atlas }
+  if FBuildingAtlas<>nil then FBuildingAtlas.KeepExistingEnd;
+  FBuildingAtlas:=FBuildBuildingAtlas;FBuildBuildingAtlas:=nil;
+  { Even the same node may now refer to changed image content. Publish the
+    texture with the immutable scene that contains its matching UV layout. }
+  FUploadedAtlas:=0;
+end;
+procedure TRtxShadow.FlushChunk;
+begin
+  if FVertexCount=0 then Exit;
+  if FSceneChunk(FContext,Pointer(FVertices),FVertexCount div 3,Pointer(FSurfaces))=0 then
+    raise Exception.Create(string(FErrorText()));
+  Inc(FCollectedTriangles,FVertexCount div 3);FVertexCount:=0;
+end;
 procedure TRtxShadow.AddTriangle(Shape:TObject;const Triangle,Normal:TTriangle3;const TexCoord:TTriangle4;const Face:TFaceIndex);
-var I,J,Index,Coord,MatID,Matched:Integer;N,Color,C:TVector3;S:TRtxSurface;Desc:TBuildingMaterialDesc;UV:array[0..2]of TVector4;
+const ChunkTriangles=65536;
+var I,J,Index,Coord,MatID,Matched:Integer;N,C:TVector3;S:TRtxSurface;Desc:TBuildingMaterialDesc;UV:array[0..2]of TVector4;
   P:array[0..2]of TVector3;
 begin
   if not Triangle.IsValid then Exit;
@@ -405,18 +486,19 @@ begin
        (Min(P[0].Z,Min(P[1].Z,P[2].Z))>C.Z+620) or
        (Max(P[0].Z,Max(P[1].Z,P[2].Z))<C.Z-620) then Exit;
   end;
-  if FVertexCount>30000000-3 then raise Exception.Create('RTX snapshot exceeds its triangle budget');
-  if FVertexCount+3>Length(FVertices) then SetLength(FVertices,Max(16384,Length(FVertices)*2));
+  if FVertexCount=ChunkTriangles*3 then FlushChunk;
+  if Length(FVertices)=0 then begin
+    SetLength(FVertices,ChunkTriangles*3);SetLength(FSurfaces,ChunkTriangles);
+    FPeakCollectionBytes:=QWord(ChunkTriangles)*(3*SizeOf(TVector3)+SizeOf(TRtxSurface));
+  end;
   Index:=FVertexCount div 3;
   for I:=0 to 2 do begin FVertices[FVertexCount]:=P[I];Inc(FVertexCount);end;
-  if Index>=Length(FSurfaces) then SetLength(FSurfaces,Max(8192,Length(FSurfaces)*2));
   N:=TVector3.CrossProduct(FVertices[FVertexCount-2]-FVertices[FVertexCount-3],FVertices[FVertexCount-1]-FVertices[FVertexCount-3]).Normalize;
   S:=Default(TRtxSurface);S.Normal:=Vector4(N.X,N.Y,N.Z,0);
   S.Color:=Vector4(FSurfaceColor.X,FSurfaceColor.Y,FSurfaceColor.Z,0);
   if FGroundShape then begin
-    Color:=GROUND_MATERIALS[EnsureRange(MatID,0,GROUND_MAT_COUNT-1)].FallbackColor;
     S.Normal.W:=-1-MatID;
-    S.Color:=Vector4(Power(Color.X,2.2),Power(Color.Y,2.2),Power(Color.Z,2.2),0);
+    S.Color:=FGroundColors[EnsureRange(MatID,0,GROUND_MAT_COUNT-1)];
     FSurfaces[Index]:=S;Exit;
   end;
   if (FBldUV<>nil) and (FBldMat<>nil) and (Face.IndexBegin>=0) and
@@ -474,9 +556,91 @@ procedure TRtxShadow.Prepare(const Casters:TCastleTransformList;Revision:QWord;
   const Focus,Sun:TVector3;Size:Integer;HalfExtent:Single;Accept:TRtxShapeFilter);
 var Scene:TCastleScene;Shapes:TShapeList;Shape:TShape;Box:TBox3D;I,K:Integer;
     M,Local:TMatrix4;V:Double;UpHint:TVector3;NativeReady:Boolean;
-    TreeRevision:QWord;RefreshTrees:Boolean;SnapshotFocus,Lead:TVector3;
+    TreeRevision:QWord;RefreshTrees,Rebase,SunChanged:Boolean;SnapshotFocus,Lead:TVector3;
+    MeshIdentity:TRtxMeshIdentity;ReuseResult:LongInt;TransformWord:Cardinal;InputRevision:QWord;
     Attr:TFloatVertexAttributeNode;E:TEffectNode;App:TAppearanceNode;Field:TX3DField;TexNode:TX3DNode;
+  function SceneSnapshotRevision(const S:TCastleScene):QWord;
+  begin
+    if FScreenShadows and FFixedLodSnapshots then Result:=S.InternalFixedLodSnapshotRevision
+    else Result:=S.InternalSnapshotRevision;
+  end;
+  procedure BeginTileMesh;
+  var N,A:Integer;Count,UVCount,GroundCount,Triangles:QWord;S:TShape;IFS:TIndexedFaceSetNode;
+  begin
+    Count:=0;UVCount:=0;GroundCount:=0;
+    for N:=0 to Shapes.Count-1 do begin
+      S:=Shapes[N];
+      if (S.Node<>nil) and not S.Node.Visible then Continue;
+      if not FScreenShadows and not Accept(S) and not (FReflections and IsRtxGround(S)) then Continue;
+      if not Intersects(S.BoundingBox.Transform(Scene.WorldTransform)) then Continue;
+      Triangles:=S.TrianglesCount;Inc(Count,Triangles);
+      if IsRtxGround(S) then Inc(GroundCount,Triangles);
+      if S.Geometry is TIndexedFaceSetNode then begin
+        IFS:=TIndexedFaceSetNode(S.Geometry);
+        for A:=0 to IFS.FdAttrib.Count-1 do
+          if (IFS.FdAttrib[A] is TFloatVertexAttributeNode) and
+            (TFloatVertexAttributeNode(IFS.FdAttrib[A]).NameField='bldUV') then begin
+            Inc(UVCount,Triangles);Break;
+          end;
+      end;
+    end;
+    if (Count>=High(Cardinal) div 3) or (UVCount>Count) then raise Exception.Create('RTX tile geometry exceeds device addressing');
+    if FMeshBeginIdentity(FContext,Count,UVCount,GroundCount,FCurrentMeshIdentity)=0 then raise Exception.Create(string(FErrorText()));
+    FMeshOpen:=True;
+  end;
+  procedure PruneMeshIdentities;
+  var Keys:array of QWord;Key:QWord;N:Integer;Found:Boolean;
+  begin
+    Keys:=FMeshIdentities.Keys.ToArray;
+    for Key in Keys do begin
+      Found:=False;
+      for N:=0 to Casters.Count-1 do if (Casters[N] is TCastleScene) and
+        (TCastleScene(Casters[N]).InternalSnapshotIdentity=Key) then begin Found:=True;Break;end;
+      if not Found then FMeshIdentities.Remove(Key);
+    end;
+  end;
+  procedure TraceCollectionReasons;
+  var N,K:Integer;S:TCastleScene;World:TMatrix4;Bits:Cardinal;
+      MatrixBits,IdentityText:String;Identity:TRtxMeshIdentity;
+  begin
+    { Explicit diagnosis only. Never format strings or traverse extra scene
+      state in the normal frame path. A camera-driven collection can also come
+      from membership/transform changes without a CGE geometry notification. }
+    WritelnLog('RTX snapshot',Format(
+      'collection serial=%d input_revision=%d mixed_revision=%d previous_revision=%d active_revision=%d '+
+      'trees=%d active_trees=%d refresh_trees=%d sun_changed=%d extent=%f previous_extent=%f '+
+      'rebase=%d raster_changed=%d active=%d collecting=%d casters=%d early_reuse=%d '+
+      'focus=(%f,%f,%f) active_origin=(%f,%f,%f)',
+      [FCollectionSerial+1,InputRevision,Revision,FRevision,FActiveRevision,
+       TreeRevision,FActiveTrees,Ord(RefreshTrees),Ord(SunChanged),HalfExtent,FHalfExtent,
+       Ord(Rebase),Ord(FRasterComparison<>FBuiltRasterComparison),Ord(FActive),
+       Ord(FCollecting),Casters.Count,Ord(FEarlyMeshReuse),SnapshotFocus.X,
+       SnapshotFocus.Y,SnapshotFocus.Z,FActiveOrigin.X,FActiveOrigin.Y,FActiveOrigin.Z]));
+    for N:=0 to Casters.Count-1 do
+      if Casters[N] is TCastleScene then begin
+        S:=TCastleScene(Casters[N]);World:=S.WorldTransform;MatrixBits:='';
+        for K:=0 to 15 do begin
+          Move(World.Data[K div 4,K mod 4],Bits,SizeOf(Bits));
+          if K>0 then MatrixBits:=MatrixBits+',';
+          MatrixBits:=MatrixBits+IntToHex(Bits,8);
+        end;
+        if FMeshIdentities.TryGetValue(S.InternalSnapshotIdentity,Identity) then
+          IdentityText:=Format('token=%d saved_revision=%d transform_equal=%d origin_equal=%d',
+            [Identity.Token,Identity.Revision,
+             Ord(CompareMem(@Identity.Transform,@World,SizeOf(World))),
+             Ord(CompareMem(@Identity.Origin,@FActiveOrigin,SizeOf(FActiveOrigin)))])
+        else IdentityText:='unseen';
+        WritelnLog('RTX snapshot',Format(
+          'caster index=%d class=%s scene=%s identity=%d revision=%d raster_revision=%d exists=%d matrix=[%s] mesh_key=[%s]',
+          [N,S.ClassName,S.Name,S.InternalSnapshotIdentity,SceneSnapshotRevision(S),S.InternalSnapshotRevision,
+           Ord(S.ExistsInRoot),MatrixBits,IdentityText]));
+      end else
+        WritelnLog('RTX snapshot',Format('caster index=%d class=%s pointer=%s exists=%d',
+          [N,Casters[N].ClassName,IntToHex(PtrUInt(Casters[N]),SizeOf(Pointer)*2),
+           Ord(Casters[N].ExistsInRoot)]));
+  end;
 begin
+  InputRevision:=Revision;
   if FFailed then begin
     if FRasterComparison=FBuiltRasterComparison then Exit;
     FFailed:=False;FError:='';
@@ -491,18 +655,31 @@ begin
     for I:=0 to Casters.Count-1 do begin
       { Snapshot cursors must not survive an unordered caster-list change. }
       Revision:=(Revision xor QWord(PtrUInt(Casters[I])))*16777619;
+      if Casters[I] is TCastleScene then begin
+        Revision:=(Revision xor TCastleScene(Casters[I]).InternalSnapshotIdentity)*16777619;
+        Revision:=(Revision xor SceneSnapshotRevision(TCastleScene(Casters[I])))*16777619;
+        M:=Casters[I].WorldTransform;
+        for K:=0 to 15 do begin
+          Move(M.Data[K div 4,K mod 4],TransformWord,SizeOf(TransformWord));
+          Revision:=(Revision xor TransformWord)*16777619;
+        end;
+        Revision:=(Revision xor QWord(Ord(Casters[I].ExistsInRoot)))*16777619;
+      end;
       if (FReflections or FScreenShadows) and (Casters[I] is TOsmProceduralVegetation) then
         TreeRevision:=TreeRevision+TOsmProceduralVegetation(Casters[I]).ShadowAtlasRevision;
     end;
-    Revision:=Revision xor (QWord(Ord(FReflections)) shl 63);
+    if not FScreenShadows then Revision:=Revision xor (QWord(Ord(FReflections)) shl 63);
     Revision:=Revision xor (QWord(Ord(FScreenShadows)) shl 62);
     FObservedTrees:=TreeRevision;
-    if FInitialized and ((Size<>FAtlasSize) or ((FSun-Sun.Normalize).Length>0.005) or (FStandaloneRaster<>FRasterComparison)) then Release;
+    SunChanged:=(FSun-Sun.Normalize).Length>0.005;
+    if FInitialized and ((Size<>FAtlasSize) or (SunChanged and not FScreenShadows) or (FStandaloneRaster<>FRasterComparison)) then Release;
     if not FInitialized then Initialize(Size);
     if not FStandaloneRaster then
       if FReadStats(FContext,@FStats)=0 then raise Exception.Create(string(FErrorText()));
     if FWaiting and (FStats.SceneID=FSubmittedID) then begin
       FActiveOrigin:=FBuildOrigin;FActiveFocus:=FLastFocus;FActiveRevision:=FRevision;FActiveSceneID:=FSubmittedID;FActive:=True;FWaiting:=False;
+      FActiveSun:=FSun;
+      PublishBuildingAtlas;
       FActiveTrees:=FBuildTrees;
       FActiveDeferredTrees:=FDeferredTrees;
       FActiveLayers:=FBuildLayers;
@@ -512,35 +689,74 @@ begin
     { The in-flight snapshot coalesces atlas uploads naturally. Publish ready
       casters without waiting for the whole atlas stream to become idle. }
     RefreshTrees:=FActive and not FCollecting and (TreeRevision<>FActiveTrees);
+    { Keep hashes stable while streaming nearby tiles, but retain sub-millimetre
+      local coordinates on long rides instead of keeping the first origin forever. }
+    Rebase:=FScreenShadows and FActive and ((SnapshotFocus-FActiveOrigin).Length>4096);
     { Receiver extents grow with an aerial view. Keep a padded snapshot when
       the view contracts, and do not restart collection on sub-texel size
       changes. Previously exact size inequality could starve an adaptive map. }
-    if RefreshTrees or (Revision<>FRevision) or (HalfExtent>FHalfExtent) or (FRasterComparison<>FBuiltRasterComparison) or
+    if RefreshTrees or SunChanged or (Revision<>FRevision) or (HalfExtent>FHalfExtent) or (FRasterComparison<>FBuiltRasterComparison) or
+      (Rebase and not FCollecting) or
       (not FScreenShadows and not FCollecting and ((SnapshotFocus-FLastFocus).Length>32)) or
       (not FScreenShadows and FCollecting and ((Focus-FLastFocus).Length>FHalfExtent*0.5+32)) or
       (not FActive and not FCollecting) then begin
+      if LogChanges then TraceCollectionReasons;
       { The immutable active snapshot stays usable while collecting its
         replacement. Changing a tile must not switch every material to sky. }
+      FReuseStatic:=FScreenShadows and FActive and (Revision=FActiveRevision) and not Rebase and not FRasterComparison;
       FCollecting:=True;FRevision:=Revision;FLastFocus:=SnapshotFocus;
+      if FBuildBuildingAtlas<>nil then FBuildBuildingAtlas.KeepExistingEnd;
+      FBuildBuildingAtlas:=nil;
       FHalfExtent:=Ceil(HalfExtent/64)*64+32;
       FBuiltRasterComparison:=FRasterComparison;
       Inc(FCollectionSerial);FBuildNear:=0;
       FillChar(FBuildLayers,SizeOf(FBuildLayers),0);
       FBuildTrees:=TreeRevision;
       FDeferredTrees:=0;
-      FBuildOrigin:=Vector3(Floor(SnapshotFocus.X/64)*64,Floor(SnapshotFocus.Y/64)*64,Floor(SnapshotFocus.Z/64)*64);
+      if FScreenShadows and FActive and not Rebase then FBuildOrigin:=FActiveOrigin
+      else FBuildOrigin:=Vector3(Floor(SnapshotFocus.X/64)*64,Floor(SnapshotFocus.Y/64)*64,Floor(SnapshotFocus.Z/64)*64);
       FSun:=Sun.Normalize;UpHint:=Vector3(0,1,0);if Abs(FSun.Y)>0.99 then UpHint:=Vector3(0,0,1);
       FSide:=TVector3.CrossProduct(FSun,UpHint).Normalize;FUp:=TVector3.CrossProduct(FSide,FSun);
       FVertexCount:=0;FCardCount:=0;FSource:=0;FShape:=0;FCell:=0;FEntry:=0;FGroundIndex:=0;
+      FCollectedTriangles:=0;FMeshOpen:=False;
+      if not FStandaloneRaster then
+        if FSceneBegin(FContext,Ord(FReuseStatic))=0 then raise Exception.Create(string(FErrorText()));
+      PruneMeshIdentities;
     end;
     if not FCollecting then Exit;
     FDeadline:=GetTickCount64+3;FBakesThisStep:=0;
     while (FSource<Casters.Count) and TimeAvailable do begin
       if Casters[FSource] is TCastleScene then begin
-        if FRasterComparison then begin Inc(FSource);FShape:=0;Continue;end;
+        if FRasterComparison or FReuseStatic then begin Inc(FSource);FShape:=0;Continue;end;
         Scene:=TCastleScene(Casters[FSource]);
-        if not Scene.ExistsInRoot or not Intersects(Scene.WorldBoundingBox) then begin Inc(FSource);FShape:=0;Continue;end;
-        Shapes:=Scene.Shapes.TraverseList(True,True,False);
+        { Scene.WorldBoundingBox follows the active raster LOD, which may be
+          an empty far placeholder while the fixed snapshot still has LOD0
+          geometry. In Screen+fixed mode only per-shape bounds may reject it. }
+        if not Scene.ExistsInRoot or
+          (not (FScreenShadows and FFixedLodSnapshots) and
+           not Intersects(Scene.WorldBoundingBox)) then begin Inc(FSource);FShape:=0;Continue;end;
+        if not FMeshOpen then begin
+          FCurrentMeshIdentity:=0;
+          if FScreenShadows and FEarlyMeshReuse then begin
+            M:=Scene.WorldTransform;
+            if not FMeshIdentities.TryGetValue(Scene.InternalSnapshotIdentity,MeshIdentity) or
+              (MeshIdentity.Revision<>SceneSnapshotRevision(Scene)) or
+              not CompareMem(@MeshIdentity.Transform,@M,SizeOf(M)) or
+              not CompareMem(@MeshIdentity.Origin,@FBuildOrigin,SizeOf(FBuildOrigin)) then begin
+              Inc(FMeshIdentitySerial);MeshIdentity.Token:=FMeshIdentitySerial;
+              MeshIdentity.Revision:=SceneSnapshotRevision(Scene);MeshIdentity.Transform:=M;MeshIdentity.Origin:=FBuildOrigin;
+              FMeshIdentities.AddOrSetValue(Scene.InternalSnapshotIdentity,MeshIdentity);
+            end;
+            FCurrentMeshIdentity:=MeshIdentity.Token;
+            ReuseResult:=FMeshReuse(FContext,FCurrentMeshIdentity);
+            if ReuseResult<0 then raise Exception.Create(string(FErrorText()));
+            if ReuseResult>0 then begin Inc(FSource);FShape:=0;Continue;end;
+          end;
+        end;
+        if FScreenShadows and FFixedLodSnapshots then
+          Shapes:=Scene.Shapes.TraverseFixedLodList(True,False)
+        else Shapes:=Scene.Shapes.TraverseList(True,True,False);
+        if not FMeshOpen then BeginTileMesh;
         while (FShape<Shapes.Count) and TimeAvailable do begin
           Shape:=Shapes[FShape];Inc(FShape);
           { CGE's shape-tree visibility accounts for invisible parents;
@@ -568,8 +784,8 @@ begin
               E:=TEffectNode(App.FdEffects[I]);Field:=E.Field('u_bld_atlas');
               if Field is TSFNode then begin
                 TexNode:=TSFNode(Field).Value;
-                if (FBuildingAtlas=nil) and (TexNode is TAbstractTextureNode) then begin
-                  FBuildingAtlas:=TAbstractTextureNode(TexNode);FBuildingAtlas.KeepExistingBegin;
+                if (FBuildBuildingAtlas=nil) and (TexNode is TAbstractTextureNode) then begin
+                  FBuildBuildingAtlas:=TAbstractTextureNode(TexNode);FBuildBuildingAtlas.KeepExistingBegin;
                 end;
                 FBuildingGrid:=Vector2(4,4);
                 Field:=E.Field('u_bld_grid_cols');if Field is TSFInt32 then FBuildingGrid.X:=TSFInt32(Field).Value;
@@ -588,6 +804,11 @@ begin
           end else Shape.LocalTriangulate(@AddTriangle,False);
         end;
         if FShape<Shapes.Count then Break;
+        { Upload small batches but build one tile, not overlapping material
+          groups. No whole-city CPU snapshot or duplicated upload array. }
+        FlushChunk;
+        if FMeshEnd(FContext)=0 then raise Exception.Create(string(FErrorText()));
+        FMeshOpen:=False;
       end else if (Casters[FSource] is TOsmProceduralVegetation) and RenderTreesActive and (FReflections or FScreenShadows) then begin
         NativeReady:=TOsmProceduralVegetation(Casters[FSource]).CollectRtxTrees(Self,FCell,FEntry);
         if not NativeReady then Break;
@@ -603,6 +824,8 @@ begin
     Inc(FBuildID);FSubmittedID:=FBuildID;
     if FStandaloneRaster then begin
       FActiveOrigin:=FBuildOrigin;FActiveFocus:=FLastFocus;FActiveRevision:=FRevision;FActive:=True;FCollecting:=False;
+      FActiveSun:=FSun;
+      PublishBuildingAtlas;
       FActiveTrees:=FBuildTrees;
       FActiveDeferredTrees:=FDeferredTrees;
       FActiveLayers:=FBuildLayers;
@@ -610,7 +833,8 @@ begin
       FStats.Bytes:=Int64(ALPHA_SIZE)*ALPHA_SIZE*ALPHA_LAYERS+Int64(FVertexCount)*SizeOf(TVector3)+Int64(FCardCount)*SizeOf(TRtxCard);
       Inc(FStats.Builds);FVertices:=nil;FCards:=nil;Exit;
     end;
-    if FSetSceneMaterials(FContext,Pointer(FVertices),FVertexCount div 3,Pointer(FCards),FCardCount,FSubmittedID,Pointer(FSurfaces))=0 then
+    FlushChunk;
+    if FSceneCommit(FContext,Pointer(FCards),FCardCount,FSubmittedID)=0 then
       raise Exception.Create(string(FErrorText()));
     FCollecting:=False;FWaiting:=True;
   except on E:Exception do Fail(E.Message);end;
@@ -630,6 +854,7 @@ end;
 procedure TRtxShadow.CopyLOD(const Layer:Integer;Texture:Cardinal;Source:Integer;Seasonal,Fruit:Boolean;Leaf,FruitAmount:Single);
 var S:TGLState;
 begin
+  if not FStandaloneRaster and (FImageWrite(FContext,0)=0) then raise Exception.Create(string(FErrorText()));
   SaveGL(S);
   try
     glBindFramebuffer(GL_FRAMEBUFFER,FFramebuffer);glFramebufferTextureLayer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,AlphaTexture,0,Layer);
@@ -734,6 +959,7 @@ begin
   finally RestoreGL(S);end;
 end;
 procedure TRtxShadow.Snapshot(const J:TJSONObject);
+var I:Integer;Memory:TJSONArray;Entry:TJSONObject;
 begin
   J.Add('active',FActive and not FFailed);J.Add('failed',FFailed);J.Add('error',FError);J.Add('device',FDevice);
   J.Add('collecting',FCollecting);J.Add('waiting_bvh',FWaiting);J.Add('sources_done',FSource);
@@ -741,6 +967,9 @@ begin
   J.Add('active_trees',Int64(FActiveTrees));J.Add('observed_trees',Int64(FObservedTrees));
   J.Add('pending_trees',FActiveDeferredTrees);J.Add('collecting_pending_trees',FDeferredTrees);
   J.Add('triangles',FStats.Triangles);J.Add('tree_cards',FStats.Cards);J.Add('gpu_bytes',FStats.Bytes);
+  J.Add('collection_triangles',Int64(FCollectedTriangles+FVertexCount div 3));
+  J.Add('collection_peak_bytes',Int64(FPeakCollectionBytes));J.Add('reusing_static',FReuseStatic);
+  J.Add('fixed_lod_snapshot',FScreenShadows and FFixedLodSnapshots);
   J.Add('trace_ms',FStats.TraceMS);J.Add('build_elapsed_ms',FStats.BuildMS);J.Add('frames',FStats.Frames);J.Add('builds',FStats.Builds);
   J.Add('silhouettes',FSlots.Count);J.Add('individual_tree_bakes',FBakedTrees);J.Add('projection_reuses',FReusedProjections);
   J.Add('cached_raster',FRasterComparison);
@@ -757,18 +986,47 @@ begin
   J.Add('screen_cache_reuse',FScreenReuseActive);
   J.Add('reflection_ranges',TJSONArray.Create([FReflectionRanges.X,FReflectionRanges.Y,FReflectionRanges.Z]));
   J.Add('screen_unified',FScreenShadows);J.Add('screen_receiver_limit_m',0);
+  J.Add('depth_capture_gpu_ms',FStageGpuMS[0]);J.Add('dynamic_gather_gpu_ms',FStageGpuMS[1]);
+  J.Add('reflection_capture_gpu_ms',FStageGpuMS[2]);J.Add('shadow_composite_gpu_ms',FStageGpuMS[3]);
   J.Add('screen_sun_radius_deg',ScreenSunRadius);J.Add('screen_rays',ScreenRayCount);
   if FDynamicMeshes<>nil then begin
     J.Add('dynamic_posed_shapes',FDynamicMeshes.Posed);
     J.Add('dynamic_skipped_shapes',FDynamicMeshes.Skipped);
     J.Add('dynamic_filtered_shapes',FDynamicMeshes.Filtered);
+    J.Add('dynamic_unique_vertices',FDynamicMeshes.VertexCount);
+    J.Add('dynamic_indexed',FDynamicMeshes.IndexedEnabled);
+    J.Add('dynamic_local_actors',FDynamicMeshes.LocalActorsEnabled);
+    J.Add('dynamic_collected_actor_groups',FDynamicMeshes.ActorCount);
+    if FDynamicMeshes.LocalActorsEnabled then
+      J.Add('dynamic_actor_count',FDynamicMeshes.ActorCount)
+    else J.Add('dynamic_actor_count',0);
+    J.Add('dynamic_rigid_actor_count',FDynamicMeshes.RigidActorCount);
   end;
   if FContext<>nil then begin
+    J.Add('static_chunks',FCacheStat(FContext,0));J.Add('mesh_builds',FCacheStat(FContext,1));
+    J.Add('mesh_cache_hits',FCacheStat(FContext,2));J.Add('static_reuses',FCacheStat(FContext,3));
+    J.Add('uploaded_triangles',FCacheStat(FContext,4));J.Add('build_peak_bytes',FCacheStat(FContext,5));
+    J.Add('compacted_blas',FCacheStat(FContext,6));J.Add('compaction_saved_bytes',FCacheStat(FContext,7));
+    J.Add('early_mesh_reuses',FCacheStat(FContext,8));
     J.Add('reflection_ms',FReflectionMS(FContext));J.Add('gpu_slot_waits',FFrameWaits(FContext));
     J.Add('ground_triangles',FGroundTriangles(FContext));
     J.Add('screen_ms',FScreenMS(FContext));J.Add('screen_bytes',FScreenBytes(FContext));
     J.Add('dynamic_triangles',FDynamicStat(FContext,0));J.Add('dynamic_builds',FDynamicStat(FContext,1));
     J.Add('dynamic_refits',FDynamicStat(FContext,2));J.Add('dynamic_bytes',FDynamicStat(FContext,3));
+    J.Add('dynamic_top_builds',FDynamicStat(FContext,4));J.Add('dynamic_top_refits',FDynamicStat(FContext,5));
+    J.Add('detailed_timing',FDiagnostic(FContext,0)<>0);
+    J.Add('dynamic_blas_ms',FStageMS(FContext,0));J.Add('dynamic_tlas_ms',FStageMS(FContext,1));
+    J.Add('shadow_ray_ms',FStageMS(FContext,2));J.Add('shadow_filter_ms',FStageMS(FContext,3));
+    J.Add('interop_submit_cpu_ms',FStageMS(FContext,4));
+    J.Add('material_upload_bytes',FDiagnostic(FContext,1));J.Add('geometry_hashed_bytes',FDiagnostic(FContext,2));
+    J.Add('descriptor_writes',FDiagnostic(FContext,3));J.Add('descriptor_skipped',FDiagnostic(FContext,4));
+    J.Add('interop_images',FDiagnostic(FContext,5));
+    Memory:=TJSONArray.Create;J.Add('vulkan_buffer_heaps',Memory);
+    for I:=0 to Integer(FDiagnostic(FContext,6))-1 do begin
+      Entry:=TJSONObject.Create;Memory.Add(Entry);Entry.Add('memory_type',I);
+      Entry.Add('bytes',FDiagnostic(FContext,32+I));Entry.Add('flags',FDiagnostic(FContext,64+I));
+      Entry.Add('heap',FDiagnostic(FContext,96+I));
+    end;
   end;
 end;
 procedure TRtxShadow.DiagnosticDepth(const J:TJSONObject);
@@ -776,6 +1034,12 @@ var S:TGLState;Pixels:array of Cardinal;I:Integer;Hash:Cardinal;Z:TJSONArray;
   Depth:array of Single;Mask:array of Byte;P:TVector4;X,Y,Visible,FarVisible,FarShadow,Pack:Integer;
   Distance,MaxDistance:Single;Partial,Levels:Integer;Seen:array[0..255]of Boolean;
   Reuse:array of TVector2;Reused,Occluded:Integer;
+  DepthHash,CoverageHash:QWord;DepthBits:Cardinal;DepthNonFinite:Integer;
+  { Diagnostic fingerprints only. Word-wise FNV arithmetic wraps by design. }
+  {$PUSH}{$Q-}
+  procedure MixDepthHash(var Value:QWord;const Word:Cardinal);inline;
+  begin Value:=(Value xor QWord(Word))*QWord(1099511628211);end;
+  {$POP}
 begin
   if (FContext=nil) or not FActive or FRasterComparison then Exit;
   if FScreenShadows then begin
@@ -791,10 +1055,20 @@ begin
       glBindTexture(GL_TEXTURE_2D,FScreenReuseTexture(FContext));glGetTexImage(GL_TEXTURE_2D,0,GL_RG,GL_FLOAT,Pointer(Reuse));
     finally glPixelStorei(GL_PACK_ALIGNMENT,Pack);RestoreGL(S);end;
     Visible:=0;FarVisible:=0;FarShadow:=0;MaxDistance:=0;Hash:=0;Partial:=0;Levels:=0;FillChar(Seen,SizeOf(Seen),0);
+    DepthHash:=QWord($CBF29CE484222325);CoverageHash:=DepthHash;DepthNonFinite:=0;
+    MixDepthHash(DepthHash,Cardinal(FScreenWidth));MixDepthHash(DepthHash,Cardinal(FScreenHeight));
+    MixDepthHash(CoverageHash,Cardinal(FScreenWidth));MixDepthHash(CoverageHash,Cardinal(FScreenHeight));
     for I:=0 to High(Depth) do begin
       Hash:=((Hash shl 5) or (Hash shr 27)) xor Mask[I];
       if not Seen[Mask[I]] then begin Seen[Mask[I]]:=True;Inc(Levels);end;
       if (Mask[I]>16) and (Mask[I]<239) then Inc(Partial);
+      { Reuse the existing D32F readback, including exact float bits and raster
+        position. No extra GPU synchronization or ordinary-frame work. }
+      Move(Depth[I],DepthBits,SizeOf(DepthBits));MixDepthHash(DepthHash,DepthBits);
+      if (DepthBits and $7F800000)=$7F800000 then begin
+        Inc(DepthNonFinite);MixDepthHash(CoverageHash,0);Continue;
+      end;
+      MixDepthHash(CoverageHash,Ord(Depth[I]<1));
       if Depth[I]>=1 then Continue;
       if FScreenReuseActive and (Reuse[I].X>=0) then begin
         if Reuse[I].Y=Depth[I] then Inc(Reused) else Inc(Occluded);
@@ -806,6 +1080,9 @@ begin
       if Distance>500 then begin Inc(FarVisible);if Mask[I]>16 then Inc(FarShadow);end;
     end;
     J.Add('screen_mask_hash',IntToHex(Hash,8));J.Add('screen_visible_pixels',Visible);
+    J.Add('screen_depth_hash',IntToHex(DepthHash,16));
+    J.Add('screen_depth_coverage_hash',IntToHex(CoverageHash,16));
+    J.Add('screen_depth_nonfinite_count',DepthNonFinite);
     J.Add('screen_partial_pixels',Partial);J.Add('screen_coverage_levels',Levels);
     J.Add('screen_far_pixels',FarVisible);J.Add('screen_far_shadow_pixels',FarShadow);
     J.Add('screen_reused_pixels',Reused);J.Add('screen_traced_pixels',Visible-Reused);
@@ -840,15 +1117,15 @@ end;
 
 procedure TRtxShadow.RenderScreenShadows(const Params:TRenderParams;Draw:TRtxDrawReflectors);
 var S:TGLState;OldView:TRectangle;OldRange:TDepthRange;OldProjection:TMatrix4;
-  C:TRtxReflectionCamera;W,H,I:Integer;Shader:UnicodeString;Tex,DynamicTarget:Cardinal;
+  C:TRtxReflectionCamera;W,H,I:Integer;Shader:UnicodeString;Tex,DynamicTarget,IndexTarget,IndicesDirty:Cardinal;
   Camera,Focus:TVector3;Radius:Single;InverseProjection:TMatrix4Double;
 begin
   ClearRtxScreenShadow;
   FScreenReuseActive:=False;
   if not ScreenReady then Exit;
-  if (FScreenLastScene<>FActiveSceneID)or((FScreenLastSun-FSun).Length>0.000001)or
+  if (FScreenLastScene<>FActiveSceneID)or((FScreenLastSun-FActiveSun).Length>0.000001)or
     (FScreenLastFilter<>FScreenFilter)or(FScreenLastSunRadius<>ScreenSunRadius)or(FScreenLastRayCount<>ScreenRayCount) then begin
-    Inc(FScreenRevision);FScreenLastScene:=FActiveSceneID;FScreenLastSun:=FSun;FScreenLastFilter:=FScreenFilter;
+    Inc(FScreenRevision);FScreenLastScene:=FActiveSceneID;FScreenLastSun:=FActiveSun;FScreenLastFilter:=FScreenFilter;
     FScreenLastSunRadius:=ScreenSunRadius;FScreenLastRayCount:=ScreenRayCount;
   end;
   SaveGL(S);OldView:=RenderContext.Viewport;OldRange:=RenderContext.DepthRange;
@@ -858,15 +1135,17 @@ begin
   try
     try
       W:=Max(1,OldView.Width);H:=Max(1,OldView.Height);
-      Shader:=UTF8Decode(UriToFilenameSafe('castle-data:/shaders/rtx/screen_shadow.spv'));
-      if FScreenSize(FContext,PWideChar(Shader),W,H)=0 then raise Exception.Create(string(FErrorText()));
-      FScreenWidth:=W;FScreenHeight:=H;
-      if FScreenFBO=0 then glGenFramebuffers(1,@FScreenFBO);
-      glBindFramebuffer(GL_FRAMEBUFFER,FScreenFBO);
-      glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,FScreenTexture(FContext,0),0);
-      glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,FScreenReuseTexture(FContext),0);
-      glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_NONE);
-      if glCheckFramebufferStatus(GL_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Screen shadow depth framebuffer incomplete');
+      if (FScreenFBO=0)or(FScreenWidth<>W)or(FScreenHeight<>H) then begin
+        Shader:=UTF8Decode(UriToFilenameSafe('castle-data:/shaders/rtx/screen_shadow.spv'));
+        if FScreenSize(FContext,PWideChar(Shader),W,H)=0 then raise Exception.Create(string(FErrorText()));
+        if FScreenFBO=0 then glGenFramebuffers(1,@FScreenFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER,FScreenFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,FScreenTexture(FContext,0),0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,FScreenReuseTexture(FContext),0);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_NONE);
+        if glCheckFramebufferStatus(GL_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Screen shadow depth framebuffer incomplete');
+        FScreenWidth:=W;FScreenHeight:=H;
+      end else glBindFramebuffer(GL_FRAMEBUFFER,FScreenFBO);
       RenderContext.Viewport:=Rectangle(0,0,W,H);RenderContext.DepthRange:=drFar;
       RenderContext.DepthBufferUpdate:=True;RenderContext.DepthTest:=True;
       glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDepthFunc(GL_LEQUAL);
@@ -877,11 +1156,26 @@ begin
       { Same camera, alpha tests and posed vertices as the colour pass. A light
         camera's depth-only pass omits non-casting ground and is unsuitable. }
       RtxScreenCapturing:=True;
-      try Draw(Params);finally RtxScreenCapturing:=False;end;
+      BeginStage(0);
+      try Draw(Params);finally RtxScreenCapturing:=False;EndStage(0);end;
+      BeginStage(1);
+      try
       FDynamicMeshes.Collect(FDynamicCasters,FActiveOrigin,Params);
-      DynamicTarget:=FDynamicBuffer(FContext,FDynamicMeshes.Triangles);
+      if FDynamicMeshes.IndexedEnabled then
+        DynamicTarget:=FDynamicBufferIndexed(FContext,FDynamicMeshes.Triangles,FDynamicMeshes.VertexCount,
+          FDynamicMeshes.TopologyVersion,IndexTarget,IndicesDirty)
+      else DynamicTarget:=FDynamicBuffer(FContext,FDynamicMeshes.Triangles);
       if (FDynamicMeshes.Triangles>0) and (DynamicTarget=0) then raise Exception.Create(string(FErrorText()));
-      FDynamicMeshes.Upload(DynamicTarget);
+      if FDynamicMeshes.IndexedEnabled then
+        FDynamicMeshes.UploadIndexed(DynamicTarget,IndexTarget,IndicesDirty<>0)
+      else FDynamicMeshes.Upload(DynamicTarget);
+      if FDynamicMeshes.LocalActorsEnabled and (FDynamicMeshes.Triangles>0) then begin
+        if FDynamicActors(FContext,FDynamicMeshes.ActorsPointer,FDynamicMeshes.ActorCount)=0 then
+          raise Exception.Create(string(FErrorText()));
+        if FDynamicActorRevisions(FContext,FDynamicMeshes.ActorRevisionsPointer,FDynamicMeshes.ActorCount)=0 then
+          raise Exception.Create(string(FErrorText()));
+      end;
+      finally EndStage(1);end;
       if not Matrix4Double(OldProjection).TryInverse(InverseProjection) then raise Exception.Create('Screen shadow projection is singular');
       { Reconstruct using (windowDepth - 1). Fold drFar into the inverse in
         Double; subtracting near-equal terms per pixel loses distant depth. }
@@ -893,7 +1187,7 @@ begin
       Params.RenderingCamera.InverseMatrixNeeded;C.InverseView:=Params.RenderingCamera.InverseMatrix;
       for I:=0 to 2 do C.InverseView.Data[3,I]:=Double(C.InverseView.Data[3,I])-FActiveOrigin.Data[I];
       Focus:=FActiveFocus-FActiveOrigin;
-      C.Sun:=Vector4(-FSun.X,-FSun.Y,-FSun.Z,0);C.Horizon:=Vector4(Focus.X,Focus.Y,Focus.Z,0);
+      C.Sun:=Vector4(-FActiveSun.X,-FActiveSun.Y,-FActiveSun.Z,0);C.Horizon:=Vector4(Focus.X,Focus.Y,Focus.Z,0);
       C.Zenith:=Vector4(Tan(DegToRad(ScreenSunRadius)),RTX_SCREEN_MAX_RAY_DISTANCE,ScreenRayCount,0);
       C.DepthRange:=Vector4(0.1,0.9,Ord(RtxScreenReceiverBounds),Ord(FScreenReuseActive));
       FScreenCamera:=C;
@@ -906,47 +1200,51 @@ begin
   finally
     RtxScreenCapturing:=False;
     RenderContext.Viewport:=OldView;RenderContext.DepthRange:=OldRange;RenderContext.ProjectionMatrix:=OldProjection;
-    RenderContext.DepthBufferUpdate:=S.DepthMask[0]<>0;RenderContext.DepthTest:=S.Depth<>0;
-    RenderContext.DepthFunc:=TDepthFunction(S.DepthFunc);RenderContext.CullFace:=S.Cull<>0;
     RestoreGL(S);
     RtxScreenTexture:=Tex;RtxScreenView:=Vector4(OldView.Left,OldView.Bottom,OldView.Width,OldView.Height);
     Focus:=FActiveFocus-Camera;RtxScreenFocus:=Vector4(Focus.X,Focus.Y,Focus.Z,Radius);
   end;
 end;
 procedure TRtxShadow.CompositeScreenShadows;
-var S:TGLState;BlendState:array[0..5]of GLint;
+var S:TGLState;
 begin
   if (RtxScreenTexture=0) or not ScreenReady then Exit;
+  BeginStage(3);
   SaveGL(S);
-  glGetIntegerv(GL_BLEND_SRC_RGB,@BlendState[0]);glGetIntegerv(GL_BLEND_DST_RGB,@BlendState[1]);
-  glGetIntegerv(GL_BLEND_SRC_ALPHA,@BlendState[2]);glGetIntegerv(GL_BLEND_DST_ALPHA,@BlendState[3]);
-  glGetIntegerv(GL_BLEND_EQUATION_RGB,@BlendState[4]);glGetIntegerv(GL_BLEND_EQUATION_ALPHA,@BlendState[5]);
   try
-    if FScreenComposite=0 then FScreenComposite:=ProgramFor('#version 330'#10+
+    if FScreenComposite=0 then begin
+      FScreenComposite:=ProgramFor('#version 330'#10+
       'in vec2 uv;out vec4 color;uniform sampler2D coverage;uniform float strength;'#10+
       'void main(){float s=texture(coverage,uv).r*strength;'#10+
       'color=vec4(mix(vec3(1.),vec3(.42,.45,.55),clamp(s,0.,1.)),1.);}'#10);
+      glUseProgram(FScreenComposite);
+      glUniform1i(glGetUniformLocation(FScreenComposite,'coverage'),0);
+      FScreenStrengthUniform:=glGetUniformLocation(FScreenComposite,'strength');
+    end;
     if FVAO=0 then glGenVertexArrays(1,@FVAO);
     glUseProgram(FScreenComposite);glBindVertexArray(FVAO);
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,RtxScreenTexture);
-    glUniform1i(glGetUniformLocation(FScreenComposite,'coverage'),0);
-    glUniform1f(glGetUniformLocation(FScreenComposite,'strength'),FScreenStrength);
+    glUniform1f(FScreenStrengthUniform,FScreenStrength);
     glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
     glBlendFuncSeparate(GL_ZERO,GL_SRC_COLOR,GL_ZERO,GL_ONE);
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_FALSE);glDrawArrays(GL_TRIANGLES,0,3);
   finally
-    glBlendFuncSeparate(BlendState[0],BlendState[1],BlendState[2],BlendState[3]);
-    glBlendEquationSeparate(BlendState[4],BlendState[5]);RestoreGL(S);
+    RestoreGL(S);
+    EndStage(3);
   end;
 end;
 procedure TRtxShadow.RenderReflections(const Params:TRenderParams;Draw:TRtxDrawReflectors);
 var S:TGLState;OldView:TRectangle;OldRange:TDepthRange;C:TRtxReflectionCamera;
   W,H,I:Integer;Shader:UnicodeString;Tex:Cardinal;R:LongInt;OldProjection:TMatrix4;
+  ConfigureTarget:Boolean;
   DebugPixels:array of TVector4;DebugHorizontal:array of Boolean;
   DebugDepth:array of Single;Eye:TVector4;Distance:Single;
 begin
   if not GetReflectionsReady then begin
+    SetRtxMaterialPass(False,0,Vector4(0,0,1,1));Exit;
+  end;
+  if Assigned(FReflectionPreflight) and not FReflectionPreflight(Params) then begin
     SetRtxMaterialPass(False,0,Vector4(0,0,1,1));Exit;
   end;
   SaveGL(S);OldView:=RenderContext.Viewport;OldRange:=RenderContext.DepthRange;OldProjection:=RenderContext.ProjectionMatrix;
@@ -954,11 +1252,19 @@ begin
   try
     try
       W:=Max(1,OldView.Width div 2);H:=Max(1,OldView.Height div 2);
-      Shader:=UTF8Decode(UriToFilenameSafe('castle-data:/shaders/rtx/reflection.spv'));
-      if FReflectionSize(FContext,PWideChar(Shader),W,H)=0 then raise Exception.Create(string(FErrorText()));
+      ConfigureTarget:=(FReflectionFBO=0)or(FReflectionWidth<>W)or(FReflectionHeight<>H);
+      if ConfigureTarget then begin
+        Shader:=UTF8Decode(UriToFilenameSafe('castle-data:/shaders/rtx/reflection.spv'));
+        if FReflectionSize(FContext,PWideChar(Shader),W,H)=0 then raise Exception.Create(string(FErrorText()));
+        { A GL name may be recycled after resize; the newly allocated atlas
+          still needs uploading even if it happens to have the old name. }
+        FUploadedAtlas:=0;
+      end;
       if FReflectionFBO=0 then glGenFramebuffers(1,@FReflectionFBO);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FReflectionFBO);
       if (FUploadedAtlas<>FReflectionTexture(FContext,3)) and (FBuildingAtlas<>nil) then begin
+        if FImageWrite(FContext,1)=0 then raise Exception.Create(string(FErrorText()));
+        ConfigureTarget:=True;
         if FRgbaCopyProgram=0 then FRgbaCopyProgram:=ProgramFor('#version 330'#10'in vec2 uv;out vec4 color;uniform sampler2D source;void main(){color=texture(source,uv);}');
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,0,0);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,FReflectionTexture(FContext,3),0);
@@ -969,20 +1275,24 @@ begin
         end;
         RestoreGL(S);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,FReflectionFBO);
       end;
-      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,FReflectionTexture(FContext,0),0);
-      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,FReflectionTexture(FContext,1),0);
-      if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Reflection framebuffer incomplete');
+      if ConfigureTarget then begin
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,FReflectionTexture(FContext,0),0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,FReflectionTexture(FContext,1),0);
+        if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then raise Exception.Create('Reflection framebuffer incomplete');
+        FReflectionWidth:=W;FReflectionHeight:=H;
+      end;
       RenderContext.Viewport:=Rectangle(0,0,W,H);RenderContext.DepthRange:=drFar;
       RenderContext.DepthBufferUpdate:=True;RenderContext.DepthTest:=True;
       { The atlas upload above uses raw GL. Reassert the depth state even when
         CGE's cache already believes it is enabled. }
       glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDepthFunc(GL_LEQUAL);
       glDisable(GL_SCISSOR_TEST);glDisable(GL_BLEND);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glClearColor(0,0,0,0);glClearDepth(1);glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT);
-      SetRtxMaterialPass(True,0,Vector4(0,0,W,H));Draw(Params);
+      SetRtxMaterialPass(True,0,Vector4(0,0,W,H));BeginStage(2);
+      try Draw(Params);finally EndStage(2);end;
       if not OldProjection.TryInverse(C.InverseProjection) then raise Exception.Create('Reflection camera projection is singular');
       Params.RenderingCamera.InverseMatrixNeeded;C.InverseView:=Params.RenderingCamera.InverseMatrix;
       for I:=0 to 2 do C.InverseView.Data[3,I]:=Double(C.InverseView.Data[3,I])-FActiveOrigin.Data[I];
-      C.Sun:=Vector4(-FSun.X,-FSun.Y,-FSun.Z,0);C.Horizon:=Vector4(0.52,0.68,0.82,0);C.Zenith:=Vector4(0.15,0.3,0.5,0);C.DepthRange:=Vector4(0.1,0.9,0,0);
+      C.Sun:=Vector4(-FActiveSun.X,-FActiveSun.Y,-FActiveSun.Z,0);C.Horizon:=Vector4(0.52,0.68,0.82,0);C.Zenith:=Vector4(0.15,0.3,0.5,0);C.DepthRange:=Vector4(0.1,0.9,0,0);
       C.Horizon.W:=FReflectionRanges.X;C.Zenith.W:=FReflectionRanges.Y;C.Sun.W:=FReflectionRanges.Z;
       C.DepthRange.W:=Ord(FReflectionRanges.X>0);
       R:=FReflect(FContext,@C,FActiveSceneID);
@@ -1018,8 +1328,6 @@ begin
     except on E:Exception do begin FReflectionError:=E.Message;WritelnWarning('RTX reflections',E.Message);end;end;
   finally
     RenderContext.Viewport:=OldView;RenderContext.DepthRange:=OldRange;RenderContext.ProjectionMatrix:=OldProjection;
-    RenderContext.DepthBufferUpdate:=S.DepthMask[0]<>0;RenderContext.DepthTest:=S.Depth<>0;
-    RenderContext.DepthFunc:=TDepthFunction(S.DepthFunc);RenderContext.CullFace:=S.Cull<>0;
     RestoreGL(S);
     SetRtxMaterialPass(False,Tex,Vector4(OldView.Left,OldView.Bottom,OldView.Width,OldView.Height));
   end;
@@ -1032,9 +1340,9 @@ begin
   {$ifdef OpenGLES}
   Result:=False;
   {$else}
-  Result:=GetScreenReady and (FSun.Length>0.000001);
+  Result:=GetScreenReady and (FActiveSun.Length>0.000001);
   if Result then begin
-    ToSun:=-FSun;
+    ToSun:=-FActiveSun;
     MaxRayDistance:=RTX_SCREEN_MAX_RAY_DISTANCE;
     ConeTangent:=Tan(DegToRad(ScreenSunRadius));
     Result:=(ConeTangent>=0) and not IsInfinite(ConeTangent);

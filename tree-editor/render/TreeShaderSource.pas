@@ -5,11 +5,11 @@ interface
 function RenderShaderSource(const Source: string; GLES: Boolean): string;
 function ReadRenderShader(const Url: string): string;
 implementation
-uses Classes, SysUtils{$ifdef ANDROID}, CastleDownload{$endif};
+uses Classes, SysUtils, VegetationAtlas{$ifdef ANDROID}, CastleDownload{$endif};
 function RenderShaderSource(const Source: string; GLES: Boolean): string;
 var Extensions:string;
 begin
-  Result := Source;
+  Result := StringReplace(Source,'/*__VEGETATION_CARD_ENVELOPE__*/',CardEnvelopeGLSL,[rfReplaceAll]);
   if not GLES then Exit;
   Extensions:='';
   if Pos('TREE_SAMPLE_MASK',Source)>0 then

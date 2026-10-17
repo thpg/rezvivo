@@ -637,10 +637,11 @@ type
     GroundWindBaseFields:  array of TSFFloat;   { per-tile uWindBase }
     GroundWindGustFields:  array of TSFFloat;   { per-tile uWindGustSpeed }
 
-    { Accessory Switch nodes (one per batch that has traffic signals). References
-      only — owned by the POI shape graph. The current tile flips their
-      WhichChoice each phase (traffic cycle) via TCacheTile.AnimateAccessories. }
-    AccessorySwitches: array of TSwitchNode;
+    { Borrowed uniforms owned by the POI appearance graph. A phase changes
+      only atlas coordinates; the head geometry, shape membership and RTX
+      snapshot stay unchanged. Cached tiles store POI records, not switches,
+      so old tile files use this path on their next runtime assembly too. }
+    AccessoryPhaseFields: array of TSFVec4f;
 
     constructor Create;
     destructor Destroy; override;
@@ -722,6 +723,14 @@ type
   the sun light. Zero SunDirection defaults to Osm3dGlslLib.DEFAULT_SUN_RAY_DIR. }
 procedure AddSceneLights(Root: TX3DRootNode; const SunDirection: TVector3;
   CastShadows: Boolean = False);
+
+{ Runtime POI assembly is shared by fresh and cached tiles. Phase is borrowed
+  from the returned graph; callers must not retain it after freeing the graph. }
+function BuildTrafficSignalNode(Atlas: TAccessoryAtlas;
+  out APhase: TSFVec4f): TAbstractChildNode;
+function BuildPoiBatchNode(Mdl: TTileModel; AKx: Double;
+  Atlas: TAccessoryAtlas; out APhase: TSFVec4f;
+  out InstanceCount: Integer): TAbstractChildNode;
 
 implementation
 
@@ -1080,13 +1089,15 @@ begin
 end;
 
 { Shared by the static batches and the diagnostic instance path. }
-function TrafficSignalStateShape(Atlas: TAccessoryAtlas; Mesh: TMesh): TShapeNode;
+function TrafficSignalShape(Atlas: TAccessoryAtlas; Mesh: TMesh;
+  out Phase: TSFVec4f): TShapeNode;
 var
   Geo: TIndexedFaceSetNode;
   Mat: TMaterialNode;
   App: TAppearanceNode;
   Tex: TAbstractTexture2DNode;
 begin
+  Phase := nil;
   Result := nil;
   Geo := TMeshToX3D.CreateGeometry(Mesh, True, uvFromMesh);
   if Geo = nil then Exit;
@@ -1101,42 +1112,22 @@ begin
   Result := TShapeNode.Create;
   Result.Geometry := Geo;
   Result.Appearance := App;
+  AttachTrafficSignalUV(Geo, App, Phase);
   CompactTileGeometry(Result);
 end;
 
-{ Traffic-signal POI node: a plain (lit) pole + plain caps, plus a TSwitchNode
-  over the 3 traffic states. Each Switch child is a "sides" shape whose mesh UVs
-  are baked to one ACCESSORY-atlas cell (no TextureTransform), with an EMISSIVE
-  atlas texture so the lamp is always at full brightness regardless of the sun.
-  The Switch is returned via ASwitch; the current tile flips WhichChoice to run
-  the cycle. No atlas -> just pole+caps, ASwitch = nil. }
+{ Plain pole/caps plus one immutable emissive head. The source UVs are the
+  green phase; the shared texture-coordinate effect selects the current
+  sprite endpoints without replacing a shape or notifying geometry changes. }
 function BuildTrafficSignalNode(Atlas: TAccessoryAtlas;
-  out ASwitch: TSwitchNode): TAbstractChildNode;
+  out APhase: TSFVec4f): TAbstractChildNode;
 var
   Grp:            TGroupNode;
-  PoleM, CapsM:   TMesh;
-  PoleSh, CapsSh: TShapeNode;
-  SGreen, SYellow, SRed:  TShapeNode;
-  Sw:             TSwitchNode;
-
-  { One "sides" sub-shape whose mesh UVs point straight at atlas cell CellIndex
-    (no TextureTransform). Emissive texture -> the lamp is always at full
-    brightness, independent of the sun (diffuse black, emissive white x atlas). }
-  function StateShape(PrimaryCell, PerpCell: Integer): TShapeNode;
-  var M: TMesh;
-  begin
-    M := TPOIBuilderExt.BuildTrafficSignalBoxSidesMeshXZ(
-      Atlas.CellUMin(PerpCell), Atlas.CellUMax(PerpCell),
-      Atlas.CellUMin(PrimaryCell), Atlas.CellUMax(PrimaryCell));
-    try
-      Result := TrafficSignalStateShape(Atlas, M);
-    finally
-      M.Free;
-    end;
-  end;
-
+  PoleM, CapsM, HeadM: TMesh;
+  PoleSh, CapsSh, HeadSh: TShapeNode;
+  Cells: TVector4;
 begin
-  ASwitch := nil;
+  APhase := nil;
   Grp := TGroupNode.Create;
 
   { pole — plain, lit POI material }
@@ -1157,38 +1148,19 @@ begin
   end;
   if CapsSh <> nil then Grp.AddChildren(CapsSh);
 
-  { sides — a Switch over the 3 traffic states; child index = phase order
-    (0=green, 1=yellow, 2=red). The tile flips WhichChoice to run the cycle. }
   if Atlas <> nil then
   begin
-    SGreen  := StateShape(Ord(asTrafficGreen),  Ord(asTrafficRed));
-    SYellow := StateShape(Ord(asTrafficYellow), Ord(asTrafficRed));
-    SRed    := StateShape(Ord(asTrafficRed),    Ord(asTrafficGreen));
-    if (SGreen <> nil) and (SYellow <> nil) and (SRed <> nil) then
-    begin
-      Sw := TSwitchNode.Create;
-      Sw.AddChildren(SGreen);
-      Sw.AddChildren(SYellow);
-      Sw.AddChildren(SRed);
-      Sw.WhichChoice := 0;   { start GREEN }
-      Grp.AddChildren(Sw);
-      ASwitch := Sw;
-    end
-    else
-    begin
-      if SGreen <> nil then SGreen.Free;
-      if SYellow <> nil then SYellow.Free;
-      if SRed <> nil then SRed.Free;
-    end;
+    Cells := TrafficSignalCells(0);
+    HeadM := TPOIBuilderExt.BuildTrafficSignalBoxSidesMeshXZ(
+      Cells.X, Cells.Y, Cells.Z, Cells.W);
+    try HeadSh := TrafficSignalShape(Atlas, HeadM, APhase);
+    finally HeadM.Free end;
+    if HeadSh <> nil then Grp.AddChildren(HeadSh);
   end;
 
   Result := Grp;
 end;
 
-{ Merge compatible POI once per tile. Keep coordinates tile-local so the
-  compact static fields retain their precision far from the session origin.
-  The signal states share a switch, but their emissive material stays separate
-  from the ordinary lit material. No vertex data changes during riding. }
 function BuildStreetLampNode(Kind: TPOIKindExt): TAbstractChildNode;
 var G:TGroupNode; M:TMesh; S:TShapeNode;
 begin
@@ -1203,32 +1175,26 @@ begin
 end;
 
 function BuildPoiBatchNode(Mdl: TTileModel; AKx: Double;
-  Atlas: TAccessoryAtlas; out ASwitch: TSwitchNode;
+  Atlas: TAccessoryAtlas; out APhase: TSFVec4f;
   out InstanceCount: Integer): TAbstractChildNode;
-const
-  PrimaryCells: array[0..2] of TAccessorySprite =
-    (asTrafficGreen, asTrafficYellow, asTrafficRed);
-  PerpCells: array[0..2] of TAccessorySprite =
-    (asTrafficRed, asTrafficRed, asTrafficGreen);
 var
   Templates,Lenses: array[TPOIKindExt] of TMesh;
-  SignalTemplates, SignalBatches: array[0..2] of TMesh;
+  SignalTemplate, SignalBatch: TMesh;
   Plain, Caps, Lamps, LampLenses: TMesh;
   Grp: TGroupNode;
   Shape: TShapeNode;
-  Sw: TSwitchNode;
   Kind: TPOIKindExt;
-  I, State: Integer;
+  I: Integer;
   Poi: TTilePOIRec;
   Position: TVector3;
+  Cells: TVector4;
 begin
   Result := nil;
-  ASwitch := nil;
+  APhase := nil;
   InstanceCount := 0;
   if Mdl.POICount = 0 then Exit;
   for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do begin Templates[Kind] := nil;Lenses[Kind]:=nil end;
-  for State := 0 to 2 do
-  begin SignalTemplates[State] := nil; SignalBatches[State] := nil end;
+  SignalTemplate := nil; SignalBatch := nil;
   Grp := nil;
   Plain := TMesh.Create('poi_material_batch');
   Lamps:=TMesh.Create('street_lamps');LampLenses:=TMesh.Create('lamp_lenses');
@@ -1247,13 +1213,12 @@ begin
           Caps := TPOIBuilderExt.BuildTrafficSignalBoxCapsMesh;
           try Templates[Kind].AppendMesh(Caps) finally Caps.Free end;
           if Atlas <> nil then
-            for State := 0 to 2 do
-            begin
-              SignalTemplates[State] := TPOIBuilderExt.BuildTrafficSignalBoxSidesMeshXZ(
-                Atlas.CellUMin(Ord(PerpCells[State])), Atlas.CellUMax(Ord(PerpCells[State])),
-                Atlas.CellUMin(Ord(PrimaryCells[State])), Atlas.CellUMax(Ord(PrimaryCells[State])));
-              SignalBatches[State] := TMesh.Create('poi_signal_batch');
-            end;
+          begin
+            Cells := TrafficSignalCells(0);
+            SignalTemplate := TPOIBuilderExt.BuildTrafficSignalBoxSidesMeshXZ(
+              Cells.X, Cells.Y, Cells.Z, Cells.W);
+            SignalBatch := TMesh.Create('poi_signal_batch');
+          end;
         end
         else
           begin Templates[Kind] := TPOIBuilderExt.BuildKindMesh(Kind);Lenses[Kind]:=TPOIBuilderExt.BuildLampLens(Kind) end;
@@ -1267,9 +1232,8 @@ begin
       end else TPOIBuilderExt.AppendInstance(Plain, Templates[Kind], Position, Poi.Rotation);
       Inc(InstanceCount);
       if (Kind = pkxTrafficSignal) and (Atlas <> nil) then
-        for State := 0 to 2 do
-          TPOIBuilderExt.AppendInstance(SignalBatches[State], SignalTemplates[State],
-            Position, Poi.Rotation);
+        TPOIBuilderExt.AppendInstance(SignalBatch, SignalTemplate,
+          Position, Poi.Rotation);
     end;
 
     Grp := TGroupNode.Create;
@@ -1283,18 +1247,14 @@ begin
     if Shape<>nil then begin Shape.X3DName:='OsmStreetLampBatch';Grp.AddChildren(Shape) end;
     Shape:=TMeshToX3D.CreateShape(LampLenses,smkLampLens,True);
     if Shape<>nil then begin Shape.X3DName:='OsmLampLensBatch';Grp.AddChildren(Shape) end;
-    if SignalBatches[0] <> nil then
+    if SignalBatch <> nil then
     begin
-      Sw := TSwitchNode.Create;
-      Grp.AddChildren(Sw);
-      for State := 0 to 2 do
+      Shape := TrafficSignalShape(Atlas, SignalBatch, APhase);
+      if Shape <> nil then
       begin
-        Shape := TrafficSignalStateShape(Atlas, SignalBatches[State]);
         Shape.X3DName := 'OsmPoiSignalBatch';
-        Sw.AddChildren(Shape);
+        Grp.AddChildren(Shape);
       end;
-      Sw.WhichChoice := 0;
-      ASwitch := Sw;
     end;
     Result := Grp;
     Grp := nil;
@@ -1303,8 +1263,7 @@ begin
     Plain.Free;
     Lamps.Free;LampLenses.Free;
     for Kind := Low(TPOIKindExt) to High(TPOIKindExt) do begin Templates[Kind].Free;Lenses[Kind].Free end;
-    for State := 0 to 2 do
-    begin SignalTemplates[State].Free; SignalBatches[State].Free end;
+    SignalTemplate.Free; SignalBatch.Free;
   end;
 end;
 
@@ -3378,6 +3337,7 @@ begin
     The padding covers sub-metre compensated-origin differences and any
     surface displacement; no terrain/detail is simplified or removed. }
   Geo.MetadataBoolean['castle.staticIndexRangeCulling'] := True;
+  Geo.MetadataBoolean['castle.spatialIndexStream'] := True;
   Geo.MetadataDouble['castle.staticIndexRangePadding'] := 4.0;
 
   App := TAppearanceNode.Create;
@@ -5246,11 +5206,13 @@ var
   TilePBRWall: array[0..BUILDING_PALETTE_SIZE-1] of TAppearanceNode;
   TilePBRRoof: array[0..5] of TAppearanceNode;
   T, M, P, TileCount, TreeCount, TreeCap: Integer;
+  TreeContactCount, TreeContactMisses: Integer;
+  TreeGroundY, TreeContactMax: Single;
   wFT, wFB, wFG: TSFFloat;   { per-tile wind fields (one walk) }
   wCnt: Integer;
   PoiK: TPOIKindExt;
-  TmpSw: TSwitchNode;   { accessory (traffic-light) Switch to register }
-  AccSwList: array of TSwitchNode;   { collected in nested build -> Result.AccessorySwitches (outer body) }
+  TmpPhase: TSFVec4f;   { borrowed traffic-signal appearance uniform }
+  AccPhaseList: array of TSFVec4f;   { collected in nested build, published with the batch }
   TileCtr: TVector3;
   PrevT:   TTilePreviewData;
   TotComposite, TotBuilding, TotWater, TotPOI: Integer;
@@ -6020,7 +5982,7 @@ var
             SharedAtlasTex, SharedAtlasNormTex, SharedAtlasMaskTex, SharedRoadHaloTex,
             GROUND_COMPOSITE_VS, GROUND_COMPOSITE_FS,
             True, True, nil, SharedGroundEffect);
-          if (GpuGroundMode<>ggCpu) or RenderBuildingsActive then begin
+          if (GpuGroundMode<>ggCpu) or RenderBuildingsActive or (Mdl.TreeCount>0) then begin
             if GpuGround=nil then GpuGround:=TGpuGroundTile.Create;
             GpuGround.Add(CompShape.Geometry as TIndexedFaceSetNode,CurbStart);
           end;
@@ -6382,7 +6344,7 @@ var
       RenderPOI gates both this path and legacy smkPOI meshes above. }
     if RenderPOIActive and RenderPOIBatchingActive then
     begin
-      PoiBatch := BuildPoiBatchNode(Mdl, AKx, ACache.AccessoryAtlas, TmpSw, PoiInstanceCount);
+      PoiBatch := BuildPoiBatchNode(Mdl, AKx, ACache.AccessoryAtlas, TmpPhase, PoiInstanceCount);
       if PoiBatch <> nil then
       begin
         PoiXform := TTransformNode.Create;
@@ -6390,10 +6352,10 @@ var
         PoiXform.AddChildren(PoiBatch);
         Result.AddChildren(PoiXform);
       end;
-      if TmpSw <> nil then
+      if TmpPhase <> nil then
       begin
-        SetLength(AccSwList, Length(AccSwList) + 1);
-        AccSwList[High(AccSwList)] := TmpSw;
+        SetLength(AccPhaseList, Length(AccPhaseList) + 1);
+        AccPhaseList[High(AccPhaseList)] := TmpPhase;
       end;
       Inc(TotPOI, PoiInstanceCount);
     end
@@ -6408,11 +6370,11 @@ var
         if PoiKind = pkxTrafficSignal then
         begin
           POIKindShape[PoiKind] :=
-            BuildTrafficSignalNode(ACache.AccessoryAtlas, TmpSw);
-          if TmpSw <> nil then
+            BuildTrafficSignalNode(ACache.AccessoryAtlas, TmpPhase);
+          if TmpPhase <> nil then
           begin
-            SetLength(AccSwList, Length(AccSwList) + 1);
-            AccSwList[High(AccSwList)] := TmpSw;
+            SetLength(AccPhaseList, Length(AccPhaseList) + 1);
+            AccPhaseList[High(AccPhaseList)] := TmpPhase;
           end;
         end
         else if TPOIBuilderExt.IsLamp(PoiKind) then
@@ -6452,8 +6414,8 @@ var
     SetLength(LodWater, LodWaterN);
     WrapTileLOD(Result, Delta, AKx, LodGround, LodBld, LodWater, BldDetailCollision,
       GlobalLODConfig.LodPbrM, GlobalLODConfig.LodFullM, APrev);
-    { CPU contact mode only borrows this assembly-time index for entrances. }
-    if GpuGroundMode=ggCpu then FreeAndNil(GpuGround);
+    { The caller also uses the index to anchor vegetation to the finished
+      road-levelled mesh, then releases it in CPU contact mode. }
   end;
 
 begin
@@ -6874,19 +6836,36 @@ begin
         границе полос была бы щель ~3 м. Z (север) от метрики не зависит. }
       Kx := TileFrameScaleX(Models[T].TileId, Grid, FrameLat, AManualScaleLat);
 
-      { Collect vegetation. }
-      for M := 0 to Models[T].TreeCount - 1 do
-      begin
-        ATrees[TreeCount] := Models[T].Trees[M];
-        { tree coords are tile-local too — scale east + shift to chunk space }
-        ATrees[TreeCount].X := ATrees[TreeCount].X * Kx + TileCtr.X;
-        ATrees[TreeCount].Z := ATrees[TreeCount].Z + TileCtr.Z;
-        Inc(TreeCount);
-      end;
-
       PrevT := nil;
       if T <= High(APreviews) then PrevT := APreviews[T];
       Result.Tiles[TileCount].Root:=BuildTileRoot(Models[T],TileCtr,PrevT,Kx,Result.Tiles[TileCount].CurbVertices,Result.Tiles[TileCount].GpuGround);
+
+      { Vegetation was generated on the DEM lattice before final road grading
+        and terrain decimation. Anchor it to the displayed mesh, including old
+        cached tiles. Reuse the assembly worker's contact index; no per-frame
+        raycasts, extra geometry copies, or new index on the render thread. }
+      TreeContactCount:=0;TreeContactMisses:=0;TreeContactMax:=0;
+      for M := 0 to Models[T].TreeCount - 1 do
+      begin
+        ATrees[TreeCount] := Models[T].Trees[M];
+        ATrees[TreeCount].X := ATrees[TreeCount].X * Kx;
+        if Result.Tiles[TileCount].GpuGround<>nil then
+          with ATrees[TreeCount] do begin
+            if Result.Tiles[TileCount].GpuGround.SampleGeometry(X,Z,Y,False,TreeGroundY) then begin
+              TreeContactMax:=Max(TreeContactMax,Abs(TreeGroundY-Y));
+              if Abs(TreeGroundY-Y)>0.03 then Inc(TreeContactCount);
+              Y:=TreeGroundY;
+            end else Inc(TreeContactMisses);
+          end;
+        { Both mesh and query use scaled tile-local XZ; only then translate. }
+        ATrees[TreeCount].X := ATrees[TreeCount].X + TileCtr.X;
+        ATrees[TreeCount].Z := ATrees[TreeCount].Z + TileCtr.Z;
+        Inc(TreeCount);
+      end;
+      if Assigned(LogProc) and (TreeContactCount>0) then
+        LogProc(Format('  vegetation ground contact: %d/%d corrected, max=%.3f m, missing=%d',
+          [TreeContactCount,Models[T].TreeCount,TreeContactMax,TreeContactMisses]));
+      if GpuGroundMode=ggCpu then FreeAndNil(Result.Tiles[TileCount].GpuGround);
       { Build alongside geometry in the existing assembly worker. Mounting
         a heavy city tile must not add an audio scan to the render thread. }
       Result.Tiles[TileCount].Soundscape:=TSoundscapeField.Create(Models[T],Kx,True,False);
@@ -6898,10 +6877,10 @@ begin
     end;
     SetLength(Result.Tiles, TileCount);
 
-    { Accessory (traffic-light) Switch nodes gathered during POI-shape build
-      (BuildTrafficSignalNode). Collected into a local to dodge the same nested
-      Result-shadowing noted above, then handed to the assembled scenes here. }
-    Result.AccessorySwitches := AccSwList;
+    { Both cached POI records and the diagnostic instance path build one
+      immutable signal head. These borrowed fields live with its appearance;
+      no old serialized graph or tile-cache invalidation is involved. }
+    Result.AccessoryPhaseFields := AccPhaseList;
 
     { Wind uniforms for the host per-frame push: ONE tree walk per tile (all 3
       fields), pre-sized to TileCount, then trimmed. No per-item realloc. }

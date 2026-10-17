@@ -63,3 +63,6 @@ rezvivo-osm-bckl/*profile*.json
 
 # Downloaded desktop encoder; restore with prepare-video-encoder.ps1.
 /rezvivo-osm-bckl/tools/video/ffmpeg.exe
+
+# Native shader build intermediates; canonical packaged SPIR-V lives in the game data.
+/Osm3d/data/shaders/rtx/

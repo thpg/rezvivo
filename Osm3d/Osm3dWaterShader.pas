@@ -59,6 +59,7 @@ uses
   Demo plane-edge fog/bloom are replaced by the scene's existing rendering. }
 const
   WATER_NOISE_GLSL: AnsiString =
+    'uniform float water_skip_zero;' + #10 +
     '// Open Sea reference: three-octave gradient FBM.' + #10 +
     'vec2 waterHash(vec2 p) {' + #10 +
     '  p=mod(p,256.0);' + #10 +
@@ -79,8 +80,11 @@ const
     '}' + #10 +
     'float waterFbm(vec2 p,float footprint) {' + #10 +
     '  vec3 fade=1.0-smoothstep(vec3(0.2),vec3(0.7),footprint*vec3(1.0,2.236068,3.605551));' + #10 +
-    '  return fade.x*waterNoise(p)+0.5*fade.y*waterNoise(mat2(2,1,-1,2)*p+vec2(17.3,9.1))+' + #10 +
-    '    0.25*fade.z*waterNoise(mat2(3,2,-2,3)*p+vec2(42.7,28.6));' + #10 +
+    '  float a=0.0,b=0.0,c=0.0;' + #10 +
+    '  if(water_skip_zero<0.5 || fade.x>0.0)a=fade.x*waterNoise(p);' + #10 +
+    '  if(water_skip_zero<0.5 || fade.y>0.0)b=0.5*fade.y*waterNoise(mat2(2,1,-1,2)*p+vec2(17.3,9.1));' + #10 +
+    '  if(water_skip_zero<0.5 || fade.z>0.0)c=0.25*fade.z*waterNoise(mat2(3,2,-2,3)*p+vec2(42.7,28.6));' + #10 +
+    '  return a+b+c;' + #10 +
     '}' + #10;
 
   WATER_VERTEX_GLSL: AnsiString =
@@ -140,11 +144,13 @@ const
     '    vec4 random=waterPacketHash(cell+offset);' + #10 +
     '    vec2 r=f-offset-(random.xy-.5)*.6;' + #10 +
     '    float support=max(0.0,1.0-dot(r,r)/1.44);' + #10 +
+    '    if(water_skip_zero>.5 && support==0.0)continue;' + #10 +
     '    vec2 direction=normalize(vec2(.8,.6)+(random.w-.5)*vec2(-.6,.8)*(.85+rz_surface.y*2.2));' + #10 +
     '    float frequency=mix(1.65,2.85,random.z);' + #10 +
+    '    float fade=1.0-smoothstep(.025,.10,footprint*frequency);' + #10 +
+    '    if(water_skip_zero>.5 && fade==0.0)continue;' + #10 +
     '    vec2 k=6.28318530718*frequency*direction;' + #10 +
     '    float phase=dot(k,r)+random.w*6.28318530718-t*sqrt(frequency)*.63;' + #10 +
-    '    float fade=1.0-smoothstep(.025,.10,footprint*frequency);' + #10 +
     '    float s=sin(phase),c=cos(phase),e=support*support*support;' + #10 +
     '    vec2 de=(-6.0/1.44)*r*support*support;' + #10 +
     '    result+=fade*vec3(e*s,de*s+e*c*k);' + #10 +
@@ -254,7 +260,7 @@ const
 
 function TWaterCompositeShader.BuildEffect: TEffectNode;
 var
-  PartNoise, PartVertex, PartFrag: TEffectPartNode;
+  PartVertex, PartFrag: TEffectPartNode;
   TimeField: TSFFloat;
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1828);{$ENDIF}
@@ -264,10 +270,6 @@ begin
   Result.SetShaderLibraries(['castle-shader:/EyeWorldSpace.glsl']);
   { ApplyToShape attaches this effect to one scene-owned appearance. }
 
-  PartNoise := TEffectPartNode.Create;
-  PartNoise.ShaderType := stFragment;
-  PartNoise.Contents   := WATER_NOISE_GLSL;
-
   PartVertex := TEffectPartNode.Create;
   PartVertex.ShaderType := stVertex;
   PartVertex.Contents   := WATER_VERTEX_GLSL;
@@ -276,16 +278,26 @@ begin
   PartFrag.ShaderType := stFragment;
   { The effect shares the ground mesh with roads. Only override actual water:
     a zero request on dry material would erase the ground effect's puddles. }
-  PartFrag.Contents   := RTX_MATERIAL_GLSL+SUN_DISC_GLSL+WATER_FRAGMENT_GLSL+#10+
+  { CGE prepends effect parts while assembling the final shader. Keep shared
+    declarations/helpers and their callers in one part: a separate noise part
+    placed water_skip_zero after waterPackets in the linked ground shader. }
+  PartFrag.Contents   := RTX_MATERIAL_GLSL+SUN_DISC_GLSL+WATER_NOISE_GLSL+
+    WATER_FRAGMENT_GLSL+#10+
     'void PLUG_fragment_end(inout vec4 color){if(rz_capture>.5 && abs(water_mat_id-20.0)<.5)color=rzWaterRequest;}';
   AttachRtxMaterial(Result);
   AttachSceneLighting(Result,False,True);
 
-  Result.SetParts([PartNoise, PartVertex, PartFrag]);
+  Result.SetParts([PartVertex, PartFrag]);
 
   { 'time' — общие часы анимации; отдаём базовому классу для Tick. }
   TimeField := TSFFloat.Create(Result, True, 'time', 0.0);
   Result.AddCustomField(TimeField);
+  { The field is declared by the ground effect. Without this water effect its
+    GL default is zero, retaining the atlas/PBR fallback. No global mode race. }
+  Result.AddCustomField(TSFFloat.Create(Result, True, 'gc_water_color_replaced',
+    Ord(GetEnvironmentVariable('REZVIVO_LEGACY_WATER_GROUND') <> '1')));
+  Result.AddCustomField(TSFFloat.Create(Result, True, 'water_skip_zero',
+    Ord(GetEnvironmentVariable('REZVIVO_LEGACY_ZERO_WEIGHTS') <> '1')));
   SetTimeField(TimeField);
 
   { 'wave_size' — FBM micro spatial frequency (меньше = крупнее рябь). }

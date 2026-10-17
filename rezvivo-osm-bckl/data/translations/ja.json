@@ -367,5 +367,7 @@
   "Run": "走る",
   "Brake": "ブレーキ",
   "+ W": "+ W",
-  "Trees: textured": "樹木：テクスチャ"
+  "Trees: textured": "樹木：テクスチャ",
+  "World image cache": "ワールド画像キャッシュ",
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "遠景を再利用してパフォーマンスを向上させますが、描画に乱れが生じる場合があります。追加のGPUメモリを使用します。初期設定ではオフです。"
 }

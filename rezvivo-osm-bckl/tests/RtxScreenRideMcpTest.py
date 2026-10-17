@@ -8,11 +8,11 @@ import time
 
 from PIL import Image
 from McpHarness import GPULock, GameSession, write_sim_fit
+from McpRuntimeOptions import add_runtime_arguments
 from GpuLoad import GpuLoad
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'tests/artifacts/rtx-unified-20261014/ride'
-OUT.mkdir(parents=True, exist_ok=True)
 
 
 def wait(app, command, predicate, timeout=240):
@@ -59,16 +59,19 @@ def resize(app, width, height):
 def main():
     global OUT
     parser=argparse.ArgumentParser()
-    parser.add_argument('--output',type=Path,default=OUT)
+    add_runtime_arguments(parser,ROOT)
+    parser.add_argument('--output','--out',type=Path,default=OUT)
     parser.add_argument('--check-penumbra',action='store_true')
     args=parser.parse_args()
     OUT=args.output.resolve();OUT.mkdir(parents=True,exist_ok=True)
     rows=[]
     def save():
         (OUT/'results.json').write_text(json.dumps(rows,indent=2))
-    with GPULock(), GameSession(ROOT, OUT/'profile', dict(fps_limit=0, msaa=4,
+    session=GameSession(args.runtime.resolve(), OUT/'profile', dict(fps_limit=0, msaa=4,
             shadow_size=2048, shadow_filter=4, grass=1, vegetation_quality=2,
-            world_shadow_backend=1, rtx_reflections=0)) as app:
+            world_shadow_backend=1, rtx_reflections=0))
+    session.env.update(args.env)
+    with GPULock(), session as app:
         fit=OUT/'steady.fit';write_sim_fit(fit,900,210,85)
         app.setting('AudioMaster',0)
         app.setting('SimulationFitPath',str(fit));app.setting('SimulationUseRoute',False)

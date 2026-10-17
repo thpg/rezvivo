@@ -177,6 +177,41 @@ void main() {
 #ifdef TREE_SAMPLE_MASK
     for(int word=0;word<gl_SampleMask.length();word++)gl_SampleMask[word]=-1;
 #endif
+#ifdef LEAF_SPRAY_BAKE
+    if(uKind==10) {
+        // Bake overlapping, irregular sprigs ONCE. Live grouped foliage reads
+        // one texture instead of cutting each sprig at a repeated cell border.
+        // Periodic placement closes the large patch without a rectangular seam.
+        vec2 patchPosition=vUV*4.0, base=floor(patchPosition);
+        float rows=vShoot.x, aspect=vShoot.y, blade=1.08/rows;
+        vec2 extent=vec2(1),crop=vec2(1);
+        if(rows>1.0) {
+            extent=vec2(
+                min(1.7,(.025+blade*(.82+max(1.0,aspect)))/aspect+.025),
+                min(1.7,1.0-.325/rows+blade*(.584+sqrt(.506+aspect*aspect))+.025));
+            crop=extent/1.7;
+        }
+        float physicalAspect=aspect*extent.x/extent.y;
+        vec4 bakedSpray=vec4(0);
+        for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++) {
+            vec2 cell=base+vec2(x,y), key=mod(cell,4.0)+float(vSpecies)*vec2(13,37);
+            float r=hash(key+vec2(7,3)), r2=hash(key+vec2(41,17));
+            vec2 center=cell+.5+(vec2(r,r2)-.5)*.70;
+            float angle=(hash(key+vec2(29,53))-.5)*1.8;
+            float cs=cos(angle),sn=sin(angle),scale=.94+.16*hash(key+vec2(61,19));
+            vec2 q=(patchPosition-center)*vec2(physicalAspect,1);
+            q=vec2(cs*q.x+sn*q.y,-sn*q.x+cs*q.y)/vec2(physicalAspect,1)/scale;
+            if(any(greaterThan(abs(q),vec2(.5))))continue;
+            vec4 sampleSpray=textureLod(uLeafSprays,
+                vec3(.5+q*crop,vShoot.z+floor(r2*8.0)),0.0);
+            vec2 tilt=sampleSpray.gb/max(sampleSpray.a,.0001)*2.0-1.0;
+            tilt=vec2(cs*tilt.x-sn*tilt.y,sn*tilt.x+cs*tilt.y);
+            sampleSpray.gb=(tilt*.5+.5)*sampleSpray.a;
+            bakedSpray=sampleSpray+bakedSpray*(1.0-sampleSpray.a);
+        }
+        fragColor=bakedSpray;return;
+    }
+#endif
     // All texture gradients precede any per-fragment discard. Otherwise LOD
     // crossfades can remove quad neighbours before implicit mip selection.
     foliageDx=dFdx(vUV);foliageDy=dFdy(vUV);
@@ -384,20 +419,21 @@ void main() {
         vec2 cell=fract(vUV*vec2(14,9))-.5;
         float areole=1.0-smoothstep(.035,.085,length(cell));
         color*=.85+vPhase*.23;color=mix(color,vec3(.27,.25,.12),areole*.65);
-    } else if(uKind==1 && vShoot.x>1.0) {
-        vec2 tiledUV=vUV;
-        // Stagger both axes deterministically. Regular rows of repeated sprays
-        // become visible stripes on a large grouped twig, even when each tile
-        // uses a different leaf variant. Keep the physical tile size intact.
-        float grouped=step(1.001,vShoot.w);
-        tiledUV.x+=fract(floor(tiledUV.y)*.754877666+vPhase)*grouped;
-        tiledUV.y+=fract(floor(tiledUV.x)*.569840291+vPhase*.618033989)*grouped;
-        vec2 cellID=floor(tiledUV);
-        float tilePhase=fract(vPhase+dot(cellID,vec2(.618033989,.381966011)));
-        vec2 sprayUV=.5+(fract(tiledUV)-.5)*vSprayCrop;
-        // Derivatives before wrapping avoid false coarse mips on group seams.
-        vec4 spray=textureGrad(uLeafSprays,vec3(sprayUV,vShoot.z+floor(tilePhase*8.0)),
-            foliageDx*vSprayCrop,foliageDy*vSprayCrop);
+    } else if(uKind==1 && (vShoot.x>1.0 ||
+              ((vSpecies==13 || vSpecies==20) && vShoot.w>1.0))) {
+        float groupBlend=smoothstep(1.0,2.0,vShoot.w);
+        vec4 spray=vec4(0);
+        if(groupBlend<1.0) {
+            vec2 sprayUV=.5+(fract(vUV)-.5)*vSprayCrop;
+            spray=textureGrad(uLeafSprays,vec3(sprayUV,vShoot.z+floor(vPhase*8.0)),
+                foliageDx*vSprayCrop,foliageDy*vSprayCrop);
+        }
+        if(groupBlend>0.0) {
+            vec2 patchUV=vUV*.25+fract(vPhase*vec2(17.13,31.71));
+            vec4 groupSpray=textureGrad(uLeafSprays,
+                vec3(patchUV,80.0+vShoot.z*.125),foliageDx*.25,foliageDy*.25);
+            spray=mix(spray,groupSpray,groupBlend);
+        }
         float alpha=spray.a*vNeedleCoverage;
         // A group represents neighbouring twigs, not a rectangular fabric of
         // repeated leaves. A soft elliptical boundary keeps its silhouette
@@ -419,6 +455,7 @@ void main() {
         vec3 along=normalize(vNeedleAxis),across=normalize(cross(along,n));
         n=normalize(n*sqrt(max(.05,1.0-dot(tilt,tilt)))+across*tilt.x+along*tilt.y);
         float shade=spray.r/max(spray.a,.0001);
+        if(vShoot.x<=1.0)shade*=1.333333333; // compound-leaf bake has 25% highlight headroom
         color=shade<.48 ? uBark*.72 : color*shade;
         if(!gl_FrontFacing) {
             if(vSpecies==3){float gray=dot(color,vec3(.2126,.7152,.0722));color=mix(color,vec3(gray)*1.22,.34);}
@@ -510,6 +547,7 @@ void main() {
             // Packed linear albedo multiplier and tangent-space normal XY.
             // Alpha remains coverage through ordinary mip filtering.
             float shade=(.80+leafPhase*.16)*(1.0+vein*.08);
+            if(rows<=1.0)shade=.75*(.80+leafPhase*.36)*(1.0+vein*.11);
             fragColor=vec4(shade,n.xy*.5+.5,1);return;
         }
         if(uDepthOnly==1) { fragColor=vec4(1); return; }
@@ -649,7 +687,11 @@ void main() {
     if(uBakeMode==2){fragColor=vec4(color*ao,1);return;}
     if(uBakeMode==3){fragColor=vec4(n*.5+.5,1);return;}
     vec3 sun=normalize(uSunDirection);
-    if(uKind==1 || uKind==5 || uKind==6)color=foliageLighting(color,n,0.0)*ao;
+    // The pine shoot integrates differently oriented needles, not one shiny
+    // camera-facing cylinder. Match their measured normal moment; the far
+    // atlas already stores orientation dispersion from the actual needles.
+    if(uKind==6 && vSpecies==2)color=foliageLighting(color,n*.45,.55)*ao;
+    else if(uKind==1 || uKind==5 || uKind==6)color=foliageLighting(color,n,0.0)*ao;
     else color*=(.38+.58*max(0.0,dot(n,sun)))*ao;
     if(uKind==7 && vFruit.w>=0.0 && vFruit.w!=12.0 && uBakeMode==0) {
         vec3 halfDirection=normalize(sun+normalize(uEye-vWorld));

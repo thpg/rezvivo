@@ -9,6 +9,19 @@ struct Card { vec4 origin;vec4 u;vec4 v;vec4 spare; };
 layout(std430,set=0,binding=3) readonly buffer Cards { Card cards[]; };
 layout(set=0,binding=1,rg16f) uniform writeonly image2D shadowSamples;
 layout(std430,set=0,binding=8) readonly buffer PosedVertices { uvec4 posed[]; };
+layout(std430,set=0,binding=11) readonly buffer PosedIndices { uint indices[]; };
+layout(std430,set=0,binding=12) readonly buffer PosedActors { uvec4 actors[]; };
+layout(constant_id=1) const bool directHardShadow=false;
+layout(constant_id=2) const bool removeInitialStore=true;
+layout(constant_id=3) const bool preparedSolar=true;
+layout(set=0,binding=7,r8) uniform writeonly image2D shadowImage;
+void storeShadow(ivec2 p,vec4 value) {
+    if(directHardShadow){
+        // The old path stores RG16F, then R8. Keep its half-float rounding.
+        float coverage=unpackHalf2x16(packHalf2x16(value.xy)).x;
+        imageStore(shadowImage,p,vec4(coverage));
+    }else imageStore(shadowSamples,p,value);
+}
 
 vec3 unpackNormal(uint packed) {
     vec2 e=unpackSnorm2x16(packed);
@@ -37,14 +50,27 @@ bool smoothReceiver(inout vec3 pos,inout vec3 normal,float tolerance) {
         0.,view,2.*tolerance);
     while(rayQueryProceedEXT(q)){}
     if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return false;
-    uint i=2u+rayQueryGetIntersectionPrimitiveIndexEXT(q,true)*3u;
-    uvec4 a=posed[i],b=posed[i+1u],c=posed[i+2u];
+    uint i=rayQueryGetIntersectionPrimitiveIndexEXT(q,true)*3u;
+    uint firstVertex=0u;
+    if(options.w>2.5){
+        uvec4 actor=actors[rayQueryGetIntersectionInstanceCustomIndexEXT(q,true)];
+        firstVertex=actor.x;i+=actor.y;
+    }
+    uvec3 ids=options.w>1.5?uvec3(indices[i],indices[i+1u],indices[i+2u]):uvec3(i,i+1u,i+2u);
+    ids+=uvec3(firstVertex);
+    uvec4 a=posed[2u+ids.x],b=posed[2u+ids.y],c=posed[2u+ids.z];
     if(a.w==0u||b.w==0u||c.w==0u)return false;
     vec3 A=uintBitsToFloat(a.xyz),B=uintBitsToFloat(b.xyz),C=uintBitsToFloat(c.xyz);
+    vec3 na=unpackNormal(a.w),nb=unpackNormal(b.w),nc=unpackNormal(c.w);
+    if(options.w>2.5){
+        mat4x3 toWorld=rayQueryGetIntersectionObjectToWorldEXT(q,true);
+        mat3 normalMatrix=transpose(mat3(rayQueryGetIntersectionWorldToObjectEXT(q,true)));
+        A=toWorld*vec4(A,1.);B=toWorld*vec4(B,1.);C=toWorld*vec4(C,1.);
+        na=normalize(normalMatrix*na);nb=normalize(normalMatrix*nb);nc=normalize(normalMatrix*nc);
+    }
     vec2 uv=rayQueryGetIntersectionBarycentricsEXT(q,true);
     vec3 w=vec3(1.-uv.x-uv.y,uv);
     vec3 P=A*w.x+B*w.y+C*w.z;
-    vec3 na=unpackNormal(a.w),nb=unpackNormal(b.w),nc=unpackNormal(c.w);
     normal=normalize(na*w.x+nb*w.y+nc*w.z);
     if(dot(normal,view)>0.){normal=-normal;na=-na;nb=-nb;nc=-nc;}
     // Tangent-plane projection (Hanika, Ray Tracing Gems II, ch.4): trace from
@@ -97,12 +123,12 @@ float shadowRay(vec3 pos,vec3 direction,vec3 receiver,vec3 normal,float cardTole
     return foliage;
 }
 void main() {
-    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=imageSize(shadowSamples);
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy),size=directHardShadow?imageSize(shadowImage):imageSize(shadowSamples);
     if(any(greaterThanEqual(p,size)))return;
-    imageStore(shadowSamples,p,vec4(0));
-    float z=texelFetch(cameraDepth,p,0).r;if(z>=1.)return;
+    if(!removeInitialStore)storeShadow(p,vec4(0));
+    float z=texelFetch(cameraDepth,p,0).r;if(z>=1.){if(removeInitialStore)storeShadow(p,vec4(0));return;}
     float cached;
-    if(reuseVisibility(p,z,cached)){imageStore(shadowSamples,p,vec4(cached,0,0,0));return;}
+    if(reuseVisibility(p,z,cached)){storeShadow(p,vec4(cached,0,0,0));return;}
     vec4 eh=eyeHomogeneous(p,size);
     vec3 eye=eh.xyz/eh.w,pos=(invView*vec4(eye,1)).xyz;
     vec3 eyeNormal=receiverNormal(p,size,eye);
@@ -118,17 +144,25 @@ void main() {
     float bias=max(.003,min(.10,length(eye)*.00008))+
         dot(abs(eyeNormal),eyeError)+dot(abs(n),abs(pos))*2e-7;
     pos+=n*bias+light*.002;
-    vec3 u=normalize(cross(light,abs(light.y)<.95?vec3(0,1,0):vec3(1,0,0)));
-    vec3 v=cross(light,u);
+    vec3 u=preparedSolar?solarU.xyz:normalize(cross(light,abs(light.y)<.95?vec3(0,1,0):vec3(1,0,0)));
+    vec3 v=preparedSolar?solarV.xyz:cross(light,u);
     int count=options.x>0.?clamp(int(options.z),2,8):1;
     // Fixed stratified disk samples, interleaved across neighbouring pixels.
     // No frame counter or history: moving riders never leave shadow trails.
     float rotation=6.28318530718*fract(52.9829189*fract(dot(vec2(p),vec2(.06711056,.00583715))));
+    vec2 spin=preparedSolar?vec2(cos(rotation),sin(rotation)):vec2(0);
     float coverage=0.,nearest=options.y;
     for(int i=0;i<count;++i) {
-        float angle=rotation+float(i)*2.39996322973;
-        float radius=options.x*sqrt((float(i)+.5)/float(count));
-        vec3 direction=normalize(light+radius*(u*cos(angle)+v*sin(angle)));
+        vec3 direction;
+        if(preparedSolar){
+            vec2 d=solarDisk[i].xy;
+            vec2 xy=vec2(d.x*spin.x-d.y*spin.y,d.x*spin.y+d.y*spin.x);
+            direction=normalize(light+u*xy.x+v*xy.y);
+        }else{
+            float angle=rotation+float(i)*2.39996322973;
+            float radius=options.x*sqrt((float(i)+.5)/float(count));
+            direction=normalize(light+radius*(u*cos(angle)+v*sin(angle)));
+        }
         float hit,c=shadowRay(pos,direction,receiver,n,cardTolerance,hit);coverage+=c;
         if(c>.05)nearest=min(nearest,hit);
     }
@@ -137,5 +171,5 @@ void main() {
     // screen overlay must not blacken its ambient light a second time, or the
     // geometric terminator becomes a sharp patch on smoothly shaded skin/cloth.
     float direct=smoothSurface?smoothstep(0.,.45,dot(n,light)):1.;
-    imageStore(shadowSamples,p,vec4(coverage/float(count)*direct,penumbra,0,0));
+    storeShadow(p,vec4(coverage/float(count)*direct,penumbra,0,0));
 }

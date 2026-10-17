@@ -1,5 +1,11 @@
 [
   {
+    "path": "rezvivo-osm-bckl/data/speech/models/en/README",
+    "bytes": 199,
+    "sha256": "c0cf286e4f7783306c5f6469b37db69228fb16803b03cae661edb2d7bba64ebb",
+    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
+  },
+  {
     "path": "rezvivo-osm-bckl/data/speech/models/en/am/final.mdl",
     "bytes": 15962575,
     "sha256": "75370a0137f9daf8f469dedd7daa4513ae7a621f03240c6e512e2b50b656a7b6",
@@ -18,12 +24,6 @@
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
-    "path": "rezvivo-osm-bckl/data/speech/models/en/graph/disambig_tid.int",
-    "bytes": 102,
-    "sha256": "9ad87cc166d0998f08f758f47a6223a120dfffcbee805c4849c3aa5e6bb3c0fc",
-    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
-  },
-  {
     "path": "rezvivo-osm-bckl/data/speech/models/en/graph/Gr.fst",
     "bytes": 24013795,
     "sha256": "023c8b7e30704a9e37765c635c252e608a02f361235bf94abdcf2a5225d85b20",
@@ -33,6 +33,12 @@
     "path": "rezvivo-osm-bckl/data/speech/models/en/graph/HCLr.fst",
     "bytes": 22416994,
     "sha256": "5caafba3081e1646545ac6bff0dd7a318e53dcbdc86f237909ce1d2ac1293d34",
+    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/speech/models/en/graph/disambig_tid.int",
+    "bytes": 102,
+    "sha256": "9ad87cc166d0998f08f758f47a6223a120dfffcbee805c4849c3aa5e6bb3c0fc",
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
@@ -78,9 +84,9 @@
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
-    "path": "rezvivo-osm-bckl/data/speech/models/en/README",
-    "bytes": 199,
-    "sha256": "c0cf286e4f7783306c5f6469b37db69228fb16803b03cae661edb2d7bba64ebb",
+    "path": "rezvivo-osm-bckl/data/speech/models/ru/README",
+    "bytes": 660,
+    "sha256": "b662517cacda14945e159538d6dd8faff23bd706e024c4fb338b6013c9939b9e",
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
@@ -102,12 +108,6 @@
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
-    "path": "rezvivo-osm-bckl/data/speech/models/ru/graph/disambig_tid.int",
-    "bytes": 25,
-    "sha256": "c3af3dbc5eb301c4b282480d785c04b1642a8db83210a12332e9790e50146fd2",
-    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
-  },
-  {
     "path": "rezvivo-osm-bckl/data/speech/models/ru/graph/Gr.fst",
     "bytes": 32288259,
     "sha256": "189b4f67c69eb34b9d8b47b12f184665e5445667ca5264579b61c6b9eb2cef1e",
@@ -117,6 +117,12 @@
     "path": "rezvivo-osm-bckl/data/speech/models/ru/graph/HCLr.fst",
     "bytes": 32993810,
     "sha256": "0b096f4676f306aa3e60d2244ef1e24c5c699b8794acf3c3946b59bcc9dca831",
+    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/speech/models/ru/graph/disambig_tid.int",
+    "bytes": 25,
+    "sha256": "c3af3dbc5eb301c4b282480d785c04b1642a8db83210a12332e9790e50146fd2",
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {
@@ -159,12 +165,6 @@
     "path": "rezvivo-osm-bckl/data/speech/models/ru/ivector/splice.conf",
     "bytes": 35,
     "sha256": "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756",
-    "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/speech/models/ru/README",
-    "bytes": 660,
-    "sha256": "b662517cacda14945e159538d6dd8faff23bd706e024c4fb338b6013c9939b9e",
     "source_manifest": "rezvivo-osm-bckl/data/speech/assets.json"
   },
   {

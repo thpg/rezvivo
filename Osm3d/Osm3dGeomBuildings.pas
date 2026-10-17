@@ -4376,6 +4376,7 @@ begin
   RoofsTarget := nil;
   HasCaster := False;
   ExtraCasters:=nil;
+  Architecture:=Default(TArchitectureRecipe);
   CasterOut.Footprint := nil;
   CasterOut.GroundOpenings := nil;
   CasterOut.BaseY := 0;
@@ -4529,13 +4530,25 @@ begin
     the highest terrain point under the footprint, so the wall never
     has to share Y with the terrain. }
   GroundY := MaxGroundY + BUILDING_FOUNDATION_LIFT_M;
+  if Way.Tags.Get(ARCHITECTURE_TAG)<>'' then begin
+    FacadeJSON:=GetJSON(Way.Tags.Get(ARCHITECTURE_TAG));
+    try Architecture:=ParseArchitecture(FacadeJSON) finally FacadeJSON.Free end;
+    ProjectArchitecture(Architecture,Projection,Verts2D,InnerRings);
+    if Architecture.HasGroundAnchor then begin
+      if TerrainSampler<>nil then begin
+        Pos:=Projection.Project(Architecture.GroundAnchor,0);
+        GroundY:=TerrainSampler.SampleAtXZ(Projection,Pos.X,Pos.Z);
+      end else GroundY:=THeightmapSampler.SampleBilinear(HM,Architecture.GroundAnchor);
+      GroundY:=GroundY+Architecture.GroundOffset+BUILDING_FOUNDATION_LIFT_M;
+    end;
+  end;
 
   { Foundation BOTTOM — extend the wall as a plain skirt DOWN to here
     so that on the downhill side of a slope the wall meets the ground
     instead of hanging in mid-air.  Pushed 10 cm BELOW the lowest
     terrain point so even a slight shader Z-bias on the terrain side
     cannot reveal a sliver of sky under the wall. }
-  FoundationBottomY := MinGroundY - 0.10;
+  FoundationBottomY := Min(MinGroundY,GroundY) - 0.10;
   { If the footprint is on near-flat terrain, MinGroundY ≈ MaxGroundY
     and FoundationBottomY ends up slightly above the normal BaseY
     (=GroundY + MinH).  The skirt block in BuildWalls already guards
@@ -4853,9 +4866,6 @@ begin
   WallParams.FacadeLayouts:=nil;
   WallParams.Architecture:=nil;
   if Way.Tags.Get(ARCHITECTURE_TAG)<>'' then begin
-    FacadeJSON:=GetJSON(Way.Tags.Get(ARCHITECTURE_TAG));
-    try Architecture:=ParseArchitecture(FacadeJSON) finally FacadeJSON.Free end;
-    ProjectArchitecture(Architecture,Projection,Verts2D,InnerRings);
     AC:=0;
     for AK:=0 to High(Architecture.Passages) do
       if Architecture.Passages[AK].Bottom+Architecture.Passages[AK].Height<EaveY-BaseY-0.02 then begin

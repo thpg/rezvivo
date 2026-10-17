@@ -227,6 +227,7 @@ type
   strict private
     FScene: TCastleScene;                 { owned, пока не MountInto }
     FSceneOwned: Boolean;                 { False после MountInto — сцена чужая }
+    FPrepareGpuPose:TNotifyEvent;
     FRig: TTripoRig;                       { metadata: names / hierarchy / bind }
     FJointNode: array of TTransformNode;   { CGE node per palette joint (nil if unresolved) }
     FRestRot: array of TVector4;           { captured bind local rotation per joint }
@@ -533,6 +534,9 @@ type
     { The skinned scene — add this to TCastleViewport.Items (or a parent
       TCastleTransform) and position it where the rider sits on the bike. }
     property Scene: TCastleScene read FScene;
+    { Finalize pure pose constants only after current face, body, clothing
+      and contact inputs. Publishing X3D fields remains on the scene thread. }
+    property PrepareGpuPose:TNotifyEvent read FPrepareGpuPose write FPrepareGpuPose;
     property AppearanceAddon:TRiderAppearanceAddon read FAppearanceAddon;
     property BodyMorph:TRiderBodyMorph read FBodyMorph;
 
@@ -1413,6 +1417,7 @@ begin
     FHair.Update(FScene,Dt,Speed);
   end;
   if (FHeadAppearance<>nil)and(FFace<>nil)then FHeadAppearance.UpdateFace(FFace);
+  if Assigned(FPrepareGpuPose)then FPrepareGpuPose(Self);
 end;
 
 procedure TTripoRiderScene.SetFaceTime(const Value:Double);
@@ -3225,6 +3230,13 @@ begin
   Result := 0.2126 * C.X + 0.7152 * C.Y + 0.0722 * C.Z;
 end;
 
+function RiderDisplayChannelToLinear(C: Single): Single; inline;
+begin
+  C := EnsureRange(C, 0.0, 1.0);
+  if C <= 0.04045 then Result := C / 12.92
+  else Result := Power((C + 0.055) / 1.055, 2.4);
+end;
+
 function TTripoRiderScene.DisplayClothColor(Slot:TClothSlot):TVector3;
 var I:Integer;Lum,Best:Single;C:TVector3;
 begin
@@ -3244,6 +3256,16 @@ var
   Peak, Denominator: Single;
 begin
   Result := FDyeColor[Slot];
+  { The picker, saved hexadecimal colours and bot palettes are display sRGB.
+    Modern garment factors and main_texture_apply operate in linear light.
+    Decode once when setting the colour, before preserving the authored
+    fabric ratios. The material-bake and live shader paths share this value;
+    no additional per-fragment conversion or texture rewrite is needed.
+    Legacy chroma-key skin/hair processing has a separate colour contract. }
+  if (FCorrectives <> nil) and
+     (Slot in [csJersey, csShorts, csSocks, csBoots, csGloves]) then
+    Result := Vector3(RiderDisplayChannelToLinear(Result.X),
+      RiderDisplayChannelToLinear(Result.Y), RiderDisplayChannelToLinear(Result.Z));
   if (FCorrectives = nil) or (Slot <> csJersey) or
      (FDyeJerseyReferenceLum <= 0) then Exit;
   { Multiply source luminance by this scale. Keep the authored fabric ratios
@@ -4561,14 +4583,6 @@ var
   WMixArr: array[TClothSlot] of Single;
   UseUv: Boolean;
 
-  function SrgbToLin(C: Single): Single; inline;
-  begin
-    if C <= 0.04045 then
-      Result := C / 12.92
-    else
-      Result := Power((C + 0.055) / 1.055, 2.4);
-  end;
-
   function LinToSrgbByte(C: Single): Byte; inline;
   var
     I2: Integer;
@@ -4972,7 +4986,8 @@ var
         for Xx := 0 to Img.Width - 1 do
         begin
           C := Img.Colors[Xx, Yy, 0];
-          R := SrgbToLin(C.X); G := SrgbToLin(C.Y); B := SrgbToLin(C.Z);
+          R := RiderDisplayChannelToLinear(C.X); G := RiderDisplayChannelToLinear(C.Y);
+          B := RiderDisplayChannelToLinear(C.Z);
           if BestSlot(R, G, B,
             Byte(EnsureRange(Round(C.X * 255), 0, 255)),
             Byte(EnsureRange(Round(C.Y * 255), 0, 255)),
@@ -5027,7 +5042,7 @@ begin
     SkinToneColor;   { тон кожи из pristine-текстур до первой запечки }
     for V := 0 to 255 do
     begin
-      s2l[V] := SrgbToLin(V / 255.0);
+      s2l[V] := RiderDisplayChannelToLinear(V / 255.0);
       if V / 255.0 <= 0.0031308 then
         l2s[V] := EnsureRange(Round(12.92 * (V / 255.0) * 255), 0, 255)
       else
@@ -8283,7 +8298,7 @@ begin
   FScapulaElevation := P.ScapulaElevation;
   FHandLevel        := P.HandLevel;
   FFrameGrip[0] := P.HandFrameR; FFrameGrip[1] := P.HandFrameL;
-  for i:=0 to 1 do FFrameHandRelax[i]:=EnsureRange(P.HandRelax[i],0.0,0.2);
+  for i:=0 to 1 do FFrameHandRelax[i]:=EnsureRange(P.HandRelax[i],0.0,1.0);
   { OffsetX/Y/Z and AnkleFlex are consumed by the bike via CurrentPose. StanceHalf is a
     main calibration param now (TripoStanceHalf), not part of the pose. }
 end;
