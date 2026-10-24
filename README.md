@@ -181,8 +181,14 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 
 28. **Profiles, platforms and maintenance.** Use a local profile without an account, save
     preferences and personal settings, and choose a UI language. Menus adapt to screen size.
-    Windows is the main platform; Android already works and is still being refined. Update
-    checks, installer downloads, diagnostic crash reports and feedback tools are included.
+    Development is on PC (Windows x86-64), and an Android build has been successfully tested.
+    Castle Game Engine supports Windows, Linux, macOS, FreeBSD, Android, iOS, web browsers
+    (WebAssembly/WebGL), Raspberry Pi and Pine64 (Linux on ARM), and Nintendo Switch. For
+    REZVIVO, the other platforms are possible in theory and still require porting and
+    validation. Nintendo Switch also requires approved Nintendo developer access and the
+    engine's separate console integration. Update checks, installer downloads, diagnostic crash
+    reports and feedback tools are included. See [CGE platform
+    support](https://castle-engine.io/features).
 
 29. **Tools for creators and developers.** OSM3D Studio and tree, avatar, anatomy and bicycle
     editors support scene preparation. Compare source photos with matching 3D views, build and
@@ -196,8 +202,10 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 </details>
 
 Built with Free Pascal and Castle Game Engine, REZVIVO is in **alpha**.
-The source build currently targets **Windows x86-64**;
-graphics performance and device compatibility are still being refined.
+Development is on **PC (Windows x86-64)**, and an **Android build has been
+successfully tested**. The other CGE platforms listed above remain theoretical
+porting targets for REZVIVO and still need adaptation and validation. Graphics
+performance and device compatibility are still being refined.
 For the ready-to-use application, visit the [download page](https://rezvivo.com/download).
 
 ## Looking for a Zwift alternative?
