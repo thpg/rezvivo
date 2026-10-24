@@ -12,30 +12,188 @@ Terrain, roads, buildings, water and vegetation are generated from OSM and
 elevation data, with map tiles loaded as you move. Handcrafted Dream Worlds and
 interval workouts offer more ways to ride.
 
-[Website](https://rezvivo.com) · [Watch videos](https://rezvivo.com/#videos) · [Download for Windows](https://rezvivo.com/download) ·
+[Website](https://rezvivo.com) · [Features](#features) · [Watch videos](https://rezvivo.com/#videos) · [Download for Windows](https://rezvivo.com/download) ·
 [Report an issue on the website](https://rezvivo.com/feedback) or
 [GitHub Issues](https://github.com/thpg/rezvivo/issues) · [License](LICENSE)
 
 ## Features
 
-- **Free exploration:** start from a point on the map, walk or run, cycle with
-  keyboard power controls, or use free flight to look around.
-- **3D OSM streaming:** terrain, roads, buildings, water and vegetation generated
-  from map and elevation data. Nearby areas load as you move. Import routes or
-  create them on the map when you want to follow a planned ride.
-- **Dream World:** a castle island, a lighthouse island, a forested mountain,
-  a futuristic district, a red canyon and an environment showcase.
-- **Interval training:** original built-in workouts, power targets, live intensity
-  adjustments and a compact workout-only window.
-- **Intervals.icu:** a synced training schedule, one-click starts for today's workout,
-  and automatic uploads of completed smart-trainer sessions. Simulated sessions
-  are excluded from uploads.
-- **Devices and simulation:** Bluetooth trainer and sensor integration, plus
-  FIT-based simulation for exploring without connected equipment. Elite STERZO
-  Smart supports steering in free exploration and lane changes on routes,
-  including while FIT simulation supplies power and cadence.
-- **Bike fitting:** adjustable avatars, riding positions and parametric bicycles,
-  with automatic frame sizing and saddle, stem and spacer adjustment.
+Train on a smart trainer or explore the world in 3D. This guide covers the current project, including map-making tools. REZVIVO is in alpha; platform-specific and experimental features are identified below.
+
+Read the guide below or [browse all features on the website](https://rezvivo.com/#features).
+
+<details>
+<summary>Explore real and imagined worlds</summary>
+
+1. **Free exploration.** Choose a point on the map and cycle, walk, run or fly freely. You do
+    not need a prepared route, a trainer or an account to explore. Switch between travel modes
+    within the scene.
+
+2. **The real world in 3D.** Terrain, roads, buildings, bridges, tunnels, water and vegetation
+    are generated from OpenStreetMap and elevation data. Nearby areas load as you move. A vector
+    map, globe, place search, start-point selection and an in-ride mini-map help you find your
+    way.
+
+3. **Routes.** Import FIT and GPX files, create routes on the map, keep a personal library or
+    choose from a server catalogue that checks for updates. Prepare routes in advance and check
+    their cached data. REZVIVO remembers your last choice; a fresh installation starts with
+    Krylatskoye.
+
+4. **Dream Worlds.** Ride and explore a castle island, a lighthouse island, a forested mountain,
+    a futuristic district, a red canyon or Demo-world, an environment showcase. You can also
+    create your own Dream Worlds with an AI agent.
+
+</details>
+
+<details>
+<summary>Train and track your progress</summary>
+
+5. **Trainers and sensors.** Connect smart trainers and power, cadence, speed and heart-rate
+    sensors through Bluetooth LE, or ANT+ on a PC with a compatible adapter. Choose separate
+    sources for each metric and trainer control, with automatic discovery and connection.
+    Compatibility depends on the device protocol.
+
+6. **Bicycle controls.** Real power drives the bicycle when using a trainer. Without one,
+    keyboard controls set effort and braking. Elite STERZO Smart steering and gamepad input
+    support direction changes in free exploration and lane changes on routes. Android also has
+    on-screen controls.
+
+7. **Cycling physics and resistance.** Speed responds to power, mass, gradient and resistance,
+    with coasting and braking. A smart trainer reproduces the gradient or holds a workout power
+    target. Adjustable gradient sensitivity changes trainer resistance without altering measured
+    power in the motion calculation. FIT routes can use a prepared load profile from the
+    recording.
+
+8. **Interval workouts.** Choose original built-in workouts or start intervals during an
+    ordinary ride. The workout panel shows the profile, target, remaining time and progress.
+    Pause, resume, skip an interval, restart or adjust the reference power by ±5 W while
+    training.
+
+9. **Automatic workout cues.** Start and resume by pedalling. Workouts pause after 5 seconds
+    without pedalling, or 15 seconds in recovery and free-ride sections. Coloured gates appear
+    before interval changes, with audio cues and a countdown.
+
+10. **Workout editor.** Create and edit workouts, import and save ZWO files. Combine warm-ups,
+    cool-downs, steady efforts, power ramps, repeated intervals and free-ride sections. Set
+    durations, power targets, cadence guidance and text prompts.
+
+11. **Workout-only mode.** Run intervals without loading a 3D map. A small vertical window lets
+    you train while watching a film, using a browser or working in another application. Its
+    always-on-top setting is optional.
+
+12. **Schedule and Intervals.icu.** Sync your training calendar, get a prompt for today's
+    workout, retrieve routes and automatically upload completed smart-trainer sessions. Uploads
+    run in the background and retry when needed. Simulations are excluded from real workout
+    uploads.
+
+13. **Metrics and ride recording.** Track power, heart rate, cadence, speed, gradient, time,
+    distance, elevation gain, work and TSS. Configure FTP and training zones. Keep ride history
+    and FIT recordings, with saved state for recovery after interruptions. Manual controls and
+    simulation are kept separate from real training measurements.
+
+</details>
+
+<details>
+<summary>Ride together and make it yours</summary>
+
+14. **Group rides.** Create a room, invite a friend or join with a code and see other
+    participants in the same scene. Ready-made real-world routes have shared rooms that eligible
+    smart-trainer rides join automatically.
+
+15. **Bot companions.** Ride with cyclists of different strengths from a fixed character
+    catalogue, with up to three local bots visible at once. They catch up, overtake, attack,
+    tire, follow wheels and take turns at the front. Companions can wait for you; oncoming and
+    crossing cyclists, glances and a helping-hand gesture add activity.
+
+16. **Body and appearance.** Adjust a shared parametric body: height, weight, fat and muscle
+    balance, leg and arm lengths, pelvis and shoulder widths, waist, thighs and calves. Choose
+    skin, hair and equipment colours, preview hairstyles including ponytails, braids and
+    dreadlocks, and add facial hair. Wear a helmet, bandana, cycling cap or no headwear.
+
+17. **Clothing.** Choose cycling jerseys and bib shorts, T-shirts, sweatshirts, trousers, jeans,
+    jackets, coats and raincoats, with footwear, everyday headwear and colours. Fabric
+    materials, seams, folds and animated loose clothing are supported. The in-game wardrobe
+    works across travel modes.
+
+18. **Bicycles and bike fitting.** Parametric bicycles include road, mountain and fixed-gear
+    options. Choose a model and frame size, then adjust the saddle, stem and spacers, or use
+    automatic bike fit for your avatar's measurements. Hand and foot positions follow bicycle
+    geometry. Bots also receive individual fitting.
+
+19. **Character animation.** Seated and standing pedalling, sustained high-power attacking
+    poses, starts, stops and waiting. Pelvis, back, shoulders, arms and head take part, with
+    breathing, effort expressions and small posture and grip changes. Walking, running,
+    soft-tissue, hair and clothing motion, drift and stationary bicycle-turn animations are included.
+
+</details>
+
+<details>
+<summary>Cameras, simulation and AI</summary>
+
+20. **Cameras and capture.** Use following, side, overview, cinematic and free cameras, with
+    overview shots while stopped. Save screenshots in the screenshots folder. Record 30 fps MP4
+    video with a virtual clock: slower rendering takes longer to record while preserving evenly
+    timed animation in the finished video.
+
+21. **FIT ride simulation.** Explore without sensors by replaying recorded power and cadence.
+    Speed up, slow down, pause or rewind. Rewinding restores participant positions and recorded
+    camera states. Simulation is also available to local profiles.
+
+22. **In-app AI assistant.** Chat with a separately connected external agent through MCP. It can
+    navigate the interface, start rides and workouts, change workout settings and follow live
+    sensor and interval data. English and Russian voice input and spoken replies are available;
+    speech recognition can run locally.
+
+23. **Map refinement from photos and video.** An agent can match imagery to OSM objects and
+    refine buildings, roofs, façades, windows, entrances, archways and decoration, as well as
+    roads, pavements, vegetation and street objects. Observations persist as tile knowledge for
+    later generation. This prepares specific areas; it does not automatically reconstruct the
+    entire map on every ride.
+
+</details>
+
+<details>
+<summary>Scenery, graphics and sound</summary>
+
+24. **Detailed environments.** Procedural asphalt, concrete, dirt, grass and rock materials,
+    with tree, shrub and grass species from different regions. Architectural components add
+    variety to buildings, alongside streetlights, fences, steps, signs, water and puddles.
+
+25. **Graphics and performance settings.** Full and Universal renderers, presets, FPS limits,
+    anti-aliasing, shadow quality and distance, and vegetation, hair and material detail. Auto
+    uses trial rendering and available GPU information to suggest settings; a live preview shows
+    FPS. Optional RTX shadows, RTX Screen and reflections require compatible hardware. The world
+    image cache is off by default: it may improve speed but can introduce artifacts.
+
+26. **Sound.** Environmental ambience, wind, bicycle and road-impact sounds, workout cues and
+    interface clicks, with separate volume controls for each group.
+
+27. **Caching and connectivity.** Compressed binary tile caches, reuse of downloaded source data
+    and photos, advance route preparation, cache-size reporting and clearing. Loading shows
+    actual work stages and server request status. Prepared data lets you revisit places without
+    downloading and generating everything again. Vegetation preparation speed and adaptation to
+    frame rate are configurable.
+
+</details>
+
+<details>
+<summary>Platforms, tools and open source</summary>
+
+28. **Profiles, platforms and maintenance.** Use a local profile without an account, save
+    preferences and personal settings, and choose a UI language. Menus adapt to screen size.
+    Windows is the main platform; Android already works and is still being refined. Update
+    checks, installer downloads, diagnostic crash reports and feedback tools are included.
+
+29. **Tools for creators and developers.** OSM3D Studio and tree, avatar, anatomy and bicycle
+    editors support scene preparation. Compare source photos with matching 3D views, build and
+    rebuild tiles, automate through MCP and inspect CPU/GPU timings and render statistics.
+    Development experiments include mesh shaders for part of the conifer rendering; they are not
+    the required default renderer.
+
+30. **Open source.** REZVIVO is published on GitHub under GPL-3.0-or-later. Explore the code,
+    build and modify the application, contribute improvements or help test it.
+
+</details>
 
 Built with Free Pascal and Castle Game Engine, REZVIVO is in **alpha**.
 The source build currently targets **Windows x86-64**;
