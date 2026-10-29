@@ -369,5 +369,18 @@
   "+ W": "+ W",
   "Trees: textured": "樹木：テクスチャ",
   "World image cache": "ワールド画像キャッシュ",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "遠景を再利用してパフォーマンスを向上させますが、描画に乱れが生じる場合があります。追加のGPUメモリを使用します。初期設定ではオフです。"
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "遠景を再利用してパフォーマンスを向上させますが、描画に乱れが生じる場合があります。追加のGPUメモリを使用します。初期設定ではオフです。",
+  "Jersey: snug": "ジャージ：タイト",
+  "Jersey: fitted": "ジャージ：ぴったり",
+  "Jersey: relaxed": "ジャージ：ゆったり",
+  "Length: short": "丈：短め",
+  "Length: regular": "丈：標準",
+  "Length: long": "丈：長め",
+  "Rearrange folds": "しわを整える",
+  "Pull jersey down": "裾を下げる",
+  "Pelvis width (%)": "骨盤の幅 (%)",
+  "Shoulder width (%)": "肩幅 (%)",
+  "Waist size (%)": "ウエストの太さ (%)",
+  "Thigh size (%)": "太ももの太さ (%)",
+  "Calf size (%)": "ふくらはぎの太さ (%)"
 }

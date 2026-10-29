@@ -70,6 +70,68 @@ vec3 wind(vec3 p, float phase) {
     return p + vec3(sin(uTime*1.25+p.y*.31)+.35*sin(uTime*2.1+p.y*.63+p.x*.11+p.z*.13),
                    0.0, .5*cos(uTime*.93+p.y*.4))*uWind*weight*.22;
 }
+// One preparation per physical needle in the mesh path, the same equations
+// in the ordinary vertex path. No second foliage shape or animation model.
+struct TreeNeedleShape {
+    vec3 base,tip,bend,side,radial,facing;
+    float season,lodScale,physicalLength,pixelWorld,length,width,coverage,flutter,phase;
+};
+TreeNeedleShape prepareTreeNeedleImpl(int needle,int species) {
+    TreeNeedleShape r;
+    r.season=1.0;
+        int fascicle=needle/uNeedlesPerFascicle;
+        float member=float(needle%uNeedlesPerFascicle);
+        float id=float(fascicle)+d.x*173.0;
+        if(uSeasonLeaf<.99999) r.season=smoothstep(random1(id+member*19.0),random1(id+member*19.0)+.08,uSeasonLeaf*1.08);
+        if(r.season<=0.0) return r;
+        // A low-discrepancy prefix covers the whole shoot. Its positions do not
+        // depend on the draw count: approaching adds needles without moving old ones.
+        float t=.02+.96*fract(float(fascicle)*.61803398875+random1(d.x*173.0+2.0));
+        vec3 tangent=normalize(mix(b.xyz-a.xyz,c.xyz-b.xyz,t));
+        r.side=normalize(cross(tangent,abs(tangent.y)>.95?vec3(1,0,0):vec3(0,1,0)));
+        vec3 up=cross(tangent,r.side);
+        // Keep azimuth independent of the longitudinal low-discrepancy order.
+        // Golden-angle azimuth is the complement of .61803398875: pairing the
+        // two locks every needle to one turn of a helix and leaves bare strips.
+        float angle=random1(id+11.0)*2.0*PI;
+        if(species==7 || species==12) angle+=member*2.0*PI/float(uNeedlesPerFascicle);
+        r.radial=r.side*cos(angle)+up*sin(angle);
+        // Pines share a sheath in pairs; spruce is solitary; juniper has
+        // three needles around each whorl. No CPU needle geometry is stored.
+        r.base=curve(a.xyz,b.xyz,c.xyz,t)+r.radial*a.w*mix(1.0,.18,t);
+        float spread=angle;
+        if(uNeedlesPerFascicle==2) spread+=(member*2.0-1.0)*(.09+.13*random1(id+3.0));
+        float forward=species==5 ? .20 : .45;
+        vec3 direction=normalize(tangent*(forward+.30*random1(id+4.0))+
+            r.side*cos(spread)*.90+up*sin(spread)*.90);
+        // Thinning must not turn individual needles into metre-long ribbons.
+        // Bound geometric compensation; represent the remaining density in
+        // sample coverage below. Full-detail needles keep their physical size.
+        r.lodScale=min(sqrt(uNeedleScale),1.5);
+        r.physicalLength=b.w*(.80+.35*random1(id+member*7.0))*sqrt(r.season)*r.lodScale;
+        float viewDepth=max(.05,-(uView*uModel*vec4(r.base,1.0)).z);
+        bool orthographic=abs(uProjection[3][3]-1.0)<.001;
+        r.pixelWorld=2.0*(orthographic ? 1.0 : viewDepth)/(uProjection[1][1]*uViewportHeight);
+        // The pixel guard is bounded too, otherwise it multiplies LOD growth.
+        // Keep the offline bake footprint unchanged for existing far atlases.
+        r.length=max(r.physicalLength,min(r.pixelWorld*1.5,r.physicalLength*(uBakeMode>0 ? 4.0 : 1.25)));
+        r.tip=r.base+direction*r.length;
+        r.bend=r.base+direction*r.length*.52+tangent*r.length*(species==5?.04:.16);
+
+    vec3 eyeLocal=transpose(mat3(uModel))*(uEye-uModel[3].xyz);
+    r.facing=uDepthOnly==1 ? normalize(transpose(mat3(uModel))*uSunDirection) : normalize(eyeLocal-r.base);
+    float physicalWidth=c.w*.5*r.lodScale*(uNeedleVertices==3 ? 1.29 : 1.0);
+    r.width=max(physicalWidth,min(r.pixelWorld*.6,r.length*.45));
+    float densityCoverage=uNeedleScale/(r.lodScale*r.lodScale);
+    r.coverage=clamp(densityCoverage*(physicalWidth/r.width)*(r.physicalLength/r.length),0.0,1.0);
+    r.flutter=uComplexity>=3 ? sin(uTime*4.1+d.x*23.0+float(fascicle))*uWind*.004 : 0.0;
+    r.phase=random1(id+member*13.0);
+    return r;
+}
+TreeNeedleShape prepareTreeNeedle(int needle) {
+    return prepareTreeNeedleImpl(needle, vSpecies);
+}
+
 void main() {
     vec3 p=vec3(0), n=vec3(0,1,0);
     vec3 farRoot=a.xyz;
@@ -391,72 +453,25 @@ void main() {
         vUV=vec2(across*.5+.5,t);
     } else if (uKind==5) {
         int needle=gl_VertexID/uNeedleVertices;
-        int fascicle=needle/uNeedlesPerFascicle;
-        float member=float(needle%uNeedlesPerFascicle);
-        float id=float(fascicle)+d.x*173.0;
-        if(uSeasonLeaf<.99999) vSeasonVisible=smoothstep(random1(id+member*19.0),random1(id+member*19.0)+.08,uSeasonLeaf*1.08);
+        TreeNeedleShape needleShape=prepareTreeNeedle(needle);
+        vSeasonVisible=needleShape.season;
         if(vSeasonVisible<=0.0) { gl_Position=vec4(2,2,2,1); return; }
-        // A low-discrepancy prefix covers the whole shoot. Its positions do not
-        // depend on the draw count: approaching adds needles without moving old ones.
-        float t=.02+.96*fract(float(fascicle)*.61803398875+random1(d.x*173.0+2.0));
-        vec3 tangent=normalize(mix(b.xyz-a.xyz,c.xyz-b.xyz,t));
-        vec3 side=normalize(cross(tangent,abs(tangent.y)>.95?vec3(1,0,0):vec3(0,1,0)));
-        vec3 up=cross(tangent,side);
-        // Keep azimuth independent of the longitudinal low-discrepancy order.
-        // Golden-angle azimuth is the complement of .61803398875: pairing the
-        // two locks every needle to one turn of a helix and leaves bare strips.
-        float angle=random1(id+11.0)*2.0*PI;
-        if(vSpecies==7 || vSpecies==12) angle+=member*2.0*PI/float(uNeedlesPerFascicle);
-        vec3 radial=side*cos(angle)+up*sin(angle);
-        // Pines share a sheath in pairs; spruce is solitary; juniper has
-        // three needles around each whorl. No CPU needle geometry is stored.
-        vec3 base=curve(a.xyz,b.xyz,c.xyz,t)+radial*a.w*mix(1.0,.18,t);
-        float spread=angle;
-        if(uNeedlesPerFascicle==2) spread+=(member*2.0-1.0)*(.09+.13*random1(id+3.0));
-        float forward=vSpecies==5 ? .20 : .45;
-        vec3 direction=normalize(tangent*(forward+.30*random1(id+4.0))+
-            side*cos(spread)*.90+up*sin(spread)*.90);
-        // Thinning must not turn individual needles into metre-long ribbons.
-        // Bound geometric compensation; represent the remaining density in
-        // sample coverage below. Full-detail needles keep their physical size.
-        float lodScale=min(sqrt(uNeedleScale),1.5);
-        float physicalLength=b.w*(.80+.35*random1(id+member*7.0))*sqrt(vSeasonVisible)*lodScale;
-        float viewDepth=max(.05,-(uView*uModel*vec4(base,1.0)).z);
-        bool orthographic=abs(uProjection[3][3]-1.0)<.001;
-        float pixelWorld=2.0*(orthographic ? 1.0 : viewDepth)/(uProjection[1][1]*uViewportHeight);
-        // The pixel guard is bounded too, otherwise it multiplies LOD growth.
-        // Keep the offline bake footprint unchanged for existing far atlases.
-        float length=max(physicalLength,min(pixelWorld*1.5,physicalLength*(uBakeMode>0 ? 4.0 : 1.25)));
-        vec3 tip=base+direction*length;
-        vec3 bend=base+direction*length*.52+tangent*length*(vSpecies==5?.04:.16);
         vec2 shape=uNeedleVertices==3 ? shortNeedleVertices[gl_VertexID%3] : needleVertices[gl_VertexID%9];
-        vec3 axis=normalize(mix(bend-base,tip-bend,shape.y));
-        // Rotate the thin ribbon around its axis toward the camera, retaining
-        // the actual 3D centerline and physical width at every viewing angle.
-        vec3 eyeLocal=transpose(mat3(uModel))*(uEye-uModel[3].xyz);
-        // A shadow sees cylindrical needles from the sun, independently of
-        // rider/cinematic camera movement. The colour pass keeps its view facing.
-        vec3 facing=uDepthOnly==1 ? normalize(transpose(mat3(uModel))*uSunDirection) : normalize(eyeLocal-base);
-        vec3 widthAxis=cross(axis,facing);
-        if(dot(widthAxis,widthAxis)<.00001) widthAxis=cross(axis,side);
+        vec3 axis=normalize(mix(needleShape.bend-needleShape.base,needleShape.tip-needleShape.bend,shape.y));
+        vec3 widthAxis=cross(axis,needleShape.facing);
+        if(dot(widthAxis,widthAxis)<.00001) widthAxis=cross(axis,needleShape.side);
         widthAxis=normalize(widthAxis);
-        float physicalWidth=c.w*.5*lodScale*(uNeedleVertices==3 ? 1.29 : 1.0);
-        float width=max(physicalWidth,min(pixelWorld*.6,length*.45));
-        // Restore the area lost to thinning through coverage, not unbounded
-        // geometry. Subtract the bounded size compensation already applied.
-        // Raster guards still account for their projected area in both passes.
-        float densityCoverage=uNeedleScale/(lodScale*lodScale);
-        vNeedleCoverage=clamp(densityCoverage*(physicalWidth/width)*(physicalLength/length),0.0,1.0);
-        width*=1.0-.48*shape.y;
-        p=curve(base,bend,tip,shape.y)+widthAxis*shape.x*width;
+        vNeedleCoverage=needleShape.coverage;
+        float width=needleShape.width*(1.0-.48*shape.y);
+        p=curve(needleShape.base,needleShape.bend,needleShape.tip,shape.y)+widthAxis*shape.x*width;
         vObject=p;
-        if(uComplexity>=3)p+=radial*sin(uTime*4.1+d.x*23.0+float(fascicle)) * uWind*.004*shape.y;
+        if(uComplexity>=3)p+=needleShape.radial*needleShape.flutter*shape.y;
         if(uDepthOnly==0) {
             n=normalize(cross(widthAxis,axis));
             vNeedleAxis=normalize(mat3(uModel)*axis);
         }
         vUV=vec2(shape.x*.5+.5,shape.y);
-        vPhase=random1(id+member*13.0);
+        vPhase=needleShape.phase;
     } else {
         p=vec3((vUV.x-.5)*2000.0,-.035,(vUV.y-.5)*2000.0);
         vPhase=0.0; vSpecies=0;

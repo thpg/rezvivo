@@ -28,6 +28,7 @@ type
 function RiderGripFrame(Grip, Side: Integer): TRiderGripFrame;
 function BlendGripFrame(const A, B: TRiderGripFrame; T: Single): TRiderGripFrame;
 function TransformGripFrame(const F: TRiderGripFrame; const M: TMatrix4): TRiderGripFrame;
+function RiderFreeElbowHint(const BarHint,RightAxis:TTripoVec3;Side:Integer;DownBlend:Single):TTripoVec3;
 procedure RiderHandAxes(Rig: TTripoRig; Side: Integer; out Forward, Palm: TTripoVec3);
 function RiderGripOrientation(const Natural: TTripoVec4; const Forearm,
   LocalForward, LocalPalm: TTripoVec3; const Frame: TRiderGripFrame;
@@ -75,6 +76,23 @@ begin
   Result := F;
   Result.Forward := M.MultDirection(F.Forward).Normalize;
   Result.Palm := M.MultDirection(F.Palm).Normalize;
+end;
+
+function RiderFreeElbowHint(const BarHint,RightAxis:TTripoVec3;Side:Integer;DownBlend:Single):TTripoVec3;
+var FreeHint:TTripoVec3;
+begin
+  if DownBlend<=0 then Exit(BarHint);
+  DownBlend:=EnsureRange(DownBlend*3,0.0,1.0);
+  DownBlend:=DownBlend*DownBlend*(3-2*DownBlend);
+  { A bar grip bends backwards. At the waist that pole can become parallel
+    to the shoulder-to-hand axis and flip inside the contact iteration.
+    Once the hand releases the bar, guide the elbow below and outside the
+    rib cage. A purely downward pole is singular when the hand passes just
+    under the shoulder; an outward component keeps the arm off the torso. }
+  { RightAxis comes from the shoulder bind positions. A legacy flare-axis
+    convention may point the other way after importing/yawing a rig. }
+  FreeHint:=V3Add(V3(0,-1,0),V3Scale(RightAxis,(1-2*Side)*0.35));
+  Result:=V3Add(V3Scale(BarHint,1-DownBlend),V3Scale(FreeHint,DownBlend));
 end;
 
 procedure RiderHandAxes(Rig: TTripoRig; Side: Integer; out Forward, Palm: TTripoVec3);

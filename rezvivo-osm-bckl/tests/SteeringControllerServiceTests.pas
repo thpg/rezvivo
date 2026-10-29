@@ -17,6 +17,7 @@ begin
   Check(GetEnvironmentVariable('REZVIVO_TEST_SETTINGS_FILE')<>'','isolated settings required');
   Check(GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1','no hardware required');
   RegisterANTUsbBackendClass(nil);Settings.SetSimulationEnabled(False);
+  Settings.SetVirtualGearingEnabled(False); { explicit legacy +/- steering mode }
   DeviceService:=TGameDeviceService.Create;P:=TZwiftControllerParser.Create;
   try
     DeviceService.AutoConnect:=False;

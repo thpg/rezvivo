@@ -1242,7 +1242,7 @@ var
 
 implementation
 
-uses RiderRuntimeAudit, BikeSeatSurface,
+uses RiderGarmentState, RiderRuntimeAudit, BikeSeatSurface,
   CastleRenderOptions, RiderPoseCatalog, TripoRig,
   CastleShapes,
   CastleSceneCore,  { SceneLifecycleLog — сборка/освобождение составной сцены райдера }
@@ -4358,6 +4358,11 @@ begin
       Result := LoadTripoRider(Path);
     end;
   end;
+  if Result and(FTripoRider<>nil)and(FTripoRider.Garment<>nil)then begin
+    D:=O.Find('garment');
+    if D is TJSONObject then FTripoRider.Garment.ConfigureGarment(
+      ReadRiderGarment(TJSONObject(D),FTripoRider.Garment.Garment));
+  end;
 end;
 
 procedure TBikeInstance.SetHeadwearColorLive(const Color:TVector3;Enabled:Boolean);
@@ -4942,7 +4947,7 @@ var
   TurnGrip,TurnFoot,TurnBar: TVector3;
   TurnStance:Single;
   GoalTransform: TMatrix4;
-  Dt, progHR, progHL, twistDeg, freeR, freeL: Single;
+  Dt, progHR, progHL, twistDeg, freeR, freeL,JerseyReach: Single;
   FromFrameR,FromFrameL:TRiderGripFrame;
   ContactAttention:TRiderAttentionFrame;
 
@@ -5170,6 +5175,10 @@ begin
   else FPartnerContact.Phase:=Max(0,FPartnerContact.Phase-Dt/0.5);
   FPartnerContact.Blend:=SmoothUnit((FPartnerContact.Phase-0.20)/0.80);
   ContactAttention:=FAttention;
+  JerseyReach:=0;
+  if(FTripoRider.Garment<>nil)and not(FGroundTurn.Active or FDrift.Frame.Active or
+    PartnerContactActive or FHandAnimating)and(LivePose.Motion.Standing<0.1)and
+    (FTripoHandPosR>0)and(FTripoHandPosL>0)then JerseyReach:=FTripoRider.Garment.AdjustReach;
   if FDrift.Frame.Active then ContactAttention:=Default(TRiderAttentionFrame);
   { With one hand supporting on the companion, the thorax cannot freely
     rotate away from that support. Keep the look (with the usual neck limit)
@@ -5245,6 +5254,7 @@ begin
     FBodyDynamicsInput.HandL:=Ord(LivePose.HandPosL>0);
     FBodyDynamicsInput.HandR:=FBodyDynamicsInput.HandR*(1-0.65*ContactAttention.HandRelease[0]);
     FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*(1-0.65*ContactAttention.HandRelease[1]);
+    FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*(1-JerseyReach);
     if FPartnerContact.Side=0 then FBodyDynamicsInput.HandR:=
       FBodyDynamicsInput.HandR*(1-FPartnerContact.Blend)
     else FBodyDynamicsInput.HandL:=FBodyDynamicsInput.HandL*(1-FPartnerContact.Blend);
@@ -5419,6 +5429,30 @@ begin
       GripL:=GripL*(1-Alpha)+FPartnerContact.LocalPoint*Alpha;
       GripL.Y:=GripL.Y+0.10*Sin(Pi*Alpha);
       LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,FPartnerContact.LocalFrame,Alpha);
+    end;
+  end;
+  { One hand reaches the side hem; the other keeps its bar contact. This
+    uses the same arm IK/contact pipeline as all other gestures. No bone
+    rotations or vertex positions are overwritten after the solve. }
+  if JerseyReach>0 then begin
+    Alpha:=JerseyReach;
+    if Alpha>0 then begin
+      if not FTripoRider.PosedJointParent('Waist',BoneA)then BoneA:=O(Saddle)+LiveOffset+Vector3(0.10,0.18,0);
+      BoneA:=BoneA+Vector3(0.025,0.035-0.008*Ord(FTripoRider.Garment.Garment.Adjusted),
+        -(0.14+0.0003*Max(0,FBodyParameters.WeightKg-75))*FBodyParameters.HeightCm/180);
+      GripL:=GripL*(1-Alpha)+BoneA*Alpha;
+      GripL.Z:=GripL.Z-0.10*Sin(Pi*Alpha);
+      { Fingers follow the forearm back into the side hem. A purely
+        vertical hand asks for more wrist bend than the anatomical limit;
+        the coupled contact solve then oscillates around the target. }
+      FromFrameL.Forward:=Vector3(-1,0,0);FromFrameL.Palm:=Vector3(0,0,1);FromFrameL.Weight:=1;
+      LivePose.HandFrameL:=BlendGripFrame(LivePose.HandFrameL,FromFrameL,Alpha);
+      { Contact constrains the palm at either end. During transfer the hand
+        follows its forearm, rather than trying to satisfy two opposing
+        grip directions while it touches neither the bar nor the cloth. }
+      LivePose.HandFrameL.Weight:=Sqr(2*Alpha-1);
+      LivePose.HandRelax[1]:=0.35*Alpha+0.45*Sin(Pi*Alpha);
+      LivePose.ElbowDown[1]:=Alpha;
     end;
   end;
   FFrameHandR:=LivePose.HandFrameR;FFrameHandL:=LivePose.HandFrameL;

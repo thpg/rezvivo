@@ -296,14 +296,16 @@ begin
       '' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;attribute vec3 castle_Normal;' + #10 + '#endif' + #10 + ''+LineEnding+
       'attribute vec4 castle_SkinWeights0;attribute vec4 castle_SkinJoints0;'+LineEnding+
       'mat4 getJointMatrix(int j);'+LineEnding+
-      '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'vec3 riderSurfaceOffset();'+LineEnding+'#endif'+LineEnding+
+      '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'vec3 riderSurfaceOffset();vec3 riderSurfaceNormalOffset();'+LineEnding+'#endif'+LineEnding+
       FBody.ShaderSource('getJointMatrix')+
       'void PLUG_vertex_object_space(inout vec4 vertex,inout vec3 normal){'+LineEnding+
       'vec3 dp,dn;riderPsdOffset(dp,dn);vec3 p=castle_Vertex.xyz+dp;'+LineEnding+
       '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'p+=riderSurfaceOffset();'+LineEnding+'#endif'+LineEnding+
       'vec3 n=vec3(0.0,1.0,0.0);'+LineEnding+
       '#if !defined(CASTLE_SHADOW_DEPTH) || defined(CASTLE_CACHE_DEFORMATION)'+LineEnding+
-      'n=castle_Normal+dn;'+LineEnding+'#endif'+LineEnding+
+      'n=castle_Normal+dn;'+LineEnding+
+      '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'n+=riderSurfaceNormalOffset();'+LineEnding+'#endif'+LineEnding+
+      '#endif'+LineEnding+
       'vec3 outP,outN;bodyDeform(p,n,castle_SkinWeights0,ivec4(castle_SkinJoints0+vec4(.5)),outP,outN);'+LineEnding+
       'vertex=vec4(outP,1.0);normal=outN;}'+LineEnding
     else Part.Contents:=Part.Contents+
@@ -485,6 +487,7 @@ begin
     FAngleList.Add(ArcTan2(FRig.Delta[J][1], FRig.Delta[J][0]));
   end;
   FAngles.Send(FAngleList);
+  if FBody<>nil then FBody.PrepareNativeGarment;
 end;
 
 end.

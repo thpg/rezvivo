@@ -1316,6 +1316,9 @@ begin
     '        baseUV=(vGroundLocalPos.xz+phase)*vec2(0.25,-0.25);' + #10 +
     '    } else {' + #10 +
     '        baseUV = vGroundUV;' + #10 +
+    { Decode the junction tag for atlas fallback too. Keep vGroundUV intact:
+      the implicit footway-curb branch below still needs the shared-area tag. }
+    '        if(matId>=24 && matId<=29 && baseUV.x < -8.0) baseUV.x+=16.0;' + #10 +
     '    }' + #10 +
     '' + #10 +
     '    /* Хэш-рандомизация блока (см. TGroundTexRandom) с БЛЕНДОМ ШВОВ' + #10 +
@@ -1468,7 +1471,9 @@ begin
     '    }' + #10 +
     '    // Footway U spans its width; use the existing metric tangent before normalization.' + #10 +
     '    vec3 sidewalkCurb=vec3(0.0,0.0,1.0), sidewalkConcrete=vec3(0.0);' + #10 +
-    '    if (matId==28 && rp_mode>0.5 && abs(tbnDet)>1e-12 && mod(floor(vRoadStyle.z/256.0),2.0)<0.5) {' + #10 +
+    { Negative U marks the shared junction footprint (ROAD_JUNCTION_UV_SHIFT).
+      It has no ribbon edge: the implicit sidewalk curb must not fill it. }
+    '    if (matId==28 && vGroundUV.x > -8.0 && rp_mode>0.5 && abs(tbnDet)>1e-12 && mod(floor(vRoadStyle.z/256.0),2.0)<0.5) {' + #10 +
     '    float sidewalkWidth=length(dp1*duv2.y-dp2*duv1.y)/max(abs(tbnDet),1e-12);' + #10 +
     '    vec2 sidewalkFootprint=vec2(max(abs(duv1.y),abs(duv2.y))*10.0,' + #10 +
     '      max(abs(duv1.x),abs(duv2.x))*sidewalkWidth)*0.5;' + #10 +

@@ -149,7 +149,7 @@ type
     property OnRosterChanged:TNotifyEvent read FOnRosterChanged write FOnRosterChanged;
   end;
 implementation
-uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, jsonparser,
+uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, RiderGarmentState, jsonparser,
   BikeGeometryLib, BikeParametric_Frame, BikeParametric_Crankset,
   GameBikeAvatar, GameRiderTraffic, GameAgentNetwork, GameMath, DebugLog, AppSettings, UiTranslations,
   GameUserData, RiderHandGrip;
@@ -259,6 +259,7 @@ procedure TLocalBots.PrepareNext;
 var I:Integer;B:TBikeInstance;A:TLocalBotAgent;Slot:TClothSlot;Tick:QWord;
   Advance:Boolean;
   Config, Rider:TJSONObject;
+  Garment:TRiderGarmentParameters;
   Pose:TObject;
 begin
   if FReady or FPreparing then Exit;
@@ -276,6 +277,10 @@ begin
           try
             Rider:=Config.Objects['tripoRider'];
             Rider.Delete('body');Rider.Add('body',WriteRiderBody(FProfiles[I].Body));
+            Garment:=DefaultRiderGarment(FProfiles[I].EffortSeed);
+            Garment.Ease:=-0.4+(FProfiles[I].CatalogIndex mod 7)*0.2;
+            Garment.LengthEase:=((FProfiles[I].CatalogIndex div 7)mod 5-2)*0.2;
+            Rider.Delete('garment');Rider.Add('garment',WriteRiderGarment(Garment));
             Rider.Floats['scale']:=1;
             { Cleats follow this bike's actual pedals, not a legacy width
               saved for an older model. No user fit/profile is inherited. }

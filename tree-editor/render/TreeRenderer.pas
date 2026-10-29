@@ -2,7 +2,7 @@ unit TreeRenderer;
 {$mode objfpc}{$H+}
 {$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
-uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, TreeGPUData, TreeDistantArena, VegetationAtlas, VegetationAtlasUpload, {$ifdef OpenGLES}CastleGLES{$else}GL, GLExt{$endif};
+uses SysUtils, TreeMath, TreeModel, TreeLOD, TreeSeason, TreeFoliageLOD, TreeGPUData, TreeDistantArena, TreeNeedleMesh, VegetationAtlas, VegetationAtlasUpload, {$ifdef OpenGLES}CastleGLES{$else}GL, GLExt{$endif};
 type
   TTreeGPUItem = TreeGPUData.TTreeGPUItem;
   TTreeGPUItems = TreeGPUData.TTreeGPUItems;
@@ -34,6 +34,7 @@ type
   TTreeRenderer = class
   private
     FProgram: GLuint;
+    FNeedleMesh:TTreeNeedleMesh;
     FLeafSprays,FBarkTextures,FBranchFineVAO,FBranchFrameVBO:GLuint;
     FPreparedFrames:Boolean;
     FPreparedFrameBytes:Int64;
@@ -100,6 +101,8 @@ type
     UProfile,UBark,ULeaf,UEye,USpecies,UDensity,UDebug,UNeedlePairs,UNeedlesPerFascicle,UNeedleVertices,UViewportHeight,UNeedleDetail: GLint;
     procedure SetPassUniforms(const Projection,View:TTreeMat4; const Eye:TTreeVec3; Seconds:Single);
     function UniformChanged(Location:GLint;X,Y,Z,W:Single):Boolean;inline;
+    procedure UniformMatrix(Location:GLint;const Value:TTreeMat4);
+    procedure UniformVec(Location:GLint;const Value:TTreeVec3);
     procedure Uniform1i(Location:GLint;Value:Integer);inline;
     procedure Uniform1f(Location:GLint;Value:Single);inline;
     procedure Uniform3f(Location:GLint;X,Y,Z:Single);inline;
@@ -232,6 +235,7 @@ begin
     end;
     end;
     if FShared<>nil then begin
+      FNeedleMesh:=FShared.FNeedleMesh;
       UComplexity:=FShared.UComplexity;
       UDistantArena:=FShared.UDistantArena;UDistantOrigin:=FShared.UDistantOrigin;
       UCardEnvelope:=FShared.UCardEnvelope;UEnvelopePoints:=FShared.UEnvelopePoints;UEnvelopeViewport:=FShared.UEnvelopeViewport;
@@ -355,6 +359,15 @@ begin
     end;
     glBindVertexArray(0); glBindBuffer(GL_ARRAY_BUFFER,0);
     if FShared=nil then begin CreateLeafSprays(ShaderDirectory);CreateBarkTextures(ShaderDirectory);end;
+    if (FShared=nil) and (TreeNeedleMeshMode>0) then begin
+      try
+        FNeedleMesh:=TTreeNeedleMesh.Create(FProgram,
+          ReadText(IncludeTrailingPathDelimiter(ShaderDirectory)+'tree.vert'),
+          ReadText(IncludeTrailingPathDelimiter(ShaderDirectory)+'tree.frag'));
+      except on E:Exception do begin
+        FNeedleMesh:=nil;TreeNeedleMeshStatus:='fallback: '+E.Message;
+      end end;
+    end;
     FReady:=True;
   except
     if FLeafSprays<>0 then glDeleteTextures(1,@FLeafSprays);FLeafSprays:=0;
@@ -480,6 +493,7 @@ end;
 procedure TTreeRenderer.Release;
 var S: TTreeSpecies;I:Integer;
 begin
+  if FShared=nil then FreeAndNil(FNeedleMesh) else FNeedleMesh:=nil;
   if not FReady then Exit;
   FreeAndNil(FPendingAtlas);FPendingPrepared:=Default(TPreparedTreeLOD);
   FreeAndNil(FArena);
@@ -989,36 +1003,36 @@ begin
     glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glDisable(GL_BLEND); glDisable(GL_CULL_FACE);
     glUseProgram(FProgram);
     glGetIntegerv(GL_VIEWPORT,@Viewport[0]);glUniform2f(UEnvelopeViewport,Viewport[2],Viewport[3]);
-    glUniform1i(UFragmentWorkReuse,Ord(TreeFragmentWorkReuse));
+    Uniform1i(UFragmentWorkReuse,Ord(TreeFragmentWorkReuse));
     if UCoverageSamples>=0 then begin
       { Read the currently bound target once per pass: shadow/atlas FBOs may
         have no MSAA even when the main window has it. No GL state is changed. }
       glGetIntegerv(GL_SAMPLES,@Samples);
       if (Samples<2) or (Samples>32) or ((Samples and (Samples-1))<>0) then Samples:=1;
       {$ifndef OpenGLES}if glIsEnabled(GL_MULTISAMPLE)=GL_FALSE then Samples:=1;{$endif}
-      glUniform1i(UCoverageSamples,Samples);
+      Uniform1i(UCoverageSamples,Samples);
     end;
-    if FBakeMode then glUniform1i(UComplexity,3) else glUniform1i(UComplexity,TreeRenderComplexity);
+    if FBakeMode then Uniform1i(UComplexity,3) else Uniform1i(UComplexity,TreeRenderComplexity);
     if FEnvironment.Enabled then begin
-      glUniform3fv(USunDirection,1,@FEnvironment.SunDirection);
-      glUniform3fv(UBillboardRight,1,@FEnvironment.BillboardRight);
-      glUniform3fv(UFogColor,1,@FEnvironment.FogColor);
-      glUniform1f(UFogDensity,FEnvironment.FogDensity);
-      glUniform1f(UOutputGamma,FEnvironment.OutputGamma);
-      glUniform1i(UDepthOnly,Ord(FEnvironment.DepthOnly));
-      glUniform1i(UShadowPartitions,FEnvironment.ShadowPartitions);
-      glUniform1i(UShadowPartition,FEnvironment.ShadowPartition);
+      UniformVec(USunDirection,FEnvironment.SunDirection);
+      UniformVec(UBillboardRight,FEnvironment.BillboardRight);
+      UniformVec(UFogColor,FEnvironment.FogColor);
+      Uniform1f(UFogDensity,FEnvironment.FogDensity);
+      Uniform1f(UOutputGamma,FEnvironment.OutputGamma);
+      Uniform1i(UDepthOnly,Ord(FEnvironment.DepthOnly));
+      Uniform1i(UShadowPartitions,FEnvironment.ShadowPartitions);
+      Uniform1i(UShadowPartition,FEnvironment.ShadowPartition);
     end else begin
-      glUniform3f(USunDirection,-0.5,0.85,0.45);
-      glUniform3f(UBillboardRight,View[0],0,View[8]);
-      glUniform3f(UFogColor,0.19,0.26,0.27);
-      glUniform1f(UFogDensity,0.0014); glUniform1f(UOutputGamma,1/2.2);
-      glUniform1i(UDepthOnly,0);
-      glUniform1i(UShadowPartitions,0);glUniform1i(UShadowPartition,0);
+      Uniform3f(USunDirection,-0.5,0.85,0.45);
+      Uniform3f(UBillboardRight,View[0],0,View[8]);
+      Uniform3f(UFogColor,0.19,0.26,0.27);
+      Uniform1f(UFogDensity,0.0014); Uniform1f(UOutputGamma,1/2.2);
+      Uniform1i(UDepthOnly,0);
+      Uniform1i(UShadowPartitions,0);Uniform1i(UShadowPartition,0);
     end;
-    glUniformMatrix4fv(UProjection,1,GL_FALSE,@Projection[0]);
-    glUniformMatrix4fv(UView,1,GL_FALSE,@View[0]);
-    glUniform3f(UEye,Eye.X,Eye.Y,Eye.Z);glUniform1f(UTime,Seconds);
+    UniformMatrix(UProjection,Projection);
+    UniformMatrix(UView,View);
+    Uniform3f(UEye,Eye.X,Eye.Y,Eye.Z);Uniform1f(UTime,Seconds);
 end;
 function TTreeRenderer.UniformChanged(Location:GLint;X,Y,Z,W:Single):Boolean;
 begin
@@ -1030,13 +1044,34 @@ begin
   end;
 end;
 procedure TTreeRenderer.Uniform1i(Location:GLint;Value:Integer);
-begin if UniformChanged(Location,Value,0,0,0) then glUniform1i(Location,Value);end;
+begin
+  if FNeedleMesh<>nil then FNeedleMesh.Remember(Location,1,@Value);
+  if UniformChanged(Location,Value,0,0,0) then glUniform1i(Location,Value);
+end;
 procedure TTreeRenderer.Uniform1f(Location:GLint;Value:Single);
-begin if UniformChanged(Location,Value,0,0,0) then glUniform1f(Location,Value);end;
+begin
+  if FNeedleMesh<>nil then FNeedleMesh.Remember(Location,1,@Value);
+  if UniformChanged(Location,Value,0,0,0) then glUniform1f(Location,Value);
+end;
 procedure TTreeRenderer.Uniform3f(Location:GLint;X,Y,Z:Single);
-begin if UniformChanged(Location,X,Y,Z,0) then glUniform3f(Location,X,Y,Z);end;
+var V:array[0..2]of Single;
+begin
+  if FNeedleMesh<>nil then begin V[0]:=X;V[1]:=Y;V[2]:=Z;FNeedleMesh.Remember(Location,3,@V[0]) end;
+  if UniformChanged(Location,X,Y,Z,0) then glUniform3f(Location,X,Y,Z);
+end;
 procedure TTreeRenderer.Uniform4f(Location:GLint;X,Y,Z,W:Single);
-begin if UniformChanged(Location,X,Y,Z,W) then glUniform4f(Location,X,Y,Z,W);end;
+var V:array[0..3]of Single;
+begin
+  if FNeedleMesh<>nil then begin V[0]:=X;V[1]:=Y;V[2]:=Z;V[3]:=W;FNeedleMesh.Remember(Location,4,@V[0]) end;
+  if UniformChanged(Location,X,Y,Z,W) then glUniform4f(Location,X,Y,Z,W);
+end;
+procedure TTreeRenderer.UniformMatrix(Location:GLint;const Value:TTreeMat4);
+begin
+  if FNeedleMesh<>nil then FNeedleMesh.Remember(Location,16,@Value[0]);
+  glUniformMatrix4fv(Location,1,GL_FALSE,@Value[0]);
+end;
+procedure TTreeRenderer.UniformVec(Location:GLint;const Value:TTreeVec3);
+begin Uniform3f(Location,Value.X,Value.Y,Value.Z) end;
 procedure TTreeRenderer.BeginBatch(const Projection,View:TTreeMat4; const Eye:TTreeVec3;
   const Env:TTreeRenderEnvironment; Seconds:Single);
 begin
@@ -1158,7 +1193,7 @@ begin
       glBindTexture(GL_TEXTURE_2D_ARRAY,Resources.FLODTextures[P.Species]);
       glUniform3fv(ULODFrames,LOD_AGES,@Resources.FLODFrames[P.Species][0].X);
     end;
-    glUniformMatrix4fv(UModel,1,GL_FALSE,@Model[0]);Resources.Uniform1f(UWind,RenderWind);
+    Resources.UniformMatrix(UModel,Model);Resources.Uniform1f(UWind,RenderWind);
     if FEnvironment.Enabled and (FEnvironment.ViewportHeight>0) then
       ViewHeight:=FEnvironment.ViewportHeight
     else begin glGetIntegerv(GL_VIEWPORT,@Viewport[0]);ViewHeight:=Max(1,Viewport[3]);end;
@@ -1253,6 +1288,12 @@ begin
                   FEnvironment.LeafFraction,FEnvironment.NeedleDetail);
               if Count>0 then Resources.Uniform1f(UNeedleScale,FullPairs/Count);
               Resources.Uniform1i(UNeedlePairs,Count);
+              if (TreeNeedleMeshMode>0) and (Resources.FNeedleMesh<>nil) and
+                 not FBakeMode and ((TreeDiagnosticDrawMask and (1 shl 5))<>0) then begin
+                Inc(FStats.DrawCalls,Resources.FNeedleMesh.Draw(FVBO[4],FNeedleGroups[G].First,
+                  FNeedleGroups[G].Count,Count*FNeedlesPerFascicle,FProgram));
+                Inc(FStats.Triangles,FNeedleGroups[G].Count*Count*FNeedlesPerFascicle*NeedleVertices(P.Species) div 3);
+              end else
               Draw(5,4,Count*FNeedlesPerFascicle*NeedleVertices(P.Species),FNeedleGroups[G].Count,FNeedleVAO[G],NeedleIndexBuffer);
               Inc(FStats.Needles,FNeedleGroups[G].Count*Count*FNeedlesPerFascicle);
             end;

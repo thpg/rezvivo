@@ -37,11 +37,13 @@ type
     FSpeedIcon, FWorkIcon, FGradeIcon: TCastleImageControl;
     FSpeedTitle, FSpeedUnits, FWorkTitle, FWorkUnits, FTSSTitle,
       FGradeTitle: TCastleLabel;
+    FGearDown,FGearUp:TCastleButton;
     FReady, FArranging: Boolean;
     FLayoutScale: Single;
     function NewLabel(const AName, Source: String; const Bold: Boolean): TCastleLabel;
     function NewValue(const AName: String): TRideHudValue;
     procedure LanguageChanged(Sender: TObject);
+    procedure ShiftGear(Sender:TObject);
   public
     constructor Create(AOwner: TComponent); override;
     procedure Resize; override;
@@ -52,7 +54,7 @@ type
 implementation
 
 uses SysUtils, Math, CastleVectors, CastleRectangles, CastleImages,
-  CastleGLUtils, GameMenuTheme, GameRideLayout, UiTranslations;
+  CastleGLUtils, GameMenuTheme, GameRideLayout, UiTranslations,GameDeviceService,GameVirtualGearing;
 
 const
   HudWidth = 1000;
@@ -261,6 +263,18 @@ begin
   FLabels.LabelWork:=NewValue('LabelWork');
   FLabels.LabelWorkTSS:=NewValue('LabelWorkTSS');
   FLabels.LabelSlope:=NewValue('LabelSlope');
+  FLabels.LabelTransmission:=NewValue('LabelTransmission');
+  FLabels.LabelTransmission.Alignment:=hpMiddle;
+  FLabels.LabelTransmission.Caption:='—';
+  BindUiText(FLabels.LabelTransmission,'Gear','Tooltip');
+  FGearDown:=TMenuButton.Create(Self);FGearDown.Name:='GearDown';FGearDown.Caption:='−';
+  TMenuButton(FGearDown).AutoIcon:=False;FGearDown.Tag:=-1;FGearDown.OnClick:=@ShiftGear;
+  FGearDown.AutoSize:=False;InsertFront(FGearDown);
+  FGearUp:=TMenuButton.Create(Self);FGearUp.Name:='GearUp';FGearUp.Caption:='+';
+  TMenuButton(FGearUp).AutoIcon:=False;FGearUp.Tag:=1;FGearUp.OnClick:=@ShiftGear;
+  FGearUp.AutoSize:=False;InsertFront(FGearUp);
+  BindUiText(FGearDown,'Easier gear (Page Down)','Tooltip');
+  BindUiText(FGearUp,'Harder gear (Page Up)','Tooltip');
   FLabels.LabelSlope.Caption:='0.0%';
   FLabels.LabelCorr:=NewLabel('LabelCorr','',False); FLabels.LabelCorr.Caption:='—';
   FLabels.LabelCorr.Alignment:=hpRight;
@@ -282,6 +296,11 @@ end;
 procedure TRideMetricsHud.LanguageChanged(Sender: TObject);
 begin
   Resize;
+end;
+procedure TRideMetricsHud.ShiftGear(Sender:TObject);
+begin
+  if(DeviceService<>nil)and not DeviceService.TrainerErgActive then
+    DeviceService.ShiftVirtualGear(TCastleButton(Sender).Tag);
 end;
 
 procedure TRideMetricsHud.Resize;
@@ -320,19 +339,22 @@ begin
       Place(FMetrics[I].Wheel,(HudWidth/3-238)/2,73,238,24);
       FMetrics[I].Wheel.FontSize:=18*S;
     end;
-    Place(FSpeedIcon,20,10,23,23);
-    Text(FSpeedTitle,51,7,74,28,14);
-    Text(FLabels.LabelSpeed,126,4,92,32,28);
-    Text(FSpeedUnits,226,7,45,28,14);
-    Place(FWorkIcon,292,10,22,23);
-    Text(FWorkTitle,322,7,66,28,14);
-    Text(FLabels.LabelWork,391,4,134,32,28);
-    Text(FWorkUnits,533,7,40,28,14);
-    Text(FTSSTitle,594,7,32,28,14);
-    Text(FLabels.LabelWorkTSS,632,4,88,32,28);
-    Place(FGradeIcon,748,10,23,23);
-    Text(FGradeTitle,779,7,72,28,14);
-    Text(FLabels.LabelSlope,850,4,85,32,28);
+    Place(FSpeedIcon,12,11,20,20);
+    Text(FSpeedTitle,38,7,53,28,13);
+    Text(FLabels.LabelSpeed,92,4,68,32,25);
+    Text(FSpeedUnits,165,7,40,28,13);
+    Place(FWorkIcon,218,11,20,20);
+    Text(FWorkTitle,244,7,54,28,13);
+    Text(FLabels.LabelWork,300,4,99,32,25);
+    Text(FWorkUnits,403,7,25,28,13);
+    Text(FTSSTitle,440,7,30,28,13);
+    Text(FLabels.LabelWorkTSS,472,4,74,32,25);
+    Place(FGradeIcon,562,11,20,20);
+    Text(FGradeTitle,589,7,65,28,13);
+    Text(FLabels.LabelSlope,656,4,86,32,25);
+    Place(FGearDown,760,5,28,32);FGearDown.FontSize:=16*S;
+    Text(FLabels.LabelTransmission,793,5,102,32,22);
+    Place(FGearUp,900,5,28,32);FGearUp.FontSize:=16*S;
     Text(FLabels.LabelCorr,938,7,50,28,13);
   finally
     FArranging:=False;
@@ -341,14 +363,17 @@ end;
 
 procedure TRideMetricsHud.Render;
 var R: TFloatRectangle; S, LineWidth: Single; I: Integer;
-const HeaderDividers: array[0..2] of Single = (278,582,732);
+const HeaderDividers: array[0..3] of Single = (210,430,554,750);
 begin
   inherited;
+  FGearUp.Enabled:=(DeviceService<>nil)and not DeviceService.TrainerErgActive and
+    (DeviceService.GearingBackend in[gbNative,gbFTMSPower]);
+  FGearDown.Enabled:=FGearUp.Enabled;
   R:=RenderRect; S:=FLayoutScale*UIScale; LineWidth:=Max(1,S);
   DrawMenuPanel(R,12*S,HudEdge);
   DrawMenuPanel(R.Grow(-LineWidth),Max(0,12*S-LineWidth),HudSurface);
   DrawRectangle(FloatRectangle(R.Left+1,R.Top-HudHeaderHeight*S,R.Width-2,LineWidth),HudEdge);
-  for I:=0 to 2 do
+  for I:=0 to High(HeaderDividers) do
     DrawRectangle(FloatRectangle(R.Left+HeaderDividers[I]*S,R.Top-33*S,
       LineWidth,24*S),HudEdge);
   for I:=1 to 2 do

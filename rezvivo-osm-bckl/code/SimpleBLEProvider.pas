@@ -21,7 +21,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs,
   SimpleBle, TrainerData, GameTransportBase, FTMSProtocol,
-  ZwiftControllerProtocol, EliteSterzoProtocol;
+  ZwiftControllerProtocol, EliteSterzoProtocol, GameVirtualGearing;
 
 type
   TSimpleBLESession = class;
@@ -56,6 +56,7 @@ type
     FSterzoResponse: TBytes;
     FZwiftParser: TZwiftControllerParser;
     function ActivateSteering: Boolean;
+    function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;override;
   private
 
     { Service+Characteristic UUIDs for writing commands }
@@ -525,14 +526,42 @@ end;
 
 { ── Connect: discover services, subscribe to notifications ── }
 
+function TSimpleBLESession.SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;
+var Packet:TBytes;
+begin
+  Result:=False;if not FTrainerFeatures.SupportsVirtualGearing then Exit;
+  Packet:=ZwiftSimulationCommand(Grade,Wind,RiderWeight,BikeWeight,Ratio);
+  if Length(Packet)>0 then Result:=WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,Packet,True);
+end;
+
 function TSimpleBLESession.ActivateSteering: Boolean;
-var Response: TBytes;
+var Response: TBytes;Attempt:Integer;
 begin
   Result:=False;
   FLock.Enter;
   try Result:=FSteeringReady and not FSteeringEncrypted finally FLock.Leave end;
   if Result then Exit;
   if not FSteeringSubscribed or not FSteeringCanWrite then Exit;
+  if FHasZwift then begin
+    for Attempt:=0 to 2 do begin
+      FLock.Enter;
+      try
+        FSteeringEvent.ResetEvent;
+        if not FDeviceInfo.SupportsSteering then Response:=ZwiftTrainerHandshake
+        else case Attempt of
+          0:Response:=ZwiftHandshakeRequest(FDeviceInfo.Name);
+          1:begin Response:=ZwiftHandshakeRequest;SetLength(Response,8);Response[6]:=2;Response[7]:=3 end;
+          else Response:=FZwiftParser.StartEncryptedHandshake;
+        end;
+      finally FLock.Leave end;
+      if(Length(Response)=0)or not WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,Response,True)then Exit;
+      FSteeringEvent.WaitFor(2500);
+      FLock.Enter;
+      try Result:=FSteeringReady and not FSteeringEncrypted finally FLock.Leave end;
+      if Result or not FDeviceInfo.SupportsSteering then Exit;
+    end;
+    Exit;
+  end;
   FSteeringEvent.ResetEvent;
   if FHasZwift then Response:=ZwiftHandshakeRequest else Response:=TBytes.Create($03,$10);
   if not WriteCharacteristic(FSteeringServiceUUID,FSteeringControlUUID,Response,True) then Exit;
@@ -736,7 +765,8 @@ begin
   FDeviceInfo.SupportsPower := FHasPower or FHasFTMS;
   FDeviceInfo.SupportsCadence := FHasFTMS or FHasCSC or FHasPower;
   FDeviceInfo.SupportsHeartRate := FHasHR;
-  FDeviceInfo.SupportsSteering:=FHasZwift or FHasSterzo;
+  FDeviceInfo.SupportsSteering:=FHasSterzo or
+    (FHasZwift and(IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC)));
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'SimpleBLE';
 
@@ -761,12 +791,14 @@ begin
     SetConnectionState(csError,'Zwift controller service is unavailable. This firmware may require activation in the vendor app.');
     Exit;
   end;
-  if FDeviceInfo.SupportsSteering and not ActivateSteering then
+  if (FHasZwift or FHasSterzo) and not ActivateSteering and FDeviceInfo.SupportsSteering then
   begin
     Disconnect;
-    SetConnectionState(csError,'Steering activation failed. Wake the controller and close other cycling apps. Encrypted or locked Zwift firmware is not supported.');
+    SetConnectionState(csError,'Controller activation failed. Wake it and close other cycling apps. Click V2 and newer Ride firmware may require activation in Zwift first.');
     Exit;
   end;
+  FTrainerFeatures.SupportsVirtualGearing:=FHasZwift and FSteeringReady and
+    not FDeviceInfo.SupportsSteering and FDeviceInfo.SupportsControl;
   SetConnectionState(csConnected, 'Connected');
   if FDeviceInfo.SupportsSteering then
   begin
@@ -811,10 +843,13 @@ begin
 
   SetLength(Buf, DataLen);
   Move(Data^, Buf[0], DataLen);
+  if((CharUUID=ZwiftNotifyUUID)or(CharUUID=ZwiftResponseUUID))and ZwiftControllerLocked(Buf)then begin
+    SetConnectionState(csError,'Zwift controller stopped sending buttons. Connect it in Zwift first, close Zwift, then reconnect here.');Exit;
+  end;
   if (CharUUID=ZwiftNotifyUUID) or (CharUUID=ZwiftResponseUUID) or
      (CharUUID=SterzoAngleUUID) or (CharUUID=SterzoChallengeUUID) then
   begin
-    Valid:=False;
+    Valid:=False;Handshake:=zhNone;
     FLock.Enter;
     try
       if CharUUID=SterzoChallengeUUID then
@@ -825,12 +860,14 @@ begin
         Valid:=ParseSterzoAngle(Buf,Parsed)
       else begin
         Handshake:=ZwiftHandshakeReply(Buf);
-        if Handshake=zhEncrypted then FSteeringEncrypted:=True;
-        if Handshake=zhPlaintext then FSteeringReady:=True;
+        if Handshake<>zhNone then begin
+          FSteeringReady:=FZwiftParser.AcceptHandshake(Buf);
+          FSteeringEncrypted:=(Handshake=zhEncrypted)and not FSteeringReady;
+        end;
         if (Handshake=zhNone) and not FSteeringEncrypted then Valid:=FZwiftParser.Parse(Buf,Parsed);
       end;
       if Valid then FSteeringReady:=True;
-      if FSteeringReady or FSteeringEncrypted then FSteeringEvent.SetEvent;
+      if FSteeringReady or(Handshake<>zhNone)then FSteeringEvent.SetEvent;
     finally FLock.Leave end;
     if Valid then PublishMeasurement(Parsed);
     Exit;

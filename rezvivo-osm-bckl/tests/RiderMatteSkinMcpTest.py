@@ -20,12 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--executable', default='third_person_navigation.exe')
     args = parser.parse_args()
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=True)
     results = {}
-    with GPULock(), GameSession(ROOT, out/'profile', dict(fps_limit=60, msaa=0,
+    session=GameSession(ROOT, out/'profile', dict(fps_limit=60, msaa=0,
             shadow_size=2048, shadow_filter=4, grass=0, vegetation_quality=0,
-            world_shadow_backend=3, rtx_reflections=1, cinematic_softening=0)) as app:
+            world_shadow_backend=3, rtx_reflections=1, cinematic_softening=0), executable=args.executable)
+    session.env['REZVIVO_TEST_HIDDEN']='1'
+    with GPULock(), session as app:
         fit = out/'steady.fit'; write_sim_fit(fit, 900, 210, 85)
         app.setting('AudioMaster', 0)
         app.setting('SimulationFitPath', str(fit)); app.setting('SimulationUseRoute', False)
@@ -76,7 +79,8 @@ def main():
         probe=skin.replace('{spec*=rsEye;}', '{diff=vec3(0.0);spec*=rsEye;}',1)
         probe=re.sub(r'^.*light\+=rsAlbedo.*$', '',probe,flags=re.MULTILINE)
         assert probe!=skin
-        sky_probe=sky.replace('diffuseColor*irradiance/3.14159265+spec','spec')
+        sky_probe=sky.replace('vec3 diff=diffuseColor*irradiance/3.14159265;',
+                              'vec3 diff=vec3(0.0);')
         assert sky_probe!=sky
         install('RiderSkyIrradiance',sky_probe,'sky-specular-only')
         install('RiderSkinSurface',probe,'skin-specular-only')

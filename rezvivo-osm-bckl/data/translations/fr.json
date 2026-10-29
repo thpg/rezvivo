@@ -358,5 +358,18 @@
   "+ W": "+ W",
   "Trees: textured": "Arbres : textures",
   "World image cache": "Cache d’image du monde",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Améliore les performances en réutilisant le paysage lointain, mais peut provoquer des artefacts visuels. Utilise davantage de mémoire graphique. Désactivé par défaut."
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Améliore les performances en réutilisant le paysage lointain, mais peut provoquer des artefacts visuels. Utilise davantage de mémoire graphique. Désactivé par défaut.",
+  "Jersey: snug": "Maillot : serré",
+  "Jersey: fitted": "Maillot : ajusté",
+  "Jersey: relaxed": "Maillot : ample",
+  "Length: short": "Longueur : courte",
+  "Length: regular": "Longueur : normale",
+  "Length: long": "Longueur : longue",
+  "Rearrange folds": "Reformer les plis",
+  "Pull jersey down": "Tirer le maillot",
+  "Pelvis width (%)": "Largeur du bassin (%)",
+  "Shoulder width (%)": "Largeur des épaules (%)",
+  "Waist size (%)": "Tour de taille (%)",
+  "Thigh size (%)": "Tour de cuisse (%)",
+  "Calf size (%)": "Tour de mollet (%)"
 }

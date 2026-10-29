@@ -117,6 +117,7 @@ var
   I,K,M,RI,Block,N,F,B,Tri,E,V0,V1,Profile,AreaRow,V2: Integer;
   Id: Int64; Key:QWord;
   UV:TVector2; P:TVector3;
+  Junction:Boolean;
   T,S,Span,MinS,MaxS,S0,S1,DS,Lo,Hi:Single;
   ActualWidth,BestDistance,Distance,DX,DZ,Along:Single;
   LocalP:TVector3; SegmentIndex:Integer;
@@ -186,6 +187,8 @@ begin
         W.MinUV:=1e20; W.MaxUV:=-1e20;
       end;
       UV:=Composite.UVOf(I);
+      Junction:=UV.X<ROAD_JUNCTION_UV_SHIFT*0.5;
+      if Junction then UV.X-=ROAD_JUNCTION_UV_SHIFT;
       W.MinUV:=Min(W.MinUV,UV.X); W.MaxUV:=Max(W.MaxUV,UV.X);
       W.MatId:=M;
       Ways.AddOrSetValue(Id,W);
@@ -282,6 +285,8 @@ begin
       end;
       if W.Surface.Asphalt=ROAD_SURFACE_OTHER then Continue;
       UV:=Composite.UVOf(I);
+      Junction:=UV.X<ROAD_JUNCTION_UV_SHIFT*0.5;
+      if Junction then UV.X-=ROAD_JUNCTION_UV_SHIFT;
       Span:=W.Surface.UVMax-W.Surface.UVMin;
       if Span<=0.001 then Continue;
       ActualWidth:=W.Width;
@@ -305,6 +310,7 @@ begin
       Style[I*4]:=W.Surface.ForwardLanes;
       Style[I*4+1]:=W.Surface.BackwardLanes;
       Style[I*4+2]:=W.Surface.Marked+2*(M-23)+16*W.Surface.Condition;
+      if Junction then Style[I*4+2]:=2*(M-23)+16*W.Surface.Condition;
       if W.Surface.Asphalt=ROAD_SURFACE_CONCRETE then
         Style[I*4+2]:=Style[I*4+2]+ROAD_STYLE_CONCRETE;
       Style[I*4+3]:=W.Seed;

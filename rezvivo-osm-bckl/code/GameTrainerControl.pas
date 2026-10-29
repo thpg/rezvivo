@@ -30,10 +30,10 @@ type
   end;
 
   TTrainerCommandKind = (tcRequest, tcPower, tcResistance, tcIncline,
-    tcSimulation, tcStart, tcStop, tcPause, tcReset);
+    tcSimulation, tcStart, tcStop, tcPause, tcReset, tcGearedSimulation);
   TTrainerCommand = record
     Kind: TTrainerCommandKind;
-    Value, Wind, RiderWeight, BikeWeight: Single;
+    Value, Wind, RiderWeight, BikeWeight, GearRatio: Single;
     Generation: Cardinal;
     Revision: Cardinal;
   end;
@@ -76,7 +76,8 @@ type
     constructor Create(AExecute: TExecuteTrainerCommand);
     destructor Destroy; override;
     function Post(Kind: TTrainerCommandKind; Value: Single = 0;
-      Wind: Single = 0; RiderWeight: Single = 75; BikeWeight: Single = 10): Boolean;
+      Wind: Single = 0; RiderWeight: Single = 75; BikeWeight: Single = 10;
+      GearRatio: Single = 0): Boolean;
     procedure Cancel;
     procedure Shutdown;
     function Current(Generation: Cardinal): Boolean;
@@ -133,7 +134,7 @@ function CommandGroup(Kind: TTrainerCommandKind): Integer;
 begin
   case Kind of
     tcRequest: Result := 0;
-    tcPower, tcResistance, tcIncline, tcSimulation: Result := 1;
+    tcPower, tcResistance, tcIncline, tcSimulation, tcGearedSimulation: Result := 1;
     else Result := 2;
   end;
 end;
@@ -192,7 +193,7 @@ begin
 end;
 
 function TTrainerControlQueue.Post(Kind: TTrainerCommandKind; Value: Single;
-  Wind: Single; RiderWeight: Single; BikeWeight: Single): Boolean;
+  Wind: Single; RiderWeight: Single; BikeWeight: Single; GearRatio: Single): Boolean;
 var I, Slot: Integer;
 begin
   Result := False;
@@ -225,6 +226,7 @@ begin
     FItems[Slot].Wind := Wind;
     FItems[Slot].RiderWeight := RiderWeight;
     FItems[Slot].BikeWeight := BikeWeight;
+    FItems[Slot].GearRatio := GearRatio;
     FItems[Slot].Generation := FGeneration;
     Inc(FRevision[CommandGroup(Kind)]);
     FItems[Slot].Revision := FRevision[CommandGroup(Kind)];

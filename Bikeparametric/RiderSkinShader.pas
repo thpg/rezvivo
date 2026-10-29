@@ -1,13 +1,17 @@
 unit RiderSkinShader;
 {$mode objfpc}{$H+}
 interface
-uses RiderShaderSharing, X3DNodes,X3DFields,CastleVectors;
+uses RiderShaderSharing, RiderBodyParameters, X3DNodes,X3DFields,CastleVectors;
 type
   TRiderSkin=class
   private
     FScale,FHeadSurfaceOffset:Single;
     FTime:Double;
     FDiffusionTexture:TImageTextureNode;
+    FLimbTexture:TImageTextureNode;
+    FLimbFields:array of TSFVec2f;
+    FLimbDefinition,FLimbEffort:Single;
+    FLimbLast:TVector2;
     FFields:array of TSFVec4f;
     FMouthFields:array of TSFFloat;
     FEyes,FEyeSkin,FIris:array[0..1]of TVector3;
@@ -21,13 +25,14 @@ type
   public
     constructor Create(Root:TX3DNode;Height:Single;const FaceFile:String;GeometricFace:Boolean=False;GeometricEyes:Boolean=False);
     { Strain already includes facial visibility and manual expression overrides. }
-    procedure Update(Dt,Strain:Single;BreathPhase:Double=0;BreathLoad:Single=0;Detail:Single=1);
+    procedure SetBodyProfile(const P:TRiderBodyParameters);
+    procedure Update(Dt,Strain:Single;BreathPhase:Double=0;BreathLoad:Single=0;Detail:Single=1;LimbEffort:Single=0);
     property Time:Double read FTime write SetTime;
   end;
 { Load-time installation; the shader uses bind coordinates, never a world hash. }
 procedure ApplyRiderSkin(Root:TX3DNode;Height:Single);
 implementation
-uses SysUtils,Math,Classes,fpjson,jsonparser,CastleRenderOptions,CastleImages,RiderSurfaceMotion,RiderFace;
+uses SysUtils,Math,Classes,fpjson,jsonparser,CastleRenderOptions,CastleImages,RiderSurfaceMotion,RiderFace,RiderLimbRelief;
 var SkinDiffusionImage:TRGBAlphaFloatImage;
 
 function SkinDiffusionLut:TRGBAlphaFloatImage;
@@ -112,6 +117,7 @@ const
     'vec3 rsEyeOffset(){return rsPosition-(rsPosition.x<0.0?rsEyeL:rsEyeR);}'+#10+
     'float rsEyeArea(vec3 q){vec2 radius=mix(vec2(0.014,0.0070),vec2(0.018,0.010),rsFace.x);float e=length(q.xy/radius);return (1.0-smoothstep(mix(0.90,0.55,rsFace.x),1.04,e))*(1.0-smoothstep(0.008,0.016,abs(q.z)))*rsFaceValid*rsPortrait;}'+#10+
     'float rsBand(float x,float a,float b,float c,float d){return smoothstep(a,b,x)*(1.0-smoothstep(c,d,x));}'+#10+
+    RiderLimbReliefGLSL+#10+
     'float rsFurrow(float d,float width){float w=max(width,fwidth(d));return exp(-pow(d/w,2.0))*width/w;}'+#10+
     'vec2 rsLidMargins(vec3 q){float arc=sqrt(max(1.0-pow(q.x/0.0129,2.0),0.0));float tilt=0.0005*q.x/0.0129*sign(rsPosition.x);return vec2(0.0046*arc,-0.0038*arc)+tilt;}'+#10+
     'float rsTension(vec3 p){'+#10+
@@ -165,12 +171,19 @@ const
     ' rsEye=area*(1.0-lid)*lower;'+#10+
     ' cornea=max(1.0-dot(eye.xy/vec2(0.012,0.006),eye.xy/vec2(0.012,0.006)),0.0); }'+#10+
     ' float fold=0.0;if(rsGeometricEyes>0.5 && rsPortrait>0.5 && rsCleanPortrait<0.5){vec3 q=rsEyeOffset();vec2 margin=rsLidMargins(q);fold=rsFurrow(q.y-margin.x-0.0035,0.0007)*(1.0-smoothstep(0.010,0.017,abs(q.x)))*(1.0-smoothstep(0.016,0.025,abs(q.z)));}'+#10+
+    ' float limbHeight=0.0;if(rsPortrait<0.5)limbHeight=rsLimbHeight(p);'+#10+
     ' float height=rsPores*0.000020*(1.0-area)*(1.0-0.7*rsLip)+rsEye*cornea*0.00020-rsCrease*0.00016-fold*0.00025;vec3 N=normalize(n),dx=dFdx(v.xyz),dy=dFdy(v.xyz);'+#10+
     ' vec3 a=cross(dy,N),b=cross(N,dx);float det=dot(dx,a);'+#10+
-    ' if(det*det>1e-12*dot(dx,dx)*dot(dy,dy)){vec3 g=(a*dFdx(height)+b*dFdy(height))/det;n=normalize(N-g*min(1.0,mix(0.12,0.35,rsFace.w)/max(length(g),1e-6)));}'+#10+
+    ' if(det*det>1e-12*dot(dx,dx)*dot(dy,dy)){'+#10+
+    ' vec3 limbGradient=(a*dFdx(limbHeight)+b*dFdy(limbHeight))/det;limbGradient*=min(1.0,0.28/max(length(limbGradient),1e-6));'+#10+
+    // Macroscopic anatomical relief turns the diffuse lobe as well. Keep
+    // its curvature estimate independent of micro detail to avoid skin glow.
+    ' rsSmoothNormal=normalize(N-limbGradient);'+#10+
+    ' vec3 g=(a*dFdx(height)+b*dFdy(height))/det;n=normalize(N-limbGradient-g*min(1.0,mix(0.12,0.35,rsFace.w)/max(length(g),1e-6)));}'+#10+
     '}'+#10+
     'void PLUG_main_texture_apply(inout vec4 c,const vec3 n){'+#10+
     ' c.rgb*=vec3(1.0)+vec3(0.045,0.028,0.014)*rsBodyTone+vec3(0.070,-0.026,-0.038)*rsJointTone+vec3(0.038,0.032,0.024)*rsInnerTone;'+#10+
+    ' c.rgb*=vec3(1.0)+vec3(0.11,0.045,0.022)*rsLimbPigment;'+#10+
     ' if(rsCleanPortrait>0.5){'+#10+
     ' vec3 p=rsPosition;vec3 skin=(rsSkinL+rsSkinR)*0.5;'+#10+
     // The CC0 scan contains shaved scalp stubble. The base scalp is bald;
@@ -279,7 +292,8 @@ var Sh:TShapeNode;App:TAppearanceNode;Mat:TPhysicalMaterialNode;
   Geo:TAbstractComposedGeometryNode;Coord:TCoordinateNode;Attr:TFloatVertexAttributeNode;
   Eff:TEffectNode;V,F:TEffectPartNode;Nm:String;P,Delta:TVector3;I:Integer;Portrait:Boolean;FaceField:TSFVec4f;
   Morph:TFloatVertexAttributeNode;MouthField:TSFFloat;Weight:Single;
-  DiffusionField:TSFNode;SkinUV:TX3DNode;SkinTex:TTextureCoordinateNode;Cavity:Single;TexP:TVector2;
+  DiffusionField,LimbTextureField:TSFNode;LimbField:TSFVec2f;
+  SkinUV:TX3DNode;SkinTex:TTextureCoordinateNode;Cavity:Single;TexP:TVector2;
 begin
   Sh:=TShapeNode(Node);
   if not(Sh.Appearance is TAppearanceNode)or not(Sh.Appearance.Material is TPhysicalMaterialNode)
@@ -330,6 +344,11 @@ begin
   DiffusionField:=TSFNode.Create(Eff,True,'rsDiffusion',[TImageTextureNode]);
   if FDiffusionTexture=nil then FDiffusionTexture:=CreateSkinDiffusionTexture;
   DiffusionField.Value:=FDiffusionTexture;Eff.AddCustomField(DiffusionField);
+  LimbTextureField:=TSFNode.Create(Eff,True,'rsLimbAtlas',[TImageTextureNode]);
+  if FLimbTexture=nil then FLimbTexture:=CreateRiderLimbReliefTexture;
+  LimbTextureField.Value:=FLimbTexture;Eff.AddCustomField(LimbTextureField);
+  LimbField:=TSFVec2f.Create(Eff,True,'rsLimbRelief',Vector2(FLimbDefinition,0));Eff.AddCustomField(LimbField);
+  if not Portrait then begin SetLength(FLimbFields,Length(FLimbFields)+1);FLimbFields[High(FLimbFields)]:=LimbField end;
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsPortrait',Ord(Portrait)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsCleanPortrait',Ord(Pos('anatomicalportrait',Nm)>0)));
   Eff.AddCustomField(TSFFloat.Create(Eff,True,'rsFaceValid',Ord(FFaceValid and Portrait)));
@@ -364,6 +383,7 @@ var Source:TFileStream;Data:TJSONData;Eyes:TJSONArray;I:Integer;
   end;
 begin
   inherited Create;FGeometricFace:=GeometricFace;FGeometricEyes:=GeometricEyes;FScale:=1.8/Max(Height,0.5);FTime:=Random*5.7;
+  FLimbDefinition:=1;FLimbLast:=Vector2(-1,-1);
   if FileExists(FaceFile)then begin
     Data:=nil;Source:=nil;
     try
@@ -383,9 +403,28 @@ begin
   if Root<>nil then Root.EnumerateNodes(TShapeNode,@Visit,False);
   Update(0,0);
 end;
-procedure TRiderSkin.Update(Dt,Strain:Single;BreathPhase:Double;BreathLoad:Single;Detail:Single);
-var Blink,Gaze,OpenMouth:Single;Value:TVector4;I:Integer;
+procedure TRiderSkin.SetBodyProfile(const P:TRiderBodyParameters);
+var Fat,Muscle,Lean:Single;
 begin
+  RiderBodyShapeWeights(P,Fat,Muscle,Lean);
+  { Same composition coefficients as the anatomical mesh. More subcutaneous
+    tissue softens relief; sex by itself does not turn muscle detail off. }
+  FLimbDefinition:=EnsureRange(1+0.40*Muscle+0.20*Lean-0.68*Max(0,Fat),0.18,1.45);
+end;
+procedure TRiderSkin.Update(Dt,Strain:Single;BreathPhase:Double;BreathLoad:Single;Detail:Single;LimbEffort:Single);
+var Blink,Gaze,OpenMouth:Single;Value:TVector4;LimbValue:TVector2;I:Integer;
+begin
+  { Body detail is independent of face visibility. Deformation supplies the
+    local flex/twist; effort changes tonus smoothly, without a second pedal
+    oscillator that could disagree with the skeletal/soft-tissue solver. }
+  if Dt<=0 then FLimbEffort:=EnsureRange(LimbEffort/1.25,0.0,1.0)
+  else FLimbEffort:=FLimbEffort+(EnsureRange(LimbEffort/1.25,0.0,1.0)-FLimbEffort)*
+    (1-Exp(-EnsureRange(Dt,0.0,0.25)*5));
+  LimbValue:=Vector2(FLimbDefinition,FLimbEffort);
+  if(Abs(LimbValue.X-FLimbLast.X)>0.0001)or(Abs(LimbValue.Y-FLimbLast.Y)>0.0005)then begin
+    for I:=0 to High(FLimbFields)do FLimbFields[I].Send(LimbValue);
+    FLimbLast:=LimbValue;
+  end;
   FTime:=FTime+EnsureRange(Dt,0.0,0.25);if not FFaceValid then Exit;
   if Detail<=0 then begin
     if FDetailActive then begin

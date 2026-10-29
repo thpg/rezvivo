@@ -358,5 +358,18 @@
   "+ W": "+ W",
   "Trees: textured": "الأشجار: صور",
   "World image cache": "ذاكرة التخزين المؤقت لصورة العالم",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "يحسّن الأداء بإعادة استخدام المشاهد البعيدة، لكنه قد يسبب عيوبًا بصرية. يستخدم ذاكرة رسومية إضافية. معطّل افتراضيًا."
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "يحسّن الأداء بإعادة استخدام المشاهد البعيدة، لكنه قد يسبب عيوبًا بصرية. يستخدم ذاكرة رسومية إضافية. معطّل افتراضيًا.",
+  "Jersey: snug": "القميص: ضيق",
+  "Jersey: fitted": "القميص: مناسب",
+  "Jersey: relaxed": "القميص: واسع",
+  "Length: short": "الطول: قصير",
+  "Length: regular": "الطول: عادي",
+  "Length: long": "الطول: طويل",
+  "Rearrange folds": "إعادة ترتيب الثنيات",
+  "Pull jersey down": "سحب القميص للأسفل",
+  "Pelvis width (%)": "عرض الحوض (%)",
+  "Shoulder width (%)": "عرض الكتفين (%)",
+  "Waist size (%)": "حجم الخصر (%)",
+  "Thigh size (%)": "حجم الفخذ (%)",
+  "Calf size (%)": "حجم ربلة الساق (%)"
 }

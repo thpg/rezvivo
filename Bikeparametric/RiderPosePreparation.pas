@@ -58,6 +58,8 @@ type
 function RiderPoseQuaternion(const M:TMatrix4):TVector4;
 function RiderPoseLocalAngles(const Child,Parent,BindRotation:TMatrix4):TVector3;
 function RiderPoseRotation(const M:TMatrix4):TMatrix4;
+procedure RiderPoseJoint(const Input:TRiderPoseJointInput;const Palette:TMatrix4List;
+  const Grip:TVector2;out Matrix,Delta:TMatrix4);
 procedure RiderPoseBody(const Joints:TMatrix4List;const Muscles:array of TRiderPoseMuscle;
   const Thighs:array of TRiderPoseThigh;const Profile:TVector4;const Frame:TVector2;
   const Dynamics:TVector4List;const BellyCentre,BellyRadii:TVector3;const ThighRadius:Single;
@@ -67,15 +69,13 @@ procedure RiderPoseJoints(const Inputs:array of TRiderPoseJointInput;const Palet
   const Angles:TVector3List);
 implementation
 uses TripoRig;
-procedure RiderPoseJoints(const Inputs:array of TRiderPoseJointInput;const Palette:TMatrix4List;
-  const Grip:TVector2;const Matrices,Deltas:TMatrix4List;const Quaternions:TVector4List;
-  const Angles:TVector3List);
-var I,J,Code,Kind,Part,Slot,HandSlot,Side,C,R:Integer;D,Hand,M,Parent:TMatrix4;
+procedure RiderPoseJoint(const Input:TRiderPoseJointInput;const Palette:TMatrix4List;
+  const Grip:TVector2;out Matrix,Delta:TMatrix4);
+var Code,Kind,Part,Slot,HandSlot,Side,C,R:Integer;D,Hand,M:TMatrix4;
   Q:TTripoVec4;P:TTripoVec3;T:TTripoMat4;Amount:Single;
 begin
-  for I:=0 to High(Inputs)do begin
-    Code:=Inputs[I].Routing;HandSlot:=Code div 64;Code:=Code-HandSlot*64;
-    D:=TMatrix4.Identity;M:=Inputs[I].Rest;
+    Code:=Input.Routing;HandSlot:=Code div 64;Code:=Code-HandSlot*64;
+    D:=TMatrix4.Identity;M:=Input.Rest;
     if Code<>0 then begin
       Kind:=Code div 8;Part:=Code-Kind*8;
       case Kind of 1:Slot:=1;2:Slot:=4;3:if Part<5 then Slot:=7 else Slot:=15;
@@ -86,19 +86,28 @@ begin
         P:=V3(M.Data[1,0],M.Data[1,1],M.Data[1,2]);
         if Part=4 then begin Q.W:=Q.W+1;Q:=QuatNormalize(Q)end;
         T:=Mat4FromTRS(V3Sub(P,QuatRotateV3(Q,P)),Q,V3(1,1,1));Move(T,M,SizeOf(M));
-        D:=M*Palette[14+Side*4];M:=D*Inputs[I].Rest;
+        D:=M*Palette[14+Side*4];M:=D*Input.Rest;
       end else begin
         D:=Palette[Slot+Part];Hand:=TMatrix4.Identity;
         if(Kind>=4)and(Part=3)then begin
-          Amount:=Grip.Data[Kind-4];Hand:=Inputs[I].HandRest;
+          Amount:=Grip.Data[Kind-4];Hand:=Input.HandRest;
           for C:=0 to 3 do for R:=0 to 3 do begin
             Hand.Data[C,R]:=Hand.Data[C,R]*Amount;
             if C=R then Hand.Data[C,R]:=(1-Amount)+Hand.Data[C,R];
           end;
         end;
-        M:=D*Hand*Inputs[I].Rest*Inputs[I].Face;
+        M:=D*Hand*Input.Rest*Input.Face;
       end;
     end;
+    Matrix:=M;Delta:=D;
+end;
+procedure RiderPoseJoints(const Inputs:array of TRiderPoseJointInput;const Palette:TMatrix4List;
+  const Grip:TVector2;const Matrices,Deltas:TMatrix4List;const Quaternions:TVector4List;
+  const Angles:TVector3List);
+var I,J:Integer;M,D,Parent:TMatrix4;
+begin
+  for I:=0 to High(Inputs)do begin
+    RiderPoseJoint(Inputs[I],Palette,Grip,M,D);
     Deltas[I]:=D;Matrices[I]:=M;Quaternions[I]:=RiderPoseQuaternion(M);
   end;
   for I:=0 to High(Inputs)do if Inputs[I].NeedAngles then begin

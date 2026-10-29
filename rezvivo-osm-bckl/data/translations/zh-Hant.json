@@ -357,5 +357,18 @@
   "+ W": "+ W",
   "Trees: textured": "樹木：貼圖",
   "World image cache": "世界影像快取",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "透過重複使用遠處景物的影像提升效能，但可能產生畫面瑕疵。佔用額外顯示記憶體。預設關閉。"
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "透過重複使用遠處景物的影像提升效能，但可能產生畫面瑕疵。佔用額外顯示記憶體。預設關閉。",
+  "Jersey: snug": "車衣：緊身",
+  "Jersey: fitted": "車衣：合身",
+  "Jersey: relaxed": "車衣：寬鬆",
+  "Length: short": "長度：短",
+  "Length: regular": "長度：標準",
+  "Length: long": "長度：長",
+  "Rearrange folds": "重新整理褶皺",
+  "Pull jersey down": "拉下衣襬",
+  "Pelvis width (%)": "骨盆寬度 (%)",
+  "Shoulder width (%)": "肩寬 (%)",
+  "Waist size (%)": "腰部圍度 (%)",
+  "Thigh size (%)": "大腿圍度 (%)",
+  "Calf size (%)": "小腿圍度 (%)"
 }

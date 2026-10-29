@@ -45,7 +45,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs, CastleStringUtils,
   TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol,
-  EliteSterzoProtocol, ZwiftControllerProtocol;
+  EliteSterzoProtocol, ZwiftControllerProtocol, GameVirtualGearing;
 
 {$ifdef ANDROID}
 
@@ -74,6 +74,8 @@ type
     FZwiftParser: TZwiftControllerParser;
     FZwiftService: String;
     FZwiftReady, FZwiftEncrypted: Boolean;
+    FZwiftCryptoStarted:Boolean;
+    function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;override;
 
     procedure ProcessNotification(const CharUUID: string; const Data: TBytes);
     procedure ProcessFTMSData(const Buf: TBytes);
@@ -229,7 +231,8 @@ function TAndroidBLESession.Connect: Boolean;
 begin
   Result := False;
   if FConnectionState = csConnected then Exit(True);
-  FZwiftService:=''; FZwiftReady:=False; FZwiftEncrypted:=False;
+  FTrainerFeatures:=Default(TTrainerFeatures);
+  FZwiftService:=''; FZwiftReady:=False; FZwiftEncrypted:=False;FZwiftCryptoStarted:=False;
   FZwiftParser.Reset;
   FLastData:=Default(TTrainerDataRecord);
   SetConnectionState(csConnecting, 'Android: connecting...');
@@ -280,10 +283,12 @@ begin
   end;
   if FZwiftService<>'' then
   begin
-    FDeviceInfo.SupportsSteering:=True;
+    FDeviceInfo.SupportsSteering:=IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC);
     Messaging.Send(['ble-subscribe',FDeviceInfo.Address,FZwiftService,ZwiftNotifyUUID]);
     Messaging.Send(['ble-subscribe',FDeviceInfo.Address,FZwiftService,ZwiftResponseUUID]);
-    WriteCharacteristic(FZwiftService,ZwiftWriteUUID,ZwiftHandshakeRequest,True);
+    if FDeviceInfo.SupportsSteering then
+      WriteCharacteristic(FZwiftService,ZwiftWriteUUID,ZwiftHandshakeRequest(FDeviceInfo.Name),True)
+    else WriteCharacteristic(FZwiftService,ZwiftWriteUUID,ZwiftTrainerHandshake,True);
   end else if FDeviceInfo.SupportsSteering then
   begin
     Messaging.Send(['ble-subscribe',FDeviceInfo.Address,SterzoServiceUUID,SterzoAngleUUID]);
@@ -325,6 +330,14 @@ begin
       '00002a5b-0000-1000-8000-00805f9b34fb']);
 end;
 
+function TAndroidBLESession.SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;
+var Packet:TBytes;
+begin
+  Result:=False;if not FTrainerFeatures.SupportsVirtualGearing then Exit;
+  Packet:=ZwiftSimulationCommand(Grade,Wind,RiderWeight,BikeWeight,Ratio);
+  if Length(Packet)>0 then Result:=WriteCharacteristic(FZwiftService,ZwiftWriteUUID,Packet,True);
+end;
+
 procedure TAndroidBLESession.OnGattNotification(const ServiceUUID, CharUUID: string;
   const Data: TBytes);
 begin
@@ -352,15 +365,24 @@ begin
   end;
   if (CharUUID=ZwiftNotifyUUID) or (CharUUID=ZwiftResponseUUID) then
   begin
+    if ZwiftControllerLocked(Data)then begin
+      SetConnectionState(csError,'Zwift controller stopped sending buttons. Connect it in Zwift first, close Zwift, then reconnect here.');Exit;
+    end;
     Handshake:=ZwiftHandshakeReply(Data);
-    if Handshake=zhEncrypted then
-    begin
-      FZwiftEncrypted:=True;
-      SetConnectionState(csError,'Encrypted Zwift firmware is not supported. Use a controller with plaintext RideOn support.');
-      Exit;
+    if Handshake<>zhNone then begin
+      FZwiftReady:=FZwiftParser.AcceptHandshake(Data);
+      FZwiftEncrypted:=(Handshake=zhEncrypted)and not FZwiftReady;
+      if FZwiftEncrypted and not FZwiftCryptoStarted then begin
+        FZwiftCryptoStarted:=True;Response:=FZwiftParser.StartEncryptedHandshake;
+        if Length(Response)>0 then WriteCharacteristic(FZwiftService,ZwiftWriteUUID,Response,True)
+        else SetConnectionState(csError,'Legacy Zwift encryption requires an OpenSSL crypto library.');
+        Exit;
+      end;
+      if FZwiftReady and not FDeviceInfo.SupportsSteering then
+        FTrainerFeatures.SupportsVirtualGearing:=True;
     end;
     if FZwiftEncrypted then Exit;
-    if Handshake=zhPlaintext then
+    if (Handshake<>zhNone)and FZwiftReady then
     begin
       FZwiftReady:=True;
       if FConnectionState<>csConnected then SetConnectionState(csConnected,'Zwift controller connected');

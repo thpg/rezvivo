@@ -28,7 +28,8 @@ type
   );
 
   TTrainerMetric = (tmPower, tmCadence, tmSpeed, tmHeartRate, tmDistance,
-    tmEnergy, tmElapsed, tmResistance, tmIncline, tmTargetPower, tmState, tmSteering);
+    tmEnergy, tmElapsed, tmResistance, tmIncline, tmTargetPower, tmState, tmSteering,
+    tmController);
   TTrainerMetrics = set of TTrainerMetric;
 
   // Данные с трейнера
@@ -55,6 +56,11 @@ type
       Zero serial means an absolute-angle sensor without discrete commands. }
     SteeringTurnSerial: Cardinal;
     SteeringTurnDirection: ShortInt; // +1 left, -1 right
+    { Ordered, bounded event journal survives notification coalescing. The
+      generation changes on reconnect; release packets retain the journal. }
+    ControllerGeneration, ControllerSerial: Cardinal;
+    ControllerShiftOnly:Boolean; // Click v1 +/-; no independent steering keys
+    ControllerActions: array[0..15] of ShortInt; // +1 harder, -1 easier
     IsMoving: Boolean;
     IsPaused: Boolean;
   end;
@@ -88,6 +94,7 @@ type
     SupportsPowerControl: Boolean;
     SupportsInclineControl: Boolean;
     SupportsSimulation: Boolean;
+    SupportsVirtualGearing: Boolean; // negotiated native Zwift ratio protocol
     MaxResistance: Word;
     MinResistance10, MaxResistance10: SmallInt;
     InclineIncrement10: Word;
@@ -176,6 +183,12 @@ begin
         Dest.SteeringAngle:=Source.SteeringAngle;
         Dest.SteeringTurnSerial:=Source.SteeringTurnSerial;
         Dest.SteeringTurnDirection:=Source.SteeringTurnDirection;
+      end;
+      tmController: begin
+        Dest.ControllerGeneration:=Source.ControllerGeneration;
+        Dest.ControllerSerial:=Source.ControllerSerial;
+        Dest.ControllerShiftOnly:=Source.ControllerShiftOnly;
+        Dest.ControllerActions:=Source.ControllerActions;
       end;
       tmState: begin Dest.IsMoving:=Source.IsMoving; Dest.IsPaused:=Source.IsPaused end;
     end;

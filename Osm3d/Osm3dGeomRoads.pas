@@ -123,6 +123,8 @@ type
       перекрывающихся колец одного материала. }
     IntRings:  array[TRoadKind] of TLatRingBag;
     UVMesh:    array[TRoadKind] of TMesh;
+    JunctionRings: array[TRoadKind] of TLatRingBag;
+    JunctionUV: array[TRoadKind] of TMesh;
     { No shoulder mesh: the sandy strip beside roads is produced in the ground composite shader
       from a road-distance field, not as separate geometry. }
   end;
@@ -290,6 +292,8 @@ const
   );
 
 implementation
+
+uses Osm3dRoadJunctions;
 
 { Streets-gl materialTable from getPathParamsFromTags.ts:3-21. }
 function ParseSurfaceMaterial(const Surface: string): TPathMaterial;
@@ -1169,6 +1173,161 @@ begin
   end;
 end;
 
+procedure BuildRoadJunctionPatches(const Jobs:TRoadJobs; Dataset:TOSMDataset;
+  Projection:TLocalProjection; const Ids:TRoadJunctionIdArray;
+  var Roads:TRoadMeshes; LogProc:TLogProc);
+type
+  TArm = record
+    Geometry:TJunctionArm;
+    Job:Integer;
+    Station,Sign,Angle:Single;
+  end;
+  TArms = array of TArm;
+  TNode = record Center:TVector2; Arms:TArms end;
+var Nodes:array of TNode; Refs:TRoadJunctionIdArray;
+  J,I,K,At,Side,A,B,C,Owner,Count,Accepted,MaterialCount,Scan,NextScan:Integer;
+  P,Q,Prev,Delta:TVector3; Node,NextNode:TOSMNode; Station,Len,U,V,Sideways:Single;
+  Tmp:TArm; Selected:TJunctionArms; Outline:TJunctionOutline;
+  Params:TRoadParams; Kind:TRoadKind; Mesh:TMesh; SameSurface,Valid:Boolean;
+  Axis,Perp,Center,D,E:TVector2;
+  DotArm,CrossArm,Reach:Single;
+  function JunctionIndex(Id:Int64):Integer;
+  var L,R,M:Integer;
+  begin
+    L:=0;R:=High(Ids);Result:=-1;
+    while L<=R do begin M:=(L+R) div 2;
+      if Ids[M]<Id then L:=M+1 else if Ids[M]>Id then R:=M-1
+      else Exit(M);
+    end;
+  end;
+  function VisibleMaterial(const P:TRoadParams):TPathMaterial;
+  begin
+    Result:=P.Material;
+    { The shared renderer uses procedural pavement for the footway bucket,
+      including legacy ways without a surface tag. Compare what is actually
+      rendered; otherwise identical grey paths keep an interior white edge.
+      Dedicated dirt/sand buckets and explicit concrete stay distinct. }
+    if (P.Kind=rkFootway) and (P.Material<>pmConcrete) then Result:=pmAsphalt;
+  end;
+  function AddVertex(const Point:TVector2):Integer;
+  var W:TVector2;
+  begin
+    W:=Point-Center;
+    Sideways:=W.X*Perp.X+W.Y*Perp.Y;
+    U:=Params.UVMinX+(Params.UVMaxX-Params.UVMinX)*(0.5+Sideways/(2*Nodes[At].Arms[Owner].Geometry.HalfWidth));
+    if SameSurface and (VisibleMaterial(Params) in [pmAsphalt,pmConcrete]) then
+      U:=EnsureRange(U,-2,3)+ROAD_JUNCTION_UV_SHIFT;
+    V:=(Nodes[At].Arms[Owner].Station+W.X*Axis.X+W.Y*Axis.Y)/TRoadBuilder.ClassUVScaleY(Params);
+    Result:=Mesh.AddVertex(Vector3(Point.X,0,Point.Y),Vector3(0,1,0),Vector2(U,V));
+  end;
+begin
+  if (Projection=nil) or (Length(Ids)=0) then Exit;
+  SetLength(Nodes,Length(Ids));Accepted:=0;
+  { One pass over the source nodes, no per-junction scan of all roads.
+    Jobs already own compatible continuation chains and the snap-way IDs. }
+  for J:=0 to High(Jobs) do begin
+    if Jobs[J].Params.Kind=rkRailway then Continue;
+    Refs:=Jobs[J].ChainRefs;if Refs=nil then Refs:=Jobs[J].Way.NodeRefs;
+    Station:=0;Prev:=Vector3(0,0,0);
+    for I:=0 to High(Refs) do begin
+      Node:=Dataset.FindNode(Refs[I]);if Node=nil then Continue;
+      P:=NodePlanePos(Dataset,Node,Projection);
+      if I>0 then Station+=Hypot(P.X-Prev.X,P.Z-Prev.Z);Prev:=P;
+      At:=JunctionIndex(Refs[I]);
+      if At<0 then Continue;
+      Nodes[At].Center:=Vector2(P.X,P.Z);
+      for Side:=-1 to 1 do begin
+        if Side=0 then Continue;K:=I+Side;
+        if (K<0) or (K>High(Refs)) then Continue;
+        NextNode:=Dataset.FindNode(Refs[K]);if NextNode=nil then Continue;
+        Q:=NodePlanePos(Dataset,NextNode,Projection);Delta:=Q-P;Len:=Hypot(Delta.X,Delta.Z);
+        if (Len<0.15) or (Len>32768) then Continue;
+        Count:=Length(Nodes[At].Arms);SetLength(Nodes[At].Arms,Count+1);
+        with Nodes[At].Arms[Count] do begin
+          Geometry.Direction:=Vector2(Delta.X/Len,Delta.Z/Len);
+          Geometry.Available:=Len;
+          Geometry.HalfWidth:=WayNodeWidth(Jobs[J].Way,I,Jobs[J].Params.Width)*0.5;
+          Job:=J;Sign:=Side;Angle:=ArcTan2(Delta.Z,Delta.X);
+        end;
+        { Photo width/elevation profiles insert sampling nodes. Those are not
+          road ends: permit the shoulder to span a straight run, stopping at
+          a real junction or a meaningful turn, never at an arbitrary sample. }
+        Scan:=K;D:=Nodes[At].Arms[Count].Geometry.Direction;
+        while Nodes[At].Arms[Count].Geometry.Available<Max(20,Jobs[J].Params.Width*4) do begin
+          if JunctionIndex(Refs[Scan])>=0 then Break;
+          NextScan:=Scan+Side;
+          if (NextScan<0) or (NextScan>High(Refs)) then Break;
+          NextNode:=Dataset.FindNode(Refs[NextScan]);if NextNode=nil then Break;
+          Q:=NodePlanePos(Dataset,NextNode,Projection);Delta:=Q-P;Reach:=Hypot(Delta.X,Delta.Z);
+          if (Reach<=Nodes[At].Arms[Count].Geometry.Available) or
+            ((Delta.X*D.X+Delta.Z*D.Y)<Reach*0.985) then Break;
+          Nodes[At].Arms[Count].Geometry.Available:=Reach;Scan:=NextScan;
+        end;
+        Nodes[At].Arms[Count].Station:=Station;
+      end;
+    end;
+  end;
+  for At:=0 to High(Nodes) do begin
+    Count:=Length(Nodes[At].Arms);if Count<3 then Continue;
+    { Deterministic geometry, independent of dictionary and worker order. }
+    for I:=1 to Count-1 do begin
+      Tmp:=Nodes[At].Arms[I];J:=I-1;
+      while (J>=0) and (Nodes[At].Arms[J].Angle>Tmp.Angle) do begin
+        Nodes[At].Arms[J+1]:=Nodes[At].Arms[J];Dec(J);
+      end;Nodes[At].Arms[J+1]:=Tmp;
+    end;
+    Owner:=0;
+    for I:=1 to Count-1 do
+      if (Nodes[At].Arms[I].Geometry.HalfWidth>Nodes[At].Arms[Owner].Geometry.HalfWidth+0.01) or
+         ((Abs(Nodes[At].Arms[I].Geometry.HalfWidth-Nodes[At].Arms[Owner].Geometry.HalfWidth)<=0.01) and
+          (Jobs[Nodes[At].Arms[I].Job].Way.Id<Jobs[Nodes[At].Arms[Owner].Job].Way.Id)) then Owner:=I;
+    Params:=Jobs[Nodes[At].Arms[Owner].Job].Params;Kind:=Params.Kind;
+    SameSurface:=True;MaterialCount:=0;SetLength(Selected,Count);
+    for I:=0 to Count-1 do
+      if VisibleMaterial(Jobs[Nodes[At].Arms[I].Job].Params)=VisibleMaterial(Params) then begin
+        { Coincident arms cannot form a second corner. }
+        if (MaterialCount>0) and
+           (Abs(Nodes[At].Arms[I].Geometry.Direction.X-Selected[MaterialCount-1].Direction.X)+
+            Abs(Nodes[At].Arms[I].Geometry.Direction.Y-Selected[MaterialCount-1].Direction.Y)<0.01) then Continue;
+        Selected[MaterialCount]:=Nodes[At].Arms[I].Geometry;Inc(MaterialCount);
+      end else SameSurface:=False;
+    if MaterialCount<2 then Continue;
+    if not SameSurface then
+      for I:=0 to MaterialCount-1 do begin
+        D:=Selected[I].Direction;
+        for J:=0 to Count-1 do begin
+          if VisibleMaterial(Jobs[Nodes[At].Arms[J].Job].Params)=VisibleMaterial(Params) then Continue;
+          E:=Nodes[At].Arms[J].Geometry.Direction;
+          DotArm:=D.X*E.X+D.Y*E.Y;CrossArm:=Abs(D.X*E.Y-D.Y*E.X);
+          if (DotArm>0) and (CrossArm>0.05) then
+            Selected[I].MinCut:=Max(Selected[I].MinCut,
+              (Selected[I].HalfWidth*DotArm+Nodes[At].Arms[J].Geometry.HalfWidth)/CrossArm+0.1);
+        end;
+      end;
+    SetLength(Selected,MaterialCount);Center:=Nodes[At].Center;
+    Outline:=RoundedJunction(Center,Selected,SameSurface);if Length(Outline)<3 then Continue;
+    { Do not emit inverted fans for nearly coincident/degenerate arms. }
+    Valid:=True;
+    for I:=0 to High(Outline) do begin J:=(I+1) mod Length(Outline);
+      if (Outline[I].X-Center.X)*(Outline[J].Z-Center.Y)-
+         (Outline[I].Z-Center.Y)*(Outline[J].X-Center.X)<-0.001 then Valid:=False;
+    end;
+    if not Valid then Continue;
+    BagAddRingWorld(Roads.JunctionRings[Kind],Outline,True);
+    if Roads.JunctionUV[Kind]=nil then Roads.JunctionUV[Kind]:=TMesh.Create('junction_uv');
+    Mesh:=Roads.JunctionUV[Kind];Mesh.CurrentOsmId:=Jobs[Nodes[At].Arms[Owner].Job].Way.Id;
+    Axis:=Nodes[At].Arms[Owner].Geometry.Direction*Nodes[At].Arms[Owner].Sign;
+    Perp:=Vector2(-Axis.Y,Axis.X);A:=AddVertex(Center);
+    B:=AddVertex(Vector2(Outline[High(Outline)].X,Outline[High(Outline)].Z));
+    for I:=0 to High(Outline) do begin
+      D:=Vector2(Outline[I].X,Outline[I].Z);C:=AddVertex(D);
+      Mesh.AddTriangle(A,C,B);B:=C;
+    end;
+    Mesh.CurrentOsmId:=0;Inc(Accepted);
+  end;
+  if Assigned(LogProc) then LogProc(Format('  roads: %d shared junction footprints (%d mapped nodes)',[Accepted,Length(Ids)]));
+end;
+
 class function TRoadBuilder.BuildAll(Dataset: TOSMDataset; HM: THeightmap;
   Projection: TLocalProjection;
   out ASegs: TRoadCenterlineSegArray;
@@ -1395,6 +1554,8 @@ begin
   Result.SandPath  := TMesh.Create('roads_sand_path');
   for K := Low(TRoadKind) to High(TRoadKind) do
   begin
+    Result.JunctionRings[K]:=Default(TLatRingBag);
+    Result.JunctionUV[K]:=nil;
     Result.IntRings[K].Rings := nil;
     Result.IntRings[K].N := 0;
     if K <> rkNone then
@@ -1655,6 +1816,10 @@ begin
       if Workers[W] <> nil then Workers[W].Free;
   end;
 
+  if (ErrMsg='') and ACarveRaw then
+    try
+      BuildRoadJunctionPatches(Jobs,Dataset,Projection,JunctionIds,Result,LogProc);
+    except on E:Exception do ErrMsg:=E.ClassName+': '+E.Message end;
   if ErrMsg <> '' then
   begin
     Result.Major.Free;     Result.Secondary.Free;
@@ -1662,8 +1827,10 @@ begin
     Result.Footway.Free;   Result.Cycleway.Free;
     Result.Railway.Free;
     Result.DirtPath.Free;  Result.SandPath.Free;
-    for K := Low(TRoadKind) to High(TRoadKind) do
+    for K := Low(TRoadKind) to High(TRoadKind) do begin
       Result.UVMesh[K].Free;
+      Result.JunctionUV[K].Free;
+    end;
     SetLength(ASegs, 0);
     raise Exception.Create('Road worker error: ' + ErrMsg);
   end;

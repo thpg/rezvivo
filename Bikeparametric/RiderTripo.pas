@@ -65,6 +65,7 @@ type
     ArmPronationR, ArmPronationL: Single; { positive = pronation for either hand }
     HandFrameR, HandFrameL: TRiderGripFrame; { transient contact orientation }
     HandRelax: array[0..1] of Single; { transient partial finger release }
+    ElbowDown:array[0..1]of Single; { 0..1 blend to downward pole for free gestures }
     ShoulderRoundDeg: Single;
     ScapulaProtraction, ScapulaElevation: TShoulderAngles; { transient motion }
     HandLevel: Single;                   { wrist leveling 0..1: 1 = align with the grip direction, within 25 degrees }
@@ -308,6 +309,7 @@ type
     FHandForward, FHandPalm: array[0..1] of TTripoVec3;
     FFrameGrip: array[0..1] of TRiderGripFrame;
     FFrameHandRelax: array[0..1] of Single;
+    FFrameElbowDown:array[0..1]of Single;
     { ── blended GPU skinning of the marker so the debug point sticks to the
       RENDERED boot/glove surface. That surface is skinned by a BLEND of bones
       (e.g. R_Foot + R_Calf near the ankle), so a single-bone reconstruction
@@ -332,6 +334,7 @@ type
     FBonesCached: Boolean;
     FBoneJoint: array[0..34] of Integer;           { joint idx per limb bone (-1 = missing) }
     FBoneOrigLocalT: array[0..34] of TVector3;     { original BindLocal translation }
+    FBoneWidthLocal:array[0..34]of TVector3; { body transverse axis in parent frame }
     FBoneOrigNodeT: array[0..34] of TVector3;      { original CGE node translation }
     { ── optional 'Helmet' accessory node, animated to follow the head ── }
     FHair: TRiderHair;
@@ -629,6 +632,7 @@ type
     function BodyShapeRevision: Cardinal;
     function BodyMeasurements:TJSONObject;
     property BodyParameters: TRiderBodyParameters read FBodyParameters;
+    property Garment:TRiderFabric read FFabric;
     property SelfOcclusion: TRiderOcclusion read FSelfOcclusion;
     property OcclusionJointQuery: TRiderJointQuery read FOcclusionJointQuery write FOcclusionJointQuery;
     property ClothingSkinQuery:TRiderSkinQuery read FClothingSkinQuery write FClothingSkinQuery;
@@ -943,7 +947,7 @@ var
 
 implementation
 
-uses AppRuntimePaths;
+uses AppRuntimePaths, RiderGarmentState;
 
 function TRiderAppearanceAddon.DisplayTopColor(out Color:TVector3):Boolean;
 begin Color:=TVector3.Zero;Result:=False end;
@@ -1163,6 +1167,7 @@ begin
   Result.ArmPronationL := L(A.ArmPronationL, B.ArmPronationL);
   Result.ShoulderRoundDeg := L(A.ShoulderRoundDeg, B.ShoulderRoundDeg);
   for i := 0 to 1 do begin
+    Result.ElbowDown[i]:=L(A.ElbowDown[i],B.ElbowDown[i]);
     Result.ScapulaProtraction[i] := L(A.ScapulaProtraction[i], B.ScapulaProtraction[i]);
     Result.ScapulaElevation[i] := L(A.ScapulaElevation[i], B.ScapulaElevation[i]);
   end;
@@ -1398,8 +1403,7 @@ begin
   end;
   FAppearanceBreathPhase:=BreathPhase;FAppearanceBreathLoad:=BreathLoad;
   if (FCorrectives<>nil)and(FCorrectives.Body<>nil)then FCorrectives.Body.Update(Effort,PedalPhase);
-  if FFabric<>nil then FFabric.Update(BreathPhase,BreathLoad,
-    FShoulderRoundDeg+FScapulaProtraction[0],FShoulderRoundDeg+FScapulaProtraction[1]);
+  if FFabric<>nil then FFabric.Update(BreathPhase,BreathLoad,Dt);
   FaceDetail:=1;FaceStrain:=RiderFaceStrain(Effort);
   FaceTime:=0;if FSurfaceSkin<>nil then FaceTime:=FSurfaceSkin.Time+EnsureRange(Dt,0.0,0.25);
   if FFace<>nil then begin
@@ -1407,7 +1411,7 @@ begin
     if FCorrectives<>nil then FCorrectives.SetFaceControls(FFace.Controls,FFace.EyeControls.X);
     if FFace.Valid then begin FaceDetail:=FFace.Visibility;FaceStrain:=FFace.Controls.Z end;
   end;
-  if FSurfaceSkin<>nil then FSurfaceSkin.Update(Dt,FaceStrain,BreathPhase,BreathLoad,FaceDetail);
+  if FSurfaceSkin<>nil then FSurfaceSkin.Update(Dt,FaceStrain,BreathPhase,BreathLoad,FaceDetail,Effort);
   if FHair<>nil then begin
     if FHairStyle in [rhsLongBraid,rhsDoubleBraids,rhsDreadlocks]then begin
       Query:=FOcclusionJointQuery;if not Assigned(Query)then Query:=@PosedJointParent;
@@ -1936,7 +1940,7 @@ begin
 end;
 
 function TTripoRiderScene.BodyMeasurements:TJSONObject;
-var H,I,A:Single;
+var H,I,A:Single;L,R:TTripoVec3;
 begin
   Result:=TJSONObject.Create;
   if FBodyMorph=nil then Exit;
@@ -1947,6 +1951,12 @@ begin
     FRig.JointBindPos(FRig.JointIndexByName('R_Forearm'))));
   Result.Add('heightCm',Double(H*100));Result.Add('inseamCm',Double(I*100));
   Result.Add('armLengthCm',Double(A*100));
+  L:=FRig.JointBindPos(FRig.JointIndexByName('L_Thigh'));
+  R:=FRig.JointBindPos(FRig.JointIndexByName('R_Thigh'));
+  Result.Add('hipJointBreadthCm',Double(Abs(L.X-R.X)*100));
+  L:=FRig.JointBindPos(FRig.JointIndexByName('L_Upperarm'));
+  R:=FRig.JointBindPos(FRig.JointIndexByName('R_Upperarm'));
+  Result.Add('shoulderJointBreadthCm',Double(Abs(L.X-R.X)*100));
 end;
 
 procedure TTripoRiderScene.ApplyBodyParameters(const Value: TRiderBodyParameters);
@@ -1958,9 +1968,12 @@ begin
   if (FBodyMorph.Revision>0) and SameRiderBody(P,FBodyParameters) then Exit;
   CacheBones;
   FBodyMorph.Apply(P,FRig);
+  if FFabric<>nil then FFabric.RefreshRespiration(RiderContentRoot);
   if FLod<>nil then FLod.Invalidate;
   if FHeadAppearance<>nil then FHeadAppearance.FitToRig(FRig);
   FBodyParameters:=P;
+  if FSurfaceSkin<>nil then FSurfaceSkin.SetBodyProfile(P);
+  if FFabric<>nil then FFabric.SetBodySeed(RiderGarmentSeed(P));
   if FCorrectives<>nil then FCorrectives.SetBodyParameters(P);
   RestH:=RestHeight;
   H:=P.HeightCm*0.01; I:=RiderBodyInseamCm(P)*0.01;
@@ -1975,11 +1988,11 @@ begin
     The two affine translation coefficients fit crown/sole and crotch/sole
     independently. Static profile edits only, never called by animation. }
   FBodyMorphed:=False;
-  ApplyLimbLengths(1,ArmK,ShoulderK,1,1,1);
+  ApplyLimbLengths(1,ArmK,ShoulderK,1+P.PelvisWidth,1,1);
   FBodyMorph.Measure(FRig,H0,I0);
-  ApplyLimbLengths(1.01,ArmK,ShoulderK,1,1,1);
+  ApplyLimbLengths(1.01,ArmK,ShoulderK,1+P.PelvisWidth,1,1);
   FBodyMorph.Measure(FRig,HL,IL);
-  ApplyLimbLengths(1,ArmK,ShoulderK,1,1.01,1);
+  ApplyLimbLengths(1,ArmK,ShoulderK,1+P.PelvisWidth,1.01,1);
   FBodyMorph.Measure(FRig,HT,IT);
   A:=(HL-H0)*100; B:=(HT-H0)*100; C:=(IL-I0)*100; D:=(IT-I0)*100;
   Det:=A*D-B*C;
@@ -1987,7 +2000,7 @@ begin
   LegK:=1+((H-H0)*D-(I-I0)*B)/Det;
   TorsoK:=1+((I-I0)*A-(H-H0)*C)/Det;
   FBodyMorphed:=True;
-  ApplyLimbLengths(LegK,ArmK,ShoulderK,1,TorsoK,1);
+  ApplyLimbLengths(LegK,ArmK,ShoulderK,1+P.PelvisWidth,TorsoK,1);
   FBodyHeightF:=H/Max(RestH,1)-1;
   FBodyMorphed:=False;
   FRig.ComputePose;
@@ -2080,7 +2093,7 @@ const
      'R_UpperarmTwist01', 'R_UpperarmTwist02', 'L_UpperarmTwist01', 'L_UpperarmTwist02',
      'R_ForearmTwist01', 'R_ForearmTwist02', 'L_ForearmTwist01', 'L_ForearmTwist02',
      'NeckTwist02', 'Head');
-var k, j: Integer;
+var k,j,Parent:Integer;X:Single;
 begin
   if FBonesCached then Exit;
   if (FRig = nil) or (not FLoaded) then Exit;
@@ -2093,6 +2106,15 @@ begin
     begin
       FBoneOrigLocalT[k] := Vector3(FRig.BindLocal[j][12], FRig.BindLocal[j][13],
                                     FRig.BindLocal[j][14]);
+      FBoneWidthLocal[k]:=TVector3.Zero;
+      Parent:=FRig.JointParent[j];
+      if(Parent>=0)and(k>=8)and(k<12)then begin
+        X:=FRig.JointBindPos(j).X;
+        { Local X is not anatomical left/right (notably at the clavicles).
+          Transform a transverse BODY-space displacement into the parent. }
+        FBoneWidthLocal[k]:=Vector3(FRig.InvBind[Parent][0]*X,
+          FRig.InvBind[Parent][1]*X,FRig.InvBind[Parent][2]*X);
+      end;
       if (j <= High(FJointNode)) and (FJointNode[j] <> nil) then
         FBoneOrigNodeT[k] := FJointNode[j].Translation
       else
@@ -2582,7 +2604,7 @@ procedure TTripoRiderScene.ApplyLimbLengths(LegK, ArmK, ShoulderK, PelvisK, Tors
     else Result := K;
   end;
 
-var k, j: Integer; factor: Single;
+var k, j: Integer; factor: Single; LocalOffset,NodeOffset:TVector3;
 begin
   if (FRig = nil) or (not FLoaded) then Exit;
   CacheBones;
@@ -2614,12 +2636,26 @@ begin
     if (FBodyMorph<>nil) and ((k=16) or (k>=33)) then
       factor:=1+(TorsoK*HeightK-1)*0.15;
     { scale the bone offset in BindLocal — IK bone lengths follow it }
-    FRig.BindLocal[j][12] := FBoneOrigLocalT[k].X * factor;
-    FRig.BindLocal[j][13] := FBoneOrigLocalT[k].Y * factor;
-    FRig.BindLocal[j][14] := FBoneOrigLocalT[k].Z * factor;
+    LocalOffset:=Vector3(FBoneOrigLocalT[k].X,FBoneOrigLocalT[k].Y,FBoneOrigLocalT[k].Z)*factor;
+    NodeOffset:=FBoneOrigNodeT[k]*factor;
+    if FBodyMorph<>nil then begin
+      { Independent breadth is transverse only: do not move the hip up/down
+        or lengthen the clavicle's vertical component when changing width. }
+      if (k>=10)and(k<12)then begin
+        LocalOffset:=FBoneOrigLocalT[k]*HeightK+FBoneWidthLocal[k]*((PelvisK-1)*HeightK);
+        NodeOffset:=FBoneOrigNodeT[k]*HeightK+FBoneWidthLocal[k]*((PelvisK-1)*HeightK);
+      end;
+      if (k>=8)and(k<10)then begin
+        LocalOffset:=LocalOffset+FBoneWidthLocal[k]*FBodyParameters.ShoulderWidth;
+        NodeOffset:=NodeOffset+FBoneWidthLocal[k]*FBodyParameters.ShoulderWidth;
+      end;
+    end;
+    FRig.BindLocal[j][12] := LocalOffset.X;
+    FRig.BindLocal[j][13] := LocalOffset.Y;
+    FRig.BindLocal[j][14] := LocalOffset.Z;
     { scale the CGE node offset — the GPU-skinned mesh stretches with it }
     if (j <= High(FJointNode)) and (FJointNode[j] <> nil) then
-      FJointNode[j].Translation := FBoneOrigNodeT[k] * factor;
+      FJointNode[j].Translation := NodeOffset;
   end;
   FRig.RecomputeBindWorld(True);   { rebuild bind positions / IK lengths from new BindLocal;
                                      KEEP InvBind native so FRig.SkinMatrix reproduces the
@@ -6351,10 +6387,16 @@ begin
     '  float a004=min(r.x*r.x,exp2(-9.28*nv))*r.x+r.y;' + #10 +
     '  vec2 ab=vec2(-1.04,1.04)*a004+r.zw;' + #10 +
     '  vec3 spec=max(f0*ab.x+ab.y,vec3(0.0))*radiance;' + #10 +
+    '  vec3 diff=diffuseColor*irradiance/3.14159265;' + #10 +
+    // Cloth must use the same fibre/base mixture for the sky and the sun.
+    // Full-strength hard-surface GGX here otherwise dominates dark fabric in
+    // shade, painting bright horizon bands across recesses and reversing the
+    // perceived relief. Material hooks run before indirect occlusion and tone.
+    '  /* PLUG: rider_environment_surface (diff,spec,diffuseColor,N,V,irradiance) */' + #10 +
     // Appearance effects can suppress sky reflection without suppressing
     // diffuse sky light, occlusion or the rider's shadow reception.
     '  /* PLUG: rider_environment_specular (spec) */' + #10 +
-    '  light=(diffuseColor*irradiance/3.14159265+spec)*riderIndirectVisibility(N);' + #10 +
+    '  light=(diff+spec)*riderIndirectVisibility(N);' + #10 +
     '}';
   FreeAndNil(FSelfOcclusion);
   if OcclusionEnabled then
@@ -6778,6 +6820,8 @@ begin
     StartupLog(Format('[dye] RefreshShaderClothDye (load) %d ms', [GetTickCount64 - TD1]));
   end;
   FFabric:=TRiderFabric.Create(RiderContentRoot,FAuthorHeight);
+  if(FCorrectives<>nil)and(FCorrectives.Body<>nil)then
+    FCorrectives.Body.AttachGarment(@FFabric.SetPanelStretch);
   { Freeze visual standing height from the bind mesh × GPU rest stretch
     BEFORE limb-length edits rewrite BindWorld. }
   { Accessories are attached before GPU skin / bike mounting. }
@@ -7584,7 +7628,7 @@ end;
 procedure TTripoRiderScene.UpdatePose(const FootTargetR, FootTargetL,
   HandTargetR, HandTargetL: TVector3);
 var
-  legR, legL, armR, armL: TTripoVec3;
+  legR, legL, armR, armL, freeArmRight: TTripoVec3;
   footYawR: TTripoVec4;
   i: Integer;
 
@@ -7849,6 +7893,12 @@ begin
   armL := V3(FArmPlaneHint.X - FFlareAxis.X * FElbowFlare,
              FArmPlaneHint.Y - FFlareAxis.Y * FElbowFlare,
              FArmPlaneHint.Z - FFlareAxis.Z * FElbowFlare);
+  if(FFrameElbowDown[0]>0)or(FFrameElbowDown[1]>0)then begin
+    freeArmRight:=V3Norm(V3Sub(FRig.JointBindPos(FRig.JointIndexByName('R_Upperarm')),
+      FRig.JointBindPos(FRig.JointIndexByName('L_Upperarm'))));
+    armR:=RiderFreeElbowHint(armR,freeArmRight,0,FFrameElbowDown[0]);
+    armL:=RiderFreeElbowHint(armL,freeArmRight,1,FFrameElbowDown[1]);
+  end;
 
   { bind -> lean/curl the spine -> solve limbs (arms read the leaned shoulders;
     the legs hang from the pelvis below the spine, so the lean doesn't move them) }
@@ -8299,6 +8349,7 @@ begin
   FHandLevel        := P.HandLevel;
   FFrameGrip[0] := P.HandFrameR; FFrameGrip[1] := P.HandFrameL;
   for i:=0 to 1 do FFrameHandRelax[i]:=EnsureRange(P.HandRelax[i],0.0,1.0);
+  for i:=0 to 1 do FFrameElbowDown[i]:=P.ElbowDown[i];
   { OffsetX/Y/Z and AnkleFlex are consumed by the bike via CurrentPose. StanceHalf is a
     main calibration param now (TripoStanceHalf), not part of the pose. }
 end;

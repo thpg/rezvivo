@@ -6,7 +6,7 @@ interface
 uses SysUtils, fpjson;
 type
   TDeviceRole = (drHeartRate, drPower, drCadence, drSpeed, drSteering,
-    drControllable, drSteeringCompanion);
+    drControllable, drSteeringCompanion,drShifting,drShiftingCompanion);
   TDeviceSelectionMode = (dsmAutomatic, dsmNone, dsmDevice);
   TDeviceSelection = record
     Mode: TDeviceSelectionMode;
@@ -37,7 +37,7 @@ type
 const
   DeviceRoleKeys: array[TDeviceRole] of String =
     ('heart_rate', 'power', 'cadence', 'speed', 'steering', 'controllable',
-     'steering_companion');
+     'steering_companion','shifting','shifting_companion');
 implementation
 uses Math;
 

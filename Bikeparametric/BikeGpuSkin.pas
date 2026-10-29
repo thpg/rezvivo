@@ -49,7 +49,7 @@ type
 
 const
   GPU_SHJ_COUNT = 21;   { суставов в капсульной тени райдера }
-  GPU_SKIN_SCALAR_COUNT = 61;
+  GPU_SKIN_SCALAR_COUNT = 63;
   GPU_POSE_MATRIX_COUNT = 22;
   GPU_POSE_UPLOAD_COUNT = GPU_POSE_MATRIX_COUNT+2; { forearm roll/pivot packed in columns }
 
@@ -69,7 +69,7 @@ type
     FUBindT: TMFVec3f;     { NJ: BindWorld translations; live after HeightK }
     FUHandRest: TMFMatrix4f;
     FUHandForward: array[0..1] of TSFVec3f;
-    FUsePosePalette: Boolean;
+    FUsePosePalette,FPrepareGarment: Boolean;
     FUsePreparedPose,FPreparedValid:Boolean;
     FPreparedSourceRevision,FPreparedRevision,FPreparedFaceRevision,FPreparedBodyRevision:QWord;
     FJointRouting:array of Integer;
@@ -136,6 +136,7 @@ type
     procedure SetPoseMatrix(Index: Integer; const Q: TTripoVec4;
       const P: TTripoVec3; const BindQ: TTripoVec4; const BindP: TTripoVec3);
     procedure UploadPosePalette;
+    function GarmentJointMatrix(Index:Integer):TMatrix4;
     procedure PreparePoseFrame(Sender:TObject);
   public
     constructor Create(ARider: TTripoRiderScene);
@@ -703,6 +704,8 @@ var
       SL.Add('  vec3 hint = gskAHINT + gskFLARE * uElbowFlare;')
     else
       SL.Add('  vec3 hint = gskAHINT - gskFLARE * uElbowFlare;');
+    if ArmOk[0]and ArmOk[1]then
+      SL.Add('  if(uScalars['+IntToStr(61+Side)+']>0.0)hint=mix(hint,vec3(0.0,-1.0,0.0)+normalize(gskAC0_A_HP-gskAC1_A_HP)*'+GNum(SideSign*0.35)+',smoothstep(0.0,1.0,3.0*uScalars['+IntToStr(61+Side)+']));');
     SL.Add('  vec3 root = pSh;');
     SL.Add('  vec3 aim = tgt;');
     SL.Add('  float reach = ' + Pfx + 'L1 + ' + Pfx + 'L2;');
@@ -891,12 +894,12 @@ begin
     6 pronR, 7 pronL, 8 shoulderRound, 9 handLevel, 10 legFreeR, 11 legFreeL,
     12..31 spine world quaternions, 32 foot yaw W, 33/34 grip closed,
     35..42 clavicle deltas, 43/44 hand alignment, 45..52 grip rotations,
-    53..60 upper neck and skull world rotations }
+    53..60 upper neck and skull world rotations, 61/62 free-arm elbow down }
   FUScalars := TMFFloat.Create(FEffect, true, 'uScalars',
     [0, 0.07, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0,
      0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1,
      1,1,1, 0,0,0,1, 0,0,0,1, 1,1, 0,0,0,1, 0,0,0,1,
-     0,0,0,1, 0,0,0,1]);
+     0,0,0,1, 0,0,0,1, 0,0]);
   FEffect.AddCustomField(FUScalars);
   FUVecs := TMFVec3f.Create(FEffect, true, 'uVecs',
     [Vector3(0, 0, 0), Vector3(0, -0.17, 0), Vector3(0, 0.17, 0),
@@ -960,7 +963,7 @@ begin
     SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;' + #10 + '#endif' + #10 + '');
     SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec3 castle_Normal;' + #10 + '#endif' + #10 + '');
     SL.Add('#ifdef RIDER_SURFACE_MOTION');
-    SL.Add('vec3 riderSurfaceOffset();');
+    SL.Add('vec3 riderSurfaceOffset();vec3 riderSurfaceNormalOffset();');
     SL.Add('#endif');
     SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_SkinJoints0;' + #10 + '#endif' + #10 + '');
     SL.Add('' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_SkinWeights0;' + #10 + '#endif' + #10 + '');
@@ -1445,7 +1448,9 @@ begin
       SL.Add('#ifdef RIDER_SURFACE_MOTION');SL.Add('p+=riderSurfaceOffset();');SL.Add('#endif');
       SL.Add('vec3 n=vec3(0.0,1.0,0.0);');
       SL.Add('#if !defined(CASTLE_SHADOW_DEPTH) || defined(CASTLE_CACHE_DEFORMATION)');
-      SL.Add('n=castle_Normal+psdN;');SL.Add('#endif');
+      SL.Add('n=castle_Normal+psdN;');
+      SL.Add('#ifdef RIDER_SURFACE_MOTION');SL.Add('n+=riderSurfaceNormalOffset();');SL.Add('#endif');
+      SL.Add('#endif');
       SL.Add('vec3 outP,outN;bodyDeform(p,n,W,J,outP,outN);vertex=vec4(outP,1.0);normal=outN;');
     end else begin
     { Zero-weight joints do not contribute and need no procedural solve. }
@@ -1530,6 +1535,7 @@ begin
   FEffect.Scene := FRider.Scene;
   FRider.Scene.ProcessEvents := True;   { Send() uniform'ов должен доходить до GPU }
   FReady := True;
+  FPrepareGarment:=(FRider.Garment<>nil)and(FRider.Correctives<>nil)and(FRider.Correctives.Body<>nil);
   FLastValid := False;   { первый SendFrame после Build обязан послать все uniform'ы }
   UploadBindUniforms;    { fill uGskRest / uBindT now that Scene is set }
   if FUsePreparedPose then FRider.PrepareGpuPose:=@PreparePoseFrame;
@@ -1613,7 +1619,18 @@ begin
     end;
   UpdateShadowLimbs;
   FShDirty := False; { contacts, helmet and AO reuse this frame's pose }
-  FUPose.Send(FPoseList);
+  if FUsePosePalette then FUPose.Send(FPoseList);
+  if FPrepareGarment and not FUsePreparedPose then
+    FRider.Correctives.Body.PrepareGarment(@GarmentJointMatrix);
+end;
+
+function TGpuRiderSkin.GarmentJointMatrix(Index:Integer):TMatrix4;
+var Input:TRiderPoseJointInput;Delta:TMatrix4;
+begin
+  Input.Routing:=FJointRouting[Index];Input.Rest:=FRestList[Index];
+  Input.HandRest:=FUHandRest.Items[Input.Routing div 64];Input.Face:=TMatrix4.Identity;
+  if FRider.Face<>nil then Input.Face:=FRider.Face.PreparedDelta(Index);
+  RiderPoseJoint(Input,FPoseList,Vector2(FUScalars.Items[33],FUScalars.Items[34]),Result,Delta);
 end;
 
 procedure TGpuRiderSkin.PreparePoseFrame(Sender:TObject);
@@ -1738,7 +1755,7 @@ begin
         MDir := V3Norm(V3Sub(Aim, pM));
         qM := QuatMul(QuatFromTo(QuatRotateV3(qMpre, AXE), MDir), qMpre);
         Aim := V3Add(pM, V3Scale(MDir, L2));
-        if FUsePosePalette then
+        if FUsePosePalette or FPrepareGarment then
         begin
           SetPoseMatrix(1+Side*3, qU, Root, UR, FShBind[SHJ_THIGH_R+Side]);
           SetPoseMatrix(2+Side*3, qM, pM, MR, FShBind[SHJ_CALF_R+Side]);
@@ -1775,6 +1792,9 @@ begin
         Hint := FShArmHint;
         if Side = 0 then Hint := V3Add(Hint, V3Scale(FShFlare, FShInPose.ElbowFlare))
         else Hint := V3Sub(Hint, V3Scale(FShFlare, FShInPose.ElbowFlare));
+        if FShInPose.ElbowDown[Side]>0 then
+          Hint:=RiderFreeElbowHint(Hint,V3Norm(V3Sub(FShBind[SHJ_UPARM_R],
+            FShBind[SHJ_UPARM_R+1])),Side,FShInPose.ElbowDown[Side]);
         if Side = 0 then Pron := FShInPose.ArmPronationR
         else Pron := FShInPose.ArmPronationL;
         if Side=0 then GripFrame:=FShInPose.HandFrameR else GripFrame:=FShInPose.HandFrameL;
@@ -1809,7 +1829,7 @@ begin
         FShRigPts[SHJ_FORE_R + Side] := pM;
         FShRigPts[SHJ_HAND_R + Side] := HandPos;
         FShHandQ[Side]:=qE;
-        if FUsePosePalette then
+        if FUsePosePalette or FPrepareGarment then
         begin
           SetPoseMatrix(12+Side*4, qCl, pCl, CR, CP);
           SetPoseMatrix(13+Side*4, qU, Root, UR, FShBind[SHJ_UPARM_R+Side]);
@@ -1818,7 +1838,7 @@ begin
         end;
         qEnat:=QuatNormalize(QuatMul(qE,QuatConj(qEnat)));
         if qEnat.W<0 then begin qEnat.X:=-qEnat.X;qEnat.Y:=-qEnat.Y;qEnat.Z:=-qEnat.Z;qEnat.W:=-qEnat.W;end;
-        if FUsePosePalette then
+        if FUsePosePalette or FPrepareGarment then
         begin
           FoAxis := V3Norm(V3Sub(HandPos,pM));
           Sv := V3Scale(FoAxis,V3Dot(V3(qEnat.X,qEnat.Y,qEnat.Z),FoAxis));
@@ -2028,6 +2048,7 @@ begin
     FScalarsList.Add(FShRS[I].X);FScalarsList.Add(FShRS[I].Y);
     FScalarsList.Add(FShRS[I].Z);FScalarsList.Add(FShRS[I].W);
   end;
+  FScalarsList.Add(Pose.ElbowDown[0]);FScalarsList.Add(Pose.ElbowDown[1]);
   FVecsList.Clear;
   FVecsList.Add(OBB);
   FVecsList.Add(CrankR);
@@ -2089,7 +2110,7 @@ begin
   FShInPose := Pose;
   FShInFootYaw := FootYaw;
   FShDirty := True;
-  if FUsePosePalette and (ChS or ChM or ChV) then UploadPosePalette;
+  if (FUsePosePalette or FPrepareGarment) and (ChS or ChM or ChV) then UploadPosePalette;
   { A model can be drawn directly after its very first SendFrame (resource
     preparation/editor). Subsequent frames publish once after appearance. }
   if FUsePreparedPose and not FPreparedValid then PreparePoseFrame(Self);

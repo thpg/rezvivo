@@ -12,7 +12,7 @@ unit GameViewBikeFit;
 
 interface
 
-uses GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, GameMenuDialog, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
+uses GameRiderGarment, RiderGarmentState, GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, GameMenuDialog, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
   Classes, SysUtils, Math, fpjson,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
@@ -41,6 +41,10 @@ type
     FHairBox:TCastleUserInterface;
     FAppearanceRows:TMenuScrollView;
     FWardrobePanel:TGameWardrobePanel;
+    FGarmentButtons:array[0..3]of TMenuButton;
+    procedure ClickGarment(Sender:TObject);
+    procedure RefreshGarment;
+  private
     FHairSelect:TMenuButton;
     FHairPreview:TCastleImageControl;
     FHairTitle,FHairPopupTitle:TCastleLabel;
@@ -79,8 +83,8 @@ type
     FPreviewItems: TCastleRootTransform;
     FLiveRide, FLiveSettingsDirty: Boolean;
     FFitSaveDelay:Single;
-    FValueButtons:array[0..12]of TCastleButton;
-    FValueLabels:array[0..12]of TCastleLabel;
+    FValueButtons:array[0..17]of TCastleButton;
+    FValueLabels:array[0..17]of TCastleLabel;
     FValueRow,FValueIndex:Integer;
     FValuePopup:TMenuDialog;
     FValueEdit:TCastleEdit;
@@ -158,6 +162,9 @@ type
     FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem: Single;
     FFitHeightCm, FFitInseamCm, FFitWeightKg, FFitComposition: Single;
     FFitSex,FFitArmCm,FFitHead:Single;
+    FFitDimensions:array[0..4]of Single;
+    FDimensionDown,FDimensionUp:array[0..4]of TCastleButton;
+    FDimensionLabels:array[0..4]of TCastleLabel;
     FBodyRows:TCastleScrollView;
     FBtnSexDown,FBtnSexUp,FBtnArmDown,FBtnArmUp,FBtnHeadDown,FBtnHeadUp:TCastleButton;
     FLblSex,FLblArm,FLblHead:TCastleLabel;
@@ -607,6 +614,7 @@ end;
 
 procedure TBikeFitPage.BuildLayout;
 var
+  S:string;
   Title: TCastleLabel;
   ResVpHost: TCastleUserInterface;
   BikeBlock, BikeRow: TCastleUserInterface;
@@ -807,6 +815,20 @@ begin
   MakeFitRow(FBodyRows.ScrollArea,UiText('Head: MEN / FEM'),0,FBtnHeadDown,FBtnHeadUp,FLblHead);
   FBtnHeadDown.Tag:=-3;FBtnHeadUp.Tag:=3;
   FBtnHeadDown.OnClick:=@ClickBodyParameter;FBtnHeadUp.OnClick:=@ClickBodyParameter;
+  for I:=0 to 4 do begin
+    case I of
+      0:S:=UiText('Pelvis width (%)');
+      1:S:=UiText('Shoulder width (%)');
+      2:S:=UiText('Waist size (%)');
+      3:S:=UiText('Thigh size (%)');
+      4:S:=UiText('Calf size (%)');
+    end;
+    MakeFitRow(FBodyRows.ScrollArea,S,0,FDimensionDown[I],FDimensionUp[I],FDimensionLabels[I]);
+    FDimensionDown[I].Tag:=-(4+I);FDimensionUp[I].Tag:=4+I;
+    FDimensionDown[I].OnClick:=@ClickBodyParameter;FDimensionUp[I].OnClick:=@ClickBodyParameter;
+    FDimensionDown[I].Name:='BodyDimensionDown'+IntToStr(I);
+    FDimensionUp[I].Name:='BodyDimensionUp'+IntToStr(I);
+  end;
 
   FCadenceControls:=MakeParamBlock(FColParams, UiText('Cadence (preview)'), -520,
     FBtnCadenceDown, FBtnCadenceUp, FLblCadence);
@@ -1830,6 +1852,8 @@ begin
   if FLblSex<>nil then FLblSex.Caption:=IntToStr(Round(FFitSex*100))+'%';
   if FLblHead<>nil then FLblHead.Caption:=IntToStr(Round(FFitHead*100))+'%';
   if FLblArm<>nil then FLblArm.Caption:=Format(UiText('%0.1f cm'),[RiderBodyArmCm(CurrentBody)]);
+  for I:=0 to 4 do if FDimensionLabels[I]<>nil then
+    FDimensionLabels[I].Caption:=FormatFloat('+0;-0;0',FFitDimensions[I]*100)+'%';
   if FLblKnee <> nil then
   begin
     if Abs(FFitKneeFlare) < 0.005 then
@@ -1918,6 +1942,12 @@ begin
   FWardrobePanel.OnChange:=@ClothingChanged;
   FWardrobePanel.OnColorClick:=@ClickDyeSlot;
   FAppearanceRows.ScrollArea.InsertFront(FWardrobePanel);
+  for I:=0 to 3 do begin
+    B:=TMenuButton.Create(FUiOwner);FGarmentButtons[I]:=B;B.Tag:=I;
+    B.Name:='JerseyOption'+IntToStr(I);B.AutoIcon:=False;B.AutoSize:=False;
+    B.OnClick:=@ClickGarment;FAppearanceRows.ScrollArea.InsertFront(B);
+  end;
+  RefreshGarment;
   FHairBox:=TCastleUserInterface.Create(FUiOwner);
   FAppearanceRows.ScrollArea.InsertFront(FHairBox);
   FHairBox.Anchor(hpMiddle);FHairBox.Anchor(vpTop);
@@ -2028,21 +2058,59 @@ end;
 procedure TBikeFitPage.ClothingChanged(Sender:TObject);
 begin
   CloseHairList(nil);FOnFootFramed:=False;
+  RefreshGarment;
   UpdateDyeStripVisuals;
   if FResultBike<>nil then RequestResultRider(CurrentRiderPath)
   else FDirtyResult:=True;
   LiveFitChanged;
 end;
 
+procedure TBikeFitPage.RefreshGarment;
+var P:TRiderGarmentParameters;I:Integer;Fit,Len:string;
+begin
+  P:=AvatarGarment;
+  if P.Ease< -0.3 then Fit:='Jersey: snug'
+  else if P.Ease>0.5 then Fit:='Jersey: relaxed'else Fit:='Jersey: fitted';
+  if P.LengthEase< -0.3 then Len:='Length: short'
+  else if P.LengthEase>0.3 then Len:='Length: long'else Len:='Length: regular';
+  BindUiText(FGarmentButtons[0],Fit);BindUiText(FGarmentButtons[1],Len);
+  BindUiText(FGarmentButtons[2],'Rearrange folds');BindUiText(FGarmentButtons[3],'Pull jersey down');
+  for I:=0 to 3 do FGarmentButtons[I].Enabled:=(WardrobeSelection(0)='')and(WardrobeSelection(2)='');
+end;
+
+procedure TBikeFitPage.ClickGarment(Sender:TObject);
+var P:TRiderGarmentParameters;Index:Integer;
+begin
+  if not TMenuButton(Sender).Enabled then Exit;
+  P:=AvatarGarment;Index:=TComponent(Sender).Tag;
+  if Index=0 then begin
+    if P.Ease< -0.3 then P.Ease:=0.15 else if P.Ease<0.5 then P.Ease:=0.85 else P.Ease:=-0.7;
+  end else if Index=1 then begin
+    if P.LengthEase< -0.3 then P.LengthEase:=0 else if P.LengthEase<0.3 then P.LengthEase:=0.75 else P.LengthEase:=-0.75;
+  end else begin Inc(P.Revision);P.Adjusted:=Index=3 end;
+  if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)and(FResultBike.TripoRider.Garment<>nil)then
+    FResultBike.TripoRider.Garment.ConfigureGarment(P,Index<2);
+  SaveAvatarGarment(P);RefreshGarment;
+end;
+
 procedure TBikeFitPage.McpClothing(AParams:TJSONObject;AResult:TJSONObject);
-var I:Integer;Changed:Boolean;
+var I:Integer;Changed:Boolean;P:TRiderGarmentParameters;D:TJSONData;
 begin
   Changed:=False;
   for I:=0 to High(WardrobeSlots)do if AParams.Find(WardrobeSlots[I])<>nil then begin
     SelectWardrobe(WardrobeSlots[I],AParams.Get(WardrobeSlots[I],''));Changed:=True;
   end;
   if Changed then begin FWardrobePanel.Refresh;ClothingChanged(nil) end;
+  D:=AParams.Find('garment');
+  if D is TJSONObject then begin
+    P:=ReadRiderGarment(TJSONObject(D),AvatarGarment);SaveAvatarGarment(P);
+    if FResultBike<>nil then ApplyAvatarGarment(FResultBike.TripoRider);
+    RefreshGarment;
+  end;
+  if AParams.Get('pull_jersey',False)then ClickGarment(FGarmentButtons[3]);
+  if AParams.Get('rearrange_folds',False)then ClickGarment(FGarmentButtons[2]);
   FSection:=2;LayoutSections;McpFillStatus(AResult);AResult.Add('ok',True);
+  AResult.Add('garment',WriteRiderGarment(AvatarGarment));
 end;
 
 procedure TBikeFitPage.McpCamera(AParams:TJSONObject;AResult:TJSONObject);
@@ -2729,6 +2797,9 @@ var S,W,TabW:Single;I:Integer;
   begin
     if B=nil then Exit;C:=B.Parent;C.Exists:=FSection=Section;
     C.Anchor(vpTop,-(Top+Index*38)/S);C.Height:=34/S;
+    { ScrollView draws its scrollbar over the content. Reserve its width so
+      the rightmost body buttons remain fully visible and clickable. }
+    if Section=1 then C.Border.Right:=10+FBodyRows.EffectiveScrollBarWidth;
     for J:=0 to C.ControlsCount-1 do
       if C.Controls[J] is TCastleLabel then begin
         TCastleLabel(C.Controls[J]).FontScale:=1;TCastleLabel(C.Controls[J]).FontSize:=14/S;
@@ -2791,12 +2862,15 @@ begin
   Row(FBtnSeatHDown,0,0,224);Row(FBtnSeatODown,0,1,224);
   Row(FBtnSpacersDown,0,2,224);Row(FBtnStemDown,0,3,224);
   FBodyRows.Exists:=FSection=1;
+  FBodyRows.Name:='RiderBodyRows';
   FBodyRows.Border.Top:=92/S;FBodyRows.Border.Bottom:=158/S;
-  FBodyRows.ScrollArea.Height:=350/S;
+  FBodyRows.ScrollArea.Height:=540/S;
   Row(FBtnSexDown,1,0,4);Row(FBtnHeightDown,1,1,4);
   Row(FBtnBulkDown,1,2,4);Row(FBtnBellyDown,1,3,4);
   Row(FBtnInseamDown,1,4,4);Row(FBtnArmDown,1,5,4);
-  Row(FBtnHeadDown,1,6,4);Row(FBtnKneeDown,1,7,4);Row(FBtnAnkleDown,1,8,4);
+  Row(FBtnHeadDown,1,6,4);
+  for I:=0 to 4 do Row(FDimensionDown[I],1,7+I,4);
+  Row(FBtnKneeDown,1,12,4);Row(FBtnAnkleDown,1,13,4);
   for I:=0 to High(FValueButtons)do if FValueButtons[I]<>nil then begin
     FValueButtons[I].Width:=74/S;FValueButtons[I].Height:=28/S;FValueButtons[I].FontScale:=1;
     FValueButtons[I].FontSize:=14/S;FValueButtons[I].Anchor(hpRight,-38/S);
@@ -2827,7 +2901,7 @@ begin
   FLblEffort.FontScale:=1;FLblEffort.FontSize:=16/S;
   FAppearanceRows.Exists:=FSection=2;
   FAppearanceRows.Border.Top:=92/S;FAppearanceRows.Border.Bottom:=106/S;
-  FAppearanceRows.ScrollArea.Height:=744/S;
+  FAppearanceRows.ScrollArea.Height:=844/S;
   FWardrobePanel.WidthFraction:=0;FWardrobePanel.Width:=W-20;
   FWardrobePanel.Anchor(hpMiddle);FWardrobePanel.Anchor(vpTop,-116/S);FWardrobePanel.Resize;
   FHairBox.Width:=W-20;FHairBox.Height:=104/S;
@@ -2839,7 +2913,13 @@ begin
   FHairSelect.Caption:=MenuSummary(UiText('Head editor'),FHairSelect.Font,
     (FHairSelect.Width-122/S)*UIScale,2);
   FDyeStrip.Width:=W-20;FDyeStrip.Height:=266/S;
-  FDyeStrip.Anchor(vpTop,-470/S);
+  for I:=0 to 3 do begin
+    FGarmentButtons[I].Width:=(W-28)/2;FGarmentButtons[I].Height:=38/S;
+    FGarmentButtons[I].FontScale:=1;FGarmentButtons[I].FontSize:=13/S;
+    FGarmentButtons[I].Anchor(hpLeft,10+(I mod 2)*(W-12)/2);
+    FGarmentButtons[I].Anchor(vpTop,-(468+(I div 2)*44)/S);
+  end;
+  FDyeStrip.Anchor(vpTop,-570/S);
   for I:=0 to High(FDyeBtns)do begin
     FDyeBtns[I].Width:=(W-40)/2;FDyeBtns[I].Height:=40/S;
     FDyeBtns[I].FontScale:=1;FDyeBtns[I].FontSize:=14/S;
@@ -2853,7 +2933,7 @@ begin
     FBikeControls.Exists:=False;FEffortControls.Exists:=False;
     FFitOverlay.Exists:=False;
     FBtnKneeDown.Parent.Exists:=False;FBtnAnkleDown.Parent.Exists:=False;
-    FBodyRows.ScrollArea.Height:=278/S;
+    FBodyRows.ScrollArea.Height:=464/S;
     FDyeBtns[7].Exists:=False;FDyeBtns[8].Exists:=False;
   end else begin
     FSectionButtons[0].Exists:=True;FDyeBtns[7].Exists:=True;FDyeBtns[8].Exists:=True;
@@ -3065,6 +3145,8 @@ begin
   Result.HeightCm:=FFitHeightCm;Result.InseamCm:=FFitInseamCm;
   Result.WeightKg:=FFitWeightKg;Result.Composition:=FFitComposition;
   Result.ArmLengthCm:=FFitArmCm;Result.HeadShape:=FFitHead;
+  Result.PelvisWidth:=FFitDimensions[0];Result.ShoulderWidth:=FFitDimensions[1];
+  Result.WaistSize:=FFitDimensions[2];Result.ThighSize:=FFitDimensions[3];Result.CalfSize:=FFitDimensions[4];
   Result:=NormalizeRiderBody(Result);
 end;
 
@@ -3075,6 +3157,8 @@ begin
   FFitSex:=P.Sex;FFitHeightCm:=P.HeightCm;FFitInseamCm:=P.InseamCm;
   FFitWeightKg:=P.WeightKg;FFitComposition:=P.Composition;
   FFitArmCm:=P.ArmLengthCm;FFitHead:=P.HeadShape;
+  FFitDimensions[0]:=P.PelvisWidth;FFitDimensions[1]:=P.ShoulderWidth;
+  FFitDimensions[2]:=P.WaistSize;FFitDimensions[3]:=P.ThighSize;FFitDimensions[4]:=P.CalfSize;
 end;
 
 procedure TBikeFitPage.SeedRiderShapeFromBike;
@@ -3084,6 +3168,7 @@ begin
 end;
 
 procedure TBikeFitPage.ClickBodyParameter(Sender:TObject);
+const DimensionBounds:array[0..4]of Single=(0.18,0.14,0.20,0.18,0.18);
 var TagValue,Direction:Integer;
 begin
   TagValue:=TComponent(Sender).Tag;Direction:=Sign(TagValue);
@@ -3091,6 +3176,8 @@ begin
     1:FFitSex:=EnsureRange(FFitSex+Direction*0.05,0,1);
     2:FFitArmCm:=EnsureRange(RiderBodyArmCm(CurrentBody)+Direction,FFitHeightCm*0.24,FFitHeightCm*0.40);
     3:FFitHead:=EnsureRange(FFitHead+Direction*0.05,0,1);
+    4..8:FFitDimensions[Abs(TagValue)-4]:=EnsureRange(FFitDimensions[Abs(TagValue)-4]+Direction*0.02,
+      -DimensionBounds[Abs(TagValue)-4],DimensionBounds[Abs(TagValue)-4]);
   end;
   ApplyRiderShapeToPreview;UpdateLabels;
 end;
@@ -3101,6 +3188,7 @@ begin
   FAutoFitStatus:=0;
   SeedRiderShapeFromBike;
   FResultBike.BodyParameters:=CurrentBody;
+  ApplyAvatarGarment(FResultBike.TripoRider);
   LiveFitChanged;
 end;
 
@@ -3565,6 +3653,7 @@ begin
     0:V:=FFitSeatExt;1:V:=FFitSaddleOff;2:V:=FFitSpacers;3:V:=FFitStem;
     4:V:=FFitHeightCm;5:V:=FFitInseamCm;6:V:=FFitWeightKg;7:V:=FFitComposition*100;
     10:V:=FFitSex*100;11:V:=FFitArmCm;12:V:=FFitHead*100;
+    13..17:V:=FFitDimensions[FValueIndex-13]*100;
     8:V:=FFitKneeFlare;else V:=FFitAnkleFlex;
   end;
   FValuePopup:=TMenuDialog.Create(FUiOwner);FValuePopup.PreferredWidth:=360;FValuePopup.PreferredHeight:=240;
@@ -3577,6 +3666,7 @@ begin
   FValuePopup.Show(Container);FValueEdit.Focused:=True;
 end;
 procedure TBikeFitPage.ApplyValue(Sender:TObject);
+const DimensionBounds:array[0..4]of Single=(0.18,0.14,0.20,0.18,0.18);
 var V:Single;FS:TFormatSettings;
 begin
   FS:=DefaultFormatSettings;FS.DecimalSeparator:='.';
@@ -3588,6 +3678,7 @@ begin
     4:FFitHeightCm:=EnsureRange(V,130,220);5:FFitInseamCm:=V;
     6:FFitWeightKg:=EnsureRange(V,35,180);7:FFitComposition:=EnsureRange(V/100,0,1);
     10:FFitSex:=EnsureRange(V/100,0,1);11:FFitArmCm:=V;12:FFitHead:=EnsureRange(V/100,0,1);
+    13..17:FFitDimensions[FValueIndex-13]:=EnsureRange(V/100,-DimensionBounds[FValueIndex-13],DimensionBounds[FValueIndex-13]);
     8:FFitKneeFlare:=EnsureRange(V,-0.5,0.5);9:FFitAnkleFlex:=EnsureRange(V,0,40);
   end;
   FFitInited:=True;ApplyFitToPreview;UpdateLabels;LiveFitChanged;CancelValue(nil);

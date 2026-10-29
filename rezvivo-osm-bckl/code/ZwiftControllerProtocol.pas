@@ -5,11 +5,11 @@
   Current firmware/field-3 format and plaintext handshake:
   https://github.com/OpenBikeControl/bikecontrol/tree/main/lib/bluetooth/devices/zwift
   This is an independent bounded protobuf decoder, not a firmware unlocker.
-  Early encrypted Play firmware is deliberately rejected, never guessed. }
+  Legacy encrypted firmware uses authenticated session decryption. }
 unit ZwiftControllerProtocol;
 {$mode objfpc}{$H+}
 interface
-uses SysUtils, TrainerData, GameSteeringInput;
+uses SysUtils, TrainerData, GameSteeringInput, ZwiftSessionCrypto;
 const
   ZwiftServiceUUID='00000001-19ca-4651-86e5-fa29dcdd09d1';
   ZwiftRideServiceUUID='0000fc82-0000-1000-8000-00805f9b34fb';
@@ -23,24 +23,52 @@ type
     FEdge: TSteeringEdge;
     FSerial: Cardinal;
     FDirection: ShortInt;
+    FShiftUp,FShiftDown:Boolean;
+    FJournal:TTrainerDataRecord;
+    FCrypto:TZwiftSessionCrypto;
+    FEncryptedRequired:Boolean;
+    function ParsePlain(const Bytes:TBytes;out Data:TTrainerDataRecord):Boolean;
+    procedure RecordShift(Direction:ShortInt);
   public
     procedure Reset;
+    constructor Create;
+    destructor Destroy;override;
+    function StartEncryptedHandshake:TBytes;
+    function AcceptHandshake(const Bytes:TBytes):Boolean;
     function Parse(const Bytes: TBytes; out Data: TTrainerDataRecord): Boolean;
   end;
 function IsZwiftControllerName(const Name: String): Boolean;
-function ZwiftHandshakeRequest: TBytes;
+function ZwiftControllerLocked(const Bytes:TBytes):Boolean;
+function ZwiftHandshakeRequest(const Name:String=''): TBytes;
 function ZwiftHandshakeReply(const Bytes: TBytes): TZwiftHandshake;
 implementation
 uses Math;
+var ControllerGeneration:LongInt=0;
+function ZwiftControllerLocked(const Bytes:TBytes):Boolean;
+begin
+  Result:=(Length(Bytes)=5)and(Bytes[0]=$FF)and(Bytes[1]=$05)and
+    (Bytes[2]=0)and(Bytes[3]in[$EA,$FA])and(Bytes[4]=$05);
+end;
 function IsZwiftControllerName(const Name: String): Boolean;
 var N: String;
 begin
   N:=UpperCase(Trim(Name));
   Result:=(Pos('ZWIFT PLAY',N)=1) or (Pos('ZWIFT CLICK',N)=1) or
-    (Pos('ZWIFT RIDE',N)=1) or (N='ZWIFT SF2') or (N='ZWIFT RC1') or (N='ZWIFT BC1');
+    (Pos('ZWIFT RIDE',N)=1) or (Pos('ZWIFT SF2',N)=1) or
+    (Pos('ZWIFT RC1',N)=1) or (Pos('ZWIFT BC1',N)=1) or
+    (Pos('ZWIFT CLICK',N)=1) or (Pos('ZWIFT BC2',N)=1);
 end;
-function ZwiftHandshakeRequest: TBytes;
-begin Result:=TBytes.Create($52,$69,$64,$65,$4f,$6e) end;
+function ZwiftHandshakeRequest(const Name:String): TBytes;
+var N:String;
+begin
+  Result:=TBytes.Create($52,$69,$64,$65,$4f,$6e);N:=UpperCase(Name);
+  if(Pos('CLICK',N)>0)or(Pos('BC2',N)>0)or(Pos('BC1',N)>0)then begin
+    SetLength(Result,8);Result[6]:=1;Result[7]:=3;
+    if(Pos('V2',N)>0)or(Pos('BC2',N)>0)then Result[6]:=2;
+  end else if(Pos('PLAY',N)>0)or(Pos('RC1',N)>0)then begin
+    SetLength(Result,8);Result[6]:=1;Result[7]:=4;
+  end;
+end;
 function ZwiftHandshakeReply(const Bytes: TBytes): TZwiftHandshake;
 var I: Integer; Header: TBytes;
 begin
@@ -108,12 +136,57 @@ begin
   end;
   Result:=HaveValue;
 end;
+constructor TZwiftControllerParser.Create;
+begin inherited;Reset end;
 procedure TZwiftControllerParser.Reset;
-begin FEdge.Reset; FSerial:=0; FDirection:=0 end;
-function TZwiftControllerParser.Parse(const Bytes:TBytes; out Data:TTrainerDataRecord):Boolean;
+begin
+  FreeAndNil(FCrypto);FEncryptedRequired:=False;
+  FEdge.Reset;FSerial:=0;FDirection:=0;FShiftUp:=False;FShiftDown:=False;
+  FJournal:=Default(TTrainerDataRecord);
+  FJournal.ControllerGeneration:=Cardinal(InterlockedIncrement(ControllerGeneration));
+end;
+destructor TZwiftControllerParser.Destroy;
+begin FCrypto.Free;inherited end;
+function TZwiftControllerParser.StartEncryptedHandshake:TBytes;
+begin
+  FEncryptedRequired:=True;
+  if FCrypto=nil then FCrypto:=TZwiftSessionCrypto.Create;
+  Result:=FCrypto.BeginHandshake;
+end;
+function TZwiftControllerParser.AcceptHandshake(const Bytes:TBytes):Boolean;
+begin
+  Result:=False;
+  case ZwiftHandshakeReply(Bytes)of
+    zhPlaintext:Result:=not FEncryptedRequired;
+    zhEncrypted:begin
+      FEncryptedRequired:=True;
+      if FCrypto<>nil then Result:=FCrypto.CompleteHandshake(Bytes);
+    end;
+  end;
+end;
+function TZwiftControllerParser.Parse(const Bytes:TBytes;out Data:TTrainerDataRecord):Boolean;
+var Plain:TBytes;
+begin
+  Data:=Default(TTrainerDataRecord);
+  if FEncryptedRequired then begin
+    Result:=(FCrypto<>nil)and FCrypto.Decrypt(Bytes,Plain);
+    if Result then Result:=ParsePlain(Plain,Data);
+  end else Result:=ParsePlain(Bytes,Data);
+end;
+procedure TZwiftControllerParser.RecordShift(Direction:ShortInt);
+begin
+  if FJournal.ControllerSerial=High(Cardinal) then begin
+    FJournal.ControllerSerial:=0;
+    FJournal.ControllerGeneration:=Cardinal(InterlockedIncrement(ControllerGeneration));
+  end;
+  FJournal.ControllerActions[FJournal.ControllerSerial mod 16]:=Direction;
+  Inc(FJournal.ControllerSerial);
+end;
+function TZwiftControllerParser.ParsePlain(const Bytes:TBytes; out Data:TTrainerDataRecord):Boolean;
 var P,A,Z,Q,A2,Z2,Location,Turn:Integer; N,W,V,N2,W2,V2:Cardinal;
   Seen: set of 0..9; Values:array[0..9] of Cardinal;
   Mask:Cardinal; Axis,Value,AnalogAxis:Single; HaveMap,HaveAnalog,Left,Right:Boolean;
+  Up,Down,HaveShift:Boolean;
 begin
   Result:=False; Data:=Default(TTrainerDataRecord);
   if (Length(Bytes)<3) or (Length(Bytes)>512) then Exit;
@@ -157,7 +230,7 @@ begin
       end;
     end;
   end;
-  Axis:=0; Left:=False; Right:=False;
+  Axis:=0;Left:=False;Right:=False;Up:=False;Down:=False;HaveShift:=False;
   case Bytes[0] of
     $07: begin
       if not (1 in Seen) then Exit;
@@ -169,18 +242,34 @@ begin
         Left:=(3 in Seen) and (Values[3]=0);
         Right:=(4 in Seen) and (Values[4]=0);
       end;
+      HaveShift:=7 in Seen;
+      if HaveShift and(Values[7]=0) then begin
+        Up:=Values[1]=0;Down:=not Up;
+      end;
       if not (8 in Seen) and not ((3 in Seen) and (4 in Seen)) then Exit;
     end;
     $23: begin
       if not HaveMap and not HaveAnalog then Exit;
-      if HaveMap then begin Left:=(Mask and 1)=0; Right:=(Mask and 4)=0 end;
+      if HaveMap then begin
+        Left:=(Mask and 1)=0;Right:=(Mask and 4)=0;
+        { Sequential shifting: both paddles on the left easier, both on the
+          right harder. Also covers Play 2 and Click V2's single +/- buttons. }
+        Down:=(Mask and $600)<>$600;Up:=(Mask and $6000)<>$6000;
+        HaveShift:=True;
+      end;
       Axis:=EnsureRange(AnalogAxis,-1,1);
     end;
     $37: begin
       if not ((1 in Seen) and (2 in Seen)) then Exit;
       { Click: minus selects left, plus selects right. }
       Left:=Values[2]=0; Right:=Values[1]=0;
+      Up:=Right;Down:=Left;HaveShift:=True;
     end;
+  end;
+  if HaveShift then begin
+    if Up and not Down and not FShiftUp then RecordShift(1);
+    if Down and not Up and not FShiftDown then RecordShift(-1);
+    FShiftUp:=Up;FShiftDown:=Down;
   end;
   if Left or Right then Axis:=Ord(Left)-Ord(Right);
   Turn:=FEdge.Update(Axis);
@@ -196,6 +285,13 @@ begin
   Data.SteeringTurnSerial:=FSerial;
   Data.SteeringTurnDirection:=FDirection;
   MarkTrainerMetric(Data,tmSteering);
+  if HaveShift then begin
+    Data.ControllerGeneration:=FJournal.ControllerGeneration;
+    Data.ControllerSerial:=FJournal.ControllerSerial;
+    Data.ControllerShiftOnly:=Bytes[0]=$37;
+    Data.ControllerActions:=FJournal.ControllerActions;
+    MarkTrainerMetric(Data,tmController);
+  end;
   Result:=True;
 end;
 end.

@@ -32,7 +32,7 @@ type
 implementation
 uses Math, SyncObjs, md5, jsonparser, UiTranslations, GameUserData,
   GameRouteLibraryData, GltfCore, AvatarGlbIO, AvatarWardrobe, AvatarClothMotion, X3DNodes,
-  RiderHair, RiderOcclusion, RiderBodyParameters;
+  RiderHair, RiderOcclusion, RiderBodyParameters, RiderGarmentState;
 const
   SlotTitles:array[0..4]of string=('Top','Bottom','Outer layer','Footwear','Headwear');
   OptionCount:array[0..4]of Integer=(3,3,5,4,4);
@@ -328,6 +328,7 @@ var O:TJSONObject;I:Integer;
 begin
   O:=TJSONObject.Create;Result.Add('clothing',O);
   for I:=0 to High(WardrobeSlots)do O.Add(WardrobeSlots[I],WardrobeSelection(I));
+  if(Rider<>nil)and(Rider.Garment<>nil)then O.Add('garment',WriteRiderGarment(Rider.Garment.Garment));
   if(Rider<>nil)and(Rider.AppearanceAddon is TWardrobeAppearance)then
   begin
     O.Add('surfaces',TWardrobeAppearance(Rider.AppearanceAddon).Motion.SurfaceCount);

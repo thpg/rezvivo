@@ -28,9 +28,12 @@ type
     FGradePanel:TMenuPanel;
     FGradeTitle,FGradeValue,FGradeHint:TCastleLabel;
     FGradeSlider:TCastleIntegerSlider;
+    FGearCheck:TCastleCheckbox;
+    FGearStatus:TCastleLabel;
     FGradeSavePending:Boolean;
     FGradeSaveDelay:Single;
     procedure GradeChanged(Sender:TObject);
+    procedure GearChanged(Sender:TObject);
     procedure RefreshGrade;
     procedure SaveGrade;
     procedure Layout;
@@ -40,6 +43,7 @@ type
     procedure ClickDisconnect(Sender:TObject);
     procedure ClickCenterSteering(Sender:TObject);
     procedure ClickSteeringCompanion(Sender:TObject);
+    procedure ClickGearController(Sender:TObject);
     procedure ClickScan(Sender:TObject);
     procedure ClickAdvanced(Sender:TObject);
     procedure WheelChanged(Sender:TObject);
@@ -104,6 +108,13 @@ begin
   FGradeHint:=TMenuLabel.Create(Self);FGradeHint.Name:='TrainerGradeHint';FGradeHint.Color:=MenuMuted;
   BindUiText(FGradeHint,'100%: full gradient. Below 100%: cap steep slopes at 8%, then scale down. 0%: flat. Ride physics and workout power stay unchanged.');
   FGradePanel.InsertFront(FGradeHint);RefreshGrade;
+  FGearCheck:=TCastleCheckbox.Create(Self);FGearCheck.Name:='VirtualGearingEnabled';
+  FGearCheck.TextColor:=White;FGearCheck.CheckboxColor:=White;
+  BindUiText(FGearCheck,'Virtual shifting (Click / Play / Ride)');
+  FGearCheck.Checked:=Settings.GetVirtualGearingEnabled;FGearCheck.OnChange:=@GearChanged;
+  FGradePanel.InsertFront(FGearCheck);
+  FGearStatus:=TMenuLabel.Create(Self);FGearStatus.Color:=MenuMuted;
+  FGradePanel.InsertFront(FGearStatus);
   FStatus:=TMenuLabel.Create(Self);FStatus.Color:=White;InsertFront(FStatus);
   FAdapters:=TMenuFlow.Create(Self);FAdapters.Spacing:=16;FAdapters.Exists:=False;InsertFront(FAdapters);
   if DeviceService<>nil then for I:=0 to DeviceService.Manager.ProviderCount-1 do begin
@@ -172,7 +183,11 @@ begin
   FGradeSlider.Anchor(hpLeft,16/S);FGradeSlider.Anchor(vpTop,-H);
   H:=H+34/S;FGradeHint.FontSize:=13/S;FGradeHint.MaxWidth:=FGradePanel.Width-32/S;
   FGradeHint.Anchor(hpLeft,16/S);FGradeHint.Anchor(vpTop,-H);
-  FGradePanel.Height:=H+FGradeHint.EffectiveHeight+12/S;Y:=Y+FGradePanel.Height+12/S;
+  H:=H+FGradeHint.EffectiveHeight+12/S;
+  FGearCheck.FontSize:=15/S;FGearCheck.Anchor(hpLeft,16/S);FGearCheck.Anchor(vpTop,-H);
+  H:=H+30/S;FGearStatus.FontSize:=13/S;FGearStatus.MaxWidth:=FGradePanel.Width-32/S;
+  FGearStatus.Anchor(hpLeft,16/S);FGearStatus.Anchor(vpTop,-H);
+  FGradePanel.Height:=H+FGearStatus.EffectiveHeight+12/S;Y:=Y+FGradePanel.Height+12/S;
   FStatus.FontSize:=17/S;FStatus.MaxWidth:=EffectiveWidth-32/S;FStatus.Anchor(hpLeft,16/S);FStatus.Anchor(vpTop,-Y);
   FScroll.Border.Top:=Y+FStatus.EffectiveHeight+16/S;
   FEmpty.Anchor(vpTop,-FScroll.Border.Top);
@@ -202,6 +217,7 @@ begin
     if not VisibleDevice(E) then Continue;Inc(Count);
     Sig:=Sig+E.DeviceInfo.Address+IntToStr(Ord(E.ConnectionState))+IntToStr(E.Sensors.Count)+
       BoolToStr(DeviceService.IsSteeringCompanion(E),True)+
+      BoolToStr(DeviceService.IsGearController(E),True)+
       BoolToStr(DeviceService.CanPairSteering(E),True)+';';end;
   if Sig<>FSignature then begin FSignature:=Sig;Rebuild;end;
   FEmpty.Exists:=(Count=0)and not FAdvanced.Exists and not Settings.GetSimulationEnabled;
@@ -273,10 +289,26 @@ begin
       else BindUiText(B,'Add to steering pair');
       B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
     end;
-    Y:=Y+138/S;
+    if IsZwiftControllerName(E.DeviceInfo.Name)then begin
+      B:=TMenuButton.Create(Card);B.Name:='UseGears'+IntToStr(I);B.Tag:=I;
+      B.OnClick:=@ClickGearController;B.FontSize:=14/S;
+      if DeviceService.IsGearController(E)then BindUiText(B,'Stop using for shifting')
+      else BindUiText(B,'Use for shifting');
+      B.Anchor(hpLeft,14/S);B.Anchor(vpTop,-80/S);Card.InsertFront(B);
+      Card.Height:=168/S;
+    end;
+    Y:=Y+Card.Height+14/S;
   end;
   FContent.Width:=W;FContent.Height:=Max(100,Y);FScroll.ScrollArea.Height:=FContent.Height;
   if FSensorPanel<>nil then TSensorPanel(FSensorPanel).Rebuild;
+end;
+procedure TDevicesPage.ClickGearController(Sender:TObject);
+var I:Integer;
+begin
+  I:=TComponent(Sender).Tag;
+  if(DeviceService=nil)or(I<0)or(I>=DeviceService.Devices.Count)then Exit;
+  DeviceService.SelectGearController(DeviceService.Devices[I]);
+  FSignature:='#refresh';Refresh;
 end;
 procedure TDevicesPage.ClickCenterSteering(Sender:TObject);
 var I:Integer;
@@ -349,9 +381,26 @@ begin
 end;
 
 procedure TDevicesPage.RefreshGrade;
+var OldGearStatus:String;
 begin
   if not FGradeSavePending then FGradeSlider.Value:=Settings.GetTrainerGradeSensitivity;
   FGradeValue.Caption:=IntToStr(FGradeSlider.Value)+'%';
+  if FGearCheck<>nil then begin
+    OldGearStatus:=FGearStatus.Caption;
+    FGearCheck.Checked:=Settings.GetVirtualGearingEnabled;
+    if DeviceService<>nil then case Ord(DeviceService.GearingBackend)of
+      0:BindUiText(FGearStatus,'Virtual shifting is off.');
+      1:BindUiText(FGearStatus,'Native trainer gears. Left: easier, right: harder. ERG keeps workout power.');
+      2:BindUiText(FGearStatus,'Calculated load via target power. A live cadence sensor is required. Trainer response may vary.');
+      else BindUiText(FGearStatus,'Connect a controllable trainer. Click V2 and newer Ride firmware may need activation in Zwift.');
+    end;
+    if FGearStatus.Caption<>OldGearStatus then Layout;
+  end;
+end;
+procedure TDevicesPage.GearChanged(Sender:TObject);
+begin
+  Settings.SetVirtualGearingEnabled(FGearCheck.Checked);
+  RefreshGrade;Layout;
 end;
 
 procedure TDevicesPage.GradeChanged(Sender:TObject);

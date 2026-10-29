@@ -96,7 +96,7 @@ procedure ReorientBikeRoot(Root: TX3DRootNode);
 implementation
 
 
-uses GameRiderWardrobe, RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
+uses GameRiderGarment, RiderGarmentState, GameRiderWardrobe, RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
   DebugLog, AppSettings, GameBikeAutoFit;
@@ -549,6 +549,7 @@ begin
       Sec.Strings['path'] := Path;
       if UseProfile then begin
         Sec.Delete('body');Sec.Add('body',WriteRiderBody(AvatarBodyParameters));
+        Sec.Delete('garment');Sec.Add('garment',WriteRiderGarment(AvatarGarment));
       end;
       if Sec.Find('showRider') = nil then
         Sec.Add('showRider', True)

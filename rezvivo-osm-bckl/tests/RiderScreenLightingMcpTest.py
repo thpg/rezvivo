@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--executable', default='third_person_navigation.exe')
+    parser.add_argument('--msaa', type=int, default=0)
     parser.add_argument('--performance', action='store_true')
     parser.add_argument('--gate', action='store_true')
     parser.add_argument('--gate-only', action='store_true')
@@ -29,9 +31,9 @@ def main():
     args.gate = args.gate or args.gate_only
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=True)
     rows = []
-    session = GameSession(ROOT, out/'profile', dict(fps_limit=60, msaa=0,
+    session = GameSession(ROOT, out/'profile', dict(fps_limit=60, msaa=args.msaa,
         shadow_size=2048, shadow_filter=4, grass=0, vegetation_quality=0,
-        world_shadow_backend=3, rtx_reflections=0, cinematic_softening=0))
+        world_shadow_backend=3, rtx_reflections=0, cinematic_softening=0), executable=args.executable)
     session.env['REZVIVO_TEST_HIDDEN'] = '1'
     if args.gate:
         workouts=session.out/'accounts/0/workouts'; workouts.mkdir(exist_ok=True)
@@ -78,7 +80,7 @@ def main():
             (out/'results.json').write_text(json.dumps(rows, indent=2))
 
         sources = {}
-        for effect in ['RiderGroundShade', 'RiderSkinSurface', 'RiderProceduralFabric']:
+        for effect in ['RiderGroundShade', 'RiderSkinSurface', 'RiderProceduralFabric', 'RiderSkyIrradiance']:
             path=out/(effect+'.fs')
             app.call('perf.rider_render', shader_effect=effect, shader_stage='fragment', save_shader_file=str(path))
             sources[effect]=path.read_text(encoding='utf-8-sig')
@@ -96,12 +98,48 @@ def main():
             masks[effect]=mask
             install(effect, sources[effect], 'restored')
 
+        if not args.gate_only:
+            # Regression for the apparent inverted relief in shade: retain the
+            # same sun visibility, geometry and normal field. Ablate only the
+            # cloth sky hook to reproduce the old full-strength hard GGX sky.
+            fabric=sources['RiderProceduralFabric']; sky=sources['RiderSkyIrradiance']
+            hook='/* PLUG: rider_environment_surface (diff,spec,diffuseColor,N,V,irradiance) */'
+            assert hook in sky
+            install('RiderProceduralFabric',fabric+'\nvoid PLUG_fragment_end(inout vec4 c){if(rfRegion>1.5 && rfRegion<2.5)c=vec4(1,0,1,1);}\n','bibs-mask')
+            image=capture('bibs-mask')
+            bibs=(image[:,:,0]>245)&(image[:,:,1]<5)&(image[:,:,2]>245)
+            bibs=np.asarray(Image.fromarray(bibs.astype('uint8')*255).filter(ImageFilter.MinFilter(7)))>0
+            assert bibs.sum()>1000, int(bibs.sum())
+            install('RiderProceduralFabric',fabric,'bibs-restored')
+            install('RiderGroundShade','void PLUG_light_scale(inout float s,const vec3 N,const vec3 L){s=0.0;}','shade')
+            corrected=capture('cloth-shade-corrected')
+            install('RiderSkyIrradiance',sky.replace(hook,''),'old-ggx-sky')
+            old=capture('cloth-shade-old-ggx')
+            install('RiderSkyIrradiance',sky.replace('light=(diff+spec)', 'light=(diff+vec3(0.0))'),'diffuse-reference')
+            diffuse=capture('cloth-shade-diffuse-reference')
+            old_excess=float((old[bibs]-diffuse[bibs]).mean())
+            corrected_excess=float((corrected[bibs]-diffuse[bibs]).mean())
+            row=dict(test='cloth-sky-model',pixels=int(bibs.sum()),
+                old_sky_excess=old_excess,corrected_sky_excess=corrected_excess)
+            rows.append(row);save()
+            assert old_excess>5 and 0<corrected_excess<old_excess*.70, row
+            install('RiderSkyIrradiance',sky,'sky-restored')
+
         for tone in ([] if args.gate_only else [False, True]):
             app.call('fx.configure', enabled=True, tone=tone, bloom=False, fog=False, softening=0)
+            previous_reference=None
             for visibility in [0, .5, 1]:
                 app.call('perf.set', shadows=False)
                 install('RiderGroundShade', 'void PLUG_light_scale(inout float scale,const vec3 N,const vec3 L){scale*='+f'{visibility:.2f}'+';}\n', 'sun-reference')
                 reference=capture(f'reference-tone{int(tone)}-sun{visibility}')
+                if previous_reference is not None:
+                    for effect, mask in masks.items():
+                        delta=reference[mask]-previous_reference[mask]
+                        row=dict(test='monotonic-sun',tone=tone,sun=visibility,
+                            material=effect,darker_fraction=float((delta < -2).mean()))
+                        rows.append(row);save()
+                        assert row['darker_fraction']<.001, row
+                previous_reference=reference
                 install('RiderGroundShade', sun.replace(sample, f'{1-visibility:.2f}'), 'controlled-visibility')
                 app.call('perf.set', shadows=True)
                 for cache in [0, 1]:
@@ -166,6 +204,8 @@ def main():
         app.setting('GraphicsMSAA', 4)
         app.setting('GraphicsRtxReflections', 1)
         app.call('app.fps_mode', mode='settings')
+        # Leave the anchored diagnostic viewpoint when resuming the real ride.
+        app.call('camera.chase', distance=4, height=2, aim_height=1.1)
         app.call('sim.play'); app.call('ride.start'); time.sleep(2)
         app.call('app.screenshot',path=str(out/'ride.png'),inline=False)
         assert not app.call('perf.state')['rtx']['failed']

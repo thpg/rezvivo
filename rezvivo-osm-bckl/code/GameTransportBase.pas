@@ -39,6 +39,7 @@ type
     FExecutingGeneration: Cardinal;
     FLastControlFailure: QWord;
     FDisconnecting: Boolean;
+    FNativeGearingActive: Boolean;
     FLastTelemetryTick: QWord;
     function ExecuteControl(const Command: TTrainerCommand): TTrainerControlState;
   protected
@@ -65,7 +66,8 @@ type
     { Commands are posted from UI; only the owned worker calls the synchronous
       transport methods below. Connect/disconnect share the I/O lock. }
     function QueueControl(Kind: TTrainerCommandKind; Value: Single = 0;
-      Wind: Single = 0; RiderWeight: Single = 75; BikeWeight: Single = 10): Boolean;
+      Wind: Single = 0; RiderWeight: Single = 75; BikeWeight: Single = 10;
+      GearRatio: Single = 0): Boolean;
     procedure CancelControl;
     procedure PrepareDisconnect;
     procedure ShutdownControl;
@@ -89,6 +91,7 @@ type
     function SetSimulation(Grade: Single; WindSpeed: Single = 0;
       RiderWeight: Single = 75; BikeWeight: Single = 10): Boolean; virtual; abstract;
     function Start: Boolean; virtual; abstract;
+    function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean; virtual;
     function Stop: Boolean; virtual; abstract;
     function Pause: Boolean; virtual; abstract;
     function Reset: Boolean; virtual; abstract;
@@ -203,6 +206,7 @@ begin
     FControlAck.NewConnection;
     FFECAck.NewConnection;
     FHasControl := False;
+    FNativeGearingActive := False;
     FLastControlFailure := 0;
   end;
 
@@ -218,10 +222,10 @@ begin
 end;
 
 function TTransportSession.QueueControl(Kind: TTrainerCommandKind; Value: Single;
-  Wind: Single; RiderWeight: Single; BikeWeight: Single): Boolean;
+  Wind: Single; RiderWeight: Single; BikeWeight: Single; GearRatio: Single): Boolean;
 begin
   Result := (not FDestroying) and (not FDisconnecting) and (FConnectionState = csConnected);
-  if Result then Result := FControlQueue.Post(Kind, Value, Wind, RiderWeight, BikeWeight);
+  if Result then Result := FControlQueue.Post(Kind, Value, Wind, RiderWeight, BikeWeight,GearRatio);
 end;
 
 procedure TTransportSession.CancelControl;
@@ -335,6 +339,8 @@ begin
       Exit(FCommandResult);
     FExecutingGeneration := Command.Generation;
     FCommandResult := tcsSent;
+    if (Command.Kind=tcGearedSimulation) and not FTrainerFeatures.SupportsVirtualGearing then
+      Exit(tcsUnsupported);
     if FTrainerFeatures.Known then
       case Command.Kind of
         tcPower: if not FTrainerFeatures.SupportsPowerControl then Exit(tcsUnsupported);
@@ -356,6 +362,13 @@ begin
       FHasControl := True;
     end;
     if not FControlQueue.IsLatest(Command) then Exit;
+    { Leave native ratio mode before ERG, ordinary simulation or stop. A shift
+      and its gradient are one queue item; neither can overtake the other. }
+    if FNativeGearingActive and(Command.Kind<>tcGearedSimulation)and(Command.Kind<>tcRequest) then begin
+      if not SetGearedSimulation(0,0,Command.RiderWeight,Command.BikeWeight,0) then
+        Exit(tcsFailed);
+      FNativeGearingActive:=False;
+    end;
     Success := False;
     case Command.Kind of
       tcRequest: Success := True;
@@ -364,6 +377,11 @@ begin
       tcIncline: Success := SetIncline(Command.Value);
       tcSimulation: Success := SetSimulation(Command.Value, Command.Wind,
         Command.RiderWeight, Command.BikeWeight);
+      tcGearedSimulation: begin
+        Success:=SetGearedSimulation(Command.Value,Command.Wind,Command.RiderWeight,
+          Command.BikeWeight,Command.GearRatio);
+        if Success then FNativeGearingActive:=Command.GearRatio>0;
+      end;
       tcStart: Success := Start;
       tcStop: Success := Stop;
       tcPause: Success := Pause;
@@ -403,6 +421,9 @@ begin
   finally FLock.Leave end;
   if Assigned(FOnDataReceived) then FOnDataReceived(Self, Snapshot);
 end;
+
+function TTransportSession.SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;
+begin FCommandResult:=tcsUnsupported;Result:=False end;
 
 function TTransportSession.IsConnectionAlive: Boolean;
 begin

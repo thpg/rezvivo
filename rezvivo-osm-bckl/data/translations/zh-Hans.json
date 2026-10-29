@@ -369,5 +369,18 @@
   "+ W": "+ W",
   "Trees: textured": "树木：贴图",
   "World image cache": "世界图像缓存",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "通过重复使用远处景物的图像提高性能，但可能产生画面瑕疵。占用额外显存。默认关闭。"
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "通过重复使用远处景物的图像提高性能，但可能产生画面瑕疵。占用额外显存。默认关闭。",
+  "Jersey: snug": "骑行服：紧身",
+  "Jersey: fitted": "骑行服：合身",
+  "Jersey: relaxed": "骑行服：宽松",
+  "Length: short": "长度：短",
+  "Length: regular": "长度：标准",
+  "Length: long": "长度：长",
+  "Rearrange folds": "重新整理褶皱",
+  "Pull jersey down": "拉下衣摆",
+  "Pelvis width (%)": "骨盆宽度 (%)",
+  "Shoulder width (%)": "肩宽 (%)",
+  "Waist size (%)": "腰部围度 (%)",
+  "Thigh size (%)": "大腿围度 (%)",
+  "Calf size (%)": "小腿围度 (%)"
 }

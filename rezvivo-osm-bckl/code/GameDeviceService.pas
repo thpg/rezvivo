@@ -34,7 +34,7 @@ uses
   TrainerData, GameTransportBase, GameDeviceManager, GameTrainerControl,
   GameDeviceTypes, GameDeviceSensor, GameDeviceAssignments, GameActivitySource,
   GameDeviceSim, GameSteeringInput, GameAndroidControllerInput,
-  AppSettings, DebugLog;
+  AppSettings, DebugLog, GameVirtualGearing, GameControllerGears;
 
 type
   TSimSeekEvent = procedure(var Seconds: Double) of object;
@@ -83,6 +83,10 @@ type
 
     { Устройство для FTMS-команд управления тренажёром }
     FControlDevice: TGameDeviceEntry;
+    FVirtualGear:Integer;
+    FTrainerErgActive:Boolean;
+    FGearPrimary,FGearCompanion:String;
+    FGearCursor,FGearCompanionCursor:TControllerGearCursor;
     FAssignments: TDeviceRoleAssignments;
     FAssignmentProfileId: Int64;
     FAssignmentFile: String;
@@ -259,6 +263,14 @@ type
       Turn is an edge, never repeated while held. The ride owns its expiry. }
     function ReadSteeringInput(out Axis: Single; out Turn: Integer): Boolean;
     procedure ResetSteeringInput;
+    procedure ReadControllerGears;
+    function IsGearController(Entry:TGameDeviceEntry):Boolean;
+    procedure SelectGearController(Entry:TGameDeviceEntry);
+    procedure ShiftVirtualGear(Direction:Integer);
+    function GearingBackend:TGearingBackend;
+    procedure SetRideSimulation(Grade,Wind,RiderKg,BikeKg:Single);
+    property VirtualGear:Integer read FVirtualGear;
+    property TrainerErgActive:Boolean read FTrainerErgActive;
     function CenterSteering: Boolean;
     function HasSensor(AKind: TSensorKind): Boolean; inline;
     function HasAnySensor: Boolean;
@@ -343,6 +355,7 @@ begin
   FAssignmentProfileId := Low(Int64);
   FDevices := TGameDeviceList.Create(True);
   FControlDevice := nil;
+  FVirtualGear:=DefaultVirtualGear;
   FAutoAssign := True;
   FAutoConnect := True;
 
@@ -677,6 +690,8 @@ begin
         ' connected: ' + Entry.DisplayName);
       ClearSensorsOfDevice(Entry);
       Entry.RebuildSensors;
+      Exclude(Entry.LastData.ValidMetrics,tmController);
+      Entry.LastData.ControllerGeneration:=0;Entry.LastData.ControllerSerial:=0;
       if Device.TransportType = ttSim then
       begin
         Session := FManager.GetSession(Device.Address);
@@ -695,6 +710,12 @@ begin
       Entry.TestedNotFitness := False;
       if FAutoAssign then
         DoAutoAssign;
+      if FAssignments.Matches(drShifting,TRANSPORT_TYPE_NAMES[Device.TransportType],Device.Address)then begin
+        FGearPrimary:=Device.Address;FGearCursor:=Default(TControllerGearCursor);
+      end;
+      if FAssignments.Matches(drShiftingCompanion,TRANSPORT_TYPE_NAMES[Device.TransportType],Device.Address)then begin
+        FGearCompanion:=Device.Address;FGearCompanionCursor:=Default(TControllerGearCursor);
+      end;
     end;
     gdcsDisconnected:
     begin
@@ -980,6 +1001,7 @@ procedure TGameDeviceService.ClearSensorsOfDevice(AEntry: TGameDeviceEntry);
 var
   K: TSensorKind;
 begin
+  if (AEntry<>nil) and (FControlDevice=AEntry) then FTrainerErgActive:=False;
   if not Assigned(AEntry) or not Assigned(AEntry.Sensors) then Exit;
   if FSteeringCompanion=AEntry then begin
     FSteeringCompanion:=nil; FCompanionInput.ForgetBLE;
@@ -996,6 +1018,7 @@ end;
 procedure TGameDeviceService.DoAutoAssign;
 var
   K: TSensorKind;
+  Role:TDeviceRole;
   I: Integer;
   Entry: TGameDeviceEntry;
   S: TDeviceSensor;
@@ -1059,6 +1082,18 @@ begin
         Break;
       end;
     end;
+  { Controllers are connected explicitly, but their gear role is independent
+    from steering: a STERZO and both Play halves can be used together. }
+  for Role in[drShifting,drShiftingCompanion]do
+    if FAssignments.Selection[Role].Mode=dsmAutomatic then
+      for I:=0 to FDevices.Count-1 do begin
+        Entry:=FDevices[I];
+        if(Entry.ConnectionState=gdcsConnected)and IsZwiftControllerName(Entry.DeviceInfo.Name)and
+          not IsGearController(Entry)then begin
+          Changed:=FAssignments.Select(Role,TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],
+            Entry.DeviceInfo.Address,Entry.DeviceInfo.Name)or Changed;Break;
+        end;
+      end;
   if Changed then SaveAssignments;
   RefreshSteeringCompanion;
 end;
@@ -1085,6 +1120,7 @@ begin
   if Assigned(FManager) then
   begin
     FManager.Tick;
+    ReadControllerGears;
     if GetTickCount64-FLastHealthCheck>=1000 then
     begin FLastHealthCheck:=GetTickCount64; CheckStaleConnections end;
   end;
@@ -1413,6 +1449,7 @@ end;
 procedure TGameDeviceService.ClearAllSensors;
 var K: TSensorKind;
 begin
+  FTrainerErgActive:=False;
   FSteeringInputSensor:=nil; FSteeringInput.ForgetBLE;
   FSteeringCompanion:=nil; FCompanionInput.ForgetBLE;
   for K := Low(TSensorKind) to High(TSensorKind) do
@@ -1492,6 +1529,8 @@ begin
   end;
   Result:=FSteeringInput.Read(BLE,SteeringAxis(Angle),Serial,Direction,
     False,0,PrimaryAxis,Turn);
+  if BLE and(E<>nil)and Settings.GetVirtualGearingEnabled and
+    E.LastData.ControllerShiftOnly then begin PrimaryAxis:=0;Turn:=0 end;
 
   { Old Play controllers advertise separate addresses, and each parser starts
     its own serial at one. Consume them independently before combining axes. }
@@ -1507,6 +1546,8 @@ begin
   end;
   FCompanionInput.Read(Companion,SteeringAxis(Angle),Serial,Direction,
     False,0,CompanionAxis,CompanionTurn);
+  if Companion and Settings.GetVirtualGearingEnabled and
+    FSteeringCompanion.LastData.ControllerShiftOnly then begin CompanionAxis:=0;CompanionTurn:=0 end;
   FGamepadInput.Read(False,0,0,0,Pad,PadAxis,DummyAxis,PadTurn);
   Axis:=EnsureRange(PrimaryAxis+CompanionAxis,-1,1);
   if Abs(PadAxis)>Abs(Axis) then Axis:=PadAxis;
@@ -1540,6 +1581,96 @@ begin
   end;
   FCompanionInput.Reset(SteeringAxis(Angle),0,Serial);
   FGamepadInput.Reset(0,PadAxis,0);
+end;
+
+procedure TGameDeviceService.ReadControllerGears;
+var E,Other:TGameDeviceEntry;I:Integer;
+  procedure Consume(Entry:TGameDeviceEntry;var Address:String;var Cursor:TControllerGearCursor);
+  begin
+    if(Entry=nil)or(Entry.ConnectionState<>gdcsConnected)then begin Address:='';Exit end;
+    if Address<>Entry.DeviceInfo.Address then begin
+      Address:=Entry.DeviceInfo.Address;PrimeControllerGears(Cursor,Entry.LastData);Exit;
+    end;
+    if Settings.GetVirtualGearingEnabled and not FTrainerErgActive then
+      FVirtualGear:=ConsumeControllerGears(Cursor,Entry.LastData,FVirtualGear,VirtualGearCount)
+    else PrimeControllerGears(Cursor,Entry.LastData);
+  end;
+begin
+  E:=nil;Other:=nil;
+  for I:=0 to FDevices.Count-1 do begin
+    if FAssignments.Matches(drShifting,TRANSPORT_TYPE_NAMES[FDevices[I].DeviceInfo.TransportType],
+      FDevices[I].DeviceInfo.Address)then E:=FDevices[I];
+    if FAssignments.Matches(drShiftingCompanion,TRANSPORT_TYPE_NAMES[FDevices[I].DeviceInfo.TransportType],
+      FDevices[I].DeviceInfo.Address)then Other:=FDevices[I];
+  end;
+  Consume(E,FGearPrimary,FGearCursor);
+  Consume(Other,FGearCompanion,FGearCompanionCursor);
+end;
+
+function TGameDeviceService.IsGearController(Entry:TGameDeviceEntry):Boolean;
+begin
+  Result:=(Entry<>nil)and(
+    FAssignments.Matches(drShifting,TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],Entry.DeviceInfo.Address)or
+    FAssignments.Matches(drShiftingCompanion,TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],Entry.DeviceInfo.Address));
+end;
+
+procedure TGameDeviceService.SelectGearController(Entry:TGameDeviceEntry);
+var Role:TDeviceRole;Transport:String;
+begin
+  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or not IsZwiftControllerName(Entry.DeviceInfo.Name)then Exit;
+  RefreshAssignmentsProfile;if not FAssignmentsReady then Exit;
+  Transport:=TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType];
+  if IsGearController(Entry)then begin
+    for Role in[drShifting,drShiftingCompanion]do
+      if FAssignments.Matches(Role,Transport,Entry.DeviceInfo.Address)then FAssignments.Disable(Role);
+    for Role in[drShifting,drShiftingCompanion]do
+      if FAssignments.Selection[Role].Mode=dsmAutomatic then FAssignments.Disable(Role);
+  end else begin
+    Role:=drShifting;
+    if FAssignments.Selection[Role].Mode=dsmDevice then Role:=drShiftingCompanion;
+    FAssignments.Select(Role,Transport,Entry.DeviceInfo.Address,Entry.DeviceInfo.Name);
+  end;
+  SaveAssignments;FGearPrimary:='';FGearCompanion:='';
+  if Entry.ConnectionState in[gdcsDisconnected,gdcsError]then ConnectDevice(Entry);
+  if Assigned(FOnDevicesChanged)then FOnDevicesChanged;
+end;
+
+procedure TGameDeviceService.ShiftVirtualGear(Direction:Integer);
+begin
+  if Settings.GetVirtualGearingEnabled and not FTrainerErgActive then
+    FVirtualGear:=EnsureRange(FVirtualGear+EnsureRange(Direction,-1,1),1,VirtualGearCount);
+end;
+
+function TGameDeviceService.GearingBackend:TGearingBackend;
+var S:TTransportSession;
+begin
+  Result:=gbOff;if not Settings.GetVirtualGearingEnabled then Exit;
+  Result:=gbUnavailable;
+  if not HasControlDevice or IsSimulationActive then Exit;
+  S:=FManager.GetSession(FControlDevice.DeviceInfo.Address);if S=nil then Exit;
+  if S.TrainerFeatures.SupportsVirtualGearing then Exit(gbNative);
+  if S.TrainerFeatures.Known and S.TrainerFeatures.SupportsPowerControl then Result:=gbFTMSPower;
+end;
+
+procedure TGameDeviceService.SetRideSimulation(Grade,Wind,RiderKg,BikeKg:Single);
+var S:TTransportSession;Load:TGearingLoad;RPM:Single;
+begin
+  case GearingBackend of
+    gbNative: begin
+      S:=FManager.GetSession(FControlDevice.DeviceInfo.Address);
+      if S<>nil then S.QueueControl(tcGearedSimulation,Grade,Wind,RiderKg,BikeKg,VirtualGearRatio(FVirtualGear));
+    end;
+    gbFTMSPower: begin
+      RPM:=0;
+      if(Cadence<>nil)and Cadence.HasData and(Cadence.DataAgeSec<=3)then RPM:=Cadence.Instant;
+      Load:=CalculateGearingLoad(FVirtualGear,RPM,Grade,Wind,RiderKg,BikeKg,Settings.GetWheelCircumferenceMm/1000);
+      { Stale/absent cadence unloads the trainer. A fixed ERG target would
+        otherwise get harder as the rider stops pedalling. }
+      SetTargetPower(Round(Load.Watts));
+    end;
+    else SetSimulation(Grade,Wind,RiderKg,BikeKg);
+  end;
+  FTrainerErgActive:=False;
 end;
 
 function TGameDeviceService.Sensor(AKind: TSensorKind): TDeviceSensor;
@@ -1614,6 +1745,7 @@ begin
     else Changed := FAssignments.Select(drControllable,
       TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType], AEntry.DeviceInfo.Address,
       AEntry.DeviceInfo.Name);
+  if FControlDevice<>AEntry then FTrainerErgActive:=False;
   FControlDevice := AEntry;
   if Changed then SaveAssignments;
   if Assigned(AEntry) then
@@ -1662,8 +1794,9 @@ end;
 
 procedure TGameDeviceService.SetTargetPower(APower: Word);
 begin
-  if not HasControlDevice then Exit;
-  FManager.SetTargetPower(FControlDevice.DeviceInfo.Address, APower);
+  if not HasControlDevice then begin FTrainerErgActive:=False;Exit end;
+  if FManager.SetTargetPower(FControlDevice.DeviceInfo.Address, APower) then
+    FTrainerErgActive:=APower>0;
 end;
 
 procedure TGameDeviceService.SetResistanceLevel(ALevel: Byte);
@@ -1680,6 +1813,7 @@ end;
 
 procedure TGameDeviceService.SetSimulation(AGrade, AWindSpeed, AUserWeight, ABikeWeight: Single);
 begin
+  FTrainerErgActive:=False;
   if not HasControlDevice then Exit;
   FManager.SetSimulation(FControlDevice.DeviceInfo.Address, AGrade, AWindSpeed, AUserWeight, ABikeWeight);
 end;
@@ -1698,6 +1832,7 @@ end;
 
 procedure TGameDeviceService.StopTrainer;
 begin
+  FTrainerErgActive:=False;
   if not HasControlDevice then Exit;
   FManager.Stop(FControlDevice.DeviceInfo.Address);
 end;

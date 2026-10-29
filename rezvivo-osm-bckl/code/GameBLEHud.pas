@@ -25,6 +25,7 @@ type
     LabelCadence: TCastleLabel;
     LabelHeart: TCastleLabel;
     LabelSlope: TCastleLabel;
+    LabelTransmission:TCastleLabel;
     LabelPitch: TCastleLabel;
     LabelInfo: TCastleLabel;
     LabelRecordingStatus:TCastleLabel;
@@ -36,6 +37,9 @@ type
     FBLESlopeUpdateTime: Single;
     FLastSentBLESlope: Single;
     FSimulationActive: Boolean;     { True после первой отправки SetSimulation }
+    FLastGearing:Boolean;
+    FLastGear:Integer;
+    FLastControlDevice:Pointer;
     FTrainerGrade: Single;          { инерционный уклон, % — то, что шлём }
     FTrainerTargetGrade: Single;
     FTrainerSensitivity:Integer;
@@ -85,6 +89,7 @@ type
       Call once per frame. }
     procedure UpdateBLETrainerControl(AActiveAgent: TPhysicalAgent;
       const SecondsPassed: Single);
+    procedure SuspendTrainerControl;
 
     { Update all HUD labels with current state.
       ALoopbackSession may be nil if not in loopback mode. }
@@ -110,7 +115,7 @@ type
 implementation
 
 uses UiTranslations, VeloSiteAPI, CastleColors, CastleVectors, GameDailyTraining, GameUserData,GameSensorLog,
-  AppSettings,GameTrainerGrade;
+  AppSettings,GameTrainerGrade,GameVirtualGearing;
 
 function TBLEHudUpdater.PowerZone(Watts,Ftp:Single):Integer;
 begin
@@ -169,6 +174,7 @@ begin
   FBLESlopeUpdateTime := 0;
   FLastSentBLESlope := 9999;
   FSimulationActive := False;
+  FLastControlDevice:=nil;FLastGear:=0;FLastGearing:=False;
   FTrainerGrade := 0;
   FTrainerTargetGrade := 0;
   FTrainerSensitivity:=100;
@@ -345,6 +351,9 @@ begin
   AActiveAgent.State.AppliedPowerWatts:=ReadMeasuredPower.Watts;
 end;
 
+procedure TBLEHudUpdater.SuspendTrainerControl;
+begin FSimulationActive:=False end;
+
 procedure TBLEHudUpdater.StepTrainerInertia(
   const ATargetGrade, ASpeedMps, ADt: Single);
 begin
@@ -380,7 +389,10 @@ begin
   StepTrainerInertia(TargetGrade, AActiveAgent.State.CurrentSpeed, SecondsPassed);
 
   HasDevice := Assigned(DeviceService) and DeviceService.HasControlDevice;
-  if not HasDevice then Exit;
+  if not HasDevice then begin FSimulationActive:=False;FLastControlDevice:=nil;Exit end;
+  if FLastControlDevice<>Pointer(DeviceService.ControlDevice)then begin
+    FLastControlDevice:=Pointer(DeviceService.ControlDevice);FSimulationActive:=False;
+  end;
 
   { При первом вызове — переводим тренажёр в режим симуляции (grade=0).
     Без этого тренажёр может оставаться в ERG/Power режиме.
@@ -395,7 +407,7 @@ begin
     FTrainerGradeInited := True;
     try
       DeviceService.RequestControl;
-      DeviceService.SetSimulation(0, 0, UserWeight, BikeWeight);
+      DeviceService.SetRideSimulation(0, 0, UserWeight, BikeWeight);
     except
       on E: Exception do
         Logger.Warning('[BLEHud] first SetSimulation: ' + E.ClassName + ': ' + E.Message);
@@ -406,12 +418,16 @@ begin
   FBLESlopeUpdateTime := FBLESlopeUpdateTime + SecondsPassed;
   if FBLESlopeUpdateTime < MinSlopeSendInterval then Exit;
   if (Abs(FTrainerGrade-FLastSentBLESlope)<MinSlopeDeltaToSend) and
+     (FLastGear=DeviceService.VirtualGear) and
+     (FLastGearing=Settings.GetVirtualGearingEnabled) and
+     (DeviceService.GearingBackend<>gbFTMSPower) and
      not ((FTrainerAdjustmentPending or (TargetGrade=0))and
        (FTrainerGrade=TargetGrade)and(Abs(TargetGrade-FLastSentBLESlope)>0.001)) then Exit;
 
   { В тренажёр — уже инерционный уклон, не сырой из физики. }
   try
-    DeviceService.SetSimulation(FTrainerGrade, 0, UserWeight, BikeWeight);
+    DeviceService.SetRideSimulation(FTrainerGrade, 0, UserWeight, BikeWeight);
+    FLastGear:=DeviceService.VirtualGear;FLastGearing:=Settings.GetVirtualGearingEnabled;
     FLastSentBLESlope := FTrainerGrade;
     if FTrainerGrade=TargetGrade then FTrainerAdjustmentPending:=False;
   except
@@ -436,6 +452,13 @@ begin
   if not Assigned(AActiveAgent.State) then Exit;
 
   S := AActiveAgent.State;
+  if FLabels.LabelTransmission<>nil then begin
+    if(DeviceService<>nil)and DeviceService.HasControlDevice and DeviceService.TrainerErgActive then
+      FLabels.LabelTransmission.Caption:='ERG'
+    else if(DeviceService<>nil)and(DeviceService.GearingBackend in[gbNative,gbFTMSPower])then
+      FLabels.LabelTransmission.Caption:=IntToStr(DeviceService.VirtualGear)
+    else FLabels.LabelTransmission.Caption:='—';
+  end;
   NL := LineEnding;
   DeltaPos := 0;
 

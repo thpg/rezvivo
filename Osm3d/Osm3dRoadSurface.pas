@@ -11,6 +11,11 @@ const ROAD_MAX_LANES = 32;
   ROAD_SURFACE_CONCRETE = 3;
   ROAD_STYLE_CONCRETE = 128;
   ROAD_STYLE_EDGE_ONLY = 256;
+  { Baked junction UVs keep their source way and metric scale, but suppress
+    ribbon markings inside the common footprint. The integral U shift is
+    invisible to tiled fallback materials and keeps the UV tangent direction.
+    It also survives both existing tile formats without losing photo metadata. }
+  ROAD_JUNCTION_UV_SHIFT = -16.0;
 
 type
   TRoadLaneLayout = record

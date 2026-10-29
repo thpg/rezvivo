@@ -361,5 +361,18 @@
   "+ W": "+ W",
   "Trees: textured": "Bäume: Texturen",
   "World image cache": "Bildcache der Spielwelt",
-  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Verbessert die Leistung durch Wiederverwendung entfernter Landschaft, kann aber Bildfehler verursachen. Benötigt zusätzlichen Grafikspeicher. Standardmäßig ausgeschaltet."
+  "Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.": "Verbessert die Leistung durch Wiederverwendung entfernter Landschaft, kann aber Bildfehler verursachen. Benötigt zusätzlichen Grafikspeicher. Standardmäßig ausgeschaltet.",
+  "Jersey: snug": "Trikot: eng",
+  "Jersey: fitted": "Trikot: passend",
+  "Jersey: relaxed": "Trikot: locker",
+  "Length: short": "Länge: kurz",
+  "Length: regular": "Länge: normal",
+  "Length: long": "Länge: lang",
+  "Rearrange folds": "Falten neu anordnen",
+  "Pull jersey down": "Trikot herunterziehen",
+  "Pelvis width (%)": "Beckenbreite (%)",
+  "Shoulder width (%)": "Schulterbreite (%)",
+  "Waist size (%)": "Taillenumfang (%)",
+  "Thigh size (%)": "Oberschenkelumfang (%)",
+  "Calf size (%)": "Wadenumfang (%)"
 }

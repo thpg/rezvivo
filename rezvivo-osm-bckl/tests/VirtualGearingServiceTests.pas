@@ -1,0 +1,75 @@
+program VirtualGearingServiceTests;
+{$mode objfpc}{$H+}
+uses SysUtils,TrainerData,AppSettings,GameDeviceService,GameDeviceTypes,
+  GameDeviceSensor,GameVirtualGearing,ZwiftControllerProtocol,ANTPlus;
+var D,Plate:TDeviceInfo;P:TZwiftControllerParser;B,C:TTrainerDataRecord;
+  Axis:Single;Turn,G:Integer;E:TGameDeviceEntry;Checks:Integer;
+procedure Check(V:Boolean;const S:String);
+begin Inc(Checks);if not V then raise Exception.Create(S) end;
+procedure Feed(Plus,Minus:Byte);
+begin
+  Check(P.Parse(TBytes.Create($37,$08,Plus,$10,Minus),B),'Click packet');
+  DeviceService.Manager.OnDeviceDataReceived(D,B);
+end;
+begin
+  Check(GetEnvironmentVariable('REZVIVO_TEST_NO_HARDWARE')='1','hardware must be isolated');
+  Check(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'','profile must be isolated');
+  Check(GetEnvironmentVariable('REZVIVO_TEST_SETTINGS_FILE')<>'','settings must be isolated');
+  Check(GetEnvironmentVariable('REZVIVO_TEST_ACCOUNT_DIR')<>'','device roles must be isolated');
+  Check(Pos('http://127.0.0.1:',GetEnvironmentVariable('REZVIVO_TEST_API'))=1,'API must be isolated');
+  Check(Settings.GetVirtualGearingEnabled,'virtual shifting should default on');
+  RegisterANTUsbBackendClass(nil);Settings.SetSimulationEnabled(False);
+  DeviceService:=TGameDeviceService.Create;P:=TZwiftControllerParser.Create;
+  try
+    DeviceService.AutoConnect:=False;
+    Plate:=Default(TDeviceInfo);Plate.Name:='Elite STERZO Smart';Plate.Address:='test-sterzo';
+    Plate.TransportType:=ttBLE;Plate.ProviderName:='test';Plate.SupportsSteering:=True;
+    DeviceService.Manager.OnDeviceFound(Plate);
+    DeviceService.Manager.OnDeviceConnectionChanged(Plate,csConnected,'test');
+    B:=Default(TTrainerDataRecord);BeginTrainerPacket(B);B.SteeringAngle:=0;MarkTrainerMetric(B,tmSteering);
+    DeviceService.Manager.OnDeviceDataReceived(Plate,B);
+    D:=Plate;D.Address:='test-click';D.Name:='Zwift Click';
+    DeviceService.Manager.OnDeviceFound(D);
+    DeviceService.Manager.OnDeviceConnectionChanged(D,csConnected,'test');
+    E:=DeviceService.Devices[1];
+    Check(DeviceService.IsGearController(E),'controller not assigned for gears alongside Sterzo');
+    G:=DeviceService.VirtualGear;
+    Feed(0,1);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G+1,'first press after connection lost');
+    Feed(1,1);DeviceService.ReadControllerGears;G:=DeviceService.VirtualGear;
+    Feed(0,1);Feed(1,1);Feed(0,1);Feed(1,1);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G+2,'fast shifts lost at device service');
+    Check(DeviceService.Sensor(skSteering).DeviceAddress=Plate.Address,'gears replaced Sterzo steering');
+    DeviceService.ReadSteeringInput(Axis,Turn);Check((Axis=0)and(Turn=0),'shifting steered bike');
+    DeviceService.SelectDeviceForRoles(E);DeviceService.ReadControllerGears;
+    Feed(0,1);DeviceService.ReadSteeringInput(Axis,Turn);
+    Check((Axis=0)and(Turn=0),'Click steered while gears enabled');
+    Feed(1,1);DeviceService.ReadControllerGears;
+    G:=DeviceService.VirtualGear;
+    Settings.SetVirtualGearingEnabled(False);Feed(0,1);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G,'disabled setting shifted');
+    DeviceService.ReadSteeringInput(Axis,Turn);Check(Turn=-1,'legacy steering disabled unexpectedly');
+    Settings.SetVirtualGearingEnabled(True);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G,'enabling replayed clicks');
+    DeviceService.Manager.OnDeviceConnectionChanged(D,csDisconnected,'test');
+    P.Reset;
+    DeviceService.Manager.OnDeviceConnectionChanged(D,csConnected,'test');
+    DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G,'reconnect replayed old actions');
+    Feed(1,0);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G-1,'first press after reconnect lost');
+    G:=DeviceService.VirtualGear;
+    DeviceService.SelectGearController(E);Check(not DeviceService.IsGearController(E),'gear unassignment failed');
+    Feed(1,1);Feed(1,0);DeviceService.ReadControllerGears;
+    Check(DeviceService.VirtualGear=G,'unassigned controller shifted');
+    Check(DeviceService.GearingBackend=gbUnavailable,'absent trainer reported usable');
+    DeviceService.SetTargetPower(220);
+    Check(not DeviceService.TrainerErgActive,'absent trainer reported ERG');
+    Check(not(tmPower in E.LastData.ValidMetrics),'buttons became measured power');
+    FreeAndNil(DeviceService);DeviceService:=TGameDeviceService.Create;DeviceService.AutoConnect:=False;
+    DeviceService.Manager.OnDeviceFound(D);
+    DeviceService.Manager.OnDeviceConnectionChanged(D,csConnected,'test');
+    Check(not DeviceService.IsGearController(DeviceService.Devices[0]),'gear opt-out not persisted');
+  finally P.Free;FreeAndNil(DeviceService) end;
+  Writeln('PASS VirtualGearingServiceTests: ',Checks,' checks');
+end.

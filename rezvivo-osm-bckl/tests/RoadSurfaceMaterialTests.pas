@@ -32,7 +32,7 @@ begin
 end;
 
 procedure CheckCachedSurface(const Name: string; Surface: Integer; UVScale: Single;
-  Mat: TGroundMaterialId; Procedural, Concrete: Boolean);
+  Mat: TGroundMaterialId; Procedural, Concrete: Boolean; EdgeOnly:Boolean=False; Junction:Boolean=False);
 var Model, Loaded: TTileModel; Stream: TMemoryStream; Seg: TTileRoadSeg;
   Comp: TGroundCompositeMesh; Geo: TIndexedFaceSetNode; V: TMeshVertex;
   Coord, Style: TFloatVertexAttributeNode; I, Bits: Integer;
@@ -46,6 +46,7 @@ begin
     Seg.Surface.Asphalt:=Surface; Seg.Surface.Condition:=3;
     Seg.Surface.ForwardLanes:=1; Seg.Surface.BackwardLanes:=1;
     Seg.Surface.Marked:=1;
+    if EdgeOnly then Seg.Surface.Marked:=1+ROAD_STYLE_EDGE_ONLY;
     Model.AddRoadSeg(Seg);
     TTileX3D.SaveStream(Stream,Model); Stream.Position:=0;
     Loaded:=TTileX3D.LoadStream(Stream);
@@ -54,9 +55,9 @@ begin
 
     Comp.ReserveForSlice(3,1);
     V:=Default(TMeshVertex); V.Normal:=Vector3(0,1,0); V.OsmId:=Seg.WayId;
-    V.Position:=Vector3(-3,0,0); V.UV:=Vector2(0,0); Comp.AppendVertex(V,Mat);
-    V.Position:=Vector3(3,0,0); V.UV:=Vector2(1,0); Comp.AppendVertex(V,Mat);
-    V.Position:=Vector3(-3,0,12); V.UV:=Vector2(0,12/UVScale); Comp.AppendVertex(V,Mat);
+    V.Position:=Vector3(-3,0,0); V.UV:=Vector2(Ord(Junction)*ROAD_JUNCTION_UV_SHIFT,0); Comp.AppendVertex(V,Mat);
+    V.Position:=Vector3(3,0,0); V.UV:=Vector2(1+Ord(Junction)*ROAD_JUNCTION_UV_SHIFT,0); Comp.AppendVertex(V,Mat);
+    V.Position:=Vector3(-3,0,12); V.UV:=Vector2(Ord(Junction)*ROAD_JUNCTION_UV_SHIFT,12/UVScale); Comp.AppendVertex(V,Mat);
     Comp.AppendTriangle(0,2,1); Comp.TrimArrays;
     AttachRoadSurface(Geo,Comp,Loaded,Vector3(0,0,0),1);
     Coord:=Attribute(Geo,'roadCoord'); Style:=Attribute(Geo,'roadStyle');
@@ -67,10 +68,15 @@ begin
       Check(((Bits and ROAD_STYLE_CONCRETE)<>0)=Concrete,Name+': concrete material');
       if Procedural then
       begin
+        Check(((Bits and ROAD_STYLE_EDGE_ONLY)<>0)=(EdgeOnly and not Junction),Name+': edge paint is suppressed only in common junction');
+        if Junction then begin
+          Check((Bits and 1)=0,Name+': no interior stripe');
+          Check(Abs(Abs(Coord.FdValue.Items[I*4+1])-3)<0.001,Name+': junction retains metric surface coordinates');
+        end;
         Check(((Bits mod ROAD_STYLE_CONCRETE) div 16)=3,Name+': wear is preserved');
         Check(Coord.FdValue.Items[I*4+3]>0,Name+': cached profile');
       end;
-      if Mat=GROUND_MAT_ROAD_FOOTWAY then
+      if (Mat=GROUND_MAT_ROAD_FOOTWAY) and not EdgeOnly then
         Check((Bits and 1)=0,Name+': no car markings on footway');
     end;
     Check(Loaded.RoadSegs[0].Surface.Asphalt=Surface,Name+': legacy data unchanged');
@@ -106,6 +112,10 @@ begin
   CheckCachedSurface('legacy footway',ROAD_SURFACE_OTHER,10,GROUND_MAT_ROAD_FOOTWAY,True,False);
   CheckCachedSurface('legacy cycleway',ROAD_SURFACE_OTHER,8,GROUND_MAT_ROAD_CYCLEWAY,False,False);
   CheckCachedSurface('concrete cycleway',ROAD_SURFACE_CONCRETE,8,GROUND_MAT_ROAD_CYCLEWAY,True,True);
+  CheckCachedSurface('edge-only cycling track',ROAD_SURFACE_ASPHALT,8,GROUND_MAT_ROAD_CYCLEWAY,True,False,True);
+  CheckCachedSurface('edge-only footway sports track',ROAD_SURFACE_ASPHALT,10,GROUND_MAT_ROAD_FOOTWAY,True,False,True);
+  CheckCachedSurface('asphalt junction',ROAD_SURFACE_ASPHALT,10,GROUND_MAT_ROAD_FOOTWAY,True,False,True,True);
+  CheckCachedSurface('concrete junction',ROAD_SURFACE_CONCRETE,12,GROUND_MAT_ROAD_MINOR,True,True,True,True);
   CheckMaterialCache;
   Writeln('All road surface tests passed');
 end.

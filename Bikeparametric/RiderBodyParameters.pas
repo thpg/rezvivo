@@ -13,7 +13,17 @@ uses Math, SysUtils, fpjson;
 type
   TRiderBodyParameters = record
     Sex, HeightCm, WeightKg, Composition, InseamCm, ArmLengthCm, HeadShape: Single;
+    { Independent deviations from this profile, expressed as fractions.
+      Zero preserves old profiles. Breadths affect skeletal spacing; girths
+      change soft-tissue envelopes without changing height or limb length. }
+    PelvisWidth, ShoulderWidth, WaistSize, ThighSize, CalfSize: Single;
   end;
+
+const
+  RiderBodyTargetCount = 10;
+  RiderBodyTargetNames:array[0..RiderBodyTargetCount-1]of String =
+    ('masculine','fat','muscle','lean','head','waist','thigh','calf','pelvis','shoulder');
+type TRiderBodyCoefficients = array[0..RiderBodyTargetCount-1] of Single;
 
 function DefaultRiderBody(const Sex: Single = 0): TRiderBodyParameters;
 function NormalizeRiderBody(const Value: TRiderBodyParameters): TRiderBodyParameters;
@@ -25,6 +35,8 @@ function RiderBodyArmCm(const Value: TRiderBodyParameters): Single;
 function RiderBodyInseamCm(const Value: TRiderBodyParameters): Single;
 procedure RiderBodyShapeWeights(const Value: TRiderBodyParameters;
   out Fat, Muscle, Lean: Single);
+procedure RiderBodyCoefficients(const Value:TRiderBodyParameters;
+  out C:TRiderBodyCoefficients);
 
 implementation
 
@@ -43,6 +55,8 @@ begin
   Result.InseamCm := 0;
   Result.ArmLengthCm := 0;
   Result.HeadShape := Result.Sex;
+  Result.PelvisWidth:=0;Result.ShoulderWidth:=0;
+  Result.WaistSize:=0;Result.ThighSize:=0;Result.CalfSize:=0;
 end;
 
 function NormalizeRiderBody(const Value: TRiderBodyParameters): TRiderBodyParameters;
@@ -53,6 +67,11 @@ begin
   Result.WeightKg := SafeValue(Value.WeightKg, 35, 180, 75);
   Result.Composition := SafeValue(Value.Composition, 0, 1, 0.5);
   Result.HeadShape := SafeValue(Value.HeadShape, 0, 1, Result.Sex);
+  Result.PelvisWidth:=SafeValue(Value.PelvisWidth,-0.18,0.18,0);
+  Result.ShoulderWidth:=SafeValue(Value.ShoulderWidth,-0.14,0.14,0);
+  Result.WaistSize:=SafeValue(Value.WaistSize,-0.20,0.20,0);
+  Result.ThighSize:=SafeValue(Value.ThighSize,-0.18,0.18,0);
+  Result.CalfSize:=SafeValue(Value.CalfSize,-0.18,0.18,0);
   if (Value.InseamCm = 0) or IsNan(Value.InseamCm) or IsInfinite(Value.InseamCm) then
     Result.InseamCm := 0
   else Result.InseamCm := SafeValue(Value.InseamCm,
@@ -69,7 +88,12 @@ begin
     (Abs(A.HeightCm-B.HeightCm)<0.001) and (Abs(A.WeightKg-B.WeightKg)<0.001) and
     (Abs(A.Composition-B.Composition)<0.00001) and
     (Abs(A.InseamCm-B.InseamCm)<0.001) and (Abs(A.ArmLengthCm-B.ArmLengthCm)<0.001) and
-    (Abs(A.HeadShape-B.HeadShape)<0.00001);
+    (Abs(A.HeadShape-B.HeadShape)<0.00001) and
+    (Abs(A.PelvisWidth-B.PelvisWidth)<0.00001) and
+    (Abs(A.ShoulderWidth-B.ShoulderWidth)<0.00001) and
+    (Abs(A.WaistSize-B.WaistSize)<0.00001) and
+    (Abs(A.ThighSize-B.ThighSize)<0.00001) and
+    (Abs(A.CalfSize-B.CalfSize)<0.00001);
 end;
 
 function ReadRiderBody(const O: TJSONObject;
@@ -85,6 +109,11 @@ begin
     Result.InseamCm := O.Get('inseamCm', Double(Result.InseamCm));
     Result.ArmLengthCm := O.Get('armLengthCm', Double(Result.ArmLengthCm));
     Result.HeadShape := O.Get('headShape', Double(Result.HeadShape));
+    Result.PelvisWidth:=O.Get('pelvisWidth',Double(Result.PelvisWidth));
+    Result.ShoulderWidth:=O.Get('shoulderWidth',Double(Result.ShoulderWidth));
+    Result.WaistSize:=O.Get('waistSize',Double(Result.WaistSize));
+    Result.ThighSize:=O.Get('thighSize',Double(Result.ThighSize));
+    Result.CalfSize:=O.Get('calfSize',Double(Result.CalfSize));
   end;
   Result := NormalizeRiderBody(Result);
 end;
@@ -94,7 +123,7 @@ var P: TRiderBodyParameters;
 begin
   P := NormalizeRiderBody(Value);
   Result := TJSONObject.Create;
-  Result.Add('version', 1);
+  Result.Add('version', 2);
   Result.Add('sex', Double(P.Sex));
   Result.Add('heightCm', Double(P.HeightCm));
   Result.Add('weightKg', Double(P.WeightKg));
@@ -102,6 +131,11 @@ begin
   Result.Add('inseamCm', Double(P.InseamCm));
   Result.Add('armLengthCm', Double(P.ArmLengthCm));
   Result.Add('headShape', Double(P.HeadShape));
+  Result.Add('pelvisWidth',Double(P.PelvisWidth));
+  Result.Add('shoulderWidth',Double(P.ShoulderWidth));
+  Result.Add('waistSize',Double(P.WaistSize));
+  Result.Add('thighSize',Double(P.ThighSize));
+  Result.Add('calfSize',Double(P.CalfSize));
 end;
 
 function RiderBodyArmCm(const Value: TRiderBodyParameters): Single;
@@ -131,6 +165,18 @@ begin
   Muscle := EnsureRange(Excess * P.Composition / 0.30 +
     0.48 * (P.Composition - 0.5), -0.24, 1.65);
   Lean := EnsureRange((1 - Radius) / 0.32, 0, 1.25);
+end;
+
+procedure RiderBodyCoefficients(const Value:TRiderBodyParameters;
+  out C:TRiderBodyCoefficients);
+var P:TRiderBodyParameters;
+begin
+  P:=NormalizeRiderBody(Value);
+  C[0]:=1-P.Sex;C[4]:=1-P.HeadShape;
+  RiderBodyShapeWeights(P,C[1],C[2],C[3]);
+  { Authored endpoints are +20%; signed controls interpolate around zero. }
+  C[5]:=P.WaistSize/0.20;C[6]:=P.ThighSize/0.20;C[7]:=P.CalfSize/0.20;
+  C[8]:=P.PelvisWidth/0.20;C[9]:=P.ShoulderWidth/0.20;
 end;
 
 end.

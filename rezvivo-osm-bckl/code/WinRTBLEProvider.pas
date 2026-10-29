@@ -15,7 +15,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs,
   TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol,
-  ZwiftControllerProtocol;
+  ZwiftControllerProtocol, GameVirtualGearing;
 
 type
   TScannedDev = record Name, Address: string; RSSI: Int16; end;
@@ -60,6 +60,7 @@ type
     FConnStatusDel: Pointer;  { PDelegate, released on disconnect }
     function ActivateSteering: Boolean;
     function ActivateZwift: Boolean;
+    function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;override;
     procedure DiscoverAndSubscribe;
     procedure CleanupSubscriptions;
     { IClosable.Close + Release на BLE-объектах. Без Close Windows
@@ -643,24 +644,29 @@ begin
 end;
 
 procedure TWinRTBLESession.ReceiveCharacteristicData(const UUID: string; const Data: TBytes);
-var U: string; Parsed: TTrainerDataRecord; Page: TBytes; Channel: Byte; Valid: Boolean;
+var U: string; Parsed: TTrainerDataRecord; Page: TBytes; Channel: Byte; Valid,NativeGearing: Boolean;
   Handshake: TZwiftHandshake;
 begin
   U:=LowerCase(UUID);
   if (Pos(ZwiftNotifyUUID,U)>0) or (Pos(ZwiftResponseUUID,U)>0) then
   begin
+    if ZwiftControllerLocked(Data)then begin
+      SetConnectionState(csError,'Zwift controller stopped sending buttons. Connect it in Zwift first, close Zwift, then reconnect here.');Exit;
+    end;
     Valid:=False;
     FLock.Enter;
     try
       Handshake:=ZwiftHandshakeReply(Data);
-      if Handshake=zhEncrypted then FZwiftEncrypted:=True;
-      if Handshake=zhPlaintext then FZwiftReady:=True;
+      if Handshake<>zhNone then begin
+        FZwiftReady:=FZwiftParser.AcceptHandshake(Data);
+        FZwiftEncrypted:=(Handshake=zhEncrypted)and not FZwiftReady;
+      end;
       if (Handshake=zhNone) and not FZwiftEncrypted then
       begin
         Valid:=FZwiftParser.Parse(Data,Parsed);
         if Valid then FZwiftReady:=True;
       end;
-      if FZwiftReady or FZwiftEncrypted then FZwiftEvent.SetEvent;
+      if FZwiftReady or(Handshake<>zhNone)then FZwiftEvent.SetEvent;
     finally FLock.Leave end;
     if Valid then PublishMeasurement(Parsed);
     Exit;
@@ -704,7 +710,11 @@ begin
       if Channel<>255 then FFECChannel:=Channel;
       if Page[0]=71 then begin ReceiveFECStatus(Page); Exit end;
       Valid:=FFECParser.Parse(17,Page,Parsed);
-      if FFECParser.Features.Known then FTrainerFeatures:=FFECParser.Features;
+      if FFECParser.Features.Known then begin
+        NativeGearing:=FTrainerFeatures.SupportsVirtualGearing;
+        FTrainerFeatures:=FFECParser.Features;
+        FTrainerFeatures.SupportsVirtualGearing:=NativeGearing;
+      end;
     end
     else
     begin
@@ -950,16 +960,38 @@ begin
   inherited;
 end;
 
+function TWinRTBLESession.SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;
+var Packet:TBytes;
+begin
+  Result:=False;
+  if not FTrainerFeatures.SupportsVirtualGearing or(FZwiftControl=nil)then Exit;
+  Packet:=ZwiftSimulationCommand(Grade,Wind,RiderWeight,BikeWeight,Ratio);
+  if Length(Packet)>0 then Result:=WriteFTMSControl(FZwiftControl,Packet);
+end;
+
 function TWinRTBLESession.ActivateZwift: Boolean;
+var Request:TBytes;Attempt:Integer;
 begin
   Result:=False;
   if not FZwiftSubscribed or (FZwiftControl=nil) then Exit;
-  FZwiftEvent.ResetEvent;
-  if not WriteFTMSControl(FZwiftControl,ZwiftHandshakeRequest) then Exit;
-  { Connect already runs on the manager's worker, never the render thread. }
-  FZwiftEvent.WaitFor(4000);
-  FLock.Enter;
-  try Result:=FZwiftReady and not FZwiftEncrypted finally FLock.Leave end;
+  for Attempt:=0 to 2 do begin
+    FLock.Enter;
+    try
+      FZwiftEvent.ResetEvent;
+      if not FDeviceInfo.SupportsSteering then Request:=ZwiftTrainerHandshake
+      else case Attempt of
+        0:Request:=ZwiftHandshakeRequest(FDeviceInfo.Name);
+        1:begin Request:=ZwiftHandshakeRequest;SetLength(Request,8);Request[6]:=2;Request[7]:=3 end;
+        else Request:=FZwiftParser.StartEncryptedHandshake;
+      end;
+    finally FLock.Leave end;
+    if Length(Request)=0 then Exit;
+    if not WriteFTMSControl(FZwiftControl,Request)then Exit;
+    FZwiftEvent.WaitFor(2500);
+    FLock.Enter;
+    try Result:=FZwiftReady and not FZwiftEncrypted finally FLock.Leave end;
+    if Result or not FDeviceInfo.SupportsSteering then Exit;
+  end;
 end;
 
 function TWinRTBLESession.ActivateSteering: Boolean;
@@ -1103,7 +1135,9 @@ begin
     FDeviceInfo.SupportsCadence := FDeviceInfo.SupportsCadence or FTrainerFeatures.SupportsCadence;
     FDeviceInfo.SupportsSpeed := FDeviceInfo.SupportsSpeed or FHasFEC or FHasFTMS;
     FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
-    FDeviceInfo.SupportsSteering := FHasSteering or FHasZwift;
+    FDeviceInfo.SupportsSteering := FHasSteering or
+      (FHasZwift and(IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC)));
+    FTrainerFeatures.SupportsVirtualGearing:=False;
 
     if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
     begin
@@ -1115,10 +1149,14 @@ begin
 
     if FHasZwift and not ActivateZwift then
     begin
+      if FDeviceInfo.SupportsSteering then begin
       Disconnect;
-      SetConnectionState(csError, 'Zwift controller did not accept RideOn. Wake it and close other cycling apps. Encrypted or locked firmware is not supported.');
+      SetConnectionState(csError, 'Zwift activation failed. Wake the controller and close other cycling apps. Click V2 and newer Ride firmware may require activation in Zwift first.');
       Exit;
+      end;
     end;
+    FTrainerFeatures.SupportsVirtualGearing:=FHasZwift and FZwiftReady and
+      not FDeviceInfo.SupportsSteering and FDeviceInfo.SupportsControl;
 
     if FHasSteering and not ActivateSteering then
     begin

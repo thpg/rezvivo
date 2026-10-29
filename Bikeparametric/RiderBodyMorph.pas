@@ -20,7 +20,7 @@ type
         Normal: TNormalNode;
         First: Integer;
         Position, Normals: TVectors;
-        DeltaP, DeltaN: array[0..4] of TVectors;
+        DeltaP, DeltaN: array[0..RiderBodyTargetCount-1] of TVectors;
       end;
     var
       FShapes: array of TShape;
@@ -28,10 +28,11 @@ type
       FApplied: Boolean;
       FRevision: Cardinal;
       FBodyVertexCount: Integer;
+      FTargetCount:Integer;
       FInseamVertex:Integer;
       FHasInseamPoint:Boolean;
       FInseamPoint,FInseamFitted:TVector3;
-      FInseamDelta:array[0..4] of TVector3;
+      FInseamDelta:array[0..RiderBodyTargetCount-1] of TVector3;
   public
     function Load(const Path: string; Skin: TSkinNode; Rig: TTripoRig): Boolean;
     function Apply(const Value: TRiderBodyParameters; Rig: TTripoRig): Boolean;
@@ -57,13 +58,16 @@ begin
   Data := OpenRiderEmbeddedData(Path, 'riderBodyShape', Info);
   if Data=nil then Exit;
   try
-    if Info.Get('version',0)<>1 then raise EReadError.Create('Unsupported rider body shape version');
+    if not(Info.Get('version',0)in[1,2])then raise EReadError.Create('Unsupported rider body shape version');
     Shapes:=ArrOf(Info,'shapes'); Targets:=ArrOf(Info,'targets');
     FBodyVertexCount:=Info.Get('vertices',0);
-    if (Shapes=nil) or (Targets=nil) or (Targets.Count<>5) or
+    if (Shapes=nil) or (Targets=nil) or not(Targets.Count in[5,RiderBodyTargetCount]) or
       (FBodyVertexCount<=0) or (FBodyVertexCount>Rig.VertexCount) then
       raise EReadError.Create('Invalid rider body shape header');
-    if Data.Size<>Int64(FBodyVertexCount)*5*2*SizeOf(TVector3) then
+    FTargetCount:=Targets.Count;
+    for K:=0 to FTargetCount-1 do
+      if Targets.Strings[K]<>RiderBodyTargetNames[K]then raise EReadError.Create('Unknown rider body target');
+    if Data.Size<>Int64(FBodyVertexCount)*FTargetCount*2*SizeOf(TVector3) then
       raise EReadError.Create('Invalid rider body shape length');
     SetLength(FShapes,Shapes.Count);
     FInseamVertex:=Info.Get('inseamVertex',-1);
@@ -72,10 +76,10 @@ begin
     FHasInseamPoint:=False;
     PointData:=ArrOf(Info,'inseamPoint');DeltaData:=ArrOf(Info,'inseamDeltas');
     if (PointData<>nil) or (DeltaData<>nil) then begin
-      if (PointData=nil) or (PointData.Count<>3) or (DeltaData=nil) or (DeltaData.Count<>5) then
+      if (PointData=nil) or (PointData.Count<>3) or (DeltaData=nil) or (DeltaData.Count<>FTargetCount) then
         raise EReadError.Create('Invalid rider anatomical inseam point');
       FInseamPoint:=Vector3(PointData.Floats[0],PointData.Floats[1],PointData.Floats[2]);
-      for K:=0 to 4 do begin
+      for K:=0 to FTargetCount-1 do begin
         PointData:=DeltaData.Arrays[K];
         if PointData.Count<>3 then raise EReadError.Create('Invalid rider anatomical inseam delta');
         FInseamDelta[K]:=Vector3(PointData.Floats[0],PointData.Floats[1],PointData.Floats[2]);
@@ -110,7 +114,7 @@ begin
         P^.Position[V]:=P^.Coord.FdPoint.Items[V];
         P^.Normals[V]:=P^.Normal.FdVector.Items[V];
       end;
-      for K:=0 to 4 do
+      for K:=0 to FTargetCount-1 do
       begin
         SetLength(P^.DeltaP[K],Count); SetLength(P^.DeltaN[K],Count);
         Data.ReadBuffer(P^.DeltaP[K][0],Count*SizeOf(TVector3));
@@ -147,7 +151,7 @@ begin
     for J:=0 to N-1 do begin Position[J]:=Coord.FdPoint.Items[J];Normals[J]:=Normal.FdVector.Items[J] end;
     { Donor topology is preserved by the wardrobe. Share immutable authored
       shape fields, retaining the garment's own rest offset and normals. }
-    for K:=0 to 4 do begin DeltaP[K]:=FShapes[Index].DeltaP[K];DeltaN[K]:=FShapes[Index].DeltaN[K] end;
+    for K:=0 to FTargetCount-1 do begin DeltaP[K]:=FShapes[Index].DeltaP[K];DeltaN[K]:=FShapes[Index].DeltaN[K] end;
   end;
 end;
 
@@ -164,7 +168,7 @@ begin
   with FShapes[Dest]do begin
     Geometry:=Garment;Coord:=TCoordinateNode(Garment.Coord);Normal:=TNormalNode(Garment.Normal);First:=RigFirst;
     SetLength(Position,Count);SetLength(Normals,Count);
-    for K:=0 to 4 do begin SetLength(DeltaP[K],Count);SetLength(DeltaN[K],Count)end;
+    for K:=0 to FTargetCount-1 do begin SetLength(DeltaP[K],Count);SetLength(DeltaN[K],Count)end;
   end;
   { Generated panels and sewn details have their own topology. Transfer
     only static body proportions, once at load, rather than giving them
@@ -186,7 +190,7 @@ begin
     end;
     Total:=0;for K:=0 to 2 do begin Weight[K]:=0;if NearShape[K]>=0 then Weight[K]:=1/Max(1e-5,NearDistance[K]);Total:=Total+Weight[K]end;
     if Total<=0 then Continue;
-    for R:=0 to 4 do begin
+    for R:=0 to FTargetCount-1 do begin
       Delta:=TVector3.Zero;
       for K:=0 to 2 do if NearShape[K]>=0 then Delta:=Delta+FShapes[NearShape[K]].DeltaP[R][NearVertex[K]]*(Weight[K]/Total);
       FShapes[Dest].DeltaP[R][V]:=Delta;
@@ -226,16 +230,15 @@ begin
 end;
 
 function TRiderBodyMorph.Apply(const Value: TRiderBodyParameters; Rig:TTripoRig):Boolean;
-var P:TRiderBodyParameters; C:array[0..4] of Single;
+var P:TRiderBodyParameters; C:TRiderBodyCoefficients;
   I,V,K,R:Integer; Position,Normal:TVector3; S:^TShape;
 begin
   Result:=False; P:=NormalizeRiderBody(Value);
   if FApplied and SameRiderBody(P,FLast) then Exit;
-  C[0]:=1-P.Sex; C[4]:=1-P.HeadShape;
-  RiderBodyShapeWeights(P,C[1],C[2],C[3]);
+  RiderBodyCoefficients(P,C);
   if FHasInseamPoint then begin
     FInseamFitted:=FInseamPoint;
-    for K:=0 to 4 do FInseamFitted:=FInseamFitted+FInseamDelta[K]*C[K];
+    for K:=0 to FTargetCount-1 do FInseamFitted:=FInseamFitted+FInseamDelta[K]*C[K];
   end;
   for I:=0 to High(FShapes) do
   begin
@@ -243,7 +246,7 @@ begin
     for V:=0 to High(S^.Position) do
     begin
       Position:=S^.Position[V]; Normal:=S^.Normals[V];
-      for K:=0 to 4 do
+      for K:=0 to FTargetCount-1 do
       begin
         Position:=Position+S^.DeltaP[K][V]*C[K];
         Normal:=Normal+S^.DeltaN[K][V]*C[K];

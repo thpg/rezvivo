@@ -210,6 +210,7 @@ begin
       [LowerCase(MD5Print(MD5String(ARouteName))), ARouteRadiusM], Fmt);
   S := S + '|road-width-profile=2';
   S := S + '|road-smoothness=1'; { persisted asphalt wear profile }
+  S := S + '|road-junction-footprint=1'; { rounded common pavement; dominant material at mixed junctions }
   { Source, sampling resolution and filtering all affect baked terrain. }
   S := S + '|height-source=' + HeightDatasetCacheKey(ASettings.TerrariumUrlTemplate)
     + Format('|height-zoom=%d|height-blur=%.5f',

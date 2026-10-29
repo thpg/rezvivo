@@ -56,7 +56,7 @@ begin
     { Captured-format Play packet: left pad, left arrow pressed. }
     B:=Hex('07080110011800200128013001380140004800');
     Check(P.Parse(B,D),'Play left button');
-    Check((D.PresentMetrics=[tmSteering])and(D.SteeringTurnDirection=1),'Play metrics/direction');
+    Check((D.PresentMetrics=[tmSteering,tmController])and(D.SteeringTurnDirection=1),'Play metrics/direction');
     Check(Abs(SteeringAxis(D.SteeringAngle)-1)<0.001,'Play continuous left');
     Serial:=D.SteeringTurnSerial;
     Check(P.Parse(B,D)and(D.SteeringTurnSerial=Serial),'repeated radio notification');

@@ -2048,6 +2048,7 @@ class procedure TBridgeBuilder.ClipRoadsUnderDecks(const Specs: TBridgeSpecArray
 var
   Lines: TDeckClipLineArray;
   nLines, s, kd, meshes, ringN: Integer;
+  RoadKind: TRoadKind;
   C: TXZArray;
 
   { Поперечник в точке стыка: полуплоскость «наружу» от моста (оставить
@@ -2161,6 +2162,9 @@ begin
   Inc(meshes, ClipKind(Roads.Railway,   Roads.UVMesh[rkRailway],   Roads.IntRings[rkRailway]));
   Inc(meshes, ClipKind(Roads.DirtPath,  Roads.UVMesh[rkDirtPath],  Roads.IntRings[rkDirtPath]));
   Inc(meshes, ClipKind(Roads.SandPath,  Roads.UVMesh[rkSandPath],  Roads.IntRings[rkSandPath]));
+  { Common pavement must obey the same bridge seam as its source ribbon. }
+  for RoadKind:=Low(TRoadKind) to High(TRoadKind) do
+    Inc(meshes,ClipKind(nil,Roads.JunctionUV[RoadKind],Roads.JunctionRings[RoadKind]));
   ringN := Roads.IntRings[rkMajor].N + Roads.IntRings[rkSecondary].N +
     Roads.IntRings[rkMinor].N + Roads.IntRings[rkService].N +
     Roads.IntRings[rkFootway].N + Roads.IntRings[rkCycleway].N;

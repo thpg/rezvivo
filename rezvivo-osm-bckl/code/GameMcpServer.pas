@@ -555,6 +555,7 @@ begin
   RegisterMcpObject('hud.cadence',ViewPlay.LabelCadence);
   RegisterMcpObject('hud.heart',ViewPlay.LabelHeart);
   RegisterMcpObject('hud.slope',ViewPlay.LabelSlope);
+  RegisterMcpObject('hud.transmission',ViewPlay.LabelTransmission);
   RegisterMcpObject('hud.correction',ViewPlay.LabelCorr);
   RegisterMcpObject('hud.work',ViewPlay.LabelWork);
   RegisterMcpObject('hud.work_tss',ViewPlay.LabelWorkTSS);
@@ -580,6 +581,7 @@ begin
   UnregisterMcpObject('hud.cadence');
   UnregisterMcpObject('hud.heart');
   UnregisterMcpObject('hud.slope');
+  UnregisterMcpObject('hud.transmission');
   UnregisterMcpObject('hud.correction');
   UnregisterMcpObject('hud.work');
   UnregisterMcpObject('hud.work_tss');
@@ -3244,7 +3246,8 @@ begin
     'Select the avatar editor clothing for cycling and walking. Empty value restores cycling kit / removes outerwear or hat. Omit fields to inspect.',
     '{"type":"object","properties":{"top":{"enum":["","tshirt","sweatshirt"]},'+
     '"bottom":{"enum":["","trousers","jeans"]},"outer":{"enum":["","jacket","coat","loose_jacket","raincoat"]},'+
-    '"feet":{"enum":["","sneakers","boots","loafers"]},"head":{"enum":["","beanie","cap","bucket"]}}}',@CmdBikeFitClothing);
+    '"feet":{"enum":["","sneakers","boots","loafers"]},"head":{"enum":["","beanie","cap","bucket"]},'+
+    '"garment":{"type":"object"},"pull_jersey":{"type":"boolean"},"rearrange_folds":{"type":"boolean"}}}',@CmdBikeFitClothing);
   RegisterMcpCommand('bikefit.camera',
     'Frame the isolated avatar preview for reproducible screenshots. Zoom 0.5..4, yaw in degrees relative to the default view. Does not affect the ride camera.',
     '{"type":"object","properties":{"zoom":{"type":"number"},"yaw":{"type":"number"},"target_y":{"type":"number","minimum":0,"maximum":2.5}}}',@CmdBikeFitCamera);

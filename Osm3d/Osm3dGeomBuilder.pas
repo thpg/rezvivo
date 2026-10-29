@@ -2351,6 +2351,7 @@ var
   Composite: TGroundCompositeMesh;
   Layout:    TGroundAtlasLayout;
   K:         TLanduseMeshKind;
+  RKf:       TRoadKind;
   MatId:     TGroundMaterialId;
   UVTable:   TUVSourceCtxArray;
   OutMeshes: TCarvedMatMeshArray;
@@ -2554,6 +2555,16 @@ begin
       CaptureRoad(Roads.Minor,     rkMinor,     GROUND_MAT_ROAD_MINOR);
       CaptureRoad(Roads.Secondary, rkSecondary, GROUND_MAT_ROAD_SECOND);
       CaptureRoad(Roads.Major,     rkMajor,     GROUND_MAT_ROAD_MAJOR);
+      { A shared footprint replaces overlapping ribbon ends before the terrain
+        is carved. At mixed-surface nodes the wider road owns the center;
+        narrow branches end exactly on its boundary, regardless of class. }
+      for RKf := Low(TRoadKind) to High(TRoadKind) do
+        if Roads.JunctionRings[RKf].N>0 then begin
+          if IntLayerN>=Length(IntLayers) then SetLength(IntLayers,IntLayerN*2+8);
+          LayerFromBag(IntLayers[IntLayerN],Roads.JunctionRings[RKf],
+            GROUND_MAT_FOR_ROAD[RKf],GROUND_MATERIALS[GROUND_MAT_ROAD_MAJOR].ZIndex+1,iumBary,0);
+          IntLayers[IntLayerN].Mesh:=Roads.JunctionUV[RKf];Inc(IntLayerN);
+        end;
       { River strips also always carved. In shader mode WaterRivers stays
         available (the assembler gates the separate animated shape on
         WaterShaders), so the carved basin gets the shader water on top. }
@@ -3297,7 +3308,10 @@ var
       BuildGroundComposite); кольца — динмассивы, умирают с записью.
       Сами меши дорог переданы во владение AInput выше. }
     for RKf := Low(TRoadKind) to High(TRoadKind) do
+    begin
       FreeAndNil(Roads.UVMesh[RKf]);
+      FreeAndNil(Roads.JunctionUV[RKf]);
+    end;
     for PaletteI := 0 to BUILDING_PALETTE_SIZE - 1 do
     begin
       AInput.BuildingWalls[PaletteI] := Buildings.Walls[PaletteI];

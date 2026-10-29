@@ -276,11 +276,15 @@ begin
   if WorldReady and(WorkoutPlayer.State=wsRunning)and(S<>nil)and(S.Kind<>wskFreeRide)then
     Target:=EnsureRange(Round(WorkoutPlayer.TargetWatts),0,2000);
   Device:=Pointer(DeviceService.ControlDevice);NowTick:=GetTickCount64;
-  if(NowTick-FLastSend>=500)and((Device<>FLastDevice)or(Target<>FLastTarget)or(NowTick-FLastSend>=2000))then
+  if(NowTick-FLastSend>=500)and((Device<>FLastDevice)or(Target<>FLastTarget)or
+    (WorldReady and(WorkoutPlayer.State=wsRunning)and(S<>nil)and(S.Kind=wskFreeRide))or
+    (NowTick-FLastSend>=2000))then
   begin
     try
       if not FHadControl or(Device<>FLastDevice)then DeviceService.StartTrainer;
       if Target>0 then DeviceService.SetTargetPower(Target)
+      else if WorldReady and(WorkoutPlayer.State=wsRunning)and(S<>nil)and(S.Kind=wskFreeRide)then
+        DeviceService.SetRideSimulation(0,0,RiderWeight,10)
       else DeviceService.SetSimulation(0,0,RiderWeight,10);
       FHadControl:=True;FLastTarget:=Target;FLastDevice:=Device;FLastSend:=NowTick;
     except on E:Exception do begin FLastSend:=NowTick;Logger.Warning('[Workout] '+E.Message);end;end;

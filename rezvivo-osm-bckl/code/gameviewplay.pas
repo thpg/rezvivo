@@ -65,6 +65,7 @@ type
     LabelCadence: TCastleLabel;
     LabelHeart: TCastleLabel;
     LabelSlope: TCastleLabel;
+    LabelTransmission:TCastleLabel;
     LabelPitch: TCastleLabel;
     LabelInfo: TCastleLabel;
     MainViewport: TCastleViewport;
@@ -3218,6 +3219,7 @@ begin
   LabelCadence:=Labels.LabelCadence;
   LabelHeart:=Labels.LabelHeart;
   LabelSlope:=Labels.LabelSlope;
+  LabelTransmission:=Labels.LabelTransmission;
   LabelWork:=Labels.LabelWork;
   LabelWorkTSS:=Labels.LabelWorkTSS;
   Labels.LabelPitch := LabelPitch;
@@ -4078,6 +4080,7 @@ begin
   FRideMetricsHud:=nil;
   LabelSpeed:=nil; LabelPower:=nil; LabelCorr:=nil;
   LabelCadence:=nil; LabelHeart:=nil; LabelSlope:=nil;
+  LabelTransmission:=nil;
   LabelWork:=nil; LabelWorkTSS:=nil;
   SceneLifecycleLog('=== TViewPlay.Stop END ===');
   FreezeDiagWrite('TViewPlay.Stop: END (clean exit completed)');
@@ -5565,7 +5568,8 @@ begin
     Подмешивание её после шага физики гасило ускорение от мощности
     и спуска, а на подъёме могло двигать байк даже без педалирования. }
     if (FTravelMode=travelBicycle) and (not Assigned(FWorkoutHud) or not FWorkoutHud.ControlsTrainer) then
-      FBLEHud.UpdateBLETrainerControl(FActiveAvatarAgent, SecondsPassed);
+      FBLEHud.UpdateBLETrainerControl(FActiveAvatarAgent, SecondsPassed)
+    else FBLEHud.SuspendTrainerControl;
 
 
   T3 := Timer;
@@ -6333,6 +6337,15 @@ var
 begin
   Result := inherited;
   if Result then Exit;
+  if (Container.ForceCaptureInput=nil)and(FTravelMode=travelBicycle)and
+    (Event.IsKey(keyPageUp)or Event.IsKey(keyPageDown))and(DeviceService<>nil)and
+    Settings.GetVirtualGearingEnabled then begin
+    if not DeviceService.TrainerErgActive then begin
+      if Event.IsKey(keyPageUp)then DeviceService.ShiftVirtualGear(1)
+      else DeviceService.ShiftVirtualGear(-1);
+    end;
+    Exit(True);
+  end;
   if (FTravelMode=travelBicycle) and (FCameraMode<>pcmFree) and
     (Container.ForceCaptureInput=nil) and (Event.EventType=itKey) and
     (Event.Key in [keyW,keyS,keyArrowUp,keyArrowDown,keyEqual,keyMinus,keyNumpadPlus,keyNumpadMinus]) then Exit(True);

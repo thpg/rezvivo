@@ -48,6 +48,7 @@ type
       FIT is retained when simulation is disabled or route mode is selected. }
     FWheelCircumferenceMm: Integer;
     FTrainerGradeSensitivity: Integer;
+    FVirtualGearingEnabled:Boolean;
     FSimulationFitPath: string;
     FSimulationEnabled: Boolean;
     FSimulationUseRoute: Boolean;
@@ -133,6 +134,8 @@ type
     function GetWheelCircumferenceMm: Integer;
     procedure SetWheelCircumferenceMm(Value: Integer);
     function GetTrainerGradeSensitivity: Integer;
+    function GetVirtualGearingEnabled:Boolean;
+    procedure SetVirtualGearingEnabled(Value:Boolean);
     procedure SetTrainerGradeSensitivity(Value: Integer);
     function GetAdapterEnabled(const AKey: string): Boolean;
     procedure SetAdapterEnabled(const AKey: string; AEnabled: Boolean);
@@ -242,6 +245,8 @@ type
       read GetSimulationFitPath write SetSimulationFitPath;
     property TrainerGradeSensitivity: Integer
       read GetTrainerGradeSensitivity write SetTrainerGradeSensitivity;
+    property VirtualGearingEnabled:Boolean
+      read GetVirtualGearingEnabled write SetVirtualGearingEnabled;
     property SimulationEnabled: Boolean
       read GetSimulationEnabled write SetSimulationEnabled;
     property SimulationUseRoute: Boolean read GetSimulationUseRoute write SetSimulationUseRoute;
@@ -369,6 +374,7 @@ begin
   FWheelCircumferenceMm := 2105;
   FSimulationFitPath := '';
   FTrainerGradeSensitivity := 100;
+  FVirtualGearingEnabled:=True;
   FTravelMode:=travelBicycle;FExploreLat:=55.75;FExploreLon:=37.62;
   FSimulationEnabled := False;
   FSimulationUseRoute := True;
@@ -492,6 +498,7 @@ begin
         if not (Root is TJSONObject) then Exit;
         FWheelCircumferenceMm:=EnsureRange(TJSONObject(Root).Get('wheel_circumference_mm',2105),500,4000);
         FTrainerGradeSensitivity:=EnsureRange(TJSONObject(Root).Get('trainer_grade_sensitivity',100),0,100);
+        FVirtualGearingEnabled:=TJSONObject(Root).Get('virtual_gearing_enabled',True);
         AdaptersObj := TJSONObject(Root).Find('adapters');
         if (AdaptersObj <> nil) and (AdaptersObj is TJSONObject) then
         begin
@@ -637,6 +644,7 @@ begin
     Root.Add('adapters', AdaptersJson);
     Root.Add('wheel_circumference_mm',FWheelCircumferenceMm);
     Root.Add('trainer_grade_sensitivity',FTrainerGradeSensitivity);
+    Root.Add('virtual_gearing_enabled',FVirtualGearingEnabled);
 
     for I := 0 to FAdapters.Count - 1 do
     begin
@@ -748,6 +756,16 @@ begin
   try
     if Value=FWheelCircumferenceMm then Exit;
     FWheelCircumferenceMm:=Value; SaveToFile;
+  finally FLock.Leave end;
+end;
+
+function TAppSettings.GetVirtualGearingEnabled:Boolean;
+begin FLock.Enter;try Result:=FVirtualGearingEnabled finally FLock.Leave end end;
+procedure TAppSettings.SetVirtualGearingEnabled(Value:Boolean);
+begin
+  FLock.Enter;try
+    if Value=FVirtualGearingEnabled then Exit;
+    FVirtualGearingEnabled:=Value;SaveToFile;
   finally FLock.Leave end;
 end;
 
