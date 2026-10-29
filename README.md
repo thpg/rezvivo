@@ -58,35 +58,41 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
     support direction changes in free exploration and lane changes on routes. Android also has
     on-screen controls.
 
-7. **Cycling physics and resistance.** Speed responds to power, mass, gradient and resistance,
+7. **Virtual shifting.** Shift virtual gears using Zwift Click, Play or Ride controllers,
+    on-screen buttons, or Page Up / Page Down. The ride panel shows the current gear or ERG mode.
+    Enabled by default, with an option to turn it off in device settings. Requires a compatible
+    controllable trainer; the calculated-resistance mode also needs live cadence. Experimental
+    support: not every controller, trainer and firmware combination has been tested.
+
+8. **Cycling physics and resistance.** Speed responds to power, mass, gradient and resistance,
     with coasting and braking. A smart trainer reproduces the gradient or holds a workout power
     target. Adjustable gradient sensitivity changes trainer resistance without altering measured
     power in the motion calculation. FIT routes can use a prepared load profile from the
     recording.
 
-8. **Interval workouts.** Choose original built-in workouts or start intervals during an
+9. **Interval workouts.** Choose original built-in workouts or start intervals during an
     ordinary ride. The workout panel shows the profile, target, remaining time and progress.
     Pause, resume, skip an interval, restart or adjust the reference power by ±5 W while
     training.
 
-9. **Automatic workout cues.** Start and resume by pedalling. Workouts pause after 5 seconds
+10. **Automatic workout cues.** Start and resume by pedalling. Workouts pause after 5 seconds
     without pedalling, or 15 seconds in recovery and free-ride sections. Coloured gates appear
     before interval changes, with audio cues and a countdown.
 
-10. **Workout editor.** Create and edit workouts, import and save ZWO files. Combine warm-ups,
+11. **Workout editor.** Create and edit workouts, import and save ZWO files. Combine warm-ups,
     cool-downs, steady efforts, power ramps, repeated intervals and free-ride sections. Set
     durations, power targets, cadence guidance and text prompts.
 
-11. **Workout-only mode.** Run intervals without loading a 3D map. A small vertical window lets
+12. **Workout-only mode.** Run intervals without loading a 3D map. A small vertical window lets
     you train while watching a film, using a browser or working in another application. Its
     always-on-top setting is optional.
 
-12. **Schedule and Intervals.icu.** Sync your training calendar, get a prompt for today's
+13. **Schedule and Intervals.icu.** Sync your training calendar, get a prompt for today's
     workout, retrieve routes and automatically upload completed smart-trainer sessions. Uploads
     run in the background and retry when needed. Simulations are excluded from real workout
     uploads.
 
-13. **Metrics and ride recording.** Track power, heart rate, cadence, speed, gradient, time,
+14. **Metrics and ride recording.** Track power, heart rate, cadence, speed, gradient, time,
     distance, elevation gain, work and TSS. Configure FTP and training zones. Keep ride history
     and FIT recordings, with saved state for recovery after interruptions. Manual controls and
     simulation are kept separate from real training measurements.
@@ -96,31 +102,31 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 <details>
 <summary>Ride together and make it yours</summary>
 
-14. **Group rides.** Create a room, invite a friend or join with a code and see other
+15. **Group rides.** Create a room, invite a friend or join with a code and see other
     participants in the same scene. Ready-made real-world routes have shared rooms that eligible
     smart-trainer rides join automatically.
 
-15. **Bot companions.** Ride with cyclists of different strengths from a fixed character
+16. **Bot companions.** Ride with cyclists of different strengths from a fixed character
     catalogue, with up to three local bots visible at once. They catch up, overtake, attack,
     tire, follow wheels and take turns at the front. Companions can wait for you; oncoming and
     crossing cyclists, glances and a helping-hand gesture add activity.
 
-16. **Body and appearance.** Adjust a shared parametric body: height, weight, fat and muscle
+17. **Body and appearance.** Adjust a shared parametric body: height, weight, fat and muscle
     balance, leg and arm lengths, pelvis and shoulder widths, waist, thighs and calves. Choose
     skin, hair and equipment colours, preview hairstyles including ponytails, braids and
     dreadlocks, and add facial hair. Wear a helmet, bandana, cycling cap or no headwear.
 
-17. **Clothing.** Choose cycling jerseys and bib shorts, T-shirts, sweatshirts, trousers, jeans,
+18. **Clothing.** Choose cycling jerseys and bib shorts, T-shirts, sweatshirts, trousers, jeans,
     jackets, coats and raincoats, with footwear, everyday headwear and colours. Fabric
     materials, seams, folds and animated loose clothing are supported. The in-game wardrobe
     works across travel modes.
 
-18. **Bicycles and bike fitting.** Parametric bicycles include road, mountain and fixed-gear
+19. **Bicycles and bike fitting.** Parametric bicycles include road, mountain and fixed-gear
     options. Choose a model and frame size, then adjust the saddle, stem and spacers, or use
     automatic bike fit for your avatar's measurements. Hand and foot positions follow bicycle
     geometry. Bots also receive individual fitting.
 
-19. **Character animation.** Seated and standing pedalling, sustained high-power attacking
+20. **Character animation.** Seated and standing pedalling, sustained high-power attacking
     poses, starts, stops and waiting. Pelvis, back, shoulders, arms and head take part, with
     breathing, effort expressions and small posture and grip changes. Walking, running,
     soft-tissue, hair and clothing motion, drift and stationary bicycle-turn animations are included.
@@ -130,21 +136,21 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 <details>
 <summary>Cameras, simulation and AI</summary>
 
-20. **Cameras and capture.** Use following, side, overview, cinematic and free cameras, with
+21. **Cameras and capture.** Use following, side, overview, cinematic and free cameras, with
     overview shots while stopped. Save screenshots in the screenshots folder. Record 30 fps MP4
     video with a virtual clock: slower rendering takes longer to record while preserving evenly
     timed animation in the finished video.
 
-21. **FIT ride simulation.** Explore without sensors by replaying recorded power and cadence.
+22. **FIT ride simulation.** Explore without sensors by replaying recorded power and cadence.
     Speed up, slow down, pause or rewind. Rewinding restores participant positions and recorded
     camera states. Simulation is also available to local profiles.
 
-22. **In-app AI assistant.** Chat with a separately connected external agent through MCP. It can
+23. **In-app AI assistant.** Chat with a separately connected external agent through MCP. It can
     navigate the interface, start rides and workouts, change workout settings and follow live
     sensor and interval data. English and Russian voice input and spoken replies are available;
     speech recognition can run locally.
 
-23. **Map refinement from photos and video.** An agent can match imagery to OSM objects and
+24. **Map refinement from photos and video.** An agent can match imagery to OSM objects and
     refine buildings, roofs, façades, windows, entrances, archways and decoration, as well as
     roads, pavements, vegetation and street objects. Observations persist as tile knowledge for
     later generation. This prepares specific areas; it does not automatically reconstruct the
@@ -155,20 +161,20 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 <details>
 <summary>Scenery, graphics and sound</summary>
 
-24. **Detailed environments.** Procedural asphalt, concrete, dirt, grass and rock materials,
+25. **Detailed environments.** Procedural asphalt, concrete, dirt, grass and rock materials,
     with tree, shrub and grass species from different regions. Architectural components add
     variety to buildings, alongside streetlights, fences, steps, signs, water and puddles.
 
-25. **Graphics and performance settings.** Full and Universal renderers, presets, FPS limits,
+26. **Graphics and performance settings.** Full and Universal renderers, presets, FPS limits,
     anti-aliasing, shadow quality and distance, and vegetation, hair and material detail. Auto
     uses trial rendering and available GPU information to suggest settings; a live preview shows
     FPS. Optional RTX shadows, RTX Screen and reflections require compatible hardware. The world
     image cache is off by default: it may improve speed but can introduce artifacts.
 
-26. **Sound.** Environmental ambience, wind, bicycle and road-impact sounds, workout cues and
+27. **Sound.** Environmental ambience, wind, bicycle and road-impact sounds, workout cues and
     interface clicks, with separate volume controls for each group.
 
-27. **Caching and connectivity.** Compressed binary tile caches, reuse of downloaded source data
+28. **Caching and connectivity.** Compressed binary tile caches, reuse of downloaded source data
     and photos, advance route preparation, cache-size reporting and clearing. Loading shows
     actual work stages and server request status. Prepared data lets you revisit places without
     downloading and generating everything again. Vegetation preparation speed and adaptation to
@@ -179,7 +185,7 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
 <details>
 <summary>Platforms, tools and open source</summary>
 
-28. **Profiles, platforms and maintenance.** Use a local profile without an account, save
+29. **Profiles, platforms and maintenance.** Use a local profile without an account, save
     preferences and personal settings, and choose a UI language. Menus adapt to screen size.
     Development is on PC (Windows x86-64), and an Android build has been successfully tested.
     Castle Game Engine supports Windows, Linux, macOS, FreeBSD, Android, iOS, web browsers
@@ -190,13 +196,13 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
     reports and feedback tools are included. See [CGE platform
     support](https://castle-engine.io/features).
 
-29. **Tools for creators and developers.** OSM3D Studio and tree, avatar, anatomy and bicycle
+30. **Tools for creators and developers.** OSM3D Studio and tree, avatar, anatomy and bicycle
     editors support scene preparation. Compare source photos with matching 3D views, build and
     rebuild tiles, automate through MCP and inspect CPU/GPU timings and render statistics.
     Development experiments include mesh shaders for part of the conifer rendering; they are not
     the required default renderer.
 
-30. **Open source.** REZVIVO is published on GitHub under GPL-3.0-or-later. Explore the code,
+31. **Open source.** REZVIVO is published on GitHub under GPL-3.0-or-later. Explore the code,
     build and modify the application, contribute improvements or help test it.
 
 </details>
