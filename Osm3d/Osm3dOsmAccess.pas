@@ -9,14 +9,24 @@ type
   TOsmAccessTokenProvider = function: string;
   TOsmAbortCheck = function: Boolean of object;
   TOsmReadProgress = procedure(Received: Int64) of object;
+  EMapAccessError = class(Exception)
+    StatusCode: Integer;
+    constructor CreateStatus(const MessageText: string; Code: Integer);
+  end;
 
 { Register before starting workers. No secret is stored in this unit or the
   directory cache. Only these exact HTTPS endpoints may receive credentials. }
 var OsmAccessTokenProvider: TOsmAccessTokenProvider = nil;
+    OsmMapClientBuild: Integer = 0;
 
 function OsmRequiresAccess(const URL: string): Boolean;
 function HeightRequiresAccess(const URL: string): Boolean;
 function MapRequiresAccess(const URL: string): Boolean;
+{ A valid account token takes precedence. Local profiles receive a short-lived
+  map-only credential, shared by workers in memory, never saved in tile caches. }
+function MapAccessToken(const URL: string; Aborted: TOsmAbortCheck;
+  out IsGuest: Boolean): string;
+procedure InvalidateMapGuestToken(const RejectedToken: string);
 function OsmPublicNativeEndpoint(const URL: string): Boolean;
 function OsmPublicPost(const URL, Body: string; ConnectMs, ReadMs: Integer;
   Response: TStream; Aborted: TOsmAbortCheck; Progress: TOsmReadProgress): Integer;
@@ -29,12 +39,33 @@ function OsmAuthenticatedPost(const URL, Body, Token: string;
 
 implementation
 
-uses {$ifdef MSWINDOWS} Windows, SyncObjs, {$endif} URIParser;
+uses {$ifdef MSWINDOWS} Windows, SyncObjs, {$endif} URIParser,
+  fpjson, jsonparser, Osm3dPlatformHttp;
+
+var
+  GuestLock: TRTLCriticalSection;
+  GuestToken: string = '';
+  GuestValidUntil: QWord = 0;
+  GuestRetryAfter: QWord = 0;
+
+constructor EMapAccessError.CreateStatus(const MessageText: string; Code: Integer);
+begin
+  inherited Create(MessageText);
+  StatusCode := Code;
+end;
 
 function OsmRequiresAccess(const URL: string): Boolean;
 begin
   Result := SameText(URL, 'https://rezvivo.com/osm/api/interpreter') or
-    SameText(URL, 'https://rezvivo.ru/osm/api/interpreter');
+    SameText(URL, 'https://rezvivo.ru/osm/api/interpreter') or
+    SameText(URL, 'https://rezvivo.com/osm/public/api/interpreter') or
+    SameText(URL, 'https://rezvivo.ru/osm/public/api/interpreter');
+end;
+
+function GuestTokenEndpoint(const URL: string): Boolean;
+begin
+  Result := (URL='https://rezvivo.com/api/v1/osm/guest-token') or
+    (URL='https://rezvivo.ru/api/v1/osm/guest-token');
 end;
 
 function OsmPublicNativeEndpoint(const URL: string): Boolean;
@@ -199,7 +230,8 @@ begin
     if not (((Method='POST') and OsmRequiresAccess(URL)) or
             ((Method='GET') and (HeightRequiresAccess(URL) or MapRequiresAccess(URL)))) or (Token = '') or
       (Pos(#13, Token) <> 0) or (Pos(#10, Token) <> 0) then Exit;
-  end else if (Method<>'POST') or not OsmPublicNativeEndpoint(URL) or (Token<>'') then Exit;
+  end else if (Method<>'POST') or
+    not (OsmPublicNativeEndpoint(URL) or GuestTokenEndpoint(URL)) or (Token<>'') then Exit;
   {$ifdef MSWINDOWS}
   { OS certificate chain, expiry and hostname validation. No security flags
     are relaxed. Async I/O lets teardown cancel without waiting for HTTP. }
@@ -208,6 +240,8 @@ begin
   Verb := UTF8Decode(Method);
   RequestPath := UTF8Decode(U.Path + U.Document);
   Headers := UTF8Decode('Content-Type: text/plain; charset=utf-8' + #13#10);
+  if GuestTokenEndpoint(URL) and (OsmMapClientBuild>0) then
+    Headers:=Headers+UTF8Decode('X-REZVIVO-Build: '+IntToStr(OsmMapClientBuild)+#13#10);
   if Authenticated then
     Headers:=UTF8Decode('Authorization: Bearer ' + Token + #13#10)+Headers;
   Session := nil; Connection := nil; Request := nil;
@@ -303,5 +337,148 @@ begin
   Result:=OsmAuthenticatedRequest(URL,'POST',Body,Token,ConnectMs,ReadMs,
     Response,Aborted,Progress);
 end;
+
+type
+  TGuestResponse = class(TMemoryStream)
+    Aborted: TOsmAbortCheck;
+    function Write(const Buffer; Count: LongInt): LongInt; override;
+  end;
+
+function TGuestResponse.Write(const Buffer; Count: LongInt): LongInt;
+begin
+  if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+  if (Count<0) or (Size+Count>8192) then
+    raise EMapAccessError.CreateStatus('Map token response too large',0);
+  Result:=inherited Write(Buffer,Count);
+end;
+
+function RequestGuestToken(const URL: string; Aborted: TOsmAbortCheck;
+  out Lifetime: Integer): string;
+var
+  Response: TGuestResponse;
+  RequestBody: TStringStream;
+  Headers, ResponseHeaders: TStringList;
+  Platform: TOsmPlatformHttpRequest;
+  Code: Integer;
+  Body: string;
+  Json: TJSONData;
+begin
+  Result:='';Lifetime:=0;
+  if not GuestTokenEndpoint(URL) then
+    raise EMapAccessError.CreateStatus('Untrusted map token issuer',0);
+  if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+  Response:=TGuestResponse.Create;Response.Aborted:=Aborted;
+  try
+    if Assigned(OsmPlatformHttpFactory) then begin
+      Platform:=OsmPlatformHttpFactory();
+      if Platform=nil then raise EMapAccessError.CreateStatus('Map token transport unavailable',0);
+      try
+        Headers:=TStringList.Create;
+        try
+          Headers.Add('Content-Type: application/json');
+          Headers.Add('User-Agent: REZVIVO/1.0 (+https://rezvivo.com)');
+          if OsmMapClientBuild>0 then Headers.Add('X-REZVIVO-Build: '+IntToStr(OsmMapClientBuild));
+          ResponseHeaders:=TStringList.Create;
+          try
+            RequestBody:=TStringStream.Create('{}');
+            try
+              Platform.NoRedirects:=True;Platform.MaxResponseBytes:=8192;
+              Platform.Execute('POST',URL,Headers,RequestBody,3000,8000,
+                Response,Code,ResponseHeaders);
+            finally RequestBody.Free end;
+          finally ResponseHeaders.Free end;
+        finally Headers.Free end;
+      finally Platform.Free end;
+    end else
+      Code:=NativeRequest(URL,'POST','{}','',False,3000,8000,Response,Aborted,nil);
+    if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+    if Code<>200 then raise EMapAccessError.CreateStatus(
+      'Map guest token request failed (HTTP '+IntToStr(Code)+')',Code);
+    SetLength(Body,Response.Size);
+    if Response.Size>0 then Move(Response.Memory^,Body[1],Response.Size);
+    Json:=GetJSON(Body);
+    try
+      if not (Json is TJSONObject) then raise EMapAccessError.CreateStatus('Invalid map token response',0);
+      if (TJSONObject(Json).Get('token_type','')<>'Bearer') or
+         (TJSONObject(Json).Get('scope','')<>'map:read') then
+        raise EMapAccessError.CreateStatus('Invalid map token scope',0);
+      Result:=TJSONObject(Json).Get('access_token','');
+      Lifetime:=TJSONObject(Json).Get('expires_in',0);
+      if (Length(Result)<20) or (Length(Result)>4096) or
+         (Pos(#13,Result)>0) or (Pos(#10,Result)>0) or (Pos(' ',Result)>0) or
+         (Lifetime<120) or (Lifetime>3600) then
+        raise EMapAccessError.CreateStatus('Invalid map token response',0);
+    finally Json.Free end;
+  finally Response.Free end;
+end;
+
+function MapAccessToken(const URL: string; Aborted: TOsmAbortCheck;
+  out IsGuest: Boolean): string;
+const Issuers: array[0..1] of string = (
+  'https://rezvivo.com/api/v1/osm/guest-token',
+  'https://rezvivo.ru/api/v1/osm/guest-token');
+var I,Lifetime:Integer;
+begin
+  Result:='';IsGuest:=False;
+  if not (OsmRequiresAccess(URL) or HeightRequiresAccess(URL) or MapRequiresAccess(URL)) then
+    raise EMapAccessError.CreateStatus('Untrusted map endpoint',0);
+  if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+  if Assigned(OsmAccessTokenProvider) then Result:=OsmAccessTokenProvider();
+  if Result<>'' then Exit;
+  IsGuest:=True;
+  { One token issue in flight for all height/OSM/map workers. Waiting for the
+    lock is cancellable; network errors back off instead of causing a stampede. }
+  while System.TryEnterCriticalSection(GuestLock)=0 do begin
+    if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+    Sleep(25);
+  end;
+  try
+    if Assigned(Aborted) and Aborted() then raise EAbort.Create('aborted');
+    if (GuestToken<>'') and (GetTickCount64<GuestValidUntil) then Exit(GuestToken);
+    if GetTickCount64<GuestRetryAfter then
+      raise EMapAccessError.CreateStatus('Map guest token temporarily unavailable',503);
+    GuestToken:='';GuestValidUntil:=0;
+    for I:=0 to High(Issuers) do begin
+      try
+        Result:=RequestGuestToken(Issuers[I],Aborted,Lifetime);
+        GuestToken:=Result;
+        GuestValidUntil:=GetTickCount64+QWord(Lifetime-60)*1000;
+        GuestRetryAfter:=0;
+        Exit;
+      except
+        on E:EAbort do raise;
+        on E:EMapAccessError do begin
+          if E.StatusCode=429 then begin
+            GuestRetryAfter:=GetTickCount64+900000;raise;
+          end;
+          if I=High(Issuers) then begin
+            GuestRetryAfter:=GetTickCount64+15000;raise;
+          end;
+        end;
+        on E:Exception do if I=High(Issuers) then begin
+          GuestRetryAfter:=GetTickCount64+15000;
+          raise EMapAccessError.CreateStatus('Map guest token transport failed',0);
+        end;
+      end;
+    end;
+  finally System.LeaveCriticalSection(GuestLock) end;
+end;
+
+procedure InvalidateMapGuestToken(const RejectedToken: string);
+begin
+  System.EnterCriticalSection(GuestLock);
+  try
+    { A late 401 from another worker must not discard a newer credential. }
+    if (RejectedToken<>'') and (RejectedToken=GuestToken) then begin
+      GuestToken:='';GuestValidUntil:=0;
+    end;
+  finally System.LeaveCriticalSection(GuestLock) end;
+end;
+
+initialization
+  System.InitCriticalSection(GuestLock);
+finalization
+  GuestToken:='';
+  System.DoneCriticalSection(GuestLock);
 
 end.

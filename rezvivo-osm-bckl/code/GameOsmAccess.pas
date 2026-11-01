@@ -2,7 +2,7 @@ unit GameOsmAccess;
 {$mode objfpc}{$H+}
 interface
 implementation
-uses VeloSiteAPI, Osm3dOsmAccess;
+uses VeloSiteAPI, Osm3dOsmAccess, GameBuildInfo;
 
 function AccessToken: string;
 begin
@@ -11,6 +11,7 @@ begin
 end;
 
 initialization
+  OsmMapClientBuild := ClientBuild;
   OsmAccessTokenProvider := @AccessToken;
 finalization
   OsmAccessTokenProvider := nil;

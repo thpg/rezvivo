@@ -434,34 +434,38 @@ var
   Response: TBytesStream;
   ConnectMs, Code: Integer;
   Started: TDateTime;
-  NeedsAccount: Boolean;
+  NeedsCredential, IsGuest: Boolean;
+  CredentialAttempt: Integer;
 begin
-  Result := TFetchResult.Failure('OSM requires an active REZVIVO account', 401);
+  Result := TFetchResult.Failure('Map credential unavailable', 401);
   if FAbortAll then Exit(TFetchResult.Failure('aborted'));
-  NeedsAccount:=OsmRequiresAccess(URL) or HeightRequiresAccess(URL) or MapRequiresAccess(URL);
-  if NeedsAccount and not Assigned(OsmAccessTokenProvider) then Exit;
+  NeedsCredential:=OsmRequiresAccess(URL) or HeightRequiresAccess(URL) or MapRequiresAccess(URL);
   Response := TBytesStream.Create;
   Started := Now;
   try
     try
       Token := '';
-      if NeedsAccount then begin
-        Token:=OsmAccessTokenProvider();
-        if Token='' then Exit;
-      end;
+      IsGuest:=False;
+      if NeedsCredential then Token:=MapAccessToken(URL,@CheckOsmAbort,IsGuest);
       SetLength(Query, Length(Body));
       if Length(Body) > 0 then Move(Body[0], Query[1], Length(Body));
       ConnectMs := ConnectTimeoutLimitMs;
       if ConnectMs <= 0 then ConnectMs := 3000;
       TLS_CurURL := URL; TLS_CurMethod := Method; TLS_CurStartTime := Started;
       TLS_CurLastReportTime := Started; TLS_CurLastReportBytes := 0;
-      if Assigned(FOnNetworkRequest) then FOnNetworkRequest(Self, URL, Method, Length(Body));
-      if NeedsAccount then
-        Code := OsmAuthenticatedRequest(URL, Method, Query, Token, ConnectMs, FTimeoutMs,
-          Response, @CheckOsmAbort, @AuthenticatedOsmProgress)
-      else
-        Code := OsmPublicPost(URL, Query, ConnectMs, FTimeoutMs,
-          Response, @CheckOsmAbort, @AuthenticatedOsmProgress);
+      for CredentialAttempt:=0 to 1 do begin
+        Response.Size:=0;Response.Position:=0;
+        if Assigned(FOnNetworkRequest) then FOnNetworkRequest(Self, URL, Method, Length(Body));
+        if NeedsCredential then
+          Code := OsmAuthenticatedRequest(URL, Method, Query, Token, ConnectMs, FTimeoutMs,
+            Response, @CheckOsmAbort, @AuthenticatedOsmProgress)
+        else
+          Code := OsmPublicPost(URL, Query, ConnectMs, FTimeoutMs,
+            Response, @CheckOsmAbort, @AuthenticatedOsmProgress);
+        if (Code<>401) or not IsGuest or (CredentialAttempt=1) then Break;
+        InvalidateMapGuestToken(Token);
+        Token:=MapAccessToken(URL,@CheckOsmAbort,IsGuest);
+      end;
       if FAbortAll then Exit(TFetchResult.Failure('aborted'));
       if Code <> 200 then Exit(TFetchResult.Failure('HTTP ' + IntToStr(Code), Code));
       Result.Success := True; Result.Data := Copy(Response.Bytes, 0, Response.Size);
@@ -472,6 +476,7 @@ begin
         200, Response.Size, MilliSecondsBetween(Now, Started));
     except
       on E: EAbort do Result := TFetchResult.Failure('aborted');
+      on E: EMapAccessError do Result:=TFetchResult.Failure(E.Message,E.StatusCode);
       on E: Exception do begin
         { Preserve native timeout/connection codes for the loading display.
           Other exceptions may originate in the credential provider. }
@@ -508,7 +513,7 @@ var
   PlatformRequest: TOsmPlatformHttpRequest;
   InFlightObject: TObject;
   EffectiveAuthorization: string;
-  AccountRequest: Boolean;
+  AccountRequest, IsGuest, GuestRetried: Boolean;
   {$ifdef REZVIVO_STARTUP_TIMING}
   TimingStart: QWord;
   {$endif}
@@ -528,14 +533,17 @@ begin
   { Android must use its TLS transport for protected tiles too. Keep the
     endpoint allowlist and never forward account credentials on redirects. }
   EffectiveAuthorization:=Authorization;
+  IsGuest:=False;GuestRetried:=False;
   if AccountRequest then begin
     if FAbortAll then Exit(TFetchResult.Failure('aborted'));
-    if not Assigned(OsmAccessTokenProvider) then
-      Exit(TFetchResult.Failure('OSM requires an active REZVIVO account',401));
-    try EffectiveAuthorization:=OsmAccessTokenProvider();
-    except Exit(TFetchResult.Failure('OSM request failed'));end;
+    try EffectiveAuthorization:=MapAccessToken(URL,@CheckOsmAbort,IsGuest);
+    except
+      on E:EAbort do Exit(TFetchResult.Failure('aborted'));
+      on E:EMapAccessError do Exit(TFetchResult.Failure(E.Message,E.StatusCode));
+      on E:Exception do Exit(TFetchResult.Failure('Map credential request failed'));
+    end;
     if EffectiveAuthorization='' then
-      Exit(TFetchResult.Failure('OSM requires an active REZVIVO account',401));
+      Exit(TFetchResult.Failure('Map credential unavailable',401));
     if (Pos(#13,EffectiveAuthorization)>0) or (Pos(#10,EffectiveAuthorization)>0) then
       Exit(TFetchResult.Failure('Invalid authorization header'));
     EffectiveAuthorization:='Bearer '+EffectiveAuthorization;
@@ -573,8 +581,10 @@ begin
 
     Attempts := FMaxRetries;
     if (AttemptLimit > 0) and (Attempts > AttemptLimit) then Attempts := AttemptLimit;
-    for Attempt := 1 to Attempts do
+    Attempt:=0;
+    while Attempt<Attempts do
     begin
+      Inc(Attempt);
       { Отмена (teardown карты): новые попытки не стартуют. }
       if FAbortAll then
       begin
@@ -703,6 +713,21 @@ begin
 
             ErrMsg := E.Message;
             if not UsedTransport then StatusCode := Client.ResponseStatusCode;
+
+            if AccountRequest and IsGuest and not GuestRetried and (StatusCode=401) then begin
+              GuestRetried:=True;
+              InvalidateMapGuestToken(Copy(EffectiveAuthorization,8,MaxInt));
+              try
+                EffectiveAuthorization:='Bearer '+MapAccessToken(URL,@CheckOsmAbort,IsGuest);
+                Client.AddHeader('Authorization',EffectiveAuthorization);
+              except
+                on E:EAbort do Exit(TFetchResult.Failure('aborted'));
+                on E:EMapAccessError do Exit(TFetchResult.Failure(E.Message,E.StatusCode));
+                on E:Exception do Exit(TFetchResult.Failure('Map credential request failed'));
+              end;
+              Dec(Attempt);
+              Continue;
+            end;
 
             if Assigned(FOnError) then
               FOnError(Self, URL, ErrMsg, Attempt, PartialSize, ElapsedMs);

@@ -1,7 +1,7 @@
 {
-  "version": "0.4.4-alpha.1",
-  "build": 19,
-  "file_version": "0.4.4.19",
+  "version": "0.4.5-alpha.1",
+  "build": 20,
+  "file_version": "0.4.5.20",
   "channel": "alpha",
-  "notes": "Fix a crash when switching to password sign-in and reopening or resizing the login form. Fix rider skin shader compilation on strict GLSL drivers, including affected Intel GPUs."
+  "notes": "Fix HTTP 401 errors when loading maps without signing in. Local profiles automatically obtain a temporary map-only guest token, shared by map loaders and refreshed when needed. Account authentication and protected server access are preserved."
 }

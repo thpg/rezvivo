@@ -51,9 +51,9 @@ begin
     Fetcher.MaxRetries:=2; Fetcher.RetryBaseMs:=1; Fetcher.RetryMaxMs:=1;
     Fetcher.MaxResponseBytes:=1024;
     OsmAccessTokenProvider:=@TokenProvider;
-    AccountToken:=''; Previous:=Calls;
-    R:=Fetcher.GetUrl('https://rezvivo.com/map/world-ne-v1/0/0/0.png');
-    Check(not R.Success and (R.StatusCode=401) and (Calls=Previous),'guest used protected map transport');
+    { MapGuestTokenTests covers the guest handshake. This fixture exercises
+      account authentication and the remaining platform/cache behavior. }
+    Previous:=Calls;
     AccountToken:='test-account-token';
     R:=Fetcher.GetUrl('https://rezvivo.com/map/world-ne-v1/0/0/0.png');
     Check(R.Success and (Calls=Previous+1) and RefuseRedirects and
