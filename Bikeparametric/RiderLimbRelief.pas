@@ -36,8 +36,9 @@ const RiderLimbReliefGLSL=
   // a blurry/dark stripe. The atlas has periodic S and zero-height gutters.
   ' vec2 uv=vec2(angle/6.2831853+0.5,(clamp(along,0.0,1.0)*511.0+0.5+arm*512.0)/1024.0);'+#10+
   ' vec4 data=texture2D(rsLimbAtlas,uv);float h=dot(data.rg,vec2(256.0,1.0))*(0.020/257.0)-0.010;float footprint=max(length(dFdx(p)),length(dFdy(p)));'+#10+
-  ' float filter=1.0-smoothstep(0.008,0.025,footprint);rsLimbPigment=(data.b-0.5)*mask;'+#10+
-  ' return h*filter*mask*rsLimbRelief.x*(0.85+0.15*rsLimbRelief.y);'+#10+
+  // "filter" is reserved by GLSL; some drivers reject the whole skin shader.
+  ' float limbDetailFade=1.0-smoothstep(0.008,0.025,footprint);rsLimbPigment=(data.b-0.5)*mask;'+#10+
+  ' return h*limbDetailFade*mask*rsLimbRelief.x*(0.85+0.15*rsLimbRelief.y);'+#10+
   '}';
 
 implementation

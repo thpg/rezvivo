@@ -85,6 +85,8 @@ type
 
     { Содержимое формы — пересоздаётся при смене вкладки }
     FFormContent: TCastleUserInterface;
+    FFormOwner: TComponent;
+    FFormReady: Boolean;
 
     { Device flow }
     FButtonGetCode: TCastleButton;
@@ -110,6 +112,7 @@ type
     procedure ClickLogin(Sender: TObject);
 
     procedure SwitchMode(AMode: TLoginMode);
+    procedure ClearFormReferences;
     procedure RebuildForm;
     procedure BuildDeviceForm;
     procedure BuildPasswordForm;
@@ -255,6 +258,7 @@ end;
 
 procedure TViewLogin.Start;
 begin
+  FFormReady := False;
   inherited;
   LocalizeDesignedUi(Self);
   TCastleRectangleControl(DesignedComponent('Background')).Color:=MenuBackground;
@@ -278,13 +282,14 @@ begin
   SetStatus('', False);
 
   RebuildForm;
-  Resize;
 end;
 
 procedure TViewLogin.Resize;
 var W,Y:Single;
 begin
-  inherited;if(FScroll=nil)or(FTabs=nil)or(FFormContent=nil)then Exit;
+  inherited;
+  if not FFormReady then Exit;
+  if(FScroll=nil)or(FTabs=nil)or(FFormContent=nil)then Exit;
   ButtonBack.FontScale:=1;ButtonBack.FontSize:=17;ButtonBack.MinWidth:=100;ButtonBack.MinHeight:=44;
   ButtonBack.Anchor(hpLeft,12);ButtonBack.Anchor(vpTop,-12);
   LabelTitle.FontSize:=24;LabelTitle.MaxWidth:=Max(1,EffectiveWidth-ButtonBack.EffectiveWidth-48);
@@ -314,13 +319,17 @@ end;
 
 procedure TViewLogin.Stop;
 begin
+  FFormReady := False;
+  FPolling := False;
   if Assigned(FBackground) then
   begin
     FBackground.WaitFor;     { не убиваем поток на лету }
     FreeAndNil(FBackground);
   end;
   inherited;
-  FScroll:=nil;FTabs:=nil;FFormContent:=nil;
+  FScroll := nil;
+  FFormOwner := nil;
+  ClearFormReferences;
 end;
 
 function TViewLogin.Press(const Event:TInputPressRelease):Boolean;
@@ -345,11 +354,37 @@ end;
 
 procedure TViewLogin.SwitchMode(AMode: TLoginMode);
 begin
-  if FMode = AMode then Exit;
+  if FMode = AMode then
+  begin
+    { A toggle button has already changed Pressed before invoking OnClick. }
+    FTabDevice.Pressed := FMode = lmDevice;
+    FTabPassword.Pressed := FMode = lmPassword;
+    Exit;
+  end;
+  { SetStatus and intermediate UI changes can call Resize. The old controls
+    must never be laid out using the new mode, nor a half-built new form. }
+  FFormReady := False;
   FMode := AMode;
   FPolling := False;
   SetStatus('', False);
   RebuildForm;
+end;
+
+procedure TViewLogin.ClearFormReferences;
+begin
+  FTabs := nil;
+  FTabDevice := nil;
+  FTabPassword := nil;
+  FFormContent := nil;
+  FIntro := nil;
+  FButtonGetCode := nil;
+  FLabelUserCode := nil;
+  FLabelHint := nil;
+  FEmailLabel := nil;
+  FPasswordLabel := nil;
+  FEditEmail := nil;
+  FEditPassword := nil;
+  FButtonLogin := nil;
 end;
 
 procedure TViewLogin.RebuildForm;
@@ -358,17 +393,23 @@ var
 begin
   if not Assigned(FormHost) then Exit;
 
+  FFormReady := False;
   FormHost.ClearControls;
-  FFormContent := nil;
+  { ClearControls only detaches children. Release the old form after the
+    current click has returned, including its sending tab button. }
+  if FFormOwner <> nil then ApplicationProperties.FreeDelayed(FFormOwner);
+  FFormOwner := TComponent.Create(FreeAtStop);
+  ClearFormReferences;
 
   { Tabs row at top of form }
-  TabsRow := TMenuFlow.Create(FreeAtStop);FTabs:=TabsRow;
+  TabsRow := TMenuFlow.Create(FFormOwner);FTabs:=TabsRow;
   TabsRow.Spacing := 4;
   TabsRow.Anchor(hpMiddle);
   TabsRow.Anchor(vpTop, 0);
   FormHost.InsertFront(TabsRow);
 
-  FTabDevice := TMenuButton.Create(FreeAtStop);
+  FTabDevice := TMenuButton.Create(FFormOwner);
+  FTabDevice.Name := 'LoginTabDevice';
   BindUiText(FTabDevice, 'Via website');
   FTabDevice.Toggle := True;
   FTabDevice.Pressed := FMode = lmDevice;
@@ -378,7 +419,8 @@ begin
   FTabDevice.OnClick := @ClickTabDevice;
   TabsRow.InsertFront(FTabDevice);
 
-  FTabPassword := TMenuButton.Create(FreeAtStop);
+  FTabPassword := TMenuButton.Create(FFormOwner);
+  FTabPassword.Name := 'LoginTabPassword';
   BindUiText(FTabPassword, 'Email and password');
   FTabPassword.Toggle := True;
   FTabPassword.Pressed := FMode = lmPassword;
@@ -393,6 +435,7 @@ begin
     lmPassword: BuildPasswordForm;
   end;
   FormHost.InsertFront(LabelStatus);
+  FFormReady := True;
   Resize;
 end;
 
@@ -400,14 +443,14 @@ procedure TViewLogin.BuildDeviceForm;
 var
   Hint: TCastleLabel;
 begin
-  FFormContent := TCastleUserInterface.Create(FreeAtStop);
+  FFormContent := TCastleUserInterface.Create(FFormOwner);
   FFormContent.Width := FormHost.EffectiveWidth;
   FFormContent.Height := 400;
   FFormContent.Anchor(hpMiddle);
   FFormContent.Anchor(vpTop, -80);
   FormHost.InsertFront(FFormContent);
 
-  Hint := TMenuLabel.Create(FreeAtStop);
+  Hint := TMenuLabel.Create(FFormOwner);
   FIntro:=Hint;
   Hint.Caption :=
     T('Secure sign-in without sharing your password with the game.') + LineEnding +
@@ -419,7 +462,8 @@ begin
   Hint.Anchor(vpTop, 0);
   FFormContent.InsertFront(Hint);
 
-  FButtonGetCode := TMenuButton.Create(FreeAtStop);
+  FButtonGetCode := TMenuButton.Create(FFormOwner);
+  FButtonGetCode.Name := 'LoginContinueBrowser';
   TMenuButton(FButtonGetCode).Style:=mbPrimary;TMenuButton(FButtonGetCode).AutoIcon:=False;
   BindUiText(FButtonGetCode, 'Continue in browser');
   FButtonGetCode.MinWidth := 280;
@@ -431,7 +475,7 @@ begin
   FButtonGetCode.Anchor(vpTop, -110);
   FFormContent.InsertFront(FButtonGetCode);
 
-  FLabelUserCode := TMenuLabel.Create(FreeAtStop);
+  FLabelUserCode := TMenuLabel.Create(FFormOwner);
   FLabelUserCode.Caption := '';
   FLabelUserCode.FontScale := 1.1;
   FLabelUserCode.Color := Vector4(0.75, 0.8, 0.85, 1);
@@ -439,7 +483,7 @@ begin
   FLabelUserCode.Anchor(vpTop, -190);
   FFormContent.InsertFront(FLabelUserCode);
 
-  FLabelHint := TMenuLabel.Create(FreeAtStop);
+  FLabelHint := TMenuLabel.Create(FFormOwner);
   FLabelHint.Caption := '';
   FLabelHint.FontScale := 1.0;
   FLabelHint.Color := Vector4(0.7, 0.85, 0.95, 1);
@@ -452,14 +496,14 @@ procedure TViewLogin.BuildPasswordForm;
 var
   LabelEmail, LabelPass: TCastleLabel;
 begin
-  FFormContent := TCastleUserInterface.Create(FreeAtStop);
+  FFormContent := TCastleUserInterface.Create(FFormOwner);
   FFormContent.Width := FormHost.EffectiveWidth;
   FFormContent.Height := 400;
   FFormContent.Anchor(hpMiddle);
   FFormContent.Anchor(vpTop, -80);
   FormHost.InsertFront(FFormContent);
 
-  LabelEmail := TMenuLabel.Create(FreeAtStop);
+  LabelEmail := TMenuLabel.Create(FFormOwner);
   FEmailLabel:=LabelEmail;
   BindUiText(LabelEmail, 'Email:');
   LabelEmail.FontScale := 1.1;
@@ -468,13 +512,16 @@ begin
   LabelEmail.Anchor(vpTop, -10);
   FFormContent.InsertFront(LabelEmail);
 
-  FEditEmail := TMenuEdit.Create(FreeAtStop);
+  FEditEmail := TMenuEdit.Create(FFormOwner);
+  FEditEmail.Name := 'LoginEmail';
+  FEditEmail.Text := ''; { CGE copies a newly assigned Name into empty Text. }
+  FEditEmail.TextTranslate := False;
   FEditEmail.Width := 440;
   FEditEmail.Anchor(hpLeft, 180);
   FEditEmail.Anchor(vpTop, -10);
   FFormContent.InsertFront(FEditEmail);
 
-  LabelPass := TMenuLabel.Create(FreeAtStop);
+  LabelPass := TMenuLabel.Create(FFormOwner);
   FPasswordLabel:=LabelPass;
   BindUiText(LabelPass, 'Password:');
   LabelPass.FontScale := 1.1;
@@ -483,14 +530,18 @@ begin
   LabelPass.Anchor(vpTop, -70);
   FFormContent.InsertFront(LabelPass);
 
-  FEditPassword := TMenuEdit.Create(FreeAtStop);
+  FEditPassword := TMenuEdit.Create(FFormOwner);
+  FEditPassword.Name := 'LoginPassword';
+  FEditPassword.Text := '';
+  FEditPassword.TextTranslate := False;
   FEditPassword.Width := 440;
   FEditPassword.PasswordChar := '*';
   FEditPassword.Anchor(hpLeft, 180);
   FEditPassword.Anchor(vpTop, -70);
   FFormContent.InsertFront(FEditPassword);
 
-  FButtonLogin := TMenuButton.Create(FreeAtStop);
+  FButtonLogin := TMenuButton.Create(FFormOwner);
+  FButtonLogin.Name := 'LoginSubmit';
   TMenuButton(FButtonLogin).Style:=mbPrimary;TMenuButton(FButtonLogin).AutoIcon:=False;
   BindUiText(FButtonLogin, 'Sign in');
   FButtonLogin.MinWidth := 240;

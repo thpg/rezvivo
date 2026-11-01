@@ -1,7 +1,7 @@
 {
-  "version": "0.4.3-alpha.1",
-  "build": 18,
-  "file_version": "0.4.3.18",
+  "version": "0.4.4-alpha.1",
+  "build": 19,
+  "file_version": "0.4.4.19",
   "channel": "alpha",
-  "notes": "Improve rider anatomy, clothing detail and fabric lighting in shadows. Join matching road surfaces with rounded intersections and connect narrower paths to the edge of wider roads. Add virtual shifting controls and an ERG/gear indicator. Refine vegetation rendering and preserve photo-based map improvements."
+  "notes": "Fix a crash when switching to password sign-in and reopening or resizing the login form. Fix rider skin shader compilation on strict GLSL drivers, including affected Intel GPUs."
 }
