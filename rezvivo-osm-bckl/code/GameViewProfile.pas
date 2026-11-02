@@ -1197,8 +1197,8 @@ begin
 
   Hint := TMenuLabel.Create(FContentOwner);
   FLangHint:=Hint;
-  Hint.Caption := T('Auto = use language from your VeloSite profile.'
-    + ' This choice is saved locally and does not change your VeloSite profile.');
+  Hint.Caption := T('Auto = use language from your Rezvivo profile.'
+    + ' This choice is saved locally and does not change your Rezvivo profile.');
   Hint.MaxWidth := FSettingsHost.EffectiveWidth;
   Hint.FontScale := 0.85;
   Hint.Color := Vector4(0.6, 0.6, 0.65, 1);

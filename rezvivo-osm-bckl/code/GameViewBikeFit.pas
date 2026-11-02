@@ -2842,6 +2842,10 @@ begin
     FColParams.HeightFraction:=1;FColParams.Anchor(vpTop);
     FColResult.HeightFraction:=1;FColResult.Width:=FBottomRow.EffectiveWidth-W;
     FColResult.Anchor(hpRight);FColResult.Anchor(vpTop);
+    if (Container<>nil) and (Container.UnscaledHeight<560) then begin
+      FColResult.HeightFraction:=0;
+      FColResult.Height:=Max(200,Container.UnscaledHeight-130/S);
+    end;
   end;
   TabW:=(W-32)/3;
   for I:=0 to High(FSectionButtons)do begin

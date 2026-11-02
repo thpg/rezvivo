@@ -196,21 +196,43 @@ begin
 end;
 
 procedure TDreamWorldPage.Layout;
-var WheelWidth,RightLeft,Scale:Single;
+var WheelWidth,RightLeft,Scale,ContentTop,SearchTop,WheelHeight:Single;ShortLayout,Narrow:Boolean;
 begin
   if(FCarousel=nil)or(EffectiveWidth<=0)then Exit;
   Scale:=Min(1,Max(0.65,UIScale));
+  Narrow:=EffectiveWidth<520/Scale;
+  ShortLayout:=(Container<>nil) and (Container.UnscaledHeight<560);
+  FHeader.Resize;
+  SearchTop:=FHeader.Height+8/Scale;ContentTop:=SearchTop+46/Scale;
+  if ShortLayout then ContentTop:=SearchTop+40/Scale;
+  FDescription.Exists:=not (ShortLayout or Narrow);FStatus.Exists:=not ShortLayout;
+  if Narrow then begin
+    WheelWidth:=Max(80,EffectiveWidth-16/Scale);
+    WheelHeight:=Min(184/Scale,Max(120/Scale,(EffectiveHeightForChildren-ContentTop)*0.42));
+    FSearch.Width:=WheelWidth;FSearch.Height:=34/Scale;FSearch.FontSize:=15/Scale;
+    FSearch.Anchor(hpLeft,8/Scale);FSearch.Anchor(vpTop,-SearchTop);
+    FCarousel.Width:=WheelWidth;FCarousel.Height:=WheelHeight;
+    FCarousel.Anchor(hpLeft,8/Scale);FCarousel.Anchor(vpTop,-ContentTop);
+    FPreview.Border.Left:=8/Scale;FPreview.Border.Right:=8/Scale;
+    FPreview.Border.Top:=ContentTop+WheelHeight+8/Scale;FPreview.Border.Bottom:=38/Scale;
+    FStatus.Anchor(hpLeft,8/Scale);FStatus.Anchor(vpBottom,8/Scale);
+    FStatus.FontSize:=12/Scale;FStatus.MaxWidth:=WheelWidth;
+    FLoadingLabel.FontSize:=16/Scale;FLoadingLabel.MaxWidth:=WheelWidth-24/Scale;
+    Exit;
+  end;
   WheelWidth:=Min(EffectiveWidth*0.32,350/Scale);RightLeft:=WheelWidth+24;
   FSearch.Width:=WheelWidth-8;FSearch.Height:=34/Scale;FSearch.FontSize:=15/Scale;
-  FSearch.Anchor(hpLeft,8);FSearch.Anchor(vpTop,-94/Scale);
-  FCarousel.Width:=WheelWidth;FCarousel.Height:=Max(120,EffectiveHeight-140/Scale-16);
-  FCarousel.Anchor(hpLeft,8);FCarousel.Anchor(vpTop,-140/Scale);
+  FSearch.Anchor(hpLeft,8);FSearch.Anchor(vpTop,-SearchTop);
+  FCarousel.Width:=WheelWidth;FCarousel.Height:=Max(96,EffectiveHeight-ContentTop-8/Scale);
+  FCarousel.Anchor(hpLeft,8);FCarousel.Anchor(vpTop,-ContentTop);
   FInfo.MaxWidth:=Max(120,EffectiveWidth-RightLeft-16);
   FDescription.Anchor(hpLeft,RightLeft);FDescription.Anchor(vpTop,-98/Scale);
   FDescription.FontSize:=15/Scale;
   FDescription.MaxWidth:=FInfo.MaxWidth;
-  FPreview.Border.Left:=RightLeft;FPreview.Border.Top:=Max(140/Scale,108/Scale+FDescription.EffectiveHeight);
+  FPreview.Border.Left:=RightLeft;FPreview.Border.Right:=0;
+  FPreview.Border.Top:=Max(140/Scale,108/Scale+FDescription.EffectiveHeight);
   FPreview.Border.Bottom:=52/Scale;
+  if ShortLayout then begin FPreview.Border.Top:=ContentTop;FPreview.Border.Bottom:=8/Scale end;
   FStatus.Anchor(hpLeft,RightLeft);FStatus.Anchor(vpBottom,10/Scale);
   FStatus.FontSize:=13/Scale;FStatus.MaxWidth:=Max(100,EffectiveWidth-RightLeft-16);
   FLoadingLabel.FontSize:=18/Scale;FLoadingLabel.MaxWidth:=Max(100,EffectiveWidth-RightLeft-64);

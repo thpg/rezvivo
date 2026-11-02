@@ -186,10 +186,14 @@ end;
 procedure TRideMapPanel.Resize;
 begin inherited;if FHeader<>nil then Layout end;
 procedure TRideMapPanel.SetSize(PanelWidth,AvailableHeight:Single);
+var TargetHeight:Single;
 begin
   Width:=PanelWidth;
-  if FCollapsed then Height:=30
-  else Height:=Min(Max(100,AvailableHeight),150+FSize*70);
+  TargetHeight:=150+FSize*70;
+  if (Container<>nil) and (Container.UnscaledWidth<520) then
+    TargetHeight:=104+FSize*40;
+  if FCollapsed then TargetHeight:=30;
+  Height:=Min(Max(0,AvailableHeight),TargetHeight);
   Layout;
 end;
 procedure TRideMapPanel.Layout;
@@ -201,14 +205,22 @@ begin
   FFollow.Width:=28;FFollow.Anchor(hpRight,-61);FFollow.Anchor(vpTop,-2);
   FZoomIn.Width:=26;FZoomIn.Anchor(hpRight,-91);FZoomIn.Anchor(vpTop,-2);
   FZoomOut.Width:=26;FZoomOut.Anchor(hpRight,-119);FZoomOut.Anchor(vpTop,-2);
-  FCanvas.Exists:=not FCollapsed;FDistance.Exists:=not FCollapsed;
-  FCanvas.Map.PauseTileLoading(FCollapsed or not FHasGeography);
-  FFollow.Exists:=not FCollapsed;FZoomIn.Exists:=not FCollapsed;FZoomOut.Exists:=not FCollapsed;
+  if W<190 then begin
+    { Preserve all actions without the Map button running under zoom-out. }
+    FHeader.Width:=Max(28,W-130);
+    FGrow.Width:=40;FGrow.Anchor(hpRight,-3);
+    FFollow.Width:=28;FFollow.Anchor(hpRight,-45);
+    FZoomIn.Width:=24;FZoomIn.Anchor(hpRight,-75);
+    FZoomOut.Width:=24;FZoomOut.Anchor(hpRight,-101);
+  end;
+  FCanvas.Exists:=not FCollapsed and(Height>=54);FDistance.Exists:=FCanvas.Exists;
+  FCanvas.Map.PauseTileLoading(not FCanvas.Exists or not FHasGeography);
+  FFollow.Exists:=FCanvas.Exists;FZoomIn.Exists:=FCanvas.Exists;FZoomOut.Exists:=FCanvas.Exists;
   FCanvas.Width:=Max(1,W-6);FCanvas.Height:=Max(1,Height-53);
   FCanvas.Anchor(hpLeft,3);FCanvas.Anchor(vpTop,-30);
   FTeleport.Width:=Max(70,(W-12)*0.6);FTeleport.Anchor(hpLeft,6);FTeleport.Anchor(vpBottom,25);
   FCancel.Width:=Max(55,(W-12)*0.4-6);FCancel.Anchor(hpRight,-6);FCancel.Anchor(vpBottom,25);
-  FTeleport.Exists:=not FCollapsed and FCanvas.PickEnabled and FCanvas.Map.HasTarget;
+  FTeleport.Exists:=FCanvas.Exists and FCanvas.PickEnabled and FCanvas.Map.HasTarget;
   FCancel.Exists:=FTeleport.Exists;
 end;
 procedure TRideMapPanel.Click(Sender:TObject);

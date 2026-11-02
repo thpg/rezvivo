@@ -37,7 +37,11 @@ type
     сворачивании вкладки, а Update/Press страница получает от
     контейнера только пока Exists=True. }
   TMenuEmbeddedPage = class(TCastleUserInterface)
+  private
+    FLayoutWidth,FLayoutHeight,FLayoutScale:Single;
+    FLayoutKnown:Boolean;
   public
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
     procedure PageShown; virtual;
     procedure PageHidden; virtual;
     function HandleBack: Boolean; virtual;
@@ -102,6 +106,22 @@ uses UiTranslations,
 procedure TMenuEmbeddedPage.PageShown;
 begin
   { Базовая реализация пустая — наследники переопределяют. }
+end;
+
+procedure TMenuEmbeddedPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+var W,H,S:Single;
+begin
+  W:=EffectiveWidth;H:=EffectiveHeight;S:=UIScale;
+  { The menu adjusts its scroll canvas after the window's Resize traversal.
+    Child pages must also react to that final parent size and to DPI changes.
+    Otherwise they retain the temporary 1024-wide constructor layout. }
+  if (W>0) and (H>0) and (not FLayoutKnown or
+    (Abs(W-FLayoutWidth)>0.1) or (Abs(H-FLayoutHeight)>0.1) or
+    (Abs(S-FLayoutScale)>0.001)) then begin
+    FLayoutKnown:=True;FLayoutWidth:=W;FLayoutHeight:=H;FLayoutScale:=S;
+    Resize;
+  end;
+  inherited;
 end;
 
 procedure TMenuEmbeddedPage.PageHidden;

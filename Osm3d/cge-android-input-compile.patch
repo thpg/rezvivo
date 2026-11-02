@@ -1,0 +1,63 @@
+--- a/src/base/android/castleandroidnativeappglue.pas
++++ b/src/base/android/castleandroidnativeappglue.pas
+@@ -313,6 +313,11 @@
+ { Allocate memory for saved state. }
+ function AllocateSavedState(const Size: csize_t): Pointer;
+ 
++{ Acknowledge pending native input during long resource compilation. Called
++  only on the app thread. CGE HandleInput stores touches in QEvents; this does
++  not dispatch UI callbacks, render, update, or process lifecycle commands. }
++procedure AndroidCollectPendingInput;
++
+ var
+   { Singleton instance of PAndroid_App, initialized right before AndroidMain is called. }
+   AndroidMainApp: PAndroid_App;
+@@ -519,6 +524,14 @@
+     AndroidLog(alError, 'NativeAppGlue: Failure reading next input event');
+ end;
+ 
++procedure AndroidCollectPendingInput;
++begin
++  if (GetCurrentThreadID <> MainThreadID) or (AndroidMainApp = nil) then Exit;
++  if AndroidMainApp^.inputQueue = nil then Exit;
++  if AInputQueue_hasEvents(AndroidMainApp^.inputQueue) > 0 then
++    process_input(AndroidMainApp, @AndroidMainApp^.inputPollSource);
++end;
++
+ procedure process_cmd(app: Pandroid_app; source: Pandroid_poll_source);
+ var cmd: cint8;
+ begin
+--- a/src/base_rendering/castleglshaders.pas
++++ b/src/base_rendering/castleglshaders.pas
+@@ -708,6 +708,7 @@
+ 
+ uses CastleStringUtils, CastleLog, CastleGLVersion, CastleRenderContext,
+   CastleInternalGLUtils, CastleApplicationProperties
++  {$if defined(ANDROID) and defined(FPC)}, CastleAndroidNativeAppGlue{$endif}
+   {$if defined(FPC) and not defined(OpenGLES)}, MD5{$endif};
+ 
+ const
+@@ -2057,6 +2058,11 @@
+     glGetShaderiv(Result, GL_COMPILE_STATUS, @CompiledInt);
+     Compiled := CompiledInt = Ord(GL_TRUE);
+     {$endif}
++    {$if defined(ANDROID) and defined(FPC)}
++    { Keep native input acknowledged between shader programs, without
++      reentering the scene/UI while its GL resources are incomplete. }
++    AndroidCollectPendingInput;
++    {$endif}
+     PrepareMs := GetTickCount64 - PrepareTick;
+     if PrepareMs > 100 then
+       WritelnLog('ResourcePrepare', 'stage=shader_compile ms=%d shader=%d type=%s bytes=%d name="%s"',
+@@ -2397,6 +2403,11 @@
+     glGetProgramiv(ProgramId, GL_LINK_STATUS, @LinkedInt);
+     Linked := LinkedInt = Ord(GL_TRUE);
+     {$endif}
++    {$if defined(ANDROID) and defined(FPC)}
++    { Keep native input acknowledged between shader programs, without
++      reentering the scene/UI while its GL resources are incomplete. }
++    AndroidCollectPendingInput;
++    {$endif}
+     PrepareMs := GetTickCount64 - PrepareTick;
+     if PrepareMs > 100 then
+       WritelnLog('ResourcePrepare', 'stage=shader_link ms=%d program=%d name="%s"',

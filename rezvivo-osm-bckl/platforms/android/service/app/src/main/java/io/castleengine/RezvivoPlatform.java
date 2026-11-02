@@ -1,8 +1,12 @@
 package io.castleengine;
 
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.os.Build;
+import org.json.JSONObject;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +20,45 @@ public final class RezvivoPlatform {
     private static final AtomicLong nextRequest = new AtomicLong();
     private static final ConcurrentHashMap<Long, Request> requests = new ConcurrentHashMap<>();
     private static final int MAX_RESPONSE = 256 * 1024 * 1024;
+
+    /** Diagnostic model metadata, deliberately excluding serials/Android ID. */
+    public static String machineInformation(Activity activity) {
+        StringBuilder text = new StringBuilder();
+        text.append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
+        text.append("Android: ").append(Build.VERSION.RELEASE).append("; API ").append(Build.VERSION.SDK_INT).append('\n');
+        text.append("ABIs: ").append(Arrays.toString(Build.SUPPORTED_ABIS)).append('\n');
+        ActivityManager am = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+        if (am != null) {
+            ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(info);
+            text.append("RAM bytes: total=").append(info.totalMem).append("; available=").append(info.availMem)
+                .append("; low memory=").append(info.lowMemory).append('\n');
+            text.append("Java heap limit MiB: ").append(am.getMemoryClass()).append('\n');
+        }
+        return text.toString();
+    }
+
+    /** Match the previous session, not an arbitrary older crash. The OS can
+     * kill native code without invoking any Pascal/Java exception handler. */
+    public static String previousExitInfo(Activity activity, int pid, long sinceUtcMs) {
+        if (Build.VERSION.SDK_INT < 30 || pid <= 0 || sinceUtcMs <= 0) return "";
+        try {
+            ActivityManager am = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return "";
+            for (ApplicationExitInfo info : am.getHistoricalProcessExitReasons(null, pid, 8)) {
+                if (info.getTimestamp() + 5000 < sinceUtcMs ||
+                    !activity.getPackageName().equals(info.getProcessName())) continue;
+                String description = info.getDescription();
+                if (description != null && description.length() > 2048) description = description.substring(0, 2048);
+                return new JSONObject().put("reason", info.getReason()).put("status", info.getStatus())
+                    .put("timestamp_utc_ms", info.getTimestamp()).put("description", description)
+                    .put("rss_kib", info.getRss()).put("pss_kib", info.getPss()).toString();
+            }
+        } catch (Exception e) {
+            android.util.Log.w("REZVIVO", "Cannot query previous process exit: " + e.getClass().getSimpleName());
+        }
+        return "";
+    }
     private static final class Request {
         volatile boolean cancelled;
         volatile HttpURLConnection connection;

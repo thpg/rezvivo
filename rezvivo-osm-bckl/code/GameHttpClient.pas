@@ -716,6 +716,9 @@ begin
     VersionHeaders:=TStringList.Create;
     if AHeaders<>nil then VersionHeaders.Assign(AHeaders);
     VersionHeaders.Add('X-REZVIVO-Build: '+IntToStr(ClientBuild));
+    {$ifdef ANDROID}
+    VersionHeaders.Add('X-REZVIVO-Platform: android');
+    {$endif}
     RequestHeaders:=VersionHeaders;
   end;
   try

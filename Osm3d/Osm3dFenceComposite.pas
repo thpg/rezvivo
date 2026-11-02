@@ -95,7 +95,10 @@ function BuildFenceCompositeShape(Composite: TGroundCompositeMesh;
 const
   { Vertex effect (mirror of BUILDING_COMPOSITE_VS) }
   FENCE_COMPOSITE_VS =
+    '#ifndef RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
+    '#define RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
     'attribute float materialId;' + #10 +
+    '#endif' + #10 +
     { TUnlitMaterial makes CGE skip texcoord/normal upload, so UV and normal ride
       dedicated TFloatVertexAttributeNode streams. }
     'attribute vec2  fncUV;' + #10 +
@@ -140,7 +143,7 @@ const
     'uniform float u_fnc_alpha_cutoff;' + #10 +
     '' + #10 +
     '/* Sun. gc_SunDirToward = direction TOWARD the sun (world). */' + #10 +
-    'uniform vec3  gc_SunDirToward;' + #10 +
+    '#ifndef GC_SUN_DIR_UNIFORM' + #10 + '#define GC_SUN_DIR_UNIFORM' + #10 + 'uniform vec3  gc_SunDirToward;' + #10 + '#endif' + #10 +
     '' + #10 +
     GLSL_LOD_UNIFORMS +
     '' + #10 +

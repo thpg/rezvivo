@@ -70,7 +70,8 @@ begin
   try
     try
       Headers.Add('User-Agent: '+ClientUserAgent);
-      GameHttpRequest('GET',ExcludeTrailingPathDelimiter(Base)+'/api/v1/client/version?build='+IntToStr(ClientBuild),
+      GameHttpRequest('GET',ExcludeTrailingPathDelimiter(Base)+'/api/v1/client/version?build='+IntToStr(ClientBuild)
+        {$ifdef ANDROID}+'&platform=android'{$endif},
         Headers,nil,2000,4000,Reply,Status,Cancellation);
       if(Status=200)and(Reply.Size<65536)then Response:=Reply.DataString;
       Manifest:=AppDirectory+'installed-files.json';
@@ -131,6 +132,9 @@ begin
     { A policy belongs to a specific build. It describes online support;
       local rides never depend on an update check or a cached server policy. }
     if O.Get('current_build',-1)<>ClientBuild then Exit;
+    {$ifdef ANDROID}
+    if O.Get('platform','')<>'android' then Exit;
+    {$endif}
     D:=O.Find('allowed');if(D=nil)or(D.JSONType<>jtBoolean)then Exit;
     Blocked:=not D.AsBoolean;NewVersion:=O.Get('update_available',False);Latest:='';
     OfflineAllowed:=O.Get('offline_allowed',False);
@@ -235,9 +239,14 @@ begin FDialog.Exists:=False;end;
 procedure TClientUpdates.Download(Sender:TObject);
 var S:TUpdateDownloadStatus;
 begin
+  {$ifdef ANDROID}
+  OpenUrl(ExcludeTrailingPathDelimiter(FBase)+'/download#android');
+  Exit;
+  {$else}
   {$ifndef MSWINDOWS}
   OpenUrl(ExcludeTrailingPathDelimiter(FBase)+'/download');
   Exit;
+  {$endif}
   {$endif}
   if not FPackageKnown then begin OpenUrl(ExcludeTrailingPathDelimiter(FBase)+'/download?build='+IntToStr(ClientBuild));Exit end;
   if FTransfer<>nil then begin

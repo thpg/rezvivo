@@ -1,7 +1,10 @@
 varying vec4 vBldDetailColor;
 varying vec3 vBldDetailNormal;
 varying vec3 vBldShadowPosition;
+#ifndef GC_SUN_DIR_UNIFORM
+#define GC_SUN_DIR_UNIFORM
 uniform vec3 gc_SunDirToward;
+#endif
 vec3 direction_world_to_eye_space(vec3 d);
 vec3 direction_eye_to_world_space(vec3 d);
 vec4 position_eye_to_world_space(vec4 p);

@@ -74,7 +74,7 @@ vec3 wind(vec3 p, float phase) {
 // in the ordinary vertex path. No second foliage shape or animation model.
 struct TreeNeedleShape {
     vec3 base,tip,bend,side,radial,facing;
-    float season,lodScale,physicalLength,pixelWorld,length,width,coverage,flutter,phase;
+    float season,lodScale,physicalLength,pixelWorld,needleLength,width,coverage,flutter,phase;
 };
 TreeNeedleShape prepareTreeNeedleImpl(int needle,int species) {
     TreeNeedleShape r;
@@ -114,16 +114,16 @@ TreeNeedleShape prepareTreeNeedleImpl(int needle,int species) {
         r.pixelWorld=2.0*(orthographic ? 1.0 : viewDepth)/(uProjection[1][1]*uViewportHeight);
         // The pixel guard is bounded too, otherwise it multiplies LOD growth.
         // Keep the offline bake footprint unchanged for existing far atlases.
-        r.length=max(r.physicalLength,min(r.pixelWorld*1.5,r.physicalLength*(uBakeMode>0 ? 4.0 : 1.25)));
-        r.tip=r.base+direction*r.length;
-        r.bend=r.base+direction*r.length*.52+tangent*r.length*(species==5?.04:.16);
+        r.needleLength=max(r.physicalLength,min(r.pixelWorld*1.5,r.physicalLength*(uBakeMode>0 ? 4.0 : 1.25)));
+        r.tip=r.base+direction*r.needleLength;
+        r.bend=r.base+direction*r.needleLength*.52+tangent*r.needleLength*(species==5?.04:.16);
 
     vec3 eyeLocal=transpose(mat3(uModel))*(uEye-uModel[3].xyz);
     r.facing=uDepthOnly==1 ? normalize(transpose(mat3(uModel))*uSunDirection) : normalize(eyeLocal-r.base);
     float physicalWidth=c.w*.5*r.lodScale*(uNeedleVertices==3 ? 1.29 : 1.0);
-    r.width=max(physicalWidth,min(r.pixelWorld*.6,r.length*.45));
+    r.width=max(physicalWidth,min(r.pixelWorld*.6,r.needleLength*.45));
     float densityCoverage=uNeedleScale/(r.lodScale*r.lodScale);
-    r.coverage=clamp(densityCoverage*(physicalWidth/r.width)*(r.physicalLength/r.length),0.0,1.0);
+    r.coverage=clamp(densityCoverage*(physicalWidth/r.width)*(r.physicalLength/r.needleLength),0.0,1.0);
     r.flutter=uComplexity>=3 ? sin(uTime*4.1+d.x*23.0+float(fascicle))*uWind*.004 : 0.0;
     r.phase=random1(id+member*13.0);
     return r;

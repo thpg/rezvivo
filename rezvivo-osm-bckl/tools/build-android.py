@@ -6,7 +6,7 @@ and applied when needed before compiling or packaging.
 Never modifies release metadata, user settings or the Windows executable.
 """
 from pathlib import Path
-import argparse,hashlib,json,os,shutil,subprocess,xml.etree.ElementTree as ET
+import argparse,hashlib,json,os,re,shutil,subprocess,xml.etree.ElementTree as ET
 from installer_assets import runtime_assets,validate_asset_links
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -15,7 +15,7 @@ def run(args,cwd):
     subprocess.run([str(x) for x in args],cwd=cwd,check=True)
 
 def ensure_mobile_patches(engine):
-    for name in ('cge-opengles3.patch','cge-android-permissions.patch','cge-scissor-context-close.patch','cge-android-back-navigation.patch','cge-android-gamepad.patch'):
+    for name in ('cge-opengles3.patch','cge-android-permissions.patch','cge-scissor-context-close.patch','cge-android-back-navigation.patch','cge-android-gamepad.patch','cge-android-input-compile.patch','cge-traverse-worker-stack.patch'):
         patch=ROOT.parent/'Osm3d'/name
         command=['git','apply','--ignore-space-change']
         applied=subprocess.run(command+['--reverse','--check',str(patch)],cwd=engine,capture_output=True)
@@ -64,7 +64,15 @@ def main():
     validate_asset_links(stage,[p.as_posix() for p in files])
     (stage/'data/rezvivo-assets.txt').write_text(digest.hexdigest()+'\n'+'\n'.join(p.relative_to('data').as_posix() for p in files)+'\n',encoding='utf-8')
     tree=ET.parse(ROOT/'CastleEngineManifest.xml');project=tree.getroot()
-    release=json.loads((ROOT/'release.json').read_text(encoding='utf-8'))
+    release=json.loads((ROOT/'release-android.json').read_text(encoding='utf-8'))
+    if not re.fullmatch(r'[0-9a-z.-]+',release['version']) or not 0 < release['build'] <= 2147483647:
+        raise ValueError('Invalid Android version or build')
+    # The native library and Android package must report the same version.
+    # Updating desktop metadata must not reset the independent Android build.
+    constants=(ROOT/'code/GameBuildInfo.pas').read_text(encoding='utf-8-sig')
+    android=re.search(r'\{\$ifdef ANDROID\}(.*?)\{\$else\}',constants,re.S|re.I)
+    if android is None or not re.search(r"ClientVersion\s*=\s*'"+re.escape(release['version'])+r"'",android[1]) or not re.search(r'ClientBuild\s*=\s*'+str(release['build'])+r'\s*;',android[1]):
+        raise ValueError('GameBuildInfo Android constants do not match release-android.json; regenerate release metadata')
     project.find('version').set('value',release['version'])
     project.find('version').set('code',str(release['build']))
     project.set('standalone_source',str(ROOT/project.get('standalone_source')))

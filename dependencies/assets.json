@@ -2518,8 +2518,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/gameviewlogin.castle-user-interface",
-    "bytes": 2888,
-    "sha256": "260327b4d2f16bd66b98fae4f897cb45a0fa2059212e8ac5aa6d3f27b22ee7b4",
+    "bytes": 2788,
+    "sha256": "ef5e7edd31cadcf45bf4ef2256d6049d83b184e605ca3a279547f092f4a4eede",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4642,16 +4642,16 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.frag",
-    "bytes": 38084,
-    "sha256": "75fa1fbf5ec70588dcb092885ea81306c4f33de2a38c93642f1c60bc0b0e4a22",
+    "bytes": 38108,
+    "sha256": "a38c41e34897035f4c0d354b8af7c0f1ccf5fb0a9e24fd12435335a6a44332b3",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/tree.vert",
-    "bytes": 27850,
-    "sha256": "2d576614c1183011f1471bb4587ecf1053e49557520a2cc17041215e7644fe30",
+    "bytes": 27892,
+    "sha256": "2d00e2fec03618b3094b9c8bd492c851951ffefdb482b639f45fa9992e305a57",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4980,96 +4980,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 28183,
-    "sha256": "75e3403ed4a1356dfe3721d24cb6403ede0a90483fd71fd09ae53d9f45a00a45",
+    "bytes": 28228,
+    "sha256": "27b4db4c061f3d99ff35803b85e3db435c9d260e482b20c9547d1d855249604f",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 23376,
-    "sha256": "5af052962eb16287a44a0ec7625ea1f9fc1d7a1d8c33c2ef3c1bd704ada0cddf",
+    "bytes": 23402,
+    "sha256": "f2d10f5fc1a3facc98cf5f7d162db4d0b74f30bbf8ff894906a9f7a59b057908",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 96751,
-    "sha256": "f93b8a9880c80d63a525475a66a369555d4bd3904109b4aff637f200b6669f04",
+    "bytes": 96773,
+    "sha256": "8d6e7c7ca7ee0fbd136f0fc726f1821500d1504fd4368e64a3132e2740dda01f",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 23409,
-    "sha256": "43dd9e53dfbbc7f6fefad44e0f9dfd112359626a7fb3678e5062687e0516b654",
+    "bytes": 23437,
+    "sha256": "84a978a948727d9d0c817b3b7122b35a863f9be29ec9d5e34b8f088a5b7d4f75",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 24134,
-    "sha256": "b7542da3f43740df7fa2b101698713b9ec65182fae8017860483236eeabc27ea",
+    "bytes": 24164,
+    "sha256": "28d94dbd7ea2aa1f06b9f00d36a6587005b97f684c5d5e9fd50c61be5ba443d9",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 23166,
-    "sha256": "f14d1c038472998ddd07d36778cfcee4d26a4b3b933a20865ad31d770fb5cdea",
+    "bytes": 23194,
+    "sha256": "7521fbf531fd5672e2faf8867ded9cd8e2408063360f8077f6cfa22bc6b35ddc",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 26579,
-    "sha256": "eff9f33ec59a63138401045e42f6922a550abad554879defa1b3d295e671883e",
+    "bytes": 26615,
+    "sha256": "4be347f6dffff5c11c44dade57cd29bd10c3725d40ba00fec4e3733ce96ffbeb",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 24435,
-    "sha256": "a75b02487bcd575b571008bc718516661f046207a8d7767d7e0797d62210d4e1",
+    "bytes": 24467,
+    "sha256": "d0cb017d333959d0dc35013569a357a065d031dc5623f70e2f9899c949267c05",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 23029,
-    "sha256": "57536efe651f3a901e22b29eb1eb8eca1cb1ae4d1077b17b006937cec798f939",
+    "bytes": 23057,
+    "sha256": "00b98ec01a0229d5ecb8ef258e517f9e1a91c200b9c6e693313b5df8dbe2f0eb",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 150436,
-    "sha256": "c2085c6b2de3d3027a116a154d3c8103557ddbb5b1ff8c8df49949abbba3844f",
+    "bytes": 150472,
+    "sha256": "dcaafd35249fbe82e223b17cc88b8db17a5e77c504298e15740f0957b7d8b4c6",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 21643,
-    "sha256": "640ee3d06e4bb41c1c03593dc2acaaca5fbaed02ea4464567de478c9bebdd30e",
+    "bytes": 21670,
+    "sha256": "b2b28588da7b1eecb2bccec9e7f19c07bddc2b063551c9b69fd6789293e6d98f",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 21451,
-    "sha256": "c548b5713180baedccb4cfdb186a43351dac416a94ea10a7da7e0aed2c0a3606",
+    "bytes": 21478,
+    "sha256": "4e35fe4633b233ac75509bfabe9de887da1c71c86ee4b59da4305d353a9d342f",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

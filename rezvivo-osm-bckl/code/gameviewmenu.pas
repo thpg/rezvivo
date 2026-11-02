@@ -628,6 +628,7 @@ begin
     if FTopBar<>nil then FTopBar.Height:=FPageScroll.Border.Top;
   end;
   if FProfilePane<>nil then begin
+    FProfilePane.Exists:=not (FCompact and FNavigationOpen);
     FProfilePane.Width:=230/S;FProfilePane.Height:=48/S;
     FProfilePane.Anchor(hpRight,-24/S);FProfilePane.Anchor(vpTop,-12/S);
     if(FProfileButton<>nil)and(FProfileButton.Caption<>'')then begin
@@ -707,17 +708,38 @@ begin
     FNavScroll.ScrollArea.Height:=Max(FNavScroll.EffectiveHeightForChildren,FTileCol.EffectiveHeight+8);
   end;
   if FPageScroll<>nil then begin
-    FPageScroll.ScrollArea.Width:=FPageScroll.EffectiveWidthForChildren;
-    H:=FPageScroll.EffectiveHeightForChildren;
+    { Use the final parent dimensions. During Android DPI/orientation changes
+      the child render rectangle may still describe the previous frame. }
+    FPageScroll.ScrollArea.Width:=Max(1,EffectiveWidth-FPageScroll.Border.TotalWidth);
+    H:=Max(1,EffectiveHeight-FPageScroll.Border.TotalHeight);
     { Pages with internal lists keep their full remaining viewport. Forms
       and the bike editor get a scrollable canvas instead of clipped feet/buttons. }
-    if not (((FProfilePage<>nil) and FProfilePage.Exists) or
-      ((FExplorePage<>nil) and FExplorePage.Exists)) then H:=Max(H,700);
+    if ((FStartPage<>nil) and FStartPage.Exists) or
+       ((FDreamPage<>nil) and FDreamPage.Exists) or
+       ((FProfilePage<>nil) and FProfilePage.Exists) or
+       ((FExplorePage<>nil) and FExplorePage.Exists) or
+       ((FSchedulePage<>nil) and FSchedulePage.Exists) or
+       ((FHistoryPage<>nil) and FHistoryPage.Exists) then begin
+      { These pages either fit the viewport or provide their own scrolling. }
+    end else if ((FRoutesPage<>nil) and FRoutesPage.Exists) and FCompact then begin
+      if EffectiveWidth<520 then H:=Max(H,540)else H:=Max(H,350);
+    end
+    else H:=Max(H,700);
     { A map is an interactive viewport, not a tall form. Scrolling its parent
       clips the globe and moves the pick coordinates outside the visible page. }
     if (FExplorePage<>nil) and FExplorePage.Exists then FPageScroll.Scroll:=0;
     if (FBikeFitPage<>nil) and FBikeFitPage.Exists and (EffectiveWidth<760) then H:=Max(H,1040);
     FPageHost.Height:=H;FPageScroll.ScrollArea.Height:=H;
+    if FWorldModeBar<>nil then begin
+      FWorldTrack.AutoSize:=False;FWorldExplore.AutoSize:=False;
+      FWorldTrack.Width:=Min(220,Max(80,(FPageScroll.ScrollArea.Width-24)/2));
+      FWorldExplore.Width:=FWorldTrack.Width;
+      FWorldTrack.Height:=40;FWorldExplore.Height:=40;
+      FWorldTrack.FontSize:=IfThen(EffectiveWidth<520,14,18);
+      FWorldExplore.FontSize:=FWorldTrack.FontSize;
+    end;
+    FPageScroll.EnableDragging:=not ((FStartPage<>nil) and FStartPage.Exists);
+    if not FPageScroll.EnableDragging then FPageScroll.Scroll:=0;
   end;
   FLastLayoutW:=EffectiveWidth;FLastLayoutH:=EffectiveHeight;
 end;
@@ -772,7 +794,7 @@ procedure TViewMenu.RefreshRideControls;
 var HasRide:Boolean;Text:String;
 begin
   HasRide:=SessionUnderneath;
-  FResumeButton.Exists:=HasRide;FEndRideButton.Exists:=HasRide;FSessionLabel.Exists:=HasRide;
+  FResumeButton.Exists:=HasRide;FEndRideButton.Exists:=HasRide;FSessionLabel.Exists:=HasRide and not FCompact;
   if Assigned(DeviceService) and DeviceService.IsSimulationActive then Text:=UiText('Devices: simulation')
   else if Assigned(DeviceService) and(DeviceService.HasSensor(skPower)or DeviceService.HasSensor(skHeartRate))then Text:=UiText('Devices connected')else Text:=UiText('Connect devices');
   if FDevicesSummary.Caption<>Text then FDevicesSummary.Caption:=Text;
@@ -1167,8 +1189,8 @@ begin
       FExplorePage:=TExplorePage.Create(FreeAtStop);FExplorePage.Border.Top:=48;
       FExplorePage.OnStart:=@LaunchExplore;FPageHost.InsertFront(FExplorePage);
     end;
-    FExplorePage.Exists:=True;FExplorePage.ShowMap;ShowWorldMode;
-    if FGlobeCredit<>nil then FGlobeCredit.Exists:=True;
+    FExplorePage.Exists:=True;LayoutTiles;FExplorePage.ShowMap;ShowWorldMode;
+    if FGlobeCredit<>nil then FGlobeCredit.Exists:=False;
     if FTileRoutes<>nil then FTileRoutes.Selected:=True;
     Exit;
   end;
@@ -1194,9 +1216,9 @@ begin
   end;
   HideEmbeddedPage;   { свернуть другую открытую страницу }
   FRoutesPage.Exists := True;
-  if FGlobeCredit<>nil then FGlobeCredit.Exists:=True;
+  if FGlobeCredit<>nil then FGlobeCredit.Exists:=False;
   if FGlobe<>nil then begin FGlobe.FullSize:=True;FGlobe.Anchor(hpLeft);FGlobe.Anchor(vpBottom);FGlobe.Exists:=True;FGlobe.SetActive(True);end;
-  FRoutesPage.PageShown;ShowWorldMode;
+  LayoutTiles;FRoutesPage.PageShown;ShowWorldMode;
   if Assigned(FTileRoutes) then FTileRoutes.Selected := True;
 end;
 
@@ -1293,7 +1315,7 @@ begin
     FGlobe.ShowPlanet;
     FGlobe.Anchor(hpRight,-16);FGlobe.Anchor(vpMiddle);FGlobe.Exists:=True;FGlobe.SetActive(True);
     LayoutTiles;
-    if FGlobeCredit<>nil then FGlobeCredit.Exists:=True;
+    if FGlobeCredit<>nil then FGlobeCredit.Exists:=FGlobe.Exists;
   end;
 end;
 procedure TViewMenu.ClickHistory(Sender:TObject);
@@ -1479,7 +1501,8 @@ begin
 
   ApplyUserInterfaceScale(Container);
   if (EffectiveWidth <> FLastLayoutW) or
-     (EffectiveHeight <> FLastLayoutH) then
+     (EffectiveHeight <> FLastLayoutH) or
+     (Abs(FPageScroll.ScrollArea.Width-Max(1,EffectiveWidth-FPageScroll.Border.TotalWidth))>0.1) then
     LayoutTiles;
 
   { Прокручиваем очередь TThread.Queue. Без этого queued-вызовы

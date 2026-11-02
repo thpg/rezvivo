@@ -12,7 +12,7 @@ unit GameViewPlay;
 
 interface
 
-uses Classes,fpjson,GameRideMap,GameRiderBadge,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,GameRouteReturn,Osm3dTravelRoads,
+uses Classes,fpjson,GameRideMap,GameRidePanel,GameRiderBadge,GameTravel,Osm3dGeoMath,RiderGroundTurn,GameRoadGuidance,GameRouteReturn,Osm3dTravelRoads,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleKeysMouse, CastleViewport, CastleScene, CastleVectors, CastleCameras,
   CastleTransform, CastleInputs, CastleThirdPersonNavigation, CastleDebugTransform,
@@ -267,7 +267,7 @@ type
     FTerrainSizeX, FTerrainSizeZ: Single;
 
     { Rider list display in VerticalGroup1 }
-    FRiderScroll: TCastleScrollView;
+    FRiderScroll: TRidePanelScroll;
     FHasOtherRiders: Boolean;
     FAdminLayoutValid, FAdminLayoutShown: Boolean;
     FAdminLayoutHeight,FAdminLayoutWidth,FAdminLayoutScale: Single;
@@ -275,6 +275,9 @@ type
     FRiderInner: TCastleVerticalGroup;
     FRiderCards: array of TRiderCard;
     FRideMap:TRideMapPanel;
+    FRidePanelHeader:TRidePanelHeader;
+    FRidePanelShow:TCastleButton;
+    FRidePanelCollapsed:Boolean;
     FNextRideHud:QWord;
     FMapPath:TGamePath;
     FMapPathCount:Integer;
@@ -283,6 +286,12 @@ type
     FMapTotal:Double;
     FMapTeleportPending:Boolean;
     FMapTeleportDistance:Single;
+    procedure ShowRidePanel(Sender:TObject);
+    procedure MinimizeRidePanel(Sender:TObject);
+    procedure RidePanelPointer(const Sender:TCastleUserInterface;
+      const Event:TInputPressRelease;var Handled:Boolean);
+    procedure RidePanelMotion(const Sender:TCastleUserInterface;
+      const Event:TInputMotion;var Handled:Boolean);
     procedure RideMapLayout(Sender:TObject);
     procedure RideMapTeleport(Sender:TObject);
     function MapGeo(const P:TVector3):TLatLon;
@@ -1221,6 +1230,7 @@ begin
     Result.Add('loading_stage',Stage);Result.Add('loading_error',LoadError);
   end;
   if FRideMap<>nil then Result.Add('ride_map',FRideMap.Diagnostics);
+  Result.Add('ride_panel_collapsed',FRidePanelCollapsed);
   Result.Add('walking_camera',WalkingCameraActive);
   if WalkingCameraActive then begin
     Result.Add('camera_overview',FWalkingCam.Overview);
@@ -3235,14 +3245,34 @@ begin
   FHasOtherRiders := False;
   FAdminLayoutValid := False;
   FRiderListCount:=0;
+  FRidePanelCollapsed:=False;
+  {$ifdef ANDROID}
+  if Container<>nil then FRidePanelCollapsed:=
+    Math.Min(Container.UnscaledWidth,Container.UnscaledHeight)<600;
+  {$endif}
   if Assigned(VerticalGroup1) then
   begin
     VerticalGroup1.AutoSizeHeight := True;
+    VerticalGroup1.Padding:=RidePanelPadding;VerticalGroup1.Spacing:=RidePanelGap;
     VerticalGroup1.HorizontalAnchorParent := hpRight;
     VerticalGroup1.HorizontalAnchorSelf := hpRight;
     VerticalGroup1.Translation := Vector2(-10, -210);
+    { Children handle map panning / list scrolling first. The group absorbs
+      otherwise unhandled pointer events, including a list too short to scroll,
+      so a panel gesture never starts a camera drag behind it. }
+    VerticalGroup1.OnPress:=@RidePanelPointer;
+    VerticalGroup1.OnRelease:=@RidePanelPointer;
+    VerticalGroup1.OnMotion:=@RidePanelMotion;
 
-    FRiderScroll := TCastleScrollView.Create(FreeAtStop);
+    FRidePanelHeader:=TRidePanelHeader.Create(FreeAtStop);
+    FRidePanelHeader.Name:='RidePanelHandle';FRidePanelHeader.OnMinimize:=@MinimizeRidePanel;
+    VerticalGroup1.InsertFront(FRidePanelHeader);
+    FRidePanelShow:=TMenuButton.Create(FreeAtStop);
+    FRidePanelShow.Name:='ShowRidePanel';TMenuButton(FRidePanelShow).AutoIcon:=False;
+    FRidePanelShow.AutoSize:=False;BindUiText(FRidePanelShow,'Map & riders');
+    FRidePanelShow.OnClick:=@ShowRidePanel;InsertFront(FRidePanelShow);
+
+    FRiderScroll := TRidePanelScroll.Create(FreeAtStop);
     FRiderScroll.Exists := False;
     FRiderScroll.Width := 270;
     FRiderScroll.Height := 600;
@@ -3400,6 +3430,12 @@ begin
   FTouchControls:=TTravelTouchControls.Create(FreeAtStop);
   FTouchControls.CameraButton.OnClick:=@ClickTouchCamera;
   InsertFront(FTouchControls);
+  { Map/list gestures take priority over the full-screen camera look pad. }
+  if VerticalGroup1<>nil then begin
+    if VerticalGroup1.Parent<>nil then VerticalGroup1.Parent.RemoveControl(VerticalGroup1);
+    InsertFront(VerticalGroup1);
+  end;
+  if FRidePanelShow<>nil then FRidePanelShow.MoveToFront;
   TMenuButton(FMenuButton).AutoIcon:=False;
   FMenuButton.Name:='RideMenu';
   {$ifdef ANDROID}BindUiText(FMenuButton,'Menu');{$else}BindUiText(FMenuButton, 'Menu  Esc');{$endif}
@@ -3980,6 +4016,7 @@ begin
     вызывает access violation в UpdateRiderList следующего захода. }
   SetLength(FRiderCards, 0);
   FRideMap:=nil;FRiderScroll:=nil;FRiderInner:=nil;FMapPath:=nil;
+  FRidePanelHeader:=nil;FRidePanelShow:=nil;
   FMapDistances:=nil;FMapTeleportPending:=False;
   if Assigned(FRemoteRiders) and Assigned(FRemoteRiders.RideClient) then
     FRemoteRiders.RideClient.OnRiderCountChanged := nil;
@@ -4327,9 +4364,16 @@ end;
 
 procedure TViewPlay.UpdateAdminPanels;
 var ShowPanels: Boolean; LayoutHeight,LayoutWidth,S,MenuTop: Single;
-  L:TRideHudLayout;I:Integer;ListHeight,MapAvailable:Single;
+  L:TRideHudLayout;I,PanelRiders:Integer;ListHeight,MapAvailable,HeaderHeight:Single;
 begin
-  ShowPanels := AdminPanelsVisible and not FFocusMode;
+  { Start may spend time preparing GL programs before its first Update.
+    Hide the ride widgets from the loading screen from the initial layout,
+    and restore them when preparation ends even if the window size is unchanged. }
+  if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=not (FOsmPrepHold or FFocusMode);
+  if FAssistantButton<>nil then FAssistantButton.Exists:=not FOsmPrepHold;
+  if FFocusButton<>nil then FFocusButton.Exists:=not FOsmPrepHold and (FTravelMode=travelBicycle);
+  UpdateRiderListVisibility;
+  ShowPanels := AdminPanelsVisible and not FFocusMode and not FOsmPrepHold;
   if FFxBtnVideo<>nil then FFxBtnVideo.Enabled:=not GameVideoBusy and not RidePreparationHeld;
   LayoutHeight := 0;LayoutWidth:=0;
   if Container <> nil then begin
@@ -4351,15 +4395,22 @@ begin
   if FBotPanel <> nil then FBotPanel.Exists := ShowPanels;
   if LabelFps <> nil then LabelFps.Exists := ShowPanels;
   if FFpsBgRect <> nil then FFpsBgRect.Exists := ShowPanels;
-  ListHeight:=0;
+  HeaderHeight:=0;
+  if FRidePanelHeader<>nil then HeaderHeight:=FRidePanelHeader.Height;
+  PanelRiders:=0;if FHasOtherRiders then PanelRiders:=FRiderListCount;
+  RidePanelHeights(L,LayoutHeight,HeaderHeight,PanelRiders,ListHeight,MapAvailable);
+  if FRidePanelHeader<>nil then FRidePanelHeader.Width:=L.RidersWidth;
+  if FRidePanelShow<>nil then begin
+    FRidePanelShow.Width:=L.RidersWidth;FRidePanelShow.Height:=L.ButtonHeight;
+    FRidePanelShow.FontSize:=12;
+    FRidePanelShow.Anchor(hpRight,-L.Margin);FRidePanelShow.Anchor(vpTop,-L.RidersTop);
+  end;
   { The list and cached map share the available right-hand column. }
   if FRiderScroll <> nil then
   begin
     FRiderScroll.Width:=L.RidersWidth;
     FRiderScroll.ScrollBarWidth:=4;
-    FRiderScroll.Height:=Math.Min(Math.Min(L.RidersMaxHeight,Math.Max(RideRiderCardHeight+4,(LayoutHeight-L.RidersTop)*0.38)),
-      Math.Max(RideRiderCardHeight+4,FRiderListCount*(RideRiderCardHeight+RideRiderCardGap)+4));
-    if FHasOtherRiders then ListHeight:=FRiderScroll.Height;
+    FRiderScroll.Height:=ListHeight;
     if FRiderInner<>nil then begin
       FRiderInner.AutoSizeWidth:=False;FRiderInner.Width:=L.RidersWidth-6;
       FRiderInner.Spacing:=RideRiderCardGap;
@@ -4367,7 +4418,6 @@ begin
     for I:=0 to High(FRiderCards)do FRiderCards[I].SetCardWidth(L.RidersWidth-10);
   end;
   if FRideMap<>nil then begin
-    MapAvailable:=LayoutHeight-L.RidersTop-ListHeight-20;
     FRideMap.SetSize(L.RidersWidth,MapAvailable);
   end;
   if VerticalGroup1 <> nil then
@@ -4402,10 +4452,37 @@ end;
 
 procedure TViewPlay.UpdateRiderListVisibility;
 begin
-  if FRiderScroll <> nil then FRiderScroll.Exists := FHasOtherRiders and not FFocusMode;
-  if FRideMap<>nil then FRideMap.Exists:=not FFocusMode;
+  if FRiderScroll <> nil then FRiderScroll.Exists := FHasOtherRiders and
+    (FRiderScroll.Height>0) and not (FFocusMode or FOsmPrepHold);
+  if FRideMap<>nil then FRideMap.Exists:=(FRideMap.Height>=30) and not (FFocusMode or FOsmPrepHold);
   if VerticalGroup1 <> nil then
-    VerticalGroup1.Exists := not FFocusMode;
+    VerticalGroup1.Exists := not (FRidePanelCollapsed or FFocusMode or FOsmPrepHold);
+  if FRidePanelShow<>nil then
+    FRidePanelShow.Exists:=FRidePanelCollapsed and not (FFocusMode or FOsmPrepHold);
+end;
+
+procedure TViewPlay.ShowRidePanel(Sender:TObject);
+begin
+  FRidePanelCollapsed:=False;
+  FAdminLayoutValid:=False;UpdateAdminPanels;UpdateRiderList;UpdateRideMap;
+end;
+
+procedure TViewPlay.RidePanelPointer(const Sender:TCastleUserInterface;
+  const Event:TInputPressRelease;var Handled:Boolean);
+begin
+  Handled:=Handled or(Event.EventType in [itMouseButton,itMouseWheel]);
+end;
+
+procedure TViewPlay.RidePanelMotion(const Sender:TCastleUserInterface;
+  const Event:TInputMotion;var Handled:Boolean);
+begin
+  Handled:=True;
+end;
+
+procedure TViewPlay.MinimizeRidePanel(Sender:TObject);
+begin
+  FRidePanelCollapsed:=True;
+  FAdminLayoutValid:=False;UpdateAdminPanels;
 end;
 
 procedure TViewPlay.RiderCountChanged(Sender: TObject);
@@ -4743,8 +4820,8 @@ begin
     if FRiderCards[I].IsSelf then SelfIdx := I;
   end;
 
-  { Scroll so self is centered }
-  if Assigned(FRiderScroll) then
+  { Keep the rider centered unless the user is inspecting other riders. }
+  if Assigned(FRiderScroll) and FRiderScroll.AutoCenterAllowed then
   begin
     ScrollH := FRiderScroll.Height;
     ContentH := Total * (RideRiderCardHeight + RideRiderCardGap);
@@ -6392,6 +6469,11 @@ begin
 
   if Event.IsKey(keyEscape) then
   begin
+    {$ifdef ANDROID}
+    if (VerticalGroup1<>nil)and VerticalGroup1.Exists then begin
+      MinimizeRidePanel(nil);Exit(True);
+    end;
+    {$endif}
     OpenMenu;
     Exit(True);
   end;

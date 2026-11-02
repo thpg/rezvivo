@@ -316,9 +316,12 @@ begin
 end;
 function TRideCarousel.AngleStep:Single;
 begin
-  { Keep neighbouring cards visible when only a few worlds are in the list. }
-  Result:=Min(0.55,Max(0.30,Max((CardHeight+0.20)/Max(1,FWheelRadius),
-    1.8/Max(1,Length(FOrder)))));
+  { Tangent card planes meet at R*tan(step/2). On a short viewport the
+    wheel radius is small: capping the step at 0.55 made adjacent preview
+    images cut through the title rows. Keep the physical half-height plus
+    a margin clear, while preserving the normal spacing of a tall wheel. }
+  Result:=Max(2*ArcTan((CardHeight+0.20)/(2*Max(0.01,FWheelRadius))),
+    Min(0.55,Max(0.30,1.8/Max(1,Length(FOrder)))));
 end;
 function TRideCarousel.StepPixels:Single;
 var A,B:TVector2;

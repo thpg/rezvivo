@@ -11,8 +11,9 @@ function ClientDiagnosticsDir:String;
 function RedactClientLog(const Text:String):String;
 
 implementation
-uses SyncObjs,fpjson,jsonparser,CustApp,CastleWindow,DebugLog,GameBuildInfo,
-  GameHttpClient,GameMachineInfo,CastleFilesUtils,CastleURIUtils{$ifdef MSWINDOWS},Windows{$endif};
+uses SyncObjs,fpjson,jsonparser,CustApp,CastleWindow,DebugLog,GameBuildInfo,DateUtils,
+  GameHttpClient,GameMachineInfo,CastleFilesUtils,CastleURIUtils
+  {$ifdef MSWINDOWS},Windows{$endif}{$ifdef ANDROID},GameAndroidPlatform{$endif};
 
 type
   TCrashUpload=class(TThread)
@@ -33,6 +34,7 @@ type
   end;
 var Worker:TCrashUpload;Hook:TCrashHook;Marker,SessionId:String;
   CleanExit:Boolean=False;Capturing:Boolean=False;Reported:Boolean=False;
+  SessionStartedUtcMs:Int64=0;
 
 function ClientDiagnosticsDir:String;
 var Root:String;
@@ -160,8 +162,37 @@ begin
   {$endif}
 end;
 
+{$ifdef ANDROID}
+function AndroidSessionExit(O:TJSONObject;const Path:String;out Expected:Boolean):String;
+var SinceUtcMs:Int64;Text:String;J:TJSONData;Reason,Status,Stamp:Integer;
+begin
+  Result:='';Expected:=False;J:=nil;
+  try
+  try
+    SinceUtcMs:=O.Get('started_utc_ms',Int64(0));
+    { Old APKs had no timestamp in the marker. Its modification time is
+      still from that session; do not match a reused PID from an older one. }
+    if SinceUtcMs<=0 then begin
+      Stamp:=FileAge(Path);if Stamp=-1 then Exit;
+      SinceUtcMs:=DateTimeToUnix(FileDateToDateTime(Stamp),False)*1000;
+    end;
+    Text:=AndroidPreviousExitInfo(O.Get('pid',0),SinceUtcMs);
+    if Text=''then Exit;
+    J:=GetJSON(Text);if not(J is TJSONObject)then Exit;
+    Reason:=TJSONObject(J).Get('reason',0);Status:=TJSONObject(J).Get('status',0);
+    { ApplicationExitInfo: user stop, permission/package change and successful
+      exit are not application crashes. Keep low-memory/ANR/native failures. }
+    Expected:=(Reason in [8,10,11,15,16])or((Reason=1)and(Status=0));
+    Result:=Format('Android process exit: reason=%d, status=%d; %s',
+      [Reason,Status,TJSONObject(J).Get('description','')])+#10+
+      'System exit metadata: '+Text;
+  except on E:Exception do Logger.Warning('[CrashReport] Exit metadata unavailable: '+E.ClassName);end;
+  finally J.Free;end;
+end;
+{$endif}
+
 procedure RecoverReports;
-var SR:TSearchRec;J:TJSONData;O:TJSONObject;Path:String;
+var SR:TSearchRec;J:TJSONData;O:TJSONObject;Path,Message,ExitInfo:String;Expected:Boolean;
 begin
   if FindFirst(ClientDiagnosticsDir+'*.running.json',faAnyFile,SR)<>0 then Exit;
   try repeat
@@ -171,8 +202,15 @@ begin
       if J is TJSONObject then begin
         O:=TJSONObject(J);
         if not ProcessRunning(O.Get('pid',0))then begin
-          QueueReport(O.Get('report_id',NewId),O.Get('log',''),O.Get('version','unknown'),
-            'Previous session ended unexpectedly',O.Get('machine',''),O.Get('build',0));
+          Expected:=False;ExitInfo:='';
+          {$ifdef ANDROID}ExitInfo:=AndroidSessionExit(O,Path,Expected);{$endif}
+          if Expected then Logger.Info('[CrashReport] Previous session closed by user/system; '+ExitInfo)
+          else begin
+            Message:='Previous session ended unexpectedly';
+            if ExitInfo<>''then Message:=Message+#10+ExitInfo;
+            QueueReport(O.Get('report_id',NewId),O.Get('log',''),O.Get('version','unknown'),
+              Message,O.Get('machine',''),O.Get('build',0));
+          end;
           SysUtils.DeleteFile(Path);
         end;
       end;
@@ -189,6 +227,7 @@ begin
     { FPC returns SizeUInt (QWord on Win64); fpjson's array-of-const
       constructor does not support vtQWord. A PID fits in signed Int64. }
     J:=TJSONObject.Create(['report_id',SessionId,'pid',Int64(GetProcessID),'log',GetLogFileName,
+      'started_utc_ms',SessionStartedUtcMs,
       'build',ClientBuild,'version',ClientVersion,
       'machine',Copy(RedactClientLog(MachineDiagnosticsSnapshot),1,64*1024)]);
     try SaveJson(Marker,J);finally J.Free;end;
@@ -201,6 +240,7 @@ begin
   try
     ForceDirectories(ClientDiagnosticsDir);RecoverReports;
     SessionId:=NewId;Marker:=ClientDiagnosticsDir+SessionId+'.running.json';
+    SessionStartedUtcMs:=DateTimeToUnix(Now,False)*1000;
     RefreshCrashDiagnostics;
     Hook:=TCrashHook.Create;Hook.Previous:=Application.OnException;Application.OnException:=@Hook.Handle;
   except on E:Exception do Logger.Warning('[CrashReport] Initialization failed: '+E.ClassName);end;
@@ -253,6 +293,7 @@ begin
       J:=GetJSON(Reply.DataString);Result:=(J is TJSONObject)and TJSONObject(J).Get('accepted',False)
         and(TJSONObject(J).Get('report_id','')=Copy(ExtractFileName(FileName),1,36));
     end;
+    if not Result then Logger.Warning(Format('[CrashReport] Upload deferred: HTTP %d; report retained',[Status]));
   finally J.Free;Headers.Free;Reply.Free;Body.Free;end;
 end;
 procedure TCrashUpload.Execute;
@@ -263,7 +304,12 @@ begin
     if FindFirst(ClientDiagnosticsDir+'*.report.json',faAnyFile,SR)=0 then
       try repeat
         if Terminated or(Count>=3)then Break;Inc(Count);Path:=ClientDiagnosticsDir+SR.Name;
-        try if Upload(Path)then SysUtils.DeleteFile(Path);except end;
+        try
+          if Upload(Path)then begin
+            Logger.Info('[CrashReport] Server accepted '+Copy(SR.Name,1,36));
+            SysUtils.DeleteFile(Path);
+          end;
+        except on E:Exception do Logger.Warning('[CrashReport] Upload deferred: '+E.ClassName+'; report retained');end;
       until FindNext(SR)<>0;finally SysUtils.FindClose(SR);end;
     if not Terminated then FWake.WaitFor(60000);
   end;

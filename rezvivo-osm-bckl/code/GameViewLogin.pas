@@ -122,6 +122,7 @@ type
     procedure SetStatus(const AText: String; AIsError: Boolean);
     procedure HandleAsyncCompletion;
     procedure FinishLoginSuccess;
+    procedure KeepInputAboveKeyboard;
   public
     constructor Create(AOwner: TComponent); override;
     procedure Start; override;
@@ -138,7 +139,8 @@ var
 implementation
 
 uses UiTranslations,Math,
-  CastleLog, CastleApplicationProperties, CastleOpenDocument,
+  CastleLog, CastleApplicationProperties, CastleOpenDocument, CastleRectangles,
+  {$ifdef ANDROID}GameAndroidPlatform,{$endif}
   GameViewMenu, GameLocalization,GameAccountChange;
 
 { ══════════════════════════════════════════════════════════════════
@@ -264,7 +266,7 @@ begin
   TCastleRectangleControl(DesignedComponent('Background')).Color:=MenuBackground;
   LabelTitle.CustomFont:=MenuFont(True);LabelTitle.FontScale:=1;LabelTitle.FontSize:=32;
   LabelStatus.CustomFont:=MenuFont;LabelStatus.FontScale:=1;LabelStatus.FontSize:=16;
-  if Assigned(LabelTitle) then BindUiText(LabelTitle, 'Sign in to VeloSite');
+  if Assigned(LabelTitle) then BindUiText(LabelTitle, 'Sign in to Rezvivo');
   if Assigned(ButtonBack) then BindUiText(ButtonBack, 'Back');
 
   if Assigned(ButtonBack) then ButtonBack.OnClick := @ClickBack;
@@ -737,12 +739,40 @@ begin
   ViewMenu.CloseChildView(Self,'');
 end;
 
+procedure TViewLogin.KeepInputAboveKeyboard;
+{$ifdef ANDROID}
+var E:TCastleEdit;R:TFloatRectangle;LowerLimit,UpperLimit,InputMargin:Single;
+{$endif}
+begin
+  {$ifdef ANDROID}
+  if not FFormReady or(FScroll=nil)or(UIScale<=0)then Exit;
+  LowerLimit:=AndroidKeyboardBottomPixels/UIScale;
+  FScroll.Border.Bottom:=12+LowerLimit;
+  if (LowerLimit<=0)or(FMode<>lmPassword)then Exit;
+  E:=nil;
+  if (FEditEmail<>nil)and(Container.ForceCaptureInput=FEditEmail)then E:=FEditEmail;
+  if (FEditPassword<>nil)and(Container.ForceCaptureInput=FEditPassword)then E:=FEditPassword;
+  if E=nil then Exit;
+  { Scroll only enough to expose the active field. No GL surface resize and
+    no change to the physical UI scale when the software keyboard opens. }
+  R:=E.RenderRect;
+  InputMargin:=12*UIScale;
+  LowerLimit:=AndroidKeyboardBottomPixels+InputMargin;
+  UpperLimit:=FScroll.RenderRect.Top-InputMargin;
+  if R.Bottom<LowerLimit then
+    FScroll.Scroll:=FScroll.Scroll+(LowerLimit-R.Bottom)/UIScale
+  else if R.Top>UpperLimit then
+    FScroll.Scroll:=FScroll.Scroll-(R.Top-UpperLimit)/UIScale;
+  {$endif}
+end;
+
 procedure TViewLogin.Update(const SecondsPassed: Single;
   var HandleInput: Boolean);
 var Blocked:String;
 begin
   inherited;
 
+  KeepInputAboveKeyboard;
   HandleAsyncCompletion;
 
   { Polling tick (только в device-режиме) }

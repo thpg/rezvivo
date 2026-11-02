@@ -1,5 +1,6 @@
 unit GameVectorMap;
 {$mode objfpc}{$H+}{$codepage UTF8}
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 interface
 uses Classes, SysUtils, fpjson, CastleUIControls, CastleVectors, CastleRectangles,
   CastleGLUtils, CastleFonts, CastleGLImages, CastleGLShaders, CastleRenderContext,
@@ -54,7 +55,8 @@ type
   end;
 implementation
 uses Math, Generics.Collections, CastleColors, CastleTextureFontData,
-  CastleUnicode, CastleTimeUtils, CastleRenderOptions, CastleGL,
+  CastleUnicode, CastleTimeUtils, CastleRenderOptions,
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},
   Osm3dStudioSettings, Osm3dOsmOverpass, Osm3dMapOverview, Osm3dMapWorld;
 
 const

@@ -19,6 +19,7 @@ uses
 ;
 
 const
+  DEF_GROUND_ATLAS_TILE_PIXELS = {$ifdef ANDROID}256{$else}1024{$endif};
   { Canonical default values
  These back BOTH the module-level "*Active" mirror globals below AND
  the corresponding fields in TStudioSettings.Defaults. Declaring the
@@ -892,6 +893,27 @@ var
 begin
   {$IFDEF IAM_LIVE}IamLiveTrack(1279);{$ENDIF}
   Result := LOD_MODE_2KM;
+  {$ifdef ANDROID}
+  { A desktop 256 px block at zoom 13 covers several kilometres and needs
+    millions of ground vertices before clipping. Keep the same 2 m terrain
+    sampling, but generate and retain smaller pieces on memory-limited devices.
+    The grid dimensions are part of the cache namespace; desktop/photo tiles
+    remain untouched. All ride and warmup sessions use these same defaults. }
+  Result.GeoTileEdgePx := 32;
+  Result.GeoBlockSize := 1;
+  Result.StreamUploadM := 600;
+  Result.StreamNearM := 650;
+  Result.StreamForwardM := 900;
+  Result.StreamSceneUnloadM := 1000;
+  Result.StreamUnloadM := 1200;
+  Result.StreamGridRadius := 5;
+  Result.GroundVisibilityM := 600;
+  Result.GroundNearMeters := 500;
+  Result.TreesNearMeters := 300;
+  Result.TreesFarMeters := 650;
+  Result.ShrubsNearMeters := 200;
+  Result.ShrubsFarMeters := 600;
+  {$endif}
   TileOverride := GetEnvironmentVariable('REZVIVO_OSM_TILE_PX');
   BlockOverride := GetEnvironmentVariable('REZVIVO_OSM_BLOCK_SIZE');
   if (TileOverride = '') and (BlockOverride = '') then Exit;
@@ -983,7 +1005,7 @@ begin
   Result.UseGroundCompositionMaterialIdAttribute := True;
   Result.GroundAtlasGridCols   := 8;
   Result.GroundAtlasGridRows   := 4;
-  Result.GroundAtlasTilePixels := 1024;
+  Result.GroundAtlasTilePixels := DEF_GROUND_ATLAS_TILE_PIXELS;
 
   Result.GenerateFarTerrain        := False;
   Result.FarTerrainExpansionMeters := 8000;     { ±8 km → 16×16 km far area }

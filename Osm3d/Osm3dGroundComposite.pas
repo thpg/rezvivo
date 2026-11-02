@@ -924,7 +924,7 @@ function LanduseUVScalesFromMaterials: TLanduseUVScales;
 
 implementation
 
-uses Osm3dRtxMaterials, Osm3dRiderShadow, Osm3dRoadMaterial, Osm3dRockMaterial, Math, GrassModel;
+uses Osm3dStudioSettings, Osm3dRtxMaterials, Osm3dRiderShadow, Osm3dRoadMaterial, Osm3dRockMaterial, Math, GrassModel;
 
 { Vertex effect — port of streets-gl. U_GROUND_MAT_COUNT генерируется
   из константы GROUND_MAT_COUNT (была зашита строкой — расходилась бы
@@ -936,7 +936,10 @@ begin
     '' + #10 +
     'attribute vec4 roadCoord, roadStyle;' + #10 +
     'varying vec4 vRoadCoord, vRoadStyle;' + #10 +
+    '#ifndef RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
+    '#define RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
     'attribute float materialId;' + #10 +
+    '#endif' + #10 +
     { Custom vertex attribute for ground UV. We do NOT use the standard
       castle_MultiTexCoord0 channel here, because CGE does not auto-bind
       it when the appearance carries TUnlitMaterialNode with no texture
@@ -1101,7 +1104,7 @@ begin
     'uniform float u_ground_spec_boost;      /* specular strength multiplier (1=physical, >1 = wetter/shinier) */' + #10 +
     '/* Direction TOWARD the sun in world space. Default used only when' + #10 +
     '   the application has not set the uniform. */' + #10 +
-    'uniform vec3 gc_SunDirToward;' + #10 +
+    '#ifndef GC_SUN_DIR_UNIFORM' + #10 + '#define GC_SUN_DIR_UNIFORM' + #10 + 'uniform vec3 gc_SunDirToward;' + #10 + '#endif' + #10 +
     RockMaterialGLSL +
     '' + #10 +
     '/* gc_ prefix avoids collision with CGE''s built-in LINEARtoSRGB /' + #10 +
@@ -1803,7 +1806,7 @@ begin
   {$IFDEF IAM_LIVE}IamLiveTrack(478);{$ENDIF}
   Result.GridCols   := 8;
   Result.GridRows   := 4;
-  Result.TilePixels := 1024;
+  Result.TilePixels := DEF_GROUND_ATLAS_TILE_PIXELS;
 end;
 
 function BuildCompositeIFS(Composite: TGroundCompositeMesh;

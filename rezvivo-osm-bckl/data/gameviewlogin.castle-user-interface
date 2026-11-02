@@ -40,7 +40,7 @@
           "HorizontalAnchorSelf": "hpMiddle",
           "Name": "LabelTitle",
           "Text": [
-            "Sign in to VeloSite"
+            "Sign in to Rezvivo"
           ],
           "TranslationPersistent": {
             "$$ClassName": "TCastleVector2Persistent",

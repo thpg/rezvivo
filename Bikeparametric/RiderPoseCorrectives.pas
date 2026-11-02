@@ -294,7 +294,9 @@ begin
     if FBody<>nil then
       Part.Contents:=Part.Contents+
       '' + #10 + '#ifndef GL_ES' + #10 + 'attribute vec4 castle_Vertex;attribute vec3 castle_Normal;' + #10 + '#endif' + #10 + ''+LineEnding+
+      '#ifndef GL_ES'+LineEnding+
       'attribute vec4 castle_SkinWeights0;attribute vec4 castle_SkinJoints0;'+LineEnding+
+      '#endif'+LineEnding+
       'mat4 getJointMatrix(int j);'+LineEnding+
       '#ifdef RIDER_SURFACE_MOTION'+LineEnding+'vec3 riderSurfaceOffset();vec3 riderSurfaceNormalOffset();'+LineEnding+'#endif'+LineEnding+
       FBody.ShaderSource('getJointMatrix')+

@@ -12,7 +12,10 @@ uniform vec3 u_bld_fallback_rgb[U_BLD_MAT_COUNT];
 uniform float u_bld_metallic[U_BLD_MAT_COUNT];
 uniform float u_bld_tint_amount[U_BLD_MAT_COUNT];
 uniform vec3 u_bld_photo_tints[32];
+#ifndef GC_SUN_DIR_UNIFORM
+#define GC_SUN_DIR_UNIFORM
 uniform vec3 gc_SunDirToward;
+#endif
 uniform vec3 u_sky_zenith;
 uniform vec3 u_sky_horizon;
 uniform vec3 u_sky_ground;

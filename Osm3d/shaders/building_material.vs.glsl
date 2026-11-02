@@ -1,4 +1,7 @@
+#ifndef RZ_MATERIAL_ID_ATTRIBUTE
+#define RZ_MATERIAL_ID_ATTRIBUTE
 attribute float materialId;
+#endif
 attribute vec2 bldUV;
 attribute vec3 bldNormal;
 attribute vec4 bldInfo;

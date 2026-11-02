@@ -122,6 +122,9 @@ begin
   FocusedColor:=MenuText;UnfocusedColor:=MenuText;PlaceholderColor:=MenuMuted;
   Frame:=False;PaddingHorizontal:=12;PaddingVertical:=9;
   Border.AllSides:=1;BorderColor:=MenuBorder;
+  { CGE defaults to hardware keyboard input. Touch devices need this both
+    to focus the field and to open the Android keyboard service. }
+  AutoOnScreenKeyboard:=True;
 end;
 
 procedure TMenuEdit.Render;
@@ -137,6 +140,7 @@ begin
     E:=TCastleEdit(Root);E.CustomFont:=MenuFont;E.BackgroundColor:=MenuSurface;
     E.FocusedColor:=MenuText;E.UnfocusedColor:=MenuText;E.PlaceholderColor:=MenuMuted;
     E.Frame:=False;E.Border.AllSides:=1;E.BorderColor:=MenuBorder;
+    E.AutoOnScreenKeyboard:=True;
   end;
   for I:=0 to Root.ControlsCount-1 do StyleMenuFields(Root.Controls[I]);
 end;
@@ -366,6 +370,10 @@ var EmptyImage:TRGBAlphaImage;
 begin
   inherited;
   StyleMenuButton(Self);
+  {$ifdef ANDROID}
+  { A swipe may start over a menu button. Hand it to the enclosing scroll view. }
+  EnableParentDragging:=True;
+  {$endif}
   { Suppress the engine's square solid background. The button keeps its
     native caption, image, focus, input and accessibility behavior. }
   EmptyImage:=TRGBAlphaImage.Create(1,1);EmptyImage.Clear(Vector4Byte(0,0,0,0));

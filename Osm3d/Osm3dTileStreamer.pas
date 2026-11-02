@@ -641,6 +641,11 @@ begin
   FUploadQueue := specialize TList<PShadowUpload>.Create;
   FWakeShadow  := TEvent.Create(nil, False, False, '');
 
+  {$ifdef ANDROID}
+  { Bound peak geometry + carve scratch memory, including offline warmup.
+    IO and scene assembly still run in parallel with this one generator. }
+  AGenWorkers := 1;
+  {$endif}
   if AIOWorkers  < 1 then AIOWorkers  := 1;
   if AGenWorkers < 1 then AGenWorkers := 1;
 

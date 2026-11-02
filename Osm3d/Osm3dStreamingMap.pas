@@ -600,6 +600,7 @@ type
 
     FLog:       TLogTarget;
     FMainLog:   TLogTarget;
+    FLastMemoryPressureLog: QWord;
 
     FDestroying: Boolean;
     FOwnWorkersJoined: Boolean; { teardown-only; POSIX joins are one-shot }
@@ -7200,10 +7201,18 @@ begin
           его тайлы немедленно }
         FStreamer.ClampLoadRadius(D1 - 2500.0);
       end;
-      LogMain(Format('mem pressure: RSS %d MB > budget %d MB — evicting %d batches',
-        [ProcessRSSBytes div (1024*1024), MemBudgetBytes div (1024*1024),
-         Far.Count]));
+      { With no eviction candidates this used to write every frame, drowning
+        out crash diagnostics and doing synchronous Android disk I/O. }
+      if (Far.Count > 0) or (FLastMemoryPressureLog = 0) or
+         (GetTickCount64 - FLastMemoryPressureLog >= 10000) then
+      begin
+        FLastMemoryPressureLog := GetTickCount64;
+        LogMain(Format('mem pressure: RSS %d MB > budget %d MB — evicting %d batches',
+          [ProcessRSSBytes div (1024*1024), MemBudgetBytes div (1024*1024),
+           Far.Count]));
+      end;
     end;
+    if not Pressure then FLastMemoryPressureLog := 0;
     { HOLE-DIAG: ordinary radius-driven eviction (no memory pressure) was
       previously silent. A far batch dropping out can read as a missing tile
       near the unload edge, so record how many went and the resident count.

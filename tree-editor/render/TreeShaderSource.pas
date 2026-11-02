@@ -13,7 +13,7 @@ begin
   if not GLES then Exit;
   Extensions:='';
   if Pos('TREE_SAMPLE_MASK',Source)>0 then
-    Extensions:='#ifdef GL_OES_sample_variables'+#10+
+    Extensions:='#if __VERSION__ >= 310 && defined(GL_OES_sample_variables)'+#10+
       '#extension GL_OES_sample_variables : enable'+#10+'#endif'+#10;
   Result := StringReplace(Result, '#version 330 core', '#version 300 es' + #10 + Extensions +
     'precision highp float;' + #10 + 'precision highp int;' + #10 +

@@ -28,7 +28,7 @@ uses
 
 type
   { Route cards and actions over the menu background; a separate details form. }
-  TRoutesPage = class(TCastleUserInterface)
+  TRoutesPage = class(TMenuEmbeddedPage)
   private
     FGlobe: TGlobeMap; { borrowed from the menu }
     FDetails: TCastleRectangleControl;
@@ -37,6 +37,7 @@ type
     FDetailsScroll: TCastleScrollView;
     FDetailsColumn: TCastleVerticalGroup;
     FStatus: TCastleLabel;
+    FStatusText: String;
     FOfflineLabel: TCastleLabel;
     FOfflinePrepareButton:TMenuTile;
     FOfflineTask: TOfflineReadinessTask;
@@ -54,6 +55,7 @@ type
     FPreparedWays:TRouteWayIdArray;
     FPreparedCacheRoot,FPreparedGenHash:string;
     FWarmSettings,FPreparedSettings:TStudioSettings;
+    procedure SetStatus(const AText: String);
     procedure ClickReview(Sender:TObject);
     procedure ClickReviewNext(Sender:TObject);
     procedure StartReview;
@@ -64,6 +66,7 @@ type
     procedure BeginWarmup(ForOffline:Boolean);
   private
     FRouteArea: TCastleUserInterface;
+    FMapFitPending:Integer;
     FActions: array[0..5] of TMenuTile;
     FHeader: TRideMenuHeader;
     FSearch: TCastleEdit;
@@ -260,8 +263,8 @@ type
       var HandleInput: Boolean); override;
 
     { Menu tab lifecycle: refresh cards, cancel pending work when hidden. }
-    procedure PageShown;
-    procedure PageHidden;
+    procedure PageShown; override;
+    procedure PageHidden; override;
 
     { Системный путь к FIT, выбранному последним кликом по ленте
       (или '' если ничего не выбрано). Меню читает это для запуска
@@ -496,7 +499,17 @@ begin
     LastRideMap(Kind,MapId);
     if Kind=rmkReal then OpenLibraryFile(MapId);
   end;
-  if FGlobe <> nil then FGlobe.FitArea := FRouteArea;
+  if FGlobe <> nil then begin
+    FGlobe.FitArea:=FRouteArea;
+    if FGlobe.Parent<>FRouteArea then begin
+      if FGlobe.Parent<>nil then FGlobe.Parent.RemoveControl(FGlobe);
+      FRouteArea.InsertBack(FGlobe);
+    end;
+    FGlobe.FullSize:=True;FGlobe.Border.AllSides:=0;
+    FGlobe.Anchor(hpLeft);FGlobe.Anchor(vpBottom);
+    FGlobe.SetActive(FRouteArea.Exists);
+    FMapFitPending:=2;
+  end;
   if (FFitUrl <> '') and (FLoadedUrl <> FFitUrl) then
   begin
     FPendingFitUrl := FFitUrl;
@@ -509,7 +522,12 @@ begin
   if FOfflineTask<>nil then begin FOfflineTask.Abandon;FOfflineTask:=nil end;
   CloseDetails;
   FCarousel.CancelGesture;
-  if FGlobe <> nil then FGlobe.FitArea := nil;
+  if FGlobe <> nil then begin
+    FGlobe.FitArea:=nil;
+    if FGlobe.Parent=FRouteArea then begin
+      FRouteArea.RemoveControl(FGlobe);ViewMenu.InsertBack(FGlobe);
+    end;
+  end;
   FPendingFitUrl := '';
   FPendingReadyRoute := '';
   FPendingMulti := False;
@@ -540,6 +558,13 @@ var
   Tk, Dt: QWord;
 begin
   inherited;
+  { Fit only after the visible map has its final viewport. While portrait
+    hides this panel, its empty rectangle cannot determine a map scale. }
+  if (FMapFitPending>0) and (FGlobe<>nil) and FRouteArea.Exists and
+    (FRouteArea.EffectiveWidth>80) and (FRouteArea.EffectiveHeight>80) then begin
+    Dec(FMapFitPending);
+    if FMapFitPending=0 then FGlobe.FitRoute(0);
+  end;
   if FReadyGeneration<>ReadyRoutes.Generation then RefreshFilesList;
   if(FPendingReadyRoute<>'')and(GetTickCount64>=FReadyRoutePollAt)then PollReadyRoute;
   if FReviewTask<>nil then begin
@@ -556,7 +581,7 @@ begin
     FOffline:=FOfflineTask.Snapshot;
     FOfflineLabel.Caption:=FOffline.Caption;
     if not FDemPending and(FPendingFitUrl='')and(FLabelProgress.Caption='')then
-      FStatus.Caption:=FOffline.Caption;
+      SetStatus(FOffline.Caption);
     if FOffline.Done then begin
       FreeAndNil(FOfflineTask);
       if FOfflinePreparing and(FOffline.ErrorText='')and
@@ -825,21 +850,57 @@ end;
 
 procedure TRoutesPage.LayoutActions;
 var
-  TileWidth, ContentTop, Scale, WheelWidth, RowTop, FilterW: Single;
+  TileWidth, ContentTop, Scale, WheelWidth, RowTop, FilterW,WheelHeight: Single;
   I: Integer;
+  ShortLayout,Narrow:Boolean;
 begin
   if (FActions[High(FActions)] = nil) or (EffectiveWidth <= 0) then Exit;
   Scale := Min(1, Max(0.65, UIScale));
-  RowTop:=94/Scale;
+  Narrow:=EffectiveWidth<520/Scale;
+  ShortLayout:=(Container<>nil) and (Container.UnscaledHeight<560);
+  { The carousel already has a route preview on every card. On a phone in
+    portrait, give it the space otherwise occupied by the separate map. }
+  if FRouteArea.Exists=Narrow then FMapFitPending:=2;
+  FRouteArea.Exists:=not Narrow;
+  if (FGlobe<>nil) and (FGlobe.Parent=FRouteArea) then
+    FGlobe.SetActive(not Narrow);
+  FHeader.Resize;
+  RowTop:=FHeader.Height+8/Scale;
   TileWidth:=Min(210/Scale,(EffectiveWidth-40)/4);
+  if Narrow then TileWidth:=(EffectiveWidth-24)/2;
   for I := 2 to High(FActions) do
   begin
     FActions[I].SetTileSize(TileWidth, 38/Scale);
     FActions[I].SetTitleFontScale(0.8 / Scale);
     FActions[I].Anchor(hpLeft, 8 + (I-2)*(TileWidth+8));
     FActions[I].Anchor(vpTop, -RowTop);
+    if Narrow then begin
+      FActions[I].Anchor(hpLeft,8+((I-2) mod 2)*(TileWidth+8));
+      FActions[I].Anchor(vpTop,-(RowTop+((I-2) div 2)*46/Scale));
+    end;
   end;
-  RowTop:=140/Scale;ContentTop:=184/Scale;
+  if Narrow then begin
+    RowTop:=RowTop+92/Scale;
+    FSearch.Width:=EffectiveWidth-16;FSearch.Height:=34/Scale;FSearch.FontSize:=15/Scale;
+    FSearch.Anchor(hpLeft,8);FSearch.Anchor(vpTop,-RowTop);
+    RowTop:=RowTop+42/Scale;FilterW:=(EffectiveWidth-28)/3;
+    for I:=0 to High(FFilters) do begin
+      FFilters[I].Width:=FilterW;FFilters[I].Height:=34/Scale;FFilters[I].FontSize:=11/Scale;
+      FFilters[I].Anchor(hpLeft,8+I*(FilterW+6));FFilters[I].Anchor(vpTop,-RowTop);
+    end;
+    ContentTop:=RowTop+42/Scale;
+    WheelWidth:=Max(80,EffectiveWidth-16);
+    WheelHeight:=Max(120/Scale,EffectiveHeightForChildren-ContentTop-32/Scale);
+    FCarousel.Width:=WheelWidth;FCarousel.Height:=WheelHeight;
+    FCarousel.Anchor(hpLeft,8);FCarousel.Anchor(vpTop,-ContentTop);
+    FStatus.FontSize:=12/Scale;FStatus.MaxWidth:=WheelWidth;
+    FStatus.Anchor(hpLeft,8);FStatus.Anchor(vpBottom,8/Scale);
+    SetStatus(FStatusText);
+    FRouteArea.Border.Left:=8;FRouteArea.Border.Right:=8;FRouteArea.Border.Bottom:=8;
+    FRouteArea.Border.Top:=ContentTop+WheelHeight+32/Scale;
+    Exit;
+  end;
+  RowTop:=RowTop+46/Scale;ContentTop:=RowTop+44/Scale;
   WheelWidth:=Min(EffectiveWidth*0.32,350/Scale);
   FSearch.Width:=WheelWidth-8;FSearch.Height:=34/Scale;FSearch.FontSize:=15/Scale;
   FSearch.Anchor(hpLeft,8);FSearch.Anchor(vpTop,-RowTop);
@@ -857,20 +918,19 @@ begin
   end;
   if FStatus <> nil then
   begin
+    FStatus.FontSize:=IfThen(ShortLayout,12,15)/Scale;
     FStatus.Anchor(hpLeft, WheelWidth + 24);
     FStatus.Anchor(vpTop, -ContentTop);
     FStatus.MaxWidth := Max(100, EffectiveWidth - WheelWidth - 40);
+    SetStatus(FStatusText);
   end;
   if FRouteArea <> nil then
   begin
     FRouteArea.Border.Left := WheelWidth + 24;
     FRouteArea.Border.Top := ContentTop + 36;
-    if Exists and(FGlobe<>nil)and(Parent<>nil)then begin
-      FGlobe.Border.Left:=Parent.Border.Left+FRouteArea.Border.Left;
-      FGlobe.Border.Top:=Parent.Border.Top+ContentTop;
-      FGlobe.Border.Right:=16;
-      FGlobe.Border.Bottom:=Parent.Border.Bottom+24;
-    end;
+    FRouteArea.Border.Right:=16;
+    FRouteArea.Border.Bottom:=16;
+    if ShortLayout then FRouteArea.Border.Top:=ContentTop+24/Scale;
   end;
 end;
 
@@ -1020,7 +1080,8 @@ begin
         Line.Add(TJSONArray.Create([Route[I].Lon, Route[I].Lat]));
     end;
     FGlobe.SelectedId := 1;
-    FGlobe.SetRoutes(A, FitView);
+    FGlobe.SetRoutes(A, False);
+    if FitView then FMapFitPending:=2;
   finally A.Free; end;
 end;
 
@@ -1578,6 +1639,16 @@ begin
   end;
 end;
 
+procedure TRoutesPage.SetStatus(const AText: String);
+begin
+  FStatusText := AText;
+  if FStatus <> nil then
+    { Details retain the complete offline/error text. Reserve one line above
+      the map, including on a short landscape screen. Reflow on resize. }
+    FStatus.Caption := MenuSummary(FStatusText, FStatus.Font,
+      Max(100, FStatus.MaxWidth * UIScale), 1);
+end;
+
 procedure TRoutesPage.SetProgress(const AText: String);
 begin
   { НИКАКИХ Application.ProcessMessage: Start выполняется внутри
@@ -1585,7 +1656,7 @@ begin
     Тяжёлая работа отложена на Update (FPendingFitUrl/FPendingMulti). }
   if Assigned(FLabelProgress) then
     FLabelProgress.Caption := AText;
-  if Assigned(FStatus) then FStatus.Caption := AText;
+  SetStatus(AText);
 end;
 
 procedure TRoutesPage.ClearStats;
@@ -2014,7 +2085,7 @@ begin
     end;
     FGlobe.SetRoutes(A,False);
   finally A.Free end;
-  FStatus.Caption:=UiText('Gray: original; cyan: prepared ride; orange: review needed.');
+  SetStatus(UiText('Gray: original; cyan: prepared ride; orange: review needed.'));
 end;
 procedure TRoutesPage.ClickReviewNext(Sender:TObject);
 var N,I:Integer;Start:Integer;

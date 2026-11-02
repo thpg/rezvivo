@@ -50,8 +50,8 @@ uses
  GLSL SOURCES — embedded, no external files.
  }
 
-{ Reference: Open Sea / Realtime Ocean, supplied as a visual reference.
-  https://qdtipu6rd2myk.ok.kimi.link/.
+{ Reference: Open Sea / Realtime Ocean.
+  https://qdtipu6rd2myk.ok.kimi.link/ (snapshot docs/water-scale-20260914).
   Reference lighting, gradient FBM, Fresnel/glitter/foam. Infinite crossing
   swells replaced by compact wave packets to avoid a lattice from above.
   Water remains in the terrain composite: normals animate, mesh stays draped.
@@ -91,7 +91,10 @@ const
     'varying float water_mat_id;' + #10 +
     'varying vec2 water_data;' + #10 +
     'flat varying float water_scale;' + #10 +
+    '#ifndef RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
+    '#define RZ_MATERIAL_ID_ATTRIBUTE' + #10 +
     'attribute float materialId;' + #10 +
+    '#endif' + #10 +
     'attribute float waterScale;' + #10 +
     'void PLUG_vertex_object_space(const in vec4 vertex_object,inout vec3 normal_object) {' + #10 +
     '  water_mat_id=materialId;' + #10 +
@@ -99,7 +102,7 @@ const
     '}' + #10;
 
   WATER_FRAGMENT_GLSL: AnsiString =
-    'uniform vec4 rz_surface;' + #10 +
+    '#ifndef RZ_SURFACE_UNIFORM' + #10 + '#define RZ_SURFACE_UNIFORM' + #10 + 'uniform vec4 rz_surface;' + #10 + '#endif' + #10 +
     'varying float water_mat_id;' + #10 +
     'varying vec2 water_data;' + #10 +
     'flat varying float water_scale;' + #10 +
@@ -107,7 +110,7 @@ const
     'uniform float time;' + #10 +
     'uniform float wave_size;' + #10 +
     'uniform float sea_state;' + #10 +
-    'uniform vec3 gc_SunDirToward;' + #10 +
+    '#ifndef GC_SUN_DIR_UNIFORM' + #10 + '#define GC_SUN_DIR_UNIFORM' + #10 + 'uniform vec3 gc_SunDirToward;' + #10 + '#endif' + #10 +
     'vec4 position_eye_to_world_space(vec4 position_eye);' + #10 +
     'float waterFbm(vec2 p,float footprint);' + #10 +
     'vec3 gWaterToCamera;vec4 rzWaterRequest=vec4(0);' + #10 +

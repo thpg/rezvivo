@@ -122,7 +122,7 @@ end;
 
 function RoadMaterialSamplingGLSL: string;
 begin
-  Result := '#define RP_LIVE_FINISH' + #10 + 'uniform vec4 rz_surface;' + #10 + RoadMaterialGLSL +
+  Result := '#define RP_LIVE_FINISH' + #10 + '#ifndef RZ_SURFACE_UNIFORM' + #10 + '#define RZ_SURFACE_UNIFORM' + #10 + 'uniform vec4 rz_surface;' + #10 + '#endif' + #10 + RoadMaterialGLSL +
     'uniform float rp_mode, rz_complexity;' + #10 +
     'uniform sampler2D rp_color, rp_normal, rp_table, rp_height;' + #10 +
     'varying vec4 vRoadCoord, vRoadStyle;' + #10 +

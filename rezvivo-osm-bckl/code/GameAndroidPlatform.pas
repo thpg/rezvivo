@@ -4,8 +4,10 @@ interface
 uses Classes, SysUtils;
 
 var AndroidPhysicalDpi:Single=160;
+    AndroidKeyboardBottomPixels:Integer=0;
 
 procedure InitializeAndroidPlatform;
+function AndroidPreviousExitInfo(Pid: Integer; SinceUtcMs: Int64): String;
 function AndroidNewHttpRequest: Int64;
 procedure AndroidCancelHttpRequest(Id: Int64);
 procedure AndroidFinishHttpRequest(Id: Int64);
@@ -16,7 +18,8 @@ procedure AndroidHttpRequest(Id: Int64; const Method, Url: String;
 
 implementation
 uses JNI, CastleAndroidNativeAppGlue, CastleFilesUtils, CastleURIUtils, Osm3dPlatformHttp,
-  CastleMessaging, CastleStringUtils, CastleWindow, CastleKeysMouse;
+  CastleMessaging, CastleStringUtils, CastleWindow, CastleKeysMouse,
+  GameMachineInfo, CastleLog;
 type
   TAndroidNavigation=class
     constructor Create;
@@ -36,6 +39,7 @@ type
 var
   PlatformClass: jclass;
   NewRequestMethod, CancelMethod, FinishMethod, HttpMethod: jmethodID;
+  PreviousExitMethod: jmethodID;
   Navigation:TAndroidNavigation;
 
 constructor TAndroidNavigation.Create;
@@ -46,6 +50,12 @@ function TAndroidNavigation.Receive(const Parts:TCastleStringList;
   const Stream:TMemoryStream):Boolean;
 var Event:TInputPressRelease;
 begin
+  if (Parts.Count=2)and(Parts[0]='rezvivo-keyboard-inset') then
+  begin
+    AndroidKeyboardBottomPixels:=StrToIntDef(Parts[1],0);
+    if AndroidKeyboardBottomPixels<0 then AndroidKeyboardBottomPixels:=0;
+    Exit(True);
+  end;
   Result:=(Parts.Count=1)and(Parts[0]='rezvivo-back');
   if not Result or(Application.MainWindow=nil)then Exit;
   { Dispatch on the native UI thread through the same hierarchy as Escape:
@@ -164,8 +174,36 @@ begin
     Check(Env, 'display metrics');
     PlatformClass := Env^^.NewGlobalRef(Env, Found);
     Check(Env, 'platform reference');
+    { Optional diagnostics cannot make a working device fail to start. }
+    try
+      M := Env^^.GetStaticMethodID(Env, Found, 'machineInformation', '(Landroid/app/Activity;)Ljava/lang/String;');
+      Check(Env, 'machine information method');
+      Directory := Env^^.CallStaticObjectMethodA(Env, Found, M, @Args[0]);
+      Check(Env, 'machine information');
+      SetMachinePlatformInformation(PascalString(Env, Directory));
+      PreviousExitMethod := Env^^.GetStaticMethodID(Env, Found, 'previousExitInfo',
+        '(Landroid/app/Activity;IJ)Ljava/lang/String;');
+      Check(Env, 'previous process exit method');
+    except on E: Exception do WritelnWarning('Android diagnostics', E.ClassName); end;
     OsmPlatformHttpFactory := @CreateMapRequest;
     Navigation:=TAndroidNavigation.Create;
+  finally Release(Env, Detach) end;
+end;
+
+function AndroidPreviousExitInfo(Pid: Integer; SinceUtcMs: Int64): String;
+var Env: PJNIEnv; Detach: Boolean; Args: array[0..2] of jvalue; Reply: jstring;
+begin
+  Result := '';
+  if (PlatformClass = nil) or (PreviousExitMethod = nil) then Exit;
+  Env := Attach(Detach);
+  try
+    FillChar(Args, SizeOf(Args), 0);
+    Args[0].l := AndroidMainApp^.Activity^.Clazz;
+    Args[1].i := Pid;
+    Args[2].j := SinceUtcMs;
+    Reply := Env^^.CallStaticObjectMethodA(Env, PlatformClass, PreviousExitMethod, @Args[0]);
+    Check(Env, 'previous process exit');
+    Result := PascalString(Env, Reply);
   finally Release(Env, Detach) end;
 end;
 

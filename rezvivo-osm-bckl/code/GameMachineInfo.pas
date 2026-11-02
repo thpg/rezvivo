@@ -8,6 +8,7 @@ interface
 function MachineInformation: string;
 function MachineDiagnosticsSnapshot: string;
 procedure SetMachineGraphicsInformation(const Value: string);
+procedure SetMachinePlatformInformation(const Value: string);
 function FormatDiagnosticBytes(N: QWord): string;
 
 implementation
@@ -17,7 +18,7 @@ uses Classes, SysUtils
 
 var
   Collected: Boolean = False;
-  HardwareInfo, GraphicsInfo: string;
+  HardwareInfo, GraphicsInfo, PlatformInfo: string;
 
 function FormatDiagnosticBytes(N: QWord): string;
 begin
@@ -177,14 +178,23 @@ begin
         {$I %FPCTARGETCPU%} + '-' + {$I %FPCTARGETOS%});
       try
         {$ifdef MSWINDOWS}CollectWindowsInformation(Lines);
-        {$else}Lines.Add('Native hardware inventory unavailable on this platform.');{$endif}
+        {$else}
+        if PlatformInfo = '' then
+          Lines.Add('Native hardware inventory unavailable on this platform.');
+        {$endif}
       except
         on E: Exception do Lines.Add('Hardware inventory incomplete: ' + E.ClassName);
       end;
       HardwareInfo := Lines.Text;
     finally Lines.Free; end;
   end;
-  Result := HardwareInfo;
+  Result := HardwareInfo + PlatformInfo;
+end;
+
+procedure SetMachinePlatformInformation(const Value: string);
+begin
+  { Only static device model/OS/memory metadata, never serials or account IDs. }
+  PlatformInfo := Copy(Value, 1, 8 * 1024);
 end;
 
 procedure SetMachineGraphicsInformation(const Value: string);

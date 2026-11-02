@@ -2,7 +2,7 @@
 #if !defined(GL_ES) && defined(GL_ARB_sample_shading)
 #extension GL_ARB_sample_shading : enable
 #define TREE_SAMPLE_MASK 1
-#elif defined(GL_ES) && defined(GL_OES_sample_variables)
+#elif defined(GL_ES) && (__VERSION__ >= 310) && defined(GL_OES_sample_variables)
 #define TREE_SAMPLE_MASK 1 // enabled before precision declarations by TreeShaderSource
 #endif
 uniform int uKind, uSpecies, uDebug;

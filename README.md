@@ -12,7 +12,7 @@ Terrain, roads, buildings, water and vegetation are generated from OSM and
 elevation data, with map tiles loaded as you move. Handcrafted Dream Worlds and
 interval workouts offer more ways to ride.
 
-[Website](https://rezvivo.com) · [Features](#features) · [Watch videos](https://rezvivo.com/#videos) · [Download for Windows](https://rezvivo.com/download) ·
+[Website](https://rezvivo.com) · [Features](#features) · [Watch videos](https://rezvivo.com/#videos) · [Download for Windows](https://rezvivo.com/download) · [Download for Android (experimental)](https://rezvivo.com/download#android) ·
 [Report an issue on the website](https://rezvivo.com/feedback) or
 [GitHub Issues](https://github.com/thpg/rezvivo/issues) · [License](LICENSE)
 
@@ -213,6 +213,8 @@ successfully tested**. The other CGE platforms listed above remain theoretical
 porting targets for REZVIVO and still need adaptation and validation. Graphics
 performance and device compatibility are still being refined.
 For the ready-to-use application, visit the [download page](https://rezvivo.com/download).
+The [experimental Android APK](https://rezvivo.com/download#android) supports
+portrait and landscape layouts and is still being refined across devices.
 
 ## Looking for a Zwift alternative?
 
@@ -401,6 +403,10 @@ and compiled shaders beside the game. The regular Pascal build uses raster
 rendering when the RTX backend is unavailable.
 
 Review the [distribution notes](PUBLICATION.md) before redistributing a binary package.
+
+Android has independent release metadata in `rezvivo-osm-bckl/release-android.json`.
+Desktop metadata remains in `release.json`; the generated `GameBuildInfo` unit
+selects the matching version for the target platform.
 
 ## Repository layout
 

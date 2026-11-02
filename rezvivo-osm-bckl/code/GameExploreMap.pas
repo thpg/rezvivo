@@ -108,6 +108,8 @@ begin
   if FPanel=nil then Exit;
   ShortPage:=EffectiveHeightForChildren<340;
   FPanel.Width:=Min(352,Max(210,EffectiveWidthForChildren*0.42));
+  if EffectiveWidthForChildren<520 then
+    FPanel.Width:=Max(160,EffectiveWidthForChildren-76);
   FHint.MaxWidth:=FPanel.Width-24;
   FHint.Exists:=not ShortPage;
   if ShortPage then SearchTop:=4 else SearchTop:=Max(70,FHint.EffectiveHeight+24);

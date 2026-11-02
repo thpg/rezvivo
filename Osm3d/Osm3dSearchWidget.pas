@@ -57,6 +57,7 @@ type
 
     FSinceLaunch: Single;                   { сек с прошлого старта запроса }
     FBusy:        Boolean;
+    FLayoutWidth,FLayoutScale:Single;
 
     FAcceptLang:  string;
     FOnPlacePicked: TPlacePickedEvent;
@@ -73,6 +74,7 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor  Destroy; override;
+    procedure Resize; override;
 
     function Press(const Event: TInputPressRelease): Boolean; override;
     procedure Update(const SecondsPassed: Single;
@@ -90,7 +92,7 @@ type
 
 implementation
 
-uses UiTranslations;
+uses UiTranslations, Math;
 
 
 procedure TOsm3dSearchWidget.SetOnStyleButton(const Value: TNotifyEvent);
@@ -193,6 +195,28 @@ begin
   inherited Destroy;
 end;
 
+procedure TOsm3dSearchWidget.Resize;
+var I,N:Integer;W:Single;
+begin
+  inherited;
+  if(FEdit=nil)or(FSearchBtn=nil)or(FAttrib=nil)then Exit;
+  FLayoutWidth:=EffectiveWidthForChildren;FLayoutScale:=UIScale;
+  W:=Max(40,EffectiveWidthForChildren-2*W_PAD);
+  FSearchBtn.Width:=Min(70,W*0.34);
+  FEdit.Width:=Max(20,W-FSearchBtn.Width-8);
+  FEdit.FontSize:=16;
+  FStatus.MaxWidth:=W;FAttrib.MaxWidth:=W;
+  for I:=0 to High(FRows)do if FRows[I]<>nil then begin
+    FRows[I].Width:=W;
+    if I<=High(FHits)then begin
+      N:=MAX_ROW_CHARS;FRows[I].Caption:=Truncate(FHits[I].DisplayName,N);
+      while (N>4) and (FRows[I].Font.TextWidth(FRows[I].Caption)>Max(1,W-20)*UIScale)do begin
+        Dec(N);FRows[I].Caption:=Truncate(FHits[I].DisplayName,N);
+      end;
+    end;
+  end;
+end;
+
 procedure TOsm3dSearchWidget.SetStatus(const AMsg: string);
 begin
   FStatus.Caption := AMsg;
@@ -226,10 +250,7 @@ begin
     B.Caption := Truncate(FHits[I].DisplayName, N);
     B.Tag := I;                       { индекс хита }
     B.AutoSize := False;
-    B.Width  := W_WIDTH - 2 * W_PAD;
-    while (N>4) and (B.Font.TextWidth(B.Caption)>B.Width-20) do begin
-      Dec(N);B.Caption:=Truncate(FHits[I].DisplayName,N);
-    end;
+    B.Width  := Max(40,EffectiveWidthForChildren - 2 * W_PAD);
     B.Height := ROW_HEIGHT;
     B.OnClick := @DoRowClick;
     FResults.InsertFront(B);
@@ -240,6 +261,7 @@ begin
   { подгоняем высоту виджета под число подсказок }
   Height := W_PAD + EDIT_HEIGHT + 22 +
             Length(FHits) * (ROW_HEIGHT + 2) + 4 + 14 + W_PAD;
+  Resize;
 end;
 
 procedure TOsm3dSearchWidget.DoRowClick(Sender: TObject);
@@ -307,6 +329,8 @@ var
   Hits: TGeoHitArray;
 begin
   inherited Update(SecondsPassed, HandleInput);
+  if (Abs(EffectiveWidthForChildren-FLayoutWidth)>0.1) or
+    (Abs(UIScale-FLayoutScale)>0.001) then Resize;
   FSinceLaunch := FSinceLaunch + SecondsPassed;
 
   if FThread = nil then Exit;

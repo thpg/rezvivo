@@ -280,6 +280,18 @@ begin
   FVoiceMeter.Width := FMicrophone.Width; FVoiceMeter.Height := 3 / S;
   FVoiceMeter.Anchor(hpLeft, 20 / S); FVoiceMeter.Anchor(vpBottom, 77 / S);
   FVoiceLevel.Height := FVoiceMeter.Height;
+  {$ifdef ANDROID}
+  { Local speech services are desktop-only. Reserve the phone's height for
+    the conversation and keep the close/send actions in the visible panel. }
+  FMicrophone.Exists:=False;FReadReplies.Exists:=False;FStopSpeech.Exists:=False;
+  FVoiceInputStatus.Exists:=False;FVoiceOutputStatus.Exists:=False;FVoiceMeter.Exists:=False;
+  FInterval.Anchor(vpTop,-94/S);
+  FScroll.Anchor(vpTop,-144/S);FScroll.Height:=Max(40/S,H-232/S);
+  FInput.Anchor(vpBottom,16/S);FSend.Anchor(vpBottom,16/S);
+  FError.Anchor(vpBottom,64/S);FError.MaxWidth:=Max(100,W-238/S);
+  FLatest.Anchor(vpBottom,60/S);
+  FHint.Exists:=False;
+  {$endif}
   FVoiceRevision := High(QWord);
   if (FSnapshot <> nil) and (Abs(FContentWidth - FScroll.Width) > 0.5) then
     BuildMessages(False);
@@ -697,6 +709,7 @@ begin
   if FLiveElapsed >= 1 then begin FLiveElapsed := 0; RefreshLiveStatus; end;
   FLatest.Exists := FScroll.ScrollMax - FScroll.Scroll > 24 / Max(0.65, Min(1, UIScale));
   FHint.Exists := not FLatest.Exists or (FPanel.Width >= 480 / Max(0.65, Min(1, UIScale)));
+  {$ifdef ANDROID}FHint.Exists:=False;FVoiceMeter.Exists:=False;{$endif}
   if FNeedFocus then begin
     FNeedFocus := False; FKeyboardActive := True;
     FInput.Focused := True; Container.ForceCaptureInput := FInput;

@@ -1,0 +1,7 @@
+{
+  "version": "0.4.5-alpha.2",
+  "build": 21,
+  "channel": "alpha",
+  "platform": "android",
+  "notes": "Improve portrait and landscape layouts, route selection and the collapsible in-ride map. Fix email and password keyboard input. Improve FIT/GPX import diagnostics and crash logs. Update the sign-in screen branding."
+}

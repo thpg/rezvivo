@@ -10,7 +10,7 @@ procedure PickGameFile(Owner:TComponent;const Title,Filters:String;
   Selected:TPickedFileEvent;const InitialUrl:String='');
 
 implementation
-uses SysUtils,CastleWindow,CastleURIUtils,UiTranslations
+uses SysUtils,CastleWindow,CastleURIUtils,UiTranslations,CastleLog
   {$ifdef ANDROID},CastleMessaging,CastleStringUtils{$endif};
 
 {$ifdef ANDROID}
@@ -50,6 +50,7 @@ begin
   if FRequest<>0 then Exit; { Ignore double taps while DocumentsUI is open. }
   Inc(FCounter);FRequest:=FCounter;FTarget:=Target;FSelected:=Selected;
   if FTarget<>nil then FTarget.FreeNotification(Self);
+  WritelnLog('FilePicker','Opening Android document picker, request '+IntToStr(FRequest));
   Messaging.Send(['rezvivo-file-open',IntToStr(FRequest),Title,Filters]);
 end;
 function TAndroidFilePicker.Receive(const Parts:TCastleStringList;const Stream:TMemoryStream):Boolean;
@@ -59,11 +60,17 @@ begin
   if not Result or(Parts.Count<>4)then Exit;
   if(FRequest=0)or(Parts[1]<>IntToStr(FRequest))then Exit;
   Callback:=FSelected;Status:=Parts[2];Value:=Parts[3];
+  WritelnLog('FilePicker','Android document result: '+Status+'; request '+IntToStr(FRequest));
   FRequest:=0;ClearTarget;
   if not Assigned(Callback)then Exit;
   if Status='ok' then begin
-    try Callback(Value);
-    except on E:Exception do Application.MainWindow.MessageOK(UiText('Could not open file: ')+E.Message,mtError) end;
+    try
+      Callback(Value);
+      WritelnLog('FilePicker','Imported document handed to application');
+    except on E:Exception do begin
+      WritelnWarning('FilePicker','Import callback failed: '+E.ClassName);
+      Application.MainWindow.MessageOK(UiText('Could not open file: ')+E.Message,mtError);
+    end;end;
   end else if Status='error' then
     Application.MainWindow.MessageOK(UiText('Could not open file: ')+UiText(Value),mtError);
 end;

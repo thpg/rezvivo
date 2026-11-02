@@ -38,8 +38,9 @@ type
     FSpeedTitle, FSpeedUnits, FWorkTitle, FWorkUnits, FTSSTitle,
       FGradeTitle: TCastleLabel;
     FGearDown,FGearUp:TCastleButton;
-    FReady, FArranging: Boolean;
+    FReady, FArranging, FCompactLayout: Boolean;
     FLayoutScale: Single;
+    FParentWidth,FParentHeight,FParentScale:Single;
     function NewLabel(const AName, Source: String; const Bold: Boolean): TCastleLabel;
     function NewValue(const AName: String): TRideHudValue;
     procedure LanguageChanged(Sender: TObject);
@@ -47,6 +48,7 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     procedure Resize; override;
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean); override;
     procedure Render; override;
     property Labels: THudLabels read FLabels;
   end;
@@ -303,6 +305,14 @@ begin
     DeviceService.ShiftVirtualGear(TCastleButton(Sender).Tag);
 end;
 
+procedure TRideMetricsHud.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+begin
+  inherited;
+  if (Parent<>nil) and ((Abs(Parent.EffectiveWidth-FParentWidth)>0.1) or
+    (Abs(Parent.EffectiveHeight-FParentHeight)>0.1) or
+    (Abs(UIScale-FParentScale)>0.001)) then Resize;
+end;
+
 procedure TRideMetricsHud.Resize;
 var Available, AvailableHeight, S, NumberWidth, UnitWidth, RowX: Single;
   I: Integer; L:TRideHudLayout;
@@ -322,10 +332,37 @@ begin
   try
     Available:=HudWidth+400;AvailableHeight:=900;
     if Parent<>nil then begin Available:=Parent.EffectiveWidth;AvailableHeight:=Parent.EffectiveHeight end;
-    L:=RideHudLayout(Available,AvailableHeight);S:=L.MetricsWidth/HudWidth;
+    FParentWidth:=Available;FParentHeight:=AvailableHeight;FParentScale:=UIScale;
+    L:=RideHudLayout(Available,AvailableHeight);FCompactLayout:=L.CompactMetrics;
+    if FCompactLayout then S:=L.MetricsWidth/360 else S:=L.MetricsWidth/HudWidth;
     FLayoutScale:=S;
-    Width:=HudWidth*S; Height:=HudHeight*S;
+    Width:=L.MetricsWidth; Height:=L.MetricsHeight;
     Anchor(hpLeft,L.MetricsLeft);Anchor(vpTop,-L.MetricsTop);
+    FSpeedTitle.Exists:=not FCompactLayout;FWorkTitle.Exists:=not FCompactLayout;
+    FGradeTitle.Exists:=not FCompactLayout;
+    if FCompactLayout then begin
+      { Reflow at a readable physical size instead of shrinking the desktop
+        strip. The three original wheels and telemetry bindings are retained. }
+      Place(FSpeedIcon,8,9,16,16);Text(FLabels.LabelSpeed,28,4,46,26,18);
+      Text(FSpeedUnits,78,6,34,24,11);
+      Place(FWorkIcon,124,9,16,16);Text(FLabels.LabelWork,144,4,70,26,18);
+      Text(FWorkUnits,218,6,23,24,11);
+      Text(FTSSTitle,256,6,28,24,11);Text(FLabels.LabelWorkTSS,287,4,64,26,18);
+      Place(FGradeIcon,8,44,16,16);Text(FLabels.LabelSlope,27,38,62,28,18);
+      Text(FLabels.LabelCorr,94,39,50,26,11);
+      Place(FGearDown,182,35,40,32);FGearDown.FontSize:=18*S;
+      Text(FLabels.LabelTransmission,226,35,78,32,18);
+      Place(FGearUp,308,35,40,32);FGearUp.FontSize:=18*S;
+      for I:=0 to 2 do begin
+        Place(FMetrics[I].Root,I*120,72,120,84);
+        Place(FMetrics[I].Icon,8,18,20,20);
+        if I=2 then Place(FMetrics[I].Icon,5,15,26,26);
+        Text(FMetrics[I].Value,29,1,82,42,32);
+        Text(FMetrics[I].Units,80,37,32,18,11);
+        Place(FMetrics[I].Wheel,8,60,104,17);FMetrics[I].Wheel.FontSize:=12*S;
+      end;
+      Exit;
+    end;
     for I:=0 to 2 do
     begin
       Place(FMetrics[I].Root,I*HudWidth/3,HudHeaderHeight,HudWidth/3,HudHeight-HudHeaderHeight);
@@ -372,6 +409,12 @@ begin
   R:=RenderRect; S:=FLayoutScale*UIScale; LineWidth:=Max(1,S);
   DrawMenuPanel(R,12*S,HudEdge);
   DrawMenuPanel(R.Grow(-LineWidth),Max(0,12*S-LineWidth),HudSurface);
+  if FCompactLayout then begin
+    DrawRectangle(FloatRectangle(R.Left+1,R.Top-72*S,R.Width-2,LineWidth),HudEdge);
+    for I:=1 to 2 do
+      DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Bottom+8*S,LineWidth,68*S),HudEdge);
+    Exit;
+  end;
   DrawRectangle(FloatRectangle(R.Left+1,R.Top-HudHeaderHeight*S,R.Width-2,LineWidth),HudEdge);
   for I:=0 to High(HeaderDividers) do
     DrawRectangle(FloatRectangle(R.Left+HeaderDividers[I]*S,R.Top-33*S,

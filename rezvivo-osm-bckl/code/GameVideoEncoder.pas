@@ -1,13 +1,16 @@
 unit GameVideoEncoder;
 {$mode objfpc}{$H+}
 interface
-uses Classes, SyncObjs, ProcessUnicode, CastleImages;
+uses Classes, SyncObjs, Process, {$ifdef MSWINDOWS}ProcessUnicode,{$endif} CastleImages;
 type
+  { FPC provides ProcessUnicode only on Windows. Unix/Android process paths
+    and arguments are already UTF-8; keep them as byte strings there. }
+  TEncoderProcess = {$ifdef MSWINDOWS}ProcessUnicode{$else}Process{$endif}.TProcess;
   { One bounded frame slot, owned by the encoder after Submit. No frame files,
     no unbounded queue, no GL on the worker. Back pressure holds virtual time. }
   TVideoEncoder = class(TThread)
   private
-    FProcess: ProcessUnicode.TProcess;
+    FProcess: TEncoderProcess;
     FLock: TCriticalSection;
     FWake: TEvent;
     FFrame: TRGBImage;
@@ -31,18 +34,18 @@ type
     property ProcessId: Cardinal read FProcessId;
   end;
 implementation
-uses SysUtils, Math, Process;
+uses SysUtils, Math;
 
 constructor TVideoEncoder.Create(const Encoder, Output: String; Width, Height, Fps: Integer);
   procedure Arg(const S: String);
-  begin FProcess.Parameters.Add(UTF8Decode(S)) end;
+  begin FProcess.Parameters.Add({$ifdef MSWINDOWS}UTF8Decode(S){$else}S{$endif}) end;
 begin
   inherited Create(True);
   FreeOnTerminate:=False;
   FLock:=TCriticalSection.Create;
   FWake:=TEvent.Create(nil,False,False,'');
-  FProcess:=ProcessUnicode.TProcess.Create(nil);
-  FProcess.Executable:=UTF8Decode(Encoder);
+  FProcess:=TEncoderProcess.Create(nil);
+  FProcess.Executable:={$ifdef MSWINDOWS}UTF8Decode(Encoder){$else}Encoder{$endif};
   FProcess.Options:=[poUsePipes,poStderrToOutPut,poNoConsole];
   FProcess.ShowWindow:=swoHIDE;
   Arg('-hide_banner'); Arg('-nostdin'); Arg('-loglevel'); Arg('error');

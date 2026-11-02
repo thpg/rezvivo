@@ -1,0 +1,35 @@
+--- a/src/scene/x3d/x3dnodes_x3dnode.inc
++++ b/src/scene/x3d/x3dnodes_x3dnode.inc
+@@ -1996,11 +1996,28 @@
+ 
+ function TX3DNode.Traverse(NodeClass: TX3DNodeClass;
+   TraversingFunc: TTraversingFunc): Pointer;
+-begin
+-  TraverseSingleStack.PushClear;
++var
++  StateStack: TX3DGraphTraverseStateStack;
++  OwnsStack: Boolean;
++begin
++  { Background tile mounting traverses detached graphs while the app thread
++    traverses live scenes. The reusable process-wide stack cannot be shared:
++    concurrent Push/Pop can corrupt its depth even for unrelated graphs.
++    Retain the cached stack on the main thread; workers own a stack per call,
++    including nested calls, with bounded lifetime and no global render lock. }
++  OwnsStack := GetCurrentThreadID <> MainThreadID;
++  if OwnsStack then
++    StateStack := TX3DGraphTraverseStateStack.Create
++  else
++    StateStack := TraverseSingleStack;
+   try
+-    Result := TraverseInternal(TraverseSingleStack, NodeClass, TraversingFunc, nil);
+-  finally TraverseSingleStack.Pop end;
++    StateStack.PushClear;
++    try
++      Result := TraverseInternal(StateStack, NodeClass, TraversingFunc, nil);
++    finally StateStack.Pop end;
++  finally
++    if OwnsStack then StateStack.Free;
++  end;
+ end;
+ 
+ function TX3DNode.X3DType: string;

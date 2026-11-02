@@ -28,6 +28,7 @@ type
   private
     FMode:TTravelMode;
     FEnabled,FFlying:Boolean;
+    FLayoutWidth,FLayoutHeight:Single;
     FStick,FPrimary,FSecondary,FLook:TTravelTouchPad;
     FCamera:TMenuButton;
   public
@@ -45,7 +46,7 @@ type
     property CameraButton:TMenuButton read FCamera;
   end;
 implementation
-uses SysUtils,Math,CastleColors,CastleRectangles,CastleGLUtils,UiTranslations;
+uses SysUtils,Math,CastleColors,CastleRectangles,CastleGLUtils,UiTranslations,GameRideLayout;
 
 constructor TTravelTouchPad.Create(AOwner:TComponent);
 begin
@@ -149,19 +150,33 @@ begin
   end;
 end;
 procedure TTravelTouchControls.Resize;
-var Size,Margin:Single;
+var Size,Margin,RightInset:Single;L:TRideHudLayout;
 begin
   inherited;
+  if FCamera=nil then Exit;
+  if (Abs(EffectiveWidth-FLayoutWidth)>0.5) or
+     (Abs(EffectiveHeight-FLayoutHeight)>0.5) then begin
+    { A rotated touch surface invalidates both the old thumb origin and any
+      captured power/brake gesture. Do not carry a held control across it. }
+    Reset;FLayoutWidth:=EffectiveWidth;FLayoutHeight:=EffectiveHeight;
+  end;
   { Logical units include physical-DPI scaling; never grow with a wide screen. }
   Size:=Min(144,Min(EffectiveWidth*0.34,EffectiveHeight*0.40));
   Size:=Max(80,Size);Margin:=20;
+  { Leave the rider list and mini-map usable. Touch actions occupy the
+    bottom strip immediately to their left on short landscape screens. }
+  RightInset:=0;
+  if (EffectiveWidth>=640) and (EffectiveHeight<560) then begin
+    L:=RideHudLayout(EffectiveWidth,EffectiveHeight);
+    RightInset:=L.RidersWidth+2*RidePanelPadding+L.Margin*2;
+  end;
   FStick.Width:=Size;FStick.Height:=Size;
   FStick.Anchor(hpLeft,20);FStick.Anchor(vpBottom,Margin);
-  FPrimary.Anchor(hpRight,-20);FPrimary.Anchor(vpBottom,Margin);
-  FSecondary.Anchor(hpRight,-92);FSecondary.Anchor(vpBottom,Margin);
-  FCamera.Anchor(hpRight,-20);FCamera.Anchor(vpBottom,Margin+80);
-  FLook.Width:=EffectiveWidth*0.52;FLook.Height:=Max(44,EffectiveHeight-200);
-  FLook.Anchor(hpRight);FLook.Anchor(vpBottom,100);
+  FPrimary.Anchor(hpRight,-Max(20,RightInset));FPrimary.Anchor(vpBottom,Margin);
+  FSecondary.Anchor(hpRight,-(Max(20,RightInset)+72));FSecondary.Anchor(vpBottom,Margin);
+  FCamera.Anchor(hpRight,-Max(20,RightInset));FCamera.Anchor(vpBottom,Margin+80);
+  FLook.Width:=Max(80,EffectiveWidth*0.52-RightInset);FLook.Height:=Max(44,EffectiveHeight-200);
+  FLook.Anchor(hpRight,-RightInset);FLook.Anchor(vpBottom,100);
 end;
 function TTravelTouchControls.Movement:TVector2;
 begin if Exists and FStick.Exists then Result:=FStick.Axis else Result:=TVector2.Zero end;

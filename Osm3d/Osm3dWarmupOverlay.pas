@@ -1,4 +1,4 @@
-unit Osm3dWarmupOverlay;
+﻿unit Osm3dWarmupOverlay;
 
 { Оверлей «прогрева» маршрута — общая фича стримера Osm3d, одинаковая для
   Osm3dStudio и игры.
@@ -655,6 +655,9 @@ begin
   SetError('');
   FShowing := True;
   Exists   := True;
+  { Initialize captions and compact network layout before the first frame;
+    resource preparation may delay the normal Update on mobile drivers. }
+  UpdateNetworkLabels;
 end;
 
 procedure TOsm3dWarmupOverlay.FreeRaster;
