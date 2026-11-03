@@ -310,6 +310,7 @@
   "Osm3d/cge-android-gamepad.patch",
   "Osm3d/cge-android-input-compile.patch",
   "Osm3d/cge-android-permissions.patch",
+  "Osm3d/cge-android-shader-jobs.patch",
   "Osm3d/cge-opengles3.patch",
   "Osm3d/cge-scissor-context-close.patch",
   "Osm3d/cge-traverse-worker-stack.patch",

@@ -1,5 +1,6 @@
 unit GameAndroidPlatform;
 {$mode objfpc}{$H+}
+{$codepage UTF8}
 interface
 uses Classes, SysUtils;
 
@@ -19,7 +20,7 @@ procedure AndroidHttpRequest(Id: Int64; const Method, Url: String;
 implementation
 uses JNI, CastleAndroidNativeAppGlue, CastleFilesUtils, CastleURIUtils, Osm3dPlatformHttp,
   CastleMessaging, CastleStringUtils, CastleWindow, CastleKeysMouse,
-  GameMachineInfo, CastleLog;
+  GameMachineInfo, CastleLog, GameLocalization, CastleInternalAndroidShaderJobs;
 type
   TAndroidNavigation=class
     constructor Create;
@@ -40,6 +41,9 @@ var
   PlatformClass: jclass;
   NewRequestMethod, CancelMethod, FinishMethod, HttpMethod: jmethodID;
   PreviousExitMethod: jmethodID;
+  GraphicsProgressMethod: jmethodID;
+  GraphicsProgressClass: jclass;
+  GraphicsProgressDisabled: Boolean;
   Navigation:TAndroidNavigation;
 
 constructor TAndroidNavigation.Create;
@@ -135,25 +139,86 @@ begin
   finally Env^^.ReleaseStringChars(Env, Value, Chars) end;
 end;
 
+function LoadPlatformClass(Env: PJNIEnv): jclass;
+var ActivityClass, LoaderClass: jclass; Loader: jobject; M: jmethodID; Arg: jvalue;
+begin
+  ActivityClass := Env^^.GetObjectClass(Env, AndroidMainApp^.Activity^.Clazz);
+  M := Env^^.GetMethodID(Env, ActivityClass, 'getClassLoader', '()Ljava/lang/ClassLoader;');
+  Check(Env, 'class loader lookup');
+  Loader := Env^^.CallObjectMethodA(Env, AndroidMainApp^.Activity^.Clazz, M, nil);
+  Check(Env, 'class loader');
+  LoaderClass := Env^^.GetObjectClass(Env, Loader);
+  M := Env^^.GetMethodID(Env, LoaderClass, 'loadClass', '(Ljava/lang/String;)Ljava/lang/Class;');
+  Check(Env, 'load class method');
+  Arg.l := JavaString(Env, 'io.castleengine.RezvivoPlatform');
+  Result := Env^^.CallObjectMethodA(Env, Loader, M, @Arg);
+  Check(Env, 'platform class');
+  if Result = nil then raise Exception.Create('Android platform service is missing');
+end;
+
+procedure ShaderProgress(const Stage, Name: String; const ElapsedMs: QWord;
+  const Finished: Boolean);
+var Env: PJNIEnv; Detach: Boolean; Args: array[0..3] of jvalue;
+  Caption, LowerName: String;
+begin
+  if GraphicsProgressDisabled or (AndroidMainApp = nil) then Exit;
+  { A status badge must never turn a successful resource load into an error. }
+  try
+    if Stage = 'cache' then Caption := 'Loading cached graphics'
+    else if Stage = 'save' then Caption := 'Saving graphics cache'
+    else begin
+      LowerName := LowerCase(Name);
+      if (Pos('rider', LowerName) > 0) or (Pos('avatar', LowerName) > 0) then
+        Caption := 'Preparing rider'
+      else if (Pos('ground', LowerName) > 0) or (Pos('tree', LowerName) > 0) or
+        (Pos('grass', LowerName) > 0) or (Pos('building', LowerName) > 0) then
+        Caption := 'Preparing scenery'
+      else Caption := 'Preparing graphics';
+    end;
+    { CGE compiles its first image shader before ApplicationInitialize.
+      Resources/localization are not installed yet at that early stage. }
+    if PlatformClass <> nil then Caption := T(Caption);
+    Caption := Caption + '...';
+    if ElapsedMs >= 1000 then begin
+      if PlatformClass <> nil then LowerName := T('Elapsed: %d s')
+      else LowerName := 'Elapsed: %d s';
+      Caption := Caption + LineEnding + Format(LowerName, [ElapsedMs div 1000]);
+    end;
+    Env := Attach(Detach);
+    try
+      if GraphicsProgressClass = nil then begin
+        GraphicsProgressClass := Env^^.NewGlobalRef(Env, LoadPlatformClass(Env));
+        Check(Env, 'graphics progress class');
+        GraphicsProgressMethod := Env^^.GetStaticMethodID(Env, GraphicsProgressClass, 'graphicsProgress',
+          '(Landroid/app/Activity;Ljava/lang/String;JZ)V');
+        Check(Env, 'graphics progress method');
+      end;
+      FillChar(Args, SizeOf(Args), 0);
+      Args[0].l := AndroidMainApp^.Activity^.Clazz;
+      Args[1].l := JavaString(Env, Caption);
+      Args[2].j := ElapsedMs;
+      Args[3].z := Ord(Finished);
+      Env^^.CallStaticVoidMethodA(Env, GraphicsProgressClass, GraphicsProgressMethod, @Args[0]);
+      Check(Env, 'graphics progress');
+    finally Release(Env, Detach) end;
+  except
+    on E: Exception do begin
+      GraphicsProgressMethod := nil;
+      GraphicsProgressDisabled := True;
+      WritelnWarning('Android graphics progress', E.ClassName);
+    end;
+  end;
+end;
+
 procedure InitializeAndroidPlatform;
-var Env: PJNIEnv; Detach: Boolean; ActivityClass, LoaderClass: jclass;
-  Loader, Found, Directory: jobject; M: jmethodID; Args: array[0..0] of jvalue;
+var Env: PJNIEnv; Detach: Boolean;
+  Found, Directory: jobject; M: jmethodID; Args: array[0..0] of jvalue;
   Root: String;
 begin
   if PlatformClass <> nil then Exit;
   Env := Attach(Detach);
   try
-    ActivityClass := Env^^.GetObjectClass(Env, AndroidMainApp^.Activity^.Clazz);
-    M := Env^^.GetMethodID(Env, ActivityClass, 'getClassLoader', '()Ljava/lang/ClassLoader;');
-    Check(Env, 'class loader lookup');
-    Loader := Env^^.CallObjectMethodA(Env, AndroidMainApp^.Activity^.Clazz, M, nil);
-    Check(Env, 'class loader');
-    LoaderClass := Env^^.GetObjectClass(Env, Loader);
-    M := Env^^.GetMethodID(Env, LoaderClass, 'loadClass', '(Ljava/lang/String;)Ljava/lang/Class;');
-    Args[0].l := JavaString(Env, 'io.castleengine.RezvivoPlatform');
-    Found := Env^^.CallObjectMethodA(Env, Loader, M, @Args[0]);
-    Check(Env, 'platform class');
-    if Found = nil then raise Exception.Create('Android platform service is missing');
+    Found := LoadPlatformClass(Env);
     NewRequestMethod := Env^^.GetStaticMethodID(Env, Found, 'newRequest', '()J');
     CancelMethod := Env^^.GetStaticMethodID(Env, Found, 'cancelRequest', '(J)V');
     FinishMethod := Env^^.GetStaticMethodID(Env, Found, 'finishRequest', '(J)V');
@@ -291,6 +356,9 @@ end;
 
 { PlatformClass lives as long as the native library. Worker finalizers can still
   use it after Application.OnInitialize's owning unit has finalized. }
+initialization
+  AndroidShaderProgress := @ShaderProgress;
 finalization
+  AndroidShaderProgress := nil;
   FreeAndNil(Navigation);
 end.

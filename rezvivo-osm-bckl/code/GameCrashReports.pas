@@ -164,7 +164,7 @@ end;
 
 {$ifdef ANDROID}
 function AndroidSessionExit(O:TJSONObject;const Path:String;out Expected:Boolean):String;
-var SinceUtcMs:Int64;Text:String;J:TJSONData;Reason,Status,Stamp:Integer;
+var SinceUtcMs:Int64;Text,Trace:String;J:TJSONData;Reason,Status,Stamp:Integer;
 begin
   Result:='';Expected:=False;J:=nil;
   try
@@ -183,9 +183,12 @@ begin
     { ApplicationExitInfo: user stop, permission/package change and successful
       exit are not application crashes. Keep low-memory/ANR/native failures. }
     Expected:=(Reason in [8,10,11,15,16])or((Reason=1)and(Status=0));
+    Trace:=TJSONObject(J).Get('anr_trace','');
+    TJSONObject(J).Delete('anr_trace');
     Result:=Format('Android process exit: reason=%d, status=%d; %s',
       [Reason,Status,TJSONObject(J).Get('description','')])+#10+
-      'System exit metadata: '+Text;
+      'System exit metadata: '+J.AsJSON;
+    if Trace<>''then Result:=Result+#10+'System ANR trace:'+#10+Trace;
   except on E:Exception do Logger.Warning('[CrashReport] Exit metadata unavailable: '+E.ClassName);end;
   finally J.Free;end;
 end;

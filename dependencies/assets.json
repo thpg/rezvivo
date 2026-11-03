@@ -4980,96 +4980,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 28228,
-    "sha256": "27b4db4c061f3d99ff35803b85e3db435c9d260e482b20c9547d1d855249604f",
+    "bytes": 28649,
+    "sha256": "68ddb19d7e9899e0f4816ebaed95f7947be4e15ec383018d185bd795c3c8f303",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 23402,
-    "sha256": "f2d10f5fc1a3facc98cf5f7d162db4d0b74f30bbf8ff894906a9f7a59b057908",
+    "bytes": 23717,
+    "sha256": "0c4b256ab275caabc776f9ddd12f7b88c2559766d4a8485118b7da41eca95d80",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 96773,
-    "sha256": "8d6e7c7ca7ee0fbd136f0fc726f1821500d1504fd4368e64a3132e2740dda01f",
+    "bytes": 97047,
+    "sha256": "02bea4643be48f3f6556b96ec1dee897e65a1bfcdc230b0f65bb361825250761",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 23437,
-    "sha256": "84a978a948727d9d0c817b3b7122b35a863f9be29ec9d5e34b8f088a5b7d4f75",
+    "bytes": 23743,
+    "sha256": "fad94715b45c61ad28bebfdd34431aee33bea4f7056c7f6bdfdc0f16a79fd88e",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 24164,
-    "sha256": "28d94dbd7ea2aa1f06b9f00d36a6587005b97f684c5d5e9fd50c61be5ba443d9",
+    "bytes": 24492,
+    "sha256": "db4a5429a16dfab26f77d627c8c5a6be2525e69be2b1333cd0d4316c5fcf04e0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 23194,
-    "sha256": "7521fbf531fd5672e2faf8867ded9cd8e2408063360f8077f6cfa22bc6b35ddc",
+    "bytes": 23529,
+    "sha256": "8292e0d2cf1a9f48c4fa42905103f9c2171326b9bcbdd79030bd7905a97b2e75",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 26615,
-    "sha256": "4be347f6dffff5c11c44dade57cd29bd10c3725d40ba00fec4e3733ce96ffbeb",
+    "bytes": 26995,
+    "sha256": "34e7fd9da491f0d2624e3a9fcbc3739356fd07be5565f104da1bd19190dda3b0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 24467,
-    "sha256": "d0cb017d333959d0dc35013569a357a065d031dc5623f70e2f9899c949267c05",
+    "bytes": 24781,
+    "sha256": "a338ed04a0069f3f08294f5548b0fb283d54e9d6ea4d6e5667463aa754069b07",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 23057,
-    "sha256": "00b98ec01a0229d5ecb8ef258e517f9e1a91c200b9c6e693313b5df8dbe2f0eb",
+    "bytes": 23359,
+    "sha256": "73bc073cdcae3c8e7ace2cc3505eea2d3cff579ef0bb8c8f15a10fb4d1a04d35",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 150472,
-    "sha256": "dcaafd35249fbe82e223b17cc88b8db17a5e77c504298e15740f0957b7d8b4c6",
+    "bytes": 150856,
+    "sha256": "8de763760cafbb10fe762adecf4df97f01862216e119a9b23ea3d5af252a01ee",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 21670,
-    "sha256": "b2b28588da7b1eecb2bccec9e7f19c07bddc2b063551c9b69fd6789293e6d98f",
+    "bytes": 21957,
+    "sha256": "b3a353b1bf6a56e450bf0d4e869d0cd7ddf94fa61817dc0af5312f174bd1c4af",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 21478,
-    "sha256": "4e35fe4633b233ac75509bfabe9de887da1c71c86ee4b59da4305d353a9d342f",
+    "bytes": 21765,
+    "sha256": "0f462ee535bf7f3e5bd52acfb461778806bc5931b46992c8056effd638adfff0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

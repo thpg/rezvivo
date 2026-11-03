@@ -1710,5 +1710,11 @@
   "Shoulder width (%)": "Shoulder width (%)",
   "Waist size (%)": "Waist size (%)",
   "Thigh size (%)": "Thigh size (%)",
-  "Calf size (%)": "Calf size (%)"
+  "Calf size (%)": "Calf size (%)",
+  "Preparing rider": "Preparing rider",
+  "Preparing scenery": "Preparing scenery",
+  "Preparing graphics": "Preparing graphics",
+  "Loading cached graphics": "Loading cached graphics",
+  "Saving graphics cache": "Saving graphics cache",
+  "Elapsed: %d s": "Elapsed: %d s"
 }

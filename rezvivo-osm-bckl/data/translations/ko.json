@@ -372,5 +372,11 @@
   "Shoulder width (%)": "어깨 너비 (%)",
   "Waist size (%)": "허리 굵기 (%)",
   "Thigh size (%)": "허벅지 굵기 (%)",
-  "Calf size (%)": "종아리 굵기 (%)"
+  "Calf size (%)": "종아리 굵기 (%)",
+  "Preparing rider": "라이더 준비 중",
+  "Preparing scenery": "주변 환경 준비 중",
+  "Preparing graphics": "그래픽 준비 중",
+  "Loading cached graphics": "캐시된 그래픽 불러오는 중",
+  "Saving graphics cache": "그래픽 캐시 저장 중",
+  "Elapsed: %d s": "경과 시간: %d초"
 }

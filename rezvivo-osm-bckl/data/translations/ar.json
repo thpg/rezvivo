@@ -372,5 +372,11 @@
   "Shoulder width (%)": "عرض الكتفين (%)",
   "Waist size (%)": "حجم الخصر (%)",
   "Thigh size (%)": "حجم الفخذ (%)",
-  "Calf size (%)": "حجم ربلة الساق (%)"
+  "Calf size (%)": "حجم ربلة الساق (%)",
+  "Preparing rider": "جارٍ تجهيز الراكب",
+  "Preparing scenery": "جارٍ تجهيز البيئة",
+  "Preparing graphics": "جارٍ تجهيز الرسومات",
+  "Loading cached graphics": "جارٍ تحميل الرسومات المخزنة مؤقتًا",
+  "Saving graphics cache": "جارٍ حفظ ذاكرة الرسومات المؤقتة",
+  "Elapsed: %d s": "الوقت المنقضي: %d ث"
 }

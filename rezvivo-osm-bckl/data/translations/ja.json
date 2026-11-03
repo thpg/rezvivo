@@ -383,5 +383,11 @@
   "Shoulder width (%)": "肩幅 (%)",
   "Waist size (%)": "ウエストの太さ (%)",
   "Thigh size (%)": "太ももの太さ (%)",
-  "Calf size (%)": "ふくらはぎの太さ (%)"
+  "Calf size (%)": "ふくらはぎの太さ (%)",
+  "Preparing rider": "ライダーを準備中",
+  "Preparing scenery": "周囲の景色を準備中",
+  "Preparing graphics": "グラフィックスを準備中",
+  "Loading cached graphics": "キャッシュからグラフィックスを読み込み中",
+  "Saving graphics cache": "グラフィックスキャッシュを保存中",
+  "Elapsed: %d s": "経過時間：%d 秒"
 }

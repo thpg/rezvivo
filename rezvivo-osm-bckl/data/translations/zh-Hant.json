@@ -371,5 +371,11 @@
   "Shoulder width (%)": "肩寬 (%)",
   "Waist size (%)": "腰部圍度 (%)",
   "Thigh size (%)": "大腿圍度 (%)",
-  "Calf size (%)": "小腿圍度 (%)"
+  "Calf size (%)": "小腿圍度 (%)",
+  "Preparing rider": "正在準備騎手",
+  "Preparing scenery": "正在準備環境",
+  "Preparing graphics": "正在準備圖形",
+  "Loading cached graphics": "正在載入快取圖形",
+  "Saving graphics cache": "正在儲存圖形快取",
+  "Elapsed: %d s": "已用時：%d 秒"
 }

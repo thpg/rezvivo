@@ -4,8 +4,8 @@ unit GameBuildInfo;
 interface
 const
   {$ifdef ANDROID}
-  ClientVersion = '0.4.5-alpha.2';
-  ClientBuild = 21;
+  ClientVersion = '0.4.5-alpha.3';
+  ClientBuild = 22;
   {$else}
   ClientVersion = '0.4.5-alpha.1';
   ClientBuild = 20;

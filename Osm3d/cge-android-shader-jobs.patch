@@ -1,0 +1,667 @@
+diff --git a/src/base_rendering/castleglshaders.pas b/src/base_rendering/castleglshaders.pas
+--- a/src/base_rendering/castleglshaders.pas
++++ b/src/base_rendering/castleglshaders.pas
+@@ -708,8 +708,8 @@
+ 
+ uses CastleStringUtils, CastleLog, CastleGLVersion, CastleRenderContext,
+   CastleInternalGLUtils, CastleApplicationProperties
+-  {$if defined(ANDROID) and defined(FPC)}, CastleAndroidNativeAppGlue{$endif}
+-  {$if defined(FPC) and not defined(OpenGLES)}, MD5{$endif};
++  {$if defined(ANDROID) and defined(FPC)}, CastleAndroidNativeAppGlue, CastleInternalAndroidShaderJobs{$endif}
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}, MD5{$endif};
+ 
+ const
+   {$ifdef OpenGLES}
+@@ -788,7 +788,7 @@
+   {$endif}
+ 
+ 
+-{$if defined(FPC) and not defined(OpenGLES)}
++{$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+ type
+   TProgramBinaryHeader = packed record
+     Magic, BinaryFormat, DataLength: UInt32;
+@@ -804,7 +804,11 @@
+     String(PAnsiChar(glGetString(GL_SHADING_LANGUAGE_VERSION)));
+   Directory := GetEnvironmentVariable('REZVIVO_TEST_SHADER_CACHE_DIR');
+   if Directory = '' then
++    {$ifdef ANDROID}
++    Directory := IncludeTrailingPathDelimiter(String(AndroidMainApp^.Activity^.InternalDataPath)) + 'shader-cache';
++    {$else}
+     Directory := IncludeTrailingPathDelimiter(GetAppConfigDir(False)) + 'shader-cache';
++    {$endif}
+   Result := IncludeTrailingPathDelimiter(Directory) +
+     MD5Print(MD5String(Driver + #0 + Key)) + '.gpb';
+ end;
+@@ -812,7 +816,7 @@
+ function ProgramBinarySupported: Boolean;
+ var Count: GLint;
+ begin
+-  Result := (GL_VERSION_4_1 or GL_ARB_get_program_binary) and
++  Result := {$ifdef OpenGLES} GLVersion.AtLeast(3, 0) {$else} (GL_VERSION_4_1 or GL_ARB_get_program_binary) {$endif} and
+     Assigned(glProgramBinary) and Assigned(glGetProgramBinary) and
+     Assigned(glProgramParameteri) and (GetEnvironmentVariable('REZVIVO_SHADER_CACHE') <> '0');
+   if not Result then Exit;
+@@ -846,27 +850,28 @@
+ {$endif}
+ 
+ function GLSLCacheHeaderSignature: String;
+-{$if defined(FPC) and not defined(OpenGLES)}
++{$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+ var ShaderType: TShaderType;
+ {$endif}
+ begin
+   Result := '';
+-  {$if defined(FPC) and not defined(OpenGLES)}
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+   for ShaderType := Low(TShaderType) to High(TShaderType) do
+-    Result := Result + ':' + MD5Print(MD5String(GL31CoreHeader[ShaderType]));
++    Result := Result + ':' + MD5Print(MD5String(
++      {$ifdef OpenGLES} GLES30CoreHeader {$else} GL31CoreHeader {$endif}[ShaderType]));
+   {$endif}
+ end;
+ 
+ function TGLSLProgram.TryLoadBinaryCache(const Key: String): Boolean;
+-{$if defined(FPC) and not defined(OpenGLES)}
+-var Stream: TFileStream; H: TProgramBinaryHeader; Data: array of Byte;
++{$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
++var Stream: TFileStream; H: TProgramBinaryHeader; Data: TBytes;
+   Linked, Count, I: GLint; FileName: String; Formats: array of GLint;
+   FormatSupported: Boolean;
+   Started, ReadStarted, PrepareMs: QWord;
+ {$endif}
+ begin
+   Result := False;
+-  {$if defined(FPC) and not defined(OpenGLES)}
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+   FSaveBinaryRequested := (Key <> '') and ProgramBinarySupported;
+   if not FSaveBinaryRequested then Exit;
+   Inc(BinaryCacheMisses);
+@@ -899,12 +904,17 @@
+         [PrepareMs, H.DataLength, Name]);
+     Started := GetTickCount64;
+     glProgramParameteri(ProgramId, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+-    glProgramBinary(ProgramId, H.BinaryFormat, @Data[0], H.DataLength);
+-    glGetProgramiv(ProgramId, GL_LINK_STATUS, @Linked);
++    {$ifdef ANDROID}
++    if not AndroidShaderJob(asoLoadBinary, ProgramId, Linked, H.BinaryFormat, Data, Name) then
++    {$endif}
++    begin
++      glProgramBinary(ProgramId, H.BinaryFormat, @Data[0], H.DataLength);
++      glGetProgramiv(ProgramId, GL_LINK_STATUS, @Linked);
++    end;
+     Result := Linked = GL_TRUE;
+     if Result then begin Inc(BinaryCacheHits); Dec(BinaryCacheMisses); end;
+     PrepareMs := GetTickCount64 - Started;
+-    if PrepareMs > 100 then
++    if (PrepareMs > 100) {$ifdef ANDROID} or Result {$endif} then
+       WritelnLog('ResourcePrepare', 'stage=program_binary_load ms=%d bytes=%d format=%d ok=%s name="%s"',
+         [PrepareMs, H.DataLength, H.BinaryFormat, BoolToStr(Result, true), Name]);
+     if LogShaders and Result then WritelnLog('GLSL binary cache',
+@@ -917,15 +927,25 @@
+ end;
+ 
+ procedure TGLSLProgram.SaveBinaryCache(const Key: String);
+-{$if defined(FPC) and not defined(OpenGLES)}
+-var Stream: TFileStream; H: TProgramBinaryHeader; Data: array of Byte;
++{$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
++var Stream: TFileStream; H: TProgramBinaryHeader; Data: TBytes;
+   Size, Actual: GLint; FileName, TempName: String;
++  {$ifdef ANDROID} Saved: GLint; {$endif}
+ {$endif}
+ begin
+-  {$if defined(FPC) and not defined(OpenGLES)}
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+   if (Key = '') or not ProgramBinarySupported then Exit;
+   TempName := '';
+   try
++    {$ifdef ANDROID}
++    Data := nil; H.BinaryFormat := 0;
++    if AndroidShaderJob(asoSaveBinary, ProgramId, Saved, H.BinaryFormat, Data, Name) then
++    begin
++      if Saved <> GL_TRUE then Exit;
++      Actual := Length(Data);
++    end else
++    {$endif}
++    begin
+     glGetProgramiv(ProgramId, GL_PROGRAM_BINARY_LENGTH, @Size);
+     if GetEnvironmentVariable('REZVIVO_SHADER_DIAGNOSTICS') = '1' then
+       WritelnLog('ShaderBinaryProbe', 'bytes=%d name="%s"', [Size, Name]);
+@@ -933,6 +953,7 @@
+     SetLength(Data, Size);
+     glGetProgramBinary(ProgramId, Size, @Actual, @H.BinaryFormat, @Data[0]);
+     if (Actual <= 0) or (Actual > Size) then Exit;
++    end;
+     H.Magic := $31425047; H.DataLength := Actual;
+     H.Digest := MD5Buffer(Data[0], Actual);
+     FileName := ProgramBinaryFile(Key);
+@@ -2046,6 +2067,10 @@
+     TimingStart := GetTickCount64;
+     {$endif}
+     PrepareTick := GetTickCount64;
++    {$if defined(ANDROID) and defined(FPC)}
++    if not AndroidCompileShader(Result, CompiledInt, Name) then
++    begin
++    {$endif}
+     try
+       glCompileShader(Result);
+     except
+@@ -2056,8 +2081,9 @@
+     Compiled := glGetShaderParameter(Result, GL_COMPILE_STATUS);
+     {$else}
+     glGetShaderiv(Result, GL_COMPILE_STATUS, @CompiledInt);
+-    Compiled := CompiledInt = Ord(GL_TRUE);
+-    {$endif}
++    {$endif}
++    {$if defined(ANDROID) and defined(FPC)} end; {$endif}
++    {$ifndef CASTLE_WEBGL} Compiled := CompiledInt = Ord(GL_TRUE); {$endif}
+     {$if defined(ANDROID) and defined(FPC)}
+     { Keep native input acknowledged between shader programs, without
+       reentering the scene/UI while its GL resources are incomplete. }
+@@ -2359,7 +2385,7 @@
+ 
+ var
+   {$ifndef CASTLE_WEBGL}
+-  LinkedInt: TGLuint;
++  LinkedInt: TGLint;
+   {$endif}
+   Linked: Boolean;
+   PrepareTick, PrepareMs: QWord;
+@@ -2370,7 +2396,7 @@
+   InvalidateUniformValues;
+   if GLFeatures.Shaders then
+   begin
+-    {$if defined(FPC) and not defined(OpenGLES)}
++    {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+     { A binary already linked this program. Still run the virtual Link chain:
+       descendants resolve their uniform and attribute locations after inherited. }
+     if FSaveBinaryRequested and (ShaderIds.Count = 0) then
+@@ -2390,19 +2416,24 @@
+     WritelnLog('StartupTiming', Format('link begin program=%d name=%s', [ProgramId, Name]));
+     TimingStart := GetTickCount64;
+     {$endif}
+-    {$if defined(FPC) and not defined(OpenGLES)}
++    {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+     if FSaveBinaryRequested then
+       glProgramParameteri(ProgramId, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+     {$endif}
+     PrepareTick := GetTickCount64;
++    {$if defined(ANDROID) and defined(FPC)}
++    if not AndroidLinkProgram(ProgramId, LinkedInt, Name) then
++    begin
++    {$endif}
+     glLinkProgram(ProgramId);
+ 
+     {$ifdef CASTLE_WEBGL}
+     Linked := glGetProgramParameter(ProgramId, GL_LINK_STATUS);
+     {$else}
+     glGetProgramiv(ProgramId, GL_LINK_STATUS, @LinkedInt);
+-    Linked := LinkedInt = Ord(GL_TRUE);
+-    {$endif}
++    {$endif}
++    {$if defined(ANDROID) and defined(FPC)} end; {$endif}
++    {$ifndef CASTLE_WEBGL} Linked := LinkedInt = Ord(GL_TRUE); {$endif}
+     {$if defined(ANDROID) and defined(FPC)}
+     { Keep native input acknowledged between shader programs, without
+       reentering the scene/UI while its GL resources are incomplete. }
+diff --git a/src/scene/castlerendererinternalshader.pas b/src/scene/castlerendererinternalshader.pas
+--- a/src/scene/castlerendererinternalshader.pas
++++ b/src/scene/castlerendererinternalshader.pas
+@@ -727,7 +727,7 @@
+   {$ifdef OpenGLES} CastleGLES, {$else} CastleGL, {$endif}
+   CastleGLUtils, CastleLog, CastleGLVersion, CastleInternalScreenEffects,
+   CastleScreenEffects, CastleInternalX3DLexer, CastleInternalGLUtils
+-  {$if defined(FPC) and not defined(OpenGLES)}, MD5{$endif};
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}, MD5{$endif};
+ 
+ {$define read_implementation}
+ {$I castlerendererinternalshader_hash.inc}
+@@ -2452,7 +2452,7 @@
+   LoadedBinary: Boolean;
+   PrepareTick, PrepareMs: QWord;
+   SurfacePart: Integer;
+-  {$if defined(FPC) and not defined(OpenGLES)}
++  {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+   CachePart: Integer;
+   {$endif}
+ begin
+@@ -2549,7 +2549,7 @@
+     if FDepthOnly then AProgram.Name := 'TShader:Depth:' + ShapeNiceName
+     else AProgram.Name := 'TShader:Shape:' + ShapeNiceName;
+     CacheKey := '';
+-    {$if defined(FPC) and not defined(OpenGLES)}
++    {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+     { Each Effect still has its own GL program and uniform listeners. Share
+       only the compiled binary, keyed by generated code rather than the
+       identity of the Effect node. This prevents compiling the same ground
+@@ -2574,7 +2574,7 @@
+     end;
+     {$endif}
+     LoadedBinary := AProgram.TryLoadBinaryCache(CacheKey);
+-    {$if defined(FPC) and not defined(OpenGLES)}
++    {$if defined(FPC) and (not defined(OpenGLES) or defined(ANDROID))}
+     ProbePath := GetEnvironmentVariable('REZVIVO_SHADER_DUMP');
+     if (ProbePath <> '') and ForceDirectories(ProbePath) then
+     begin
+diff --git a/src/base/android/castleandroidnativeappglue.pas b/src/base/android/castleandroidnativeappglue.pas
+--- a/src/base/android/castleandroidnativeappglue.pas
++++ b/src/base/android/castleandroidnativeappglue.pas
+@@ -315,8 +315,16 @@
+ 
+ { Acknowledge pending native input during long resource compilation. Called
+   only on the app thread. CGE HandleInput stores touches in QEvents; this does
+-  not dispatch UI callbacks, render, update, or process lifecycle commands. }
++  not dispatch UI callbacks, render or update. During a resource wait, native
++  lifecycle handshakes are acknowledged and their scene callbacks deferred. }
+ procedure AndroidCollectPendingInput;
++
++{ Resource jobs may wait for a driver while still acknowledging Android.
++  Scene/lifecycle callbacks are deferred to the next event-loop boundary. }
++procedure AndroidBeginResourceWait;
++procedure AndroidEndResourceWait;
++procedure AndroidDispatchDeferredCommands;
++function AndroidDeferredWindowChange: Boolean;
+ 
+ var
+   { Singleton instance of PAndroid_App, initialized right before AndroidMain is called. }
+@@ -524,20 +532,87 @@
+     AndroidLog(alError, 'NativeAppGlue: Failure reading next input event');
+ end;
+ 
++type
++  TDeferredResourceCommand = record
++    Command: cint8;
++    Window: PANativeWindow;
++  end;
++var
++  ResourceWaitDepth: Integer;
++  DeferredCommands: array of TDeferredResourceCommand;
++  DeferredWindowChange: Boolean;
++
++procedure AndroidBeginResourceWait;
++begin Inc(ResourceWaitDepth) end;
++procedure AndroidEndResourceWait;
++begin Assert(ResourceWaitDepth > 0); Dec(ResourceWaitDepth) end;
++function AndroidDeferredWindowChange: Boolean;
++begin Result := DeferredWindowChange end;
++
++procedure AndroidDispatchDeferredCommands;
++var Commands: array of TDeferredResourceCommand;
++  I: Integer; CurrentWindow: PANativeWindow;
++begin
++  if (ResourceWaitDepth <> 0) or (Length(DeferredCommands) = 0) then Exit;
++  Commands := DeferredCommands; DeferredCommands := nil;
++  DeferredWindowChange := False;
++  CurrentWindow := AndroidMainApp^.window;
++  try
++    for I := 0 to High(Commands) do
++    begin
++      AndroidMainApp^.window := Commands[I].Window;
++      if Assigned(AndroidMainApp^.onAppCmd) then
++        AndroidMainApp^.onAppCmd(AndroidMainApp, Commands[I].Command);
++    end;
++  finally
++    AndroidMainApp^.window := CurrentWindow;
++    for I := 0 to High(Commands) do
++      if Commands[I].Window <> nil then ANativeWindow_release(Commands[I].Window);
++  end;
++end;
++
+ procedure AndroidCollectPendingInput;
++var Ident, Events, Count: Integer; Source: Pandroid_poll_source;
+ begin
+   if (GetCurrentThreadID <> MainThreadID) or (AndroidMainApp = nil) then Exit;
+-  if AndroidMainApp^.inputQueue = nil then Exit;
+-  if AInputQueue_hasEvents(AndroidMainApp^.inputQueue) > 0 then
++  if ResourceWaitDepth > 0 then
++    for Count := 1 to 32 do
++    begin
++      Source := nil;
++      Ident := ALooper_pollAll(0, nil, @Events, @Source);
++      if Ident < 0 then Break;
++      if Source <> nil then Source^.Process(AndroidMainApp, Source);
++    end;
++  if (AndroidMainApp^.inputQueue <> nil) and
++     (AInputQueue_hasEvents(AndroidMainApp^.inputQueue) > 0) then
+     process_input(AndroidMainApp, @AndroidMainApp^.inputPollSource);
+ end;
+ 
+ procedure process_cmd(app: Pandroid_app; source: Pandroid_poll_source);
+-var cmd: cint8;
++var cmd: cint8; SavedWindow: PANativeWindow; N: Integer;
+ begin
+     cmd := android_app_read_cmd(app);
++    SavedWindow := app^.window;
++    if (ResourceWaitDepth > 0) and (SavedWindow <> nil) then ANativeWindow_acquire(SavedWindow);
+     android_app_pre_exec_cmd(app, cmd);
+-    if (app^.onAppCmd <> nil) then app^.onAppCmd(app, cmd);
++    if ResourceWaitDepth > 0 then
++    begin
++      if cmd = APP_CMD_INIT_WINDOW then
++      begin
++        if SavedWindow <> nil then ANativeWindow_release(SavedWindow);
++        SavedWindow := app^.window;
++        if SavedWindow <> nil then ANativeWindow_acquire(SavedWindow);
++      end;
++      { Saving state must acknowledge immediately. During resource creation
++        there is no consistent new UI snapshot; the app persists settings to
++        disk. Never replay SAVE_STATE after Android has consumed its answer. }
++      if cmd <> APP_CMD_SAVE_STATE then
++      begin
++        N := Length(DeferredCommands); SetLength(DeferredCommands, N + 1);
++        DeferredCommands[N].Command := cmd; DeferredCommands[N].Window := SavedWindow;
++        if cmd in [APP_CMD_INIT_WINDOW, APP_CMD_TERM_WINDOW] then DeferredWindowChange := True;
++      end else if SavedWindow <> nil then ANativeWindow_release(SavedWindow);
++    end else if (app^.onAppCmd <> nil) then app^.onAppCmd(app, cmd);
+     android_app_post_exec_cmd(app, cmd);
+ end;
+ 
+diff --git a/src/window/castlewindow_android.inc b/src/window/castlewindow_android.inc
+--- a/src/window/castlewindow_android.inc
++++ b/src/window/castlewindow_android.inc
+@@ -764,6 +764,7 @@
+   MessageHandlingBegin: TTimerResult;
+ begin
+   MessageHandlingBegin := Timer;
++  AndroidDispatchDeferredCommands;
+   repeat
+     { When the window is open: We cannot suspend (wait indefinitely for a message)
+       an open window, even when AllowSuspendForInput or WaitForMessage.
+@@ -774,7 +775,7 @@
+       When the window is closed: We can and should suspend in this case,
+       regardless of AllowSuspendForInput or WaitForMessage,
+       to not waste battery. }
+-    if (MainWindow = nil) or MainWindow.Closed then
++    if ((MainWindow = nil) or MainWindow.Closed) and (QEvents.Count = 0) then
+     begin
+       WritelnLog('Android', 'Waiting for next event without consuming CPU ticks.');
+       Ident := ALooper_pollAll(-1 { wait }, nil, @Events, @Source);
+@@ -784,9 +785,7 @@
+       { Uncomment it to test loop suspending solution. }
+       //WritelnLog('Android', 'Looping...');
+     end;
+-    if Ident < 0 then Break;
+-
+-    if Source <> nil then
++    if (Ident >= 0) and (Source <> nil) then
+       Source^.Process(AndroidMainApp, Source);
+ 
+     { poll our own events quueue.
+@@ -809,6 +808,9 @@
+             if not MainWindow.Closed then
+               MainWindow.DoMotion   (InputMotion(QEvent.Touch.OldPosition, QEvent.Touch.Position, [buttonLeft], QEvent.FingerIndex));
+         end;
++        { OpenContext may have prepared shaders while Android replaced the
++          surface. The open call has now returned; closing is safe here. }
++        AndroidDispatchDeferredCommands;
+       end;
+ 
+     // Check if we are exiting.
+@@ -821,6 +823,10 @@
+         In this case we know it's "false", since we called "Terminate" above. }
+       Exit(not Terminated);
+     end;
++
++    { Input collected during a resource job still needs dispatching even
++      when the native looper currently has no more events. }
++    if Ident < 0 then Break;
+ 
+   // loop condition avoids being clogged with motion events
+   until TimerSeconds(Timer, MessageHandlingBegin) >
+diff --git a/src/window/castlewindow_egl.inc b/src/window/castlewindow_egl.inc
+--- a/src/window/castlewindow_egl.inc
++++ b/src/window/castlewindow_egl.inc
+@@ -64,6 +64,11 @@
+ 
+ procedure TCastleWindow.SwapBuffers;
+ begin
++  {$ifdef ANDROID}
++  { A surface can be retired while a shader job is running. Close/reopen it
++    at the next event-loop boundary, never present the retired surface. }
++  if AndroidDeferredWindowChange then Exit;
++  {$endif}
+   Assert(not Closed);
+   Assert(Context <> nil);
+   Context.SwapBuffers;
+diff --git a/src/base_rendering/castleinternalandroidshaderjobs.pas b/src/base_rendering/castleinternalandroidshaderjobs.pas
+new file mode 100644
+--- /dev/null
++++ b/src/base_rendering/castleinternalandroidshaderjobs.pas
+@@ -0,0 +1,237 @@
++{ Android shader preparation in a shared EGL context. The native app thread
++  acknowledges input/lifecycle while the driver compiles, without reentering
++  scene loading, rendering, or UI callbacks. Shader/program objects are shared;
++  the worker never sees a scene, X3D field, renderer state cache, or UI object. }
++unit CastleInternalAndroidShaderJobs;
++{$I castleconf.inc}
++interface
++uses SysUtils, CastleGLES;
++type
++  TAndroidShaderOperation = (asoCompile, asoLink, asoLoadBinary, asoSaveBinary);
++  TAndroidShaderProgress = procedure(const Stage, Name: String;
++    const ElapsedMs: QWord; const Finished: Boolean);
++var
++  AndroidShaderProgress: TAndroidShaderProgress;
++{ False means no shared context is available; caller retains the normal GL
++  fallback. A failed shader itself returns True with Status = GL_FALSE. }
++function AndroidShaderJob(const Operation: TAndroidShaderOperation;
++  const Id: GLuint; var Status: GLint; var Format: GLenum; var Data: TBytes;
++  const Name: String): Boolean;
++function AndroidCompileShader(const Id: GLuint; out Status: GLint;
++  const Name: String): Boolean;
++function AndroidLinkProgram(const Id: GLuint; out Status: GLint;
++  const Name: String): Boolean;
++implementation
++uses Classes, SyncObjs, CastleInternalEgl, CastleAndroidNativeAppGlue,
++  CastleApplicationProperties, CastleLog;
++type
++  TShaderWorker = class(TThread)
++  public
++    Display: EGLDisplay;
++    ParentContext, Context: EGLContext;
++    Surface: EGLSurface;
++    ConfigId, ClientVersion: EGLint;
++    Ready, Request, Completed: TEvent;
++    Available: Boolean;
++    ErrorText: String;
++    Operation: TAndroidShaderOperation;
++    ObjectId: GLuint;
++    Status: GLint;
++    Format: GLenum;
++    Data: TBytes;
++    constructor Create;
++    destructor Destroy; override;
++    procedure Execute; override;
++  end;
++  TShaderJobs = class
++    Worker: TShaderWorker;
++    constructor Create;
++    destructor Destroy; override;
++    procedure ContextClose(Sender: TObject);
++  end;
++var Jobs: TShaderJobs;
++
++constructor TShaderWorker.Create;
++begin
++  inherited Create(True);
++  FreeOnTerminate := False;
++  Ready := TEvent.Create(nil, True, False, '');
++  Request := TEvent.Create(nil, False, False, '');
++  Completed := TEvent.Create(nil, True, False, '');
++  Display := eglGetCurrentDisplay();
++  ParentContext := eglGetCurrentContext();
++  eglQueryContext(Display, ParentContext, EGL_CONFIG_ID, @ConfigId);
++  eglQueryContext(Display, ParentContext, EGL_CONTEXT_CLIENT_VERSION, @ClientVersion);
++  Start;
++end;
++
++destructor TShaderWorker.Destroy;
++begin
++  Terminate;
++  Request.SetEvent;
++  WaitFor;
++  Ready.Free; Request.Free; Completed.Free;
++  inherited;
++end;
++
++procedure TShaderWorker.Execute;
++var Config: EGLConfig; Count, Actual: EGLint;
++  ConfigAttrs: array[0..2] of EGLint;
++  ContextAttrs: array[0..2] of EGLint;
++  SurfaceAttrs: array[0..4] of EGLint;
++  Size, ErrorCount: GLint;
++  {$ifdef REZVIVO_ANDROID_SHADER_JOB_TEST}
++  DelayFile: String; DelayText: TStringList; DelayMs: Integer;
++  {$endif}
++begin
++  try
++    try
++      ConfigAttrs[0] := EGL_CONFIG_ID; ConfigAttrs[1] := ConfigId; ConfigAttrs[2] := EGL_NONE;
++      ContextAttrs[0] := EGL_CONTEXT_CLIENT_VERSION; ContextAttrs[1] := ClientVersion; ContextAttrs[2] := EGL_NONE;
++      SurfaceAttrs[0] := EGL_WIDTH; SurfaceAttrs[1] := 1;
++      SurfaceAttrs[2] := EGL_HEIGHT; SurfaceAttrs[3] := 1; SurfaceAttrs[4] := EGL_NONE;
++      Count := 0;
++      if (Display = EGL_NO_DISPLAY) or (ParentContext = EGL_NO_CONTEXT) or
++         (eglChooseConfig(Display, @ConfigAttrs[0], @Config, 1, @Count) = EGL_FALSE) or
++         (Count = 0) then raise Exception.Create('No matching EGL configuration');
++      Context := eglCreateContext(Display, Config, ParentContext, @ContextAttrs[0]);
++      if Context = EGL_NO_CONTEXT then raise Exception.Create('Cannot share EGL context');
++      Surface := eglCreatePbufferSurface(Display, Config, @SurfaceAttrs[0]);
++      if Surface = EGL_NO_SURFACE then raise Exception.Create('Cannot create EGL pbuffer');
++      Available := eglMakeCurrent(Display, Surface, Surface, Context) <> EGL_FALSE;
++    except on E: Exception do ErrorText := E.ClassName + ': ' + E.Message end;
++  finally Ready.SetEvent end;
++  try
++    if not Available then Exit;
++    while not Terminated do
++    begin
++      Request.WaitFor(INFINITE);
++      if Terminated then Break;
++      try
++        ErrorText := '';
++        {$ifdef REZVIVO_ANDROID_SHADER_JOB_TEST}
++        { Fault injection is absent from production builds. Private test file
++          is consumed once, allowing a >5 s driver delay on a fast test GPU. }
++        DelayFile := IncludeTrailingPathDelimiter(String(AndroidMainApp^.Activity^.InternalDataPath)) + 'shader-job-test-delay';
++        if FileExists(DelayFile) then
++        begin
++          DelayText := TStringList.Create;
++          try DelayText.LoadFromFile(DelayFile); DelayMs := StrToIntDef(Trim(DelayText.Text), 0);
++          finally DelayText.Free end;
++          DeleteFile(DelayFile);
++          if (DelayMs > 0) and (DelayMs <= 60000) then Sleep(DelayMs);
++        end;
++        {$endif}
++        case Operation of
++          asoCompile: begin glCompileShader(ObjectId); glGetShaderiv(ObjectId, GL_COMPILE_STATUS, @Status) end;
++          asoLink: begin glLinkProgram(ObjectId); glGetProgramiv(ObjectId, GL_LINK_STATUS, @Status) end;
++          asoLoadBinary:
++            begin
++              glProgramBinary(ObjectId, Format, @Data[0], Length(Data));
++              glGetProgramiv(ObjectId, GL_LINK_STATUS, @Status);
++              { An invalid cache is an expected miss, never a later GL error. }
++              for ErrorCount := 1 to 4 do if glGetError() = GL_NO_ERROR then Break;
++            end;
++          asoSaveBinary:
++            begin
++              glGetProgramiv(ObjectId, GL_PROGRAM_BINARY_LENGTH, @Size);
++              Data := nil; Status := GL_FALSE;
++              if (Size > 0) and (Size <= 32 * 1024 * 1024) then
++              begin
++                SetLength(Data, Size);
++                glGetProgramBinary(ObjectId, Size, @Actual, @Format, @Data[0]);
++                if (Actual > 0) and (Actual <= Size) then
++                begin SetLength(Data, Actual); Status := GL_TRUE end else Data := nil;
++              end;
++            end;
++        end;
++        { Publish completed objects to the rendering context before signaling.
++          This context has no scene draws, so it cannot wait for a whole frame. }
++        glFinish;
++      except on E: Exception do ErrorText := E.ClassName + ': ' + E.Message end;
++      Completed.SetEvent;
++    end;
++  finally
++    if Available then eglMakeCurrent(Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++    if Surface <> EGL_NO_SURFACE then eglDestroySurface(Display, Surface);
++    if Context <> EGL_NO_CONTEXT then eglDestroyContext(Display, Context);
++    Surface := EGL_NO_SURFACE; Context := EGL_NO_CONTEXT;
++  end;
++end;
++
++constructor TShaderJobs.Create;
++begin
++  inherited;
++  ApplicationProperties.OnGLContextCloseObject.Add(@ContextClose);
++end;
++destructor TShaderJobs.Destroy;
++begin
++  ApplicationProperties.OnGLContextCloseObject.Remove(@ContextClose);
++  ContextClose(nil);
++  inherited;
++end;
++procedure TShaderJobs.ContextClose(Sender: TObject);
++begin FreeAndNil(Worker) end;
++
++function AndroidShaderJob(const Operation: TAndroidShaderOperation;
++  const Id: GLuint; var Status: GLint; var Format: GLenum; var Data: TBytes;
++  const Name: String): Boolean;
++const Stages: array[TAndroidShaderOperation] of String = ('compile', 'link', 'cache', 'save');
++var W: TShaderWorker; Started, LastProgress, NowTick: QWord;
++
++  procedure CollectInputAndProgress;
++  begin
++    AndroidCollectPendingInput;
++    NowTick := GetTickCount64;
++    if Assigned(AndroidShaderProgress) and (NowTick - LastProgress >= 250) then
++    begin
++      AndroidShaderProgress(Stages[Operation], Name, NowTick - Started, False);
++      LastProgress := NowTick;
++    end;
++  end;
++
++begin
++  Result := False;
++  if (GetCurrentThreadID <> MainThreadID) or (eglGetCurrentContext() = EGL_NO_CONTEXT) then Exit;
++  if GetEnvironmentVariable('REZVIVO_ANDROID_SHADER_WORKER') = '0' then Exit;
++  if Jobs = nil then Jobs := TShaderJobs.Create;
++  Started := GetTickCount64; LastProgress := Started;
++  AndroidBeginResourceWait;
++  try
++    if Assigned(AndroidShaderProgress) then AndroidShaderProgress(Stages[Operation], Name, 0, False);
++    if Jobs.Worker = nil then
++    begin
++      Jobs.Worker := TShaderWorker.Create;
++      while Jobs.Worker.Ready.WaitFor(8) = wrTimeout do CollectInputAndProgress;
++      WritelnLog('AndroidShaders', 'shared_context=%s detail="%s"',
++        [BoolToStr(Jobs.Worker.Available, True), Jobs.Worker.ErrorText]);
++    end;
++    W := Jobs.Worker;
++    if not W.Available then Exit;
++    Assert(W.ParentContext = eglGetCurrentContext());
++    W.Operation := Operation; W.ObjectId := Id; W.Format := Format;
++    W.Data := Data; W.Status := GL_FALSE; W.Completed.ResetEvent;
++    glFlush; { make the newly created/attached shader objects visible }
++    W.Request.SetEvent;
++    while W.Completed.WaitFor(8) = wrTimeout do
++      CollectInputAndProgress;
++    if W.ErrorText <> '' then raise Exception.Create('Android shader worker: ' + W.ErrorText);
++    Status := W.Status; Format := W.Format; Data := W.Data; W.Data := nil;
++    Result := True;
++  finally
++    AndroidCollectPendingInput;
++    AndroidEndResourceWait;
++    if Assigned(AndroidShaderProgress) then AndroidShaderProgress(Stages[Operation], Name, GetTickCount64 - Started, True);
++  end;
++end;
++
++function AndroidCompileShader(const Id: GLuint; out Status: GLint; const Name: String): Boolean;
++var Format: GLenum; Data: TBytes;
++begin Format := 0; Data := nil; Result := AndroidShaderJob(asoCompile, Id, Status, Format, Data, Name) end;
++function AndroidLinkProgram(const Id: GLuint; out Status: GLint; const Name: String): Boolean;
++var Format: GLenum; Data: TBytes;
++begin Format := 0; Data := nil; Result := AndroidShaderJob(asoLink, Id, Status, Format, Data, Name) end;
++
++finalization
++  FreeAndNil(Jobs);
++end.

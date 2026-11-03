@@ -15,11 +15,18 @@ def run(args,cwd):
     subprocess.run([str(x) for x in args],cwd=cwd,check=True)
 
 def ensure_mobile_patches(engine):
-    for name in ('cge-opengles3.patch','cge-android-permissions.patch','cge-scissor-context-close.patch','cge-android-back-navigation.patch','cge-android-gamepad.patch','cge-android-input-compile.patch','cge-traverse-worker-stack.patch'):
+    for name in ('cge-opengles3.patch','cge-android-permissions.patch','cge-scissor-context-close.patch','cge-android-back-navigation.patch','cge-android-gamepad.patch','cge-android-input-compile.patch','cge-traverse-worker-stack.patch','cge-android-shader-jobs.patch'):
         patch=ROOT.parent/'Osm3d'/name
         command=['git','apply','--ignore-space-change']
         applied=subprocess.run(command+['--reverse','--check',str(patch)],cwd=engine,capture_output=True)
         if applied.returncode==0:continue
+        # The shader worker extends the earlier input-draining patch. Its
+        # verified final state already includes that prerequisite, although
+        # the original prerequisite's context lines have since changed.
+        if name=='cge-android-input-compile.patch':
+            successor=ROOT.parent/'Osm3d/cge-android-shader-jobs.patch'
+            if subprocess.run(command+['--reverse','--check',str(successor)],cwd=engine,capture_output=True).returncode==0:
+                continue
         check=subprocess.run(command+['--check',str(patch)],cwd=engine,capture_output=True)
         if check.returncode!=0:
             raise RuntimeError('CGE patch needs review: '+name+'\n'+check.stderr.decode(errors='replace'))

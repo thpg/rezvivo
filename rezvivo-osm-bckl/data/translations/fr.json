@@ -372,5 +372,11 @@
   "Shoulder width (%)": "Largeur des épaules (%)",
   "Waist size (%)": "Tour de taille (%)",
   "Thigh size (%)": "Tour de cuisse (%)",
-  "Calf size (%)": "Tour de mollet (%)"
+  "Calf size (%)": "Tour de mollet (%)",
+  "Preparing rider": "Préparation du cycliste",
+  "Preparing scenery": "Préparation du décor",
+  "Preparing graphics": "Préparation des graphismes",
+  "Loading cached graphics": "Chargement des graphismes en cache",
+  "Saving graphics cache": "Enregistrement du cache graphique",
+  "Elapsed: %d s": "Temps écoulé : %d s"
 }

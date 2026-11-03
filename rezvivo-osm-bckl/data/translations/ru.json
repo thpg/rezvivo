@@ -1903,5 +1903,11 @@
   "Shoulder width (%)": "Ширина плеч (%)",
   "Waist size (%)": "Объём талии (%)",
   "Thigh size (%)": "Объём бедра (%)",
-  "Calf size (%)": "Объём голени (%)"
+  "Calf size (%)": "Объём голени (%)",
+  "Preparing rider": "Подготовка райдера",
+  "Preparing scenery": "Подготовка окружения",
+  "Preparing graphics": "Подготовка графики",
+  "Loading cached graphics": "Загрузка графики из кэша",
+  "Saving graphics cache": "Сохранение кэша графики",
+  "Elapsed: %d s": "Прошло: %d с"
 }

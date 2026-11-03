@@ -1,7 +1,7 @@
 {
-  "version": "0.4.5-alpha.2",
-  "build": 21,
+  "version": "0.4.5-alpha.3",
+  "build": 22,
   "channel": "alpha",
   "platform": "android",
-  "notes": "Improve portrait and landscape layouts, route selection and the collapsible in-ride map. Fix email and password keyboard input. Improve FIT/GPX import diagnostics and crash logs. Update the sign-in screen branding."
+  "notes": "Avoid freezes while preparing graphics. Cache compiled shaders to speed up later launches and rides. Show loading stages and elapsed time while preparing riders and scenery. Improve diagnostics for Android app freezes."
 }

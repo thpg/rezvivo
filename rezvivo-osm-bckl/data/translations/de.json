@@ -375,5 +375,11 @@
   "Shoulder width (%)": "Schulterbreite (%)",
   "Waist size (%)": "Taillenumfang (%)",
   "Thigh size (%)": "Oberschenkelumfang (%)",
-  "Calf size (%)": "Wadenumfang (%)"
+  "Calf size (%)": "Wadenumfang (%)",
+  "Preparing rider": "Fahrer wird vorbereitet",
+  "Preparing scenery": "Umgebung wird vorbereitet",
+  "Preparing graphics": "Grafik wird vorbereitet",
+  "Loading cached graphics": "Grafik aus dem Cache wird geladen",
+  "Saving graphics cache": "Grafik-Cache wird gespeichert",
+  "Elapsed: %d s": "Vergangen: %d s"
 }

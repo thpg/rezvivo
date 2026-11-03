@@ -3,9 +3,23 @@ package io.castleengine;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ApplicationExitInfo;
+import android.app.Application;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.PopupWindow;
+import java.lang.ref.WeakReference;
 import org.json.JSONObject;
 import java.io.*;
 import java.net.*;
@@ -20,6 +34,140 @@ public final class RezvivoPlatform {
     private static final AtomicLong nextRequest = new AtomicLong();
     private static final ConcurrentHashMap<Long, Request> requests = new ConcurrentHashMap<>();
     private static final int MAX_RESPONSE = 256 * 1024 * 1024;
+    private static final WeakHashMap<Activity, WeakReference<GraphicsProgress>> graphicsBadges = new WeakHashMap<>();
+    private static boolean graphicsLifecycleRegistered;
+
+    /** Native rendering can be busy compiling a shader. This small Android
+     * view stays animated on the UI thread and never takes input focus. No
+     * percentage is shown: the driver provides no measurable total work. */
+    private static final class GraphicsProgress extends LinearLayout {
+        private final Activity activity;
+        private final TextView label;
+        private final PopupWindow popup;
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private boolean paused, finished;
+        private final Runnable show = this::showWindow;
+        private final Runnable hide = this::hideWindow;
+        GraphicsProgress(Activity activity) {
+            super(activity);
+            this.activity = activity;
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setFocusable(false);
+            setClickable(false);
+            float dp = getResources().getDisplayMetrics().density;
+            int pad = Math.round(12 * dp);
+            setPadding(pad, pad, pad, pad);
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(Color.argb(242, 20, 36, 44));
+            background.setCornerRadius(12 * dp);
+            setBackground(background);
+            ProgressBar spinner = new ProgressBar(activity, null, android.R.attr.progressBarStyleSmall);
+            spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Color.rgb(81, 204, 221)));
+            addView(spinner, new LinearLayout.LayoutParams(Math.round(24 * dp), Math.round(24 * dp)));
+            label = new TextView(activity);
+            label.setTextColor(Color.WHITE);
+            label.setTextSize(15);
+            label.setMaxWidth(Math.max(1, getResources().getDisplayMetrics().widthPixels - Math.round(96 * dp)));
+            LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            textParams.leftMargin = pad;
+            addView(label, textParams);
+            // NativeActivity owns its window's surface: ordinary Android child
+            // views have layout but are not painted over that EGL surface.
+            // A non-focusable popup has its own surface and takes no input.
+            popup = new PopupWindow(this, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, false);
+            popup.setTouchable(false);
+            popup.setOutsideTouchable(false);
+            popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+            popup.setElevation(6 * dp);
+            popup.setAnimationStyle(0);
+        }
+        private void showWindow() {
+            if (paused || finished || popup.isShowing() || activity.isFinishing() || activity.isDestroyed()) return;
+            if (!activity.hasWindowFocus()) return;
+            View decor = activity.getWindow().getDecorView();
+            int inset = decor.getRootWindowInsets() == null ? 0 : decor.getRootWindowInsets().getSystemWindowInsetBottom();
+            try {
+                popup.showAtLocation(decor, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL,
+                    0, Math.round(24 * getResources().getDisplayMetrics().density) + inset);
+            } catch (android.view.WindowManager.BadTokenException ignored) {
+                // Activity can lose its surface between a posted update and show.
+            }
+        }
+        private void hideWindow() {
+            popup.dismiss(); graphicsBadges.remove(activity);
+        }
+        void update(String caption, long elapsedMs, boolean finished) {
+            this.finished = finished;
+            handler.removeCallbacks(hide);
+            handler.removeCallbacks(show);
+            if (finished) {
+                // Keep a visible badge across adjacent compile/link jobs.
+                handler.postDelayed(hide, 250);
+            } else {
+                label.setText(caption);
+                if (!popup.isShowing()) handler.postDelayed(show, Math.max(0, 350 - elapsedMs));
+                else popup.update();
+            }
+        }
+        void pause(boolean value) {
+            paused = value;
+            if (paused) { handler.removeCallbacks(show); popup.dismiss(); }
+        }
+        void dispose() {
+            handler.removeCallbacks(show); handler.removeCallbacks(hide); popup.dismiss();
+        }
+    }
+
+    private static GraphicsProgress graphicsBadge(Activity activity) {
+        WeakReference<GraphicsProgress> ref = graphicsBadges.get(activity);
+        return ref == null ? null : ref.get();
+    }
+
+    public static void graphicsProgress(Activity activity, String caption, long elapsedMs, boolean finished) {
+        activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            if (!graphicsLifecycleRegistered) {
+                graphicsLifecycleRegistered = true;
+                activity.getApplication().registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
+                    public void onActivityCreated(Activity a, Bundle b) { }
+                    public void onActivityStarted(Activity a) { }
+                    public void onActivityResumed(Activity a) { GraphicsProgress p=graphicsBadge(a); if(p!=null)p.pause(false); }
+                    public void onActivityPaused(Activity a) { GraphicsProgress p=graphicsBadge(a); if(p!=null)p.pause(true); }
+                    public void onActivityStopped(Activity a) { }
+                    public void onActivitySaveInstanceState(Activity a, Bundle b) { }
+                    public void onActivityDestroyed(Activity a) {
+                        GraphicsProgress p=graphicsBadge(a); if(p!=null)p.dispose(); graphicsBadges.remove(a);
+                    }
+                });
+            }
+            GraphicsProgress progress = graphicsBadge(activity);
+            if (progress == null) {
+                if (finished) return;
+                progress = new GraphicsProgress(activity);
+                graphicsBadges.put(activity, new WeakReference<>(progress));
+            }
+            progress.update(caption, elapsedMs, finished);
+        });
+    }
+
+    private static String previousAnrTrace(ApplicationExitInfo info) {
+        // Native tombstones can be binary protobuf. Only ANR traces are text.
+        if (info.getReason() != ApplicationExitInfo.REASON_ANR) return "";
+        try (InputStream input = info.getTraceInputStream()) {
+            if (input == null) return "";
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int remaining = 24 * 1024, count;
+            while (remaining > 0 && (count = input.read(buffer, 0, Math.min(buffer.length, remaining))) > 0) {
+                output.write(buffer, 0, count); remaining -= count;
+            }
+            return new String(output.toByteArray(), StandardCharsets.UTF_8) +
+                (remaining == 0 ? "\n[ANR trace truncated at 24 KiB]\n" : "");
+        } catch (Exception e) { return ""; }
+    }
 
     /** Diagnostic model metadata, deliberately excluding serials/Android ID. */
     public static String machineInformation(Activity activity) {
@@ -52,7 +200,8 @@ public final class RezvivoPlatform {
                 if (description != null && description.length() > 2048) description = description.substring(0, 2048);
                 return new JSONObject().put("reason", info.getReason()).put("status", info.getStatus())
                     .put("timestamp_utc_ms", info.getTimestamp()).put("description", description)
-                    .put("rss_kib", info.getRss()).put("pss_kib", info.getPss()).toString();
+                    .put("rss_kib", info.getRss()).put("pss_kib", info.getPss())
+                    .put("anr_trace", previousAnrTrace(info)).toString();
             }
         } catch (Exception e) {
             android.util.Log.w("REZVIVO", "Cannot query previous process exit: " + e.getClass().getSimpleName());

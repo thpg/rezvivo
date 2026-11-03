@@ -372,5 +372,11 @@
   "Shoulder width (%)": "Larghezza spalle (%)",
   "Waist size (%)": "Girovita (%)",
   "Thigh size (%)": "Circonferenza coscia (%)",
-  "Calf size (%)": "Circonferenza polpaccio (%)"
+  "Calf size (%)": "Circonferenza polpaccio (%)",
+  "Preparing rider": "Preparazione del ciclista",
+  "Preparing scenery": "Preparazione dell’ambiente",
+  "Preparing graphics": "Preparazione della grafica",
+  "Loading cached graphics": "Caricamento della grafica dalla cache",
+  "Saving graphics cache": "Salvataggio della cache grafica",
+  "Elapsed: %d s": "Tempo trascorso: %d s"
 }

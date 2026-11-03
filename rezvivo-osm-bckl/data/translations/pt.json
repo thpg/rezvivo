@@ -372,5 +372,11 @@
   "Shoulder width (%)": "Largura dos ombros (%)",
   "Waist size (%)": "Contorno da cintura (%)",
   "Thigh size (%)": "Contorno da coxa (%)",
-  "Calf size (%)": "Contorno da panturrilha (%)"
+  "Calf size (%)": "Contorno da panturrilha (%)",
+  "Preparing rider": "Preparando ciclista",
+  "Preparing scenery": "Preparando ambiente",
+  "Preparing graphics": "Preparando gráficos",
+  "Loading cached graphics": "Carregando gráficos do cache",
+  "Saving graphics cache": "Salvando cache de gráficos",
+  "Elapsed: %d s": "Tempo decorrido: %d s"
 }
