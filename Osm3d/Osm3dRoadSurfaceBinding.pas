@@ -30,6 +30,81 @@ type
 // a triangle. New caches retain the original owner and skip this step.
 type TRoadOwnerArray = array of Int64;
 
+function IsRibbonMaterial(M:Integer):Boolean; inline;
+begin Result:=(M in [23..29]) or (M=GROUND_MAT_ROAD_DIRT) end;
+
+type
+  TLandSample = record Way:Int64; Side:Integer; Station:Single; Material:Integer end;
+  TLandSamples = array of TLandSample;
+
+function LandCompare(const A,B:TLandSample):Integer;
+begin
+  if A.Way<B.Way then Exit(-1);if A.Way>B.Way then Exit(1);
+  if A.Side<B.Side then Exit(-1);if A.Side>B.Side then Exit(1);
+  if A.Station<B.Station then Exit(-1);if A.Station>B.Station then Exit(1);
+  Result:=0;
+end;
+
+procedure SortLand(var Samples:TLandSamples; L,R:Integer);
+var I,J:Integer; P,T:TLandSample;
+begin
+  I:=L;J:=R;P:=Samples[(L+R) div 2];
+  repeat
+    while LandCompare(Samples[I],P)<0 do Inc(I);
+    while LandCompare(Samples[J],P)>0 do Dec(J);
+    if I<=J then begin T:=Samples[I];Samples[I]:=Samples[J];Samples[J]:=T;Inc(I);Dec(J) end;
+  until I>J;
+  if L<J then SortLand(Samples,L,J);if I<R then SortLand(Samples,I,R);
+end;
+
+function LandAt(const Samples:TLandSamples; Way:Int64; Side:Integer; Station:Single):Integer;
+var L,H,M,I:Integer; Key:TLandSample; Best,D:Single;
+begin
+  Result:=GROUND_MAT_TERRAIN;L:=0;H:=Length(Samples);
+  Key:=Default(TLandSample);Key.Way:=Way;Key.Side:=Side;Key.Station:=Station;
+  while L<H do begin
+    M:=(L+H) div 2;
+    if LandCompare(Samples[M],Key)<0 then L:=M+1 else H:=M;
+  end;
+  Best:=1e30;
+  for I:=Max(0,L-1) to Min(High(Samples),L) do
+    if (Samples[I].Way=Way) and (Samples[I].Side=Side) then begin
+      D:=Abs(Samples[I].Station-Station);
+      if D<Best then begin Best:=D;Result:=Samples[I].Material end;
+    end;
+end;
+
+{ Carved land/road edges share XZ. Ignore the tiny layer-height bias and
+  normals. Collect adjacent materials once, not by searching terrain per frame.
+  Samples along each side let a way cross meadow, forest and sand without a
+  hard-coded green border or a new serialized field in photo-authored tiles. }
+function EdgeLandSamples(Composite:TGroundCompositeMesh; const Owners:TRoadOwnerArray):TLandSamples;
+var AtPosition:specialize TDictionary<QWord,Integer>;I,M,N:Integer;P:TVector3;K:QWord;UV:TVector2;
+  function PositionKey(const V:TVector3):QWord;
+  begin Result:=(QWord(LongWord(Int64(Round(V.X*100)))) shl 32) or LongWord(Int64(Round(V.Z*100))) end;
+begin
+  Result:=nil;N:=0;AtPosition:=specialize TDictionary<QWord,Integer>.Create;
+  try
+    for I:=0 to Composite.VertexCount-1 do begin
+      M:=Composite.MatIdOf(I);
+      if (M>22) or (M=20) then Continue;
+      K:=PositionKey(Composite.PositionOf(I));AtPosition.AddOrSetValue(K,M);
+    end;
+    SetLength(Result,64);
+    for I:=0 to Composite.VertexCount-1 do begin
+      if not IsRibbonMaterial(Composite.MatIdOf(I)) or (Owners[I]=0) then Continue;
+      P:=Composite.PositionOf(I);K:=PositionKey(P);
+      if not AtPosition.TryGetValue(K,M) then Continue;
+      UV:=Composite.UVOf(I);
+      if UV.X<ROAD_JUNCTION_UV_SHIFT*0.5 then Continue;
+      if N=Length(Result) then SetLength(Result,Max(64,N*2));
+      Result[N].Way:=Owners[I];Result[N].Side:=Ord(UV.X>0.5);
+      Result[N].Station:=UV.Y;Result[N].Material:=M;Inc(N);
+    end;
+    SetLength(Result,N);if N>1 then SortLand(Result,0,N-1);
+  finally AtPosition.Free end;
+end;
+
 function SurfaceOwners(Composite:TGroundCompositeMesh; Model:TTileModel;
   const TileOrigin:TVector3; EastScale:Single):TRoadOwnerArray;
 type TIntArray=array of Integer;
@@ -49,14 +124,14 @@ begin
   begin
     A:=Composite.Indices[I*3]; B:=Composite.Indices[I*3+1]; C:=Composite.Indices[I*3+2];
     Mat:=Composite.MatIdOf(A);
-    if (Mat<24) or (Mat>29) or (Result[A]<>0) or (Result[B]<>0) or (Result[C]<>0) then Continue;
+    if not IsRibbonMaterial(Mat) or (Result[A]<>0) or (Result[B]<>0) or (Result[C]<>0) then Continue;
     Parent[Root(B)]:=Root(A); Parent[Root(C)]:=Root(A);
   end;
   for I:=0 to Composite.TriangleCount-1 do
   begin
     A:=Composite.Indices[I*3]; B:=Composite.Indices[I*3+1]; C:=Composite.Indices[I*3+2];
     Mat:=Composite.MatIdOf(A);
-    if (Mat<24) or (Mat>29) or (Result[A]<>0) then Continue;
+    if not IsRibbonMaterial(Mat) or (Result[A]<>0) then Continue;
     R:=Root(A); P:=Composite.PositionOf(A); Q:=Composite.PositionOf(B); T:=Composite.PositionOf(C);
     ar:=Abs((Q.X-P.X)*(T.Z-P.Z)-(Q.Z-P.Z)*(T.X-P.X));
     if ar>Area[R] then begin Area[R]:=ar; Centers[R]:=(P+Q+T)/3 end;
@@ -108,6 +183,9 @@ procedure AttachRoadSurface(Geo: TIndexedFaceSetNode;
   const TileOrigin: TVector3; EastScale: Single; AreaCondition: Integer);
 var
   Owners: TRoadOwnerArray;
+  LandSamples:TLandSamples;
+  HasUnpaved:Boolean;
+  Unpaved:Integer;
   Ways: specialize TDictionary<Int64,TWayInfo>;
   RequestsByKey: specialize TDictionary<QWord,Integer>;
   Pair: specialize TPair<Int64,TWayInfo>;
@@ -153,6 +231,7 @@ begin
   if (Geo=nil) or (Composite=nil) then Exit;
   RequestCount:=0;
   Owners:=SurfaceOwners(Composite,Model,TileOrigin,EastScale);
+  HasUnpaved:=False;
   Ways:=specialize TDictionary<Int64,TWayInfo>.Create;
   RequestsByKey:=specialize TDictionary<QWord,Integer>.Create;
   Puddles:=TRoadPuddleCollector.Create;
@@ -178,7 +257,7 @@ begin
     for I:=0 to Composite.VertexCount-1 do
     begin
       M:=Composite.MatIdOf(I);
-      if (M<24) or (M>29) or (Composite.OsmIdOf(I)=ROAD_CURB_OWNER) then Continue;
+      if not IsRibbonMaterial(M) or (Composite.OsmIdOf(I)=ROAD_CURB_OWNER) then Continue;
       Id:=Owners[I];
       if Id=0 then Continue;
       if not Ways.TryGetValue(Id,W) then
@@ -216,6 +295,15 @@ begin
         W.Surface.UVMax:=0.5+Min(B,2)*0.25-0.0125;
         W.Surface.UVScale:=ROAD_UV_SCALE_Y_ASPHALT;
         W.Surface.Marked:=Ord(W.MatId<=25);
+        if W.MatId in [GROUND_MAT_ROAD_DIRT,GROUND_MAT_ROAD_SAND] then begin
+          W.Surface.UVMin:=0;W.Surface.UVMax:=1;W.Surface.UVScale:=ROAD_UV_SCALE_Y_DIRT;
+        end;
+      end;
+      { Old caches retain the dirt/sand bucket even without detailed profiles.
+        Do not reinterpret explicit pavement or overwrite the saved tile. }
+      if W.Surface.Asphalt in [ROAD_SURFACE_UNKNOWN,ROAD_SURFACE_OTHER] then begin
+        if W.MatId=GROUND_MAT_ROAD_DIRT then W.Surface.Asphalt:=ROAD_SURFACE_DIRT
+        else if W.MatId=GROUND_MAT_ROAD_SAND then W.Surface.Asphalt:=ROAD_SURFACE_SAND;
       end;
       // Old carriageway profiles stored concrete as "other", but its 12 m
       // UV scale distinguishes it from stone/dirt/sand (6 m) and wood (4 m).
@@ -229,7 +317,8 @@ begin
       // intact so the legacy material switch still works. Explicit concrete
       // now retains its own material on sidewalks too.
       if (W.MatId=GROUND_MAT_ROAD_FOOTWAY) and
-         (W.Surface.Asphalt<>ROAD_SURFACE_CONCRETE) then W.Surface.Asphalt:=ROAD_SURFACE_ASPHALT;
+         (W.Surface.Asphalt<>ROAD_SURFACE_CONCRETE) and
+         (RoadUnpavedKind(W.Surface.Asphalt)=0) then W.Surface.Asphalt:=ROAD_SURFACE_ASPHALT;
       if W.MatId in [28,29] then
       begin
         if W.Surface.Asphalt=ROAD_SURFACE_OTHER then begin Ways[Id]:=W; Continue end;
@@ -244,14 +333,17 @@ begin
       end;
       N:=0;
       if W.MatId<=27 then N:=W.Surface.ForwardLanes+W.Surface.BackwardLanes;
+      Unpaved:=RoadUnpavedKind(W.Surface.Asphalt);
+      if Unpaved>0 then begin HasUnpaved:=True;N:=0;W.Surface.Marked:=0 end;
       if W.Surface.Asphalt<>ROAD_SURFACE_OTHER then
         W.Handle:=RoadMaterialRegister(Id,W.Width,N,W.Surface.Layout,W.Seed,
-          W.Surface.Condition,W.Surface.Asphalt=ROAD_SURFACE_CONCRETE);
+          W.Surface.Condition,W.Surface.Asphalt=ROAD_SURFACE_CONCRETE,Unpaved);
       Ways[Id]:=W;
     end;
 
     SetLength(Coord,Composite.VertexCount*4);
     SetLength(Style,Composite.VertexCount*4);
+    if HasUnpaved then LandSamples:=EdgeLandSamples(Composite,Owners);
     for I:=0 to Composite.VertexCount-1 do
     begin
       M:=Composite.MatIdOf(I); P:=Composite.PositionOf(I);
@@ -275,10 +367,11 @@ begin
         Style[I*4+2]:=16*AreaCondition;
         Continue;
       end;
-      if (M<24) or (M>29) or (Composite.OsmIdOf(I)=ROAD_CURB_OWNER) then Continue;
+      if not IsRibbonMaterial(M) or (Composite.OsmIdOf(I)=ROAD_CURB_OWNER) then Continue;
       Id:=Owners[I];
       if (Id=0) or not Ways.TryGetValue(Id,W) then
       begin
+        if M in [GROUND_MAT_ROAD_DIRT,GROUND_MAT_ROAD_SAND] then Continue;
         // Untagged junction fill: plain asphalt, never spurious lane lines.
         Coord[I*4]:=P.Z; Coord[I*4+1]:=P.X; Coord[I*4+2]:=16; Coord[I*4+3]:=-1;
         Continue;
@@ -313,6 +406,14 @@ begin
       if Junction then Style[I*4+2]:=2*(M-23)+16*W.Surface.Condition;
       if W.Surface.Asphalt=ROAD_SURFACE_CONCRETE then
         Style[I*4+2]:=Style[I*4+2]+ROAD_STYLE_CONCRETE;
+      Unpaved:=RoadUnpavedKind(W.Surface.Asphalt);
+      if Unpaved>0 then begin
+        { On unpaved surfaces X/Y are the adjacent land materials, not lanes. }
+        Style[I*4]:=LandAt(LandSamples,Id,0,UV.Y);
+        Style[I*4+1]:=LandAt(LandSamples,Id,1,UV.Y);
+        Style[I*4+2]:=16*W.Surface.Condition+ROAD_STYLE_UNPAVED*Unpaved;
+        if Junction then Style[I*4+2]+=ROAD_STYLE_JUNCTION;
+      end;
       Style[I*4+3]:=W.Seed;
     end;
     // Cover every page intersected by a triangle, including pages with no
@@ -321,7 +422,7 @@ begin
     for Tri:=0 to Composite.TriangleCount-1 do
     begin
       V0:=Composite.Indices[Tri*3]; Profile:=Round(Coord[V0*4+3]);
-      if Coord[V0*4+2]>=1 then begin
+      if (Coord[V0*4+2]>=1) and (Style[V0*4+2]<ROAD_STYLE_UNPAVED) then begin
         V1:=Composite.Indices[Tri*3+1];V2:=Composite.Indices[Tri*3+2];
         Puddles.Triangle(Composite.PositionOf(V0),Composite.PositionOf(V1),Composite.PositionOf(V2),
           Composite.NormalOf(V0),Composite.NormalOf(V1),Composite.NormalOf(V2),

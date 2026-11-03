@@ -86,7 +86,7 @@ begin
 end;
 
 procedure CheckMaterialCache;
-var L: TRoadLaneLayout; S: Single; Asphalt, Concrete: Integer;
+var L: TRoadLaneLayout; S: Single; Asphalt, Concrete, Dirt, Gravel: Integer;
 begin
   L:=Default(TRoadLaneLayout);
   Asphalt:=RoadMaterialRegister(739571415,6,2,L,S,3,False);
@@ -94,7 +94,69 @@ begin
   Check(Asphalt<>Concrete,'Different surfaces must not share cached pages');
   Check(Concrete=RoadMaterialRegister(739571415,6,2,L,S,3,True),
     'Same concrete road must reuse cached pages');
+  Dirt:=RoadMaterialRegister(739571415,6,0,L,S,3,False,1);
+  Gravel:=RoadMaterialRegister(739571415,6,0,L,S,3,False,2);
+  Check((Dirt<>Gravel) and (Dirt<>Asphalt) and (Gravel<>Concrete),
+    'Soil, aggregate and pavement must not alias in the cache');
+  Check(Gravel=RoadMaterialRegister(739571415,6,0,L,S,3,False,2),'Gravel cache reuse');
   Writeln('PASS separate material profiles, reuse within material');
+end;
+
+procedure CheckUnpavedTags;
+const Values:array[0..5] of string=('dirt','earth','gravel','compacted','fine_gravel','sand');
+  Kinds:array[0..5] of Integer=(4,4,5,6,7,8);
+var Tags:TOSMTags;P:TRoadParams;I:Integer;
+begin
+  for I:=0 to High(Values) do begin
+    Tags:=TOSMTags.Create;
+    try
+      Tags.Add('highway','path');Tags.Add('surface',Values[I]);
+      P:=TRoadBuilder.ParseRoadParams(Tags);
+      Check(P.SurfaceKind=Kinds[I],Values[I]+': distinct material');
+      Check(not P.IsMarked,Values[I]+': no lane paint');
+    finally Tags.Free end;
+  end;
+  Tags:=TOSMTags.Create;
+  try
+    Tags.Add('highway','track');Tags.Add('tracktype','grade2');
+    Check(TRoadBuilder.ParseRoadParams(Tags).SurfaceKind=ROAD_SURFACE_COMPACTED,'grade2 fallback');
+    Tags.Add('surface','dirt');
+    Check(TRoadBuilder.ParseRoadParams(Tags).SurfaceKind=ROAD_SURFACE_DIRT,'explicit surface beats grade');
+  finally Tags.Free end;
+  Writeln('PASS unpaved OSM tags and grade fallback');
+end;
+
+procedure CheckAdjacentLand;
+var Comp:TGroundCompositeMesh;Model:TTileModel;Geo:TIndexedFaceSetNode;
+  V:TMeshVertex;Seg:TTileRoadSeg;Style:TFloatVertexAttributeNode;I:Integer;
+begin
+  Comp:=TGroundCompositeMesh.Create;Model:=TTileModel.Create;Geo:=TIndexedFaceSetNode.Create;
+  try
+    Seg:=Default(TTileRoadSeg);Seg.WayId:=91;Seg.Width:=4;Seg.Z1:=20;
+    Seg.Surface.Asphalt:=ROAD_SURFACE_DIRT;Seg.Surface.UVMax:=1;Seg.Surface.UVScale:=6;
+    Model.AddRoadSeg(Seg);
+    V:=Default(TMeshVertex);V.Normal:=Vector3(0,1,0);V.OsmId:=91;
+    for I:=0 to 3 do begin
+      V.Position:=Vector3(-2+4*(I mod 2),0.005,20*(I div 2));V.UV:=Vector2(I mod 2,V.Position.Z/6);
+      Comp.AppendVertex(V,GROUND_MAT_ROAD_DIRT);
+    end;
+    Comp.AppendTriangle(0,2,1);Comp.AppendTriangle(1,2,3);
+    V.OsmId:=0;
+    for I:=0 to 3 do begin
+      V.Position:=Vector3(-2+4*(I mod 2),0,20*(I div 2));
+      Comp.AppendVertex(V,2+I mod 2); { forest left, sand right; different layer bias }
+    end;
+    Comp.TrimArrays;AttachRoadSurface(Geo,Comp,Model,Vector3(0,0,0),1);
+    Style:=Attribute(Geo,'roadStyle');
+    for I:=0 to 3 do begin
+      Check(Round(Style.FdValue.Items[I*4])=2,'left shoulder follows forest');
+      Check(Round(Style.FdValue.Items[I*4+1])=3,'right shoulder follows sand');
+      Check(Round(Style.FdValue.Items[I*4+2]) div ROAD_STYLE_UNPAVED=1,'unpaved kind in shader');
+      Check((Round(Style.FdValue.Items[I*4+2]) and 1)=0,'no paint on dirt');
+    end;
+    Check(Comp.VertexCount=8,'shoulder does not add geometry');
+    Writeln('PASS adjacent land, independent sides, layer offset, no extra geometry');
+  finally Geo.Free;Model.Free;Comp.Free end;
 end;
 
 begin
@@ -117,5 +179,14 @@ begin
   CheckCachedSurface('asphalt junction',ROAD_SURFACE_ASPHALT,10,GROUND_MAT_ROAD_FOOTWAY,True,False,True,True);
   CheckCachedSurface('concrete junction',ROAD_SURFACE_CONCRETE,12,GROUND_MAT_ROAD_MINOR,True,True,True,True);
   CheckMaterialCache;
+  CheckUnpavedTags;
+  CheckAdjacentLand;
+  CheckCachedSurface('soil',ROAD_SURFACE_DIRT,6,GROUND_MAT_ROAD_DIRT,True,False);
+  CheckCachedSurface('gravel',ROAD_SURFACE_GRAVEL,6,GROUND_MAT_ROAD_DIRT,True,False);
+  CheckCachedSurface('compacted',ROAD_SURFACE_COMPACTED,6,GROUND_MAT_ROAD_DIRT,True,False);
+  CheckCachedSurface('fine gravel',ROAD_SURFACE_FINE_GRAVEL,6,GROUND_MAT_ROAD_DIRT,True,False);
+  CheckCachedSurface('sand',ROAD_SURFACE_SAND,6,GROUND_MAT_ROAD_SAND,True,False);
+  CheckCachedSurface('legacy dirt',ROAD_SURFACE_OTHER,6,GROUND_MAT_ROAD_DIRT,True,False);
+  CheckCachedSurface('explicit dirt footpath',ROAD_SURFACE_DIRT,10,GROUND_MAT_ROAD_FOOTWAY,True,False);
   Writeln('All road surface tests passed');
 end.

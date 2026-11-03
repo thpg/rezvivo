@@ -2501,7 +2501,9 @@ begin
 
   if AttachShaderEffect then
   begin
-    Effect := TEffectNode.Create;
+    { Non-streaming worlds need the same road-page bindings and complexity
+      uniforms as CreateShapeTiled. A plain effect leaves rp_mode at zero. }
+    Effect := TRoadGroundEffect.Create;
     Effect.Language := slGLSL;
 
     { Provides position_eye_to_world_space() etc. used by the FS for LOD.

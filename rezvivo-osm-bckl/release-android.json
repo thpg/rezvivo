@@ -1,7 +1,7 @@
 {
-  "version": "0.4.5-alpha.3",
-  "build": 22,
+  "version": "0.4.6-alpha.1",
+  "build": 23,
   "channel": "alpha",
   "platform": "android",
-  "notes": "Avoid freezes while preparing graphics. Cache compiled shaders to speed up later launches and rides. Show loading stages and elapsed time while preparing riders and scenery. Improve diagnostics for Android app freezes."
+  "notes": "More natural dirt and gravel roads: irregular edges blend into the surrounding ground, with wheel tracks, compacted patches and small stones. Distinct soil, gravel, compacted gravel and sand materials also work in simplified graphics. Correct the unpaved surface examples in Demo-world."
 }

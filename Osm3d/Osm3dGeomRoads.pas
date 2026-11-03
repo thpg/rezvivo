@@ -97,6 +97,7 @@ type
   TRoadParams = record
     Kind:          TRoadKind;
     Material:      TPathMaterial;
+    SurfaceKind:   Integer; { ROAD_SURFACE_*; persistent material detail within a mesh bucket }
     IsMarked:      Boolean;
     EdgeOnly:      Boolean;
     Width:         Single;
@@ -465,6 +466,27 @@ begin
     Result.Material := SurfaceMat
   else
     Result.Material := DefMaterial;
+
+  { Keep the existing buckets/UVs and photo-authored widths. The serialized
+    profile distinguishes natural soil from loose and compacted aggregate. }
+  case Result.Material of
+    pmAsphalt: Result.SurfaceKind:=ROAD_SURFACE_ASPHALT;
+    pmConcrete: Result.SurfaceKind:=ROAD_SURFACE_CONCRETE;
+    pmSand: Result.SurfaceKind:=ROAD_SURFACE_SAND;
+    pmDirt: begin
+      Result.SurfaceKind:=ROAD_SURFACE_DIRT;
+      if SurfaceTag='gravel' then Result.SurfaceKind:=ROAD_SURFACE_GRAVEL
+      else if SurfaceTag='fine_gravel' then Result.SurfaceKind:=ROAD_SURFACE_FINE_GRAVEL
+      else if SurfaceTag='compacted' then Result.SurfaceKind:=ROAD_SURFACE_COMPACTED
+      else if ((SurfaceTag='') or (SurfaceTag='unpaved')) and (HighwayTag='track') and
+        (Tags.GetLower('tracktype')='grade2') then Result.SurfaceKind:=ROAD_SURFACE_COMPACTED
+      else if (SurfaceTag='') and ((HighwayTag='footway') or
+        (HighwayTag='pedestrian') or (HighwayTag='corridor') or
+        (HighwayTag='steps') or (HighwayTag='cycleway')) then
+        Result.SurfaceKind:=ROAD_SURFACE_OTHER;
+    end;
+    else Result.SurfaceKind:=ROAD_SURFACE_OTHER;
+  end;
 
   { Highway=path with surface=asphalt/concrete: keep rkFootway but
     promote material to pavement so it renders smooth.
@@ -1158,8 +1180,7 @@ begin
               UVScale := TRoadBuilder.ClassUVScaleY(Job.Params);
               Marked := Ord(Job.Params.IsMarked);
               if Job.Params.EdgeOnly then Marked:=Marked+ROAD_STYLE_EDGE_ONLY;
-              if Job.Params.Material=pmConcrete then Asphalt:=ROAD_SURFACE_CONCRETE
-              else Asphalt := ROAD_SURFACE_ASPHALT + Ord(Job.Params.Material <> pmAsphalt);
+              Asphalt:=Job.Params.SurfaceKind;
               Condition := RoadConditionFromSmoothness(Job.Way.Tags.GetLower('smoothness'));
             end;
           end;
@@ -1207,7 +1228,8 @@ var Nodes:array of TNode; Refs:TRoadJunctionIdArray;
       including legacy ways without a surface tag. Compare what is actually
       rendered; otherwise identical grey paths keep an interior white edge.
       Dedicated dirt/sand buckets and explicit concrete stay distinct. }
-    if (P.Kind=rkFootway) and (P.Material<>pmConcrete) then Result:=pmAsphalt;
+    if (P.Kind=rkFootway) and (P.Material<>pmConcrete) and
+      (RoadUnpavedKind(P.SurfaceKind)=0) then Result:=pmAsphalt;
   end;
   function AddVertex(const Point:TVector2):Integer;
   var W:TVector2;
@@ -1410,8 +1432,7 @@ var
           UVMin:=BParams.UVMinX; UVMax:=BParams.UVMaxX;
           UVScale:=ClassUVScaleY(BParams); Marked:=Ord(BParams.IsMarked);
           if BParams.EdgeOnly then Marked:=Marked+ROAD_STYLE_EDGE_ONLY;
-          if BParams.Material=pmConcrete then Asphalt:=ROAD_SURFACE_CONCRETE
-          else Asphalt:=ROAD_SURFACE_ASPHALT+Ord(BParams.Material<>pmAsphalt);
+          Asphalt:=BParams.SurfaceKind;
           Condition:=RoadConditionFromSmoothness(BridgeWays[bi].Tags.GetLower('smoothness'));
         end;
         Inc(bn);

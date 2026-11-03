@@ -1214,12 +1214,13 @@ begin
     '    return clamp(v * u_road_halo_strength, 0.0, 1.0);' + #10 +
     '}' + #10 +
     '' + #10 +
+    {$I shaders/ground_unpaved_blend.glsl.inc} +
     'uniform float gc_water_color_replaced;' + #10 +
     'void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)' + #10 +
     '{' + #10 +
     '    float gp_pixel=max(length(dFdx(vRoadCoord.xy)),length(dFdy(vRoadCoord.xy)));' + #10 +
     '    gp_pixel*=rz_ground_capture>.5 ? .5 : 1.0;' + #10 +
-    '    if(gp_available>.5 || rz_ground_capture>.5){' + #10 +
+    '    if((gp_available>.5 || rz_ground_capture>.5) && vRoadStyle.z<1024.){' + #10 +
     '        gp_mask=gpPuddleMask(vRoadCoord,vRoadStyle,gp_pixel)*(smoothstep(.985,.998,normalize(vGroundNormalOS).y));' + #10 +
     '        if(gp_mask>.001){gp_normal=gpWaterFilmNormal(vRoadCoord.xy,gp_pixel,normalize(vGroundNormalOS));gp_request=vec4(gp_normal*.5+.5,1);}' + #10 +
     '    }' + #10 +
@@ -1476,7 +1477,7 @@ begin
     '    vec3 sidewalkCurb=vec3(0.0,0.0,1.0), sidewalkConcrete=vec3(0.0);' + #10 +
     { Negative U marks the shared junction footprint (ROAD_JUNCTION_UV_SHIFT).
       It has no ribbon edge: the implicit sidewalk curb must not fill it. }
-    '    if (matId==28 && vGroundUV.x > -8.0 && rp_mode>0.5 && abs(tbnDet)>1e-12 && mod(floor(vRoadStyle.z/256.0),2.0)<0.5) {' + #10 +
+    '    if (matId==28 && vRoadStyle.z<1024. && vGroundUV.x > -8.0 && rp_mode>0.5 && abs(tbnDet)>1e-12 && mod(floor(vRoadStyle.z/256.0),2.0)<0.5) {' + #10 +
     '    float sidewalkWidth=length(dp1*duv2.y-dp2*duv1.y)/max(abs(tbnDet),1e-12);' + #10 +
     '    vec2 sidewalkFootprint=vec2(max(abs(duv1.y),abs(duv2.y))*10.0,' + #10 +
     '      max(abs(duv1.x),abs(duv2.x))*sidewalkWidth)*0.5;' + #10 +
@@ -1582,6 +1583,23 @@ begin
     '      nrmSample=mix(nrmSample,curbNormal,sidewalkCurb.x);' + #10 +
     '    }' + #10 +
     '    vec3 albedoLin  = gc_SRGBtoLINEAR(diffSample.rgb);' + #10 +
+    '    float landBlend=0.;vec3 landAlbedo=vec3(0),landNormal=vec3(.5,.5,1);vec4 landMask=vec4(1);' + #10 +
+    '    bool landGrass=false;' + #10 +
+    '    if(proceduralRoad && vRoadStyle.z>=1024.){' + #10 +
+    '      float pixel=max(length(rndLocalDx),length(rndLocalDy));' + #10 +
+    '      vec2 phase=mod(mod(gc_ground_origin.xz,256.)+gc_ground_origin_low.xz,256.);' + #10 +
+    '      landBlend=1.-rp_unpavedCoverage(vRoadCoord,vRoadStyle,vGroundLocalPos.xz+phase,pixel);' + #10 +
+    '      if(landBlend>0.){' + #10 +
+    '        int land=int(clamp(floor((vRoadCoord.y<0. ? vRoadStyle.x : vRoadStyle.y)+.5),0.,22.));' + #10 +
+    '        landGrass=land==0 || land==1 || land==2 || land==8 || land==9;' + #10 +
+    '        gcRoadLand(land,vGroundLocalPos.xz,rndLocalDx,rndLocalDy,landAlbedo,landNormal,landMask);' + #10 +
+    '        landAlbedo=gc_SRGBtoLINEAR(landAlbedo);' + #10 +
+    '        landAlbedo=mix(landAlbedo,gc_SRGBtoLINEAR(u_ground_fallback_rgb[land]),clamp(u_ground_tint_amount,0.,1.));' + #10 +
+    '        if(land!=20 && land!=19 && (land<15 || land>18)){' + #10 +
+    '          float halo=sampleRoadHaloFactor(vGroundObjPos);if(halo>.001)landAlbedo=mix(landAlbedo,sampleSandySoilAlbedoLinear(vGroundObjPos),halo);}' + #10 +
+    '        if(landGrass)gc_road_land_display=vec4(gcGrassDisplayColor(landAlbedo,vGroundLocalPos.xz,pixel),landBlend);' + #10 +
+    '      }' + #10 +
+    '    }' + #10 +
     '#ifdef DIAG_NRMSAMPLE' + #10 +
     '    fragment_color = vec4(textureGrad(u_ground_normal_atlas, atlasUV, gradX, gradY).rgb, 1.0); return;' + #10 +
     '#endif' + #10 +
@@ -1628,6 +1646,7 @@ begin
     '        }' + #10 +
     '    }' + #10 +
     '    float grassFootprint=max(length(rndLocalDx),length(rndLocalDy));' + #10 +
+    '    if(landBlend>0. && !landGrass)albedoLin=mix(albedoLin,landAlbedo,landBlend);' + #10 +
     '    if (flatGrass) {' + #10 +
     '        fragment_color=vec4(gcGrassDisplayColor(albedoLin,vGroundLocalPos.xz,grassFootprint),1.0);' + #10 +
     '        gc_grass_display=fragment_color.rgb;' + #10 +
@@ -1689,6 +1708,12 @@ begin
     '    maskSample.r=mix(maskSample.r,0.9,sidewalkCurb.x);' + #10 +
     '    maskSample.b=mix(maskSample.b,sidewalkCurb.z,sidewalkCurb.x);' + #10 +
     '    vec3 grassAlbedoLin=albedoLin;' + #10 +
+    '    if(landBlend>0. && !landGrass){' + #10 +
+    '      vec3 landN=landNormal*2.-1.;landN.xy*=u_ground_normal_strength;' + #10 +
+    '      vec3 landT=normalize(vec3(Ngeo.y,-Ngeo.x,0.));' + #10 +
+    '      landN=useNormalMap ? normalize(mat3(landT,cross(landT,Ngeo),Ngeo)*landN) : Ngeo;' + #10 +
+    '      worldN=normalize(mix(worldN,landN,landBlend));maskSample=mix(maskSample,landMask,landBlend);' + #10 +
+    '    }' + #10 +
     '    if (rockWeight>0.001) {' + #10 +
     '        vec3 rockAlbedo,rockNormal; vec2 rockSurface;' + #10 +
     '        gcRockMaterial(rockPosition,Ngeo,normalize(gLodToCamera),rockFootprint,' + #10 +
@@ -1783,6 +1808,10 @@ begin
     '    }' + #10 +
     '    // All coverage collectors have run now; keep indirect light in shadow.' + #10 +
     '    if(gc_scene_valid)color.rgb=rzSceneDisplay(gc_scene_direct*(1.-gc_shadowCoverage())+gc_scene_indirect);' + #10 +
+    '    if(gc_road_land_display.a>0.){' + #10 +
+    '      vec4 land=vec4(gc_road_land_display.rgb,1.);gc_grass_applyShadow(land);' + #10 +
+    '      color.rgb=mix(color.rgb,land.rgb,gc_road_land_display.a);' + #10 +
+    '    }' + #10 +
     '    if(gp_mask>.001)color.rgb=mix(color.rgb,gpWaterFilm(color.rgb,gp_normal,normalize(gLodToCamera),normalize(gc_SunDirToward)),gp_mask);' + #10 +
     '}' + #10;
   if GetEnvironmentVariable('REZVIVO_LEGACY_ZERO_WEIGHTS')='1' then

@@ -9,8 +9,15 @@ const ROAD_MAX_LANES = 32;
   ROAD_SURFACE_ASPHALT = 1;
   ROAD_SURFACE_OTHER = 2;
   ROAD_SURFACE_CONCRETE = 3;
+  ROAD_SURFACE_DIRT = 4;
+  ROAD_SURFACE_GRAVEL = 5;
+  ROAD_SURFACE_COMPACTED = 6;
+  ROAD_SURFACE_FINE_GRAVEL = 7;
+  ROAD_SURFACE_SAND = 8;
   ROAD_STYLE_CONCRETE = 128;
   ROAD_STYLE_EDGE_ONLY = 256;
+  ROAD_STYLE_JUNCTION = 512;
+  ROAD_STYLE_UNPAVED = 1024;
   { Baked junction UVs keep their source way and metric scale, but suppress
     ribbon markings inside the common footprint. The integral U shift is
     invisible to tiled fallback materials and keeps the UV tangent direction.
@@ -42,12 +49,20 @@ type
   end;
 
 function RoadConditionFromSmoothness(const Value: string): LongInt;
+function RoadUnpavedKind(Surface: Integer): Integer; inline;
 function RoadWidthAt(const Surface: TRoadSurfaceProfile; DefaultWidth, T: Single): Single; inline;
 function RoadWidthAtPoint(const Surface: TRoadSurfaceProfile;
   DefaultWidth, X0,Z0,X1,Z1,X,Z: Single): Single; inline;
 
 implementation
 uses SysUtils, Math;
+
+function RoadUnpavedKind(Surface: Integer): Integer;
+begin
+  if Surface in [ROAD_SURFACE_DIRT..ROAD_SURFACE_SAND] then
+    Result:=Surface-ROAD_SURFACE_DIRT+1
+  else Result:=0;
+end;
 
 function RoadWidthAt(const Surface: TRoadSurfaceProfile; DefaultWidth, T: Single): Single;
 begin

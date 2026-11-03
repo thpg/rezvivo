@@ -39,7 +39,7 @@ type
 
 function RoadMaterialGLSL: string;
 function RoadMaterialSamplingGLSL: string;
-function RoadMaterialRegister(AWay: Int64; AWidth: Single; MotorLanes: Integer; const Layout:TRoadLaneLayout; out Seed: Single; Condition: Integer = 0; Concrete: Boolean = False): Integer;
+function RoadMaterialRegister(AWay: Int64; AWidth: Single; MotorLanes: Integer; const Layout:TRoadLaneLayout; out Seed: Single; Condition: Integer = 0; Concrete: Boolean = False; Unpaved: Integer = 0): Integer;
 function RoadMaterialRegisterArea(Row: Integer; Condition: Integer = 0): Integer;
 procedure SetRoadMaterialMode(Mode: TRoadMaterialMode; SavePreference: Boolean = True);
 function RoadMaterialMode: TRoadMaterialMode;
@@ -68,7 +68,7 @@ const
   MaxMip = 4;
 
 type
-  TProfile = record Width, Seed, Origin: Single; AreaRow, MotorLanes, Condition: Integer; IsArea, Concrete: Boolean; Layout:TRoadLaneLayout end;
+  TProfile = record Width, Seed, Origin: Single; AreaRow, MotorLanes, Condition, Unpaved: Integer; IsArea, Concrete: Boolean; Layout:TRoadLaneLayout end;
   TPage = record Profile, Block: Integer; LastWanted: QWord; Distance: Single end;
   TRoadTextureNode = class(TShaderTextureNode)
   public Kind: Integer end;
@@ -117,7 +117,7 @@ var
 
 function RoadMaterialGLSL: string;
 begin
-  Result := {$I shaders/road_material.glsl.inc};
+  Result := {$I shaders/road_material.glsl.inc} + {$I shaders/unpaved_material.glsl.inc};
 end;
 
 function RoadMaterialSamplingGLSL: string;
@@ -147,6 +147,7 @@ begin
     '  style=floor(style+vec4(0.5)); coord.w=floor(coord.w+0.5);' + #10 +
     '  bool area=coord.w< -0.5; float row=floor(p.y/16.0);' + #10 +
     '  float condition=floor(mod(style.z,128.0)/16.0);' + #10 +
+    '  float unpaved=floor(style.z/1024.);' + #10 +
     '  int address=area ? int(condition)*4096+int(mod(row,64.0))*64+int(mod(block,64.0)) : 24576+int(coord.w)*64+int(mod(block,64.0));' + #10 +
     '  vec4 entry=vec4(0); if(rp_mode>1.5 && (area || coord.w>0.5)) entry=texelFetch(rp_table,ivec2(address%1024,address/1024),0);' + #10 +
     '  bool cached=rp_mode>1.5 && (area || coord.w>0.5) && entry.x>0.5 && abs(entry.y-block)<0.1 && abs(entry.w-condition)<0.1 && (!area || abs(entry.z-row)<0.1);' + #10 +
@@ -176,23 +177,29 @@ begin
     '    }' + #10 +
     '    color=textureGrad(rp_color,at,gx,gy);' + #10 +
     '    normalData=textureGrad(rp_normal,at,gx,gy);' + #10 +
-    '    refine*=max(smoothstep(0.005,0.08,1.0-normalData.z),smoothstep(0.001,0.004,abs(surfaceHeight)));' + #10 +
+    '    if(unpaved<.5)refine*=max(smoothstep(0.005,0.08,1.0-normalData.z),smoothstep(0.001,0.004,abs(surfaceHeight)));' + #10 +
     '  } else { color=vec4(0); normalData=vec4(0.5,0.5,1.0,0.0); }' + #10 +
     '  // The page stores centimeters per texel. Resolve subtexel fractures' + #10 +
     '  // at screen resolution nearby, smoothly returning to cached relief.' + #10 +
     '  if(refine>0.0) {' + #10 +
     '    vec3 relief; vec4 detailedColor; vec2 heightGradient;' + #10 +
-    '    rp_roadGradient(detailP,style.w,max(footprint.x,footprint.y),vec3(width,max(coord.w,0.0),area ? 0.0 : rp_motorLanes(style)),condition,step(128.0,mod(style.z,256.0)),detailedColor,relief,heightGradient);' + #10 +
+    '    float detailPixel=max(footprint.x,footprint.y);' + #10 +
+    '    if(unpaved>.5 && rz_complexity<1.5)detailPixel=max(.08,detailPixel);' + #10 +
+    '    rp_surfaceGradient(detailP,style.w,detailPixel,vec3(width,max(coord.w,0.0),area || unpaved>0.5 ? 0.0 : rp_motorLanes(style)),condition,unpaved>0.5 ? unpaved+1. : step(128.0,mod(style.z,256.0)),detailedColor,relief,heightGradient);' + #10 +
     '    color=mix(color,detailedColor,refine);' + #10 +
     '    normalData.xy=mix(normalData.xy,rp_gradientNormal(heightGradient)*0.5+0.5,refine);' + #10 +
     '    normalData.zw=mix(normalData.zw,vec2(1.0-relief.y,relief.z),refine);' + #10 +
     '  }' + #10 +
     '  if(rz_complexity<0.5)normalData.xy=vec2(0.5);' + #10 +
-    '  rp_finish(p,width,style,footprint,rp_laneLayout(coord,style),color,normalData);' + #10 +
+    '  if(unpaved<0.5)rp_finish(p,width,style,footprint,rp_laneLayout(coord,style),color,normalData);' + #10 +
+    '  else {' + #10 +
+    '    float fineFade=1.-smoothstep(.006,.045,max(footprint.x,footprint.y));' + #10 +
+    '    if(fineFade>0.)color.rgb*=1.+(rp_gritGradient(p*65.,uint(style.w)^0xf5127u).x-.5)*.12*fineFade;' + #10 +
+    '  }' + #10 +
     '}' + #10;
 end;
 
-function RoadMaterialRegister(AWay: Int64; AWidth: Single; MotorLanes: Integer; const Layout:TRoadLaneLayout; out Seed: Single; Condition: Integer; Concrete: Boolean): Integer;
+function RoadMaterialRegister(AWay: Int64; AWidth: Single; MotorLanes: Integer; const Layout:TRoadLaneLayout; out Seed: Single; Condition: Integer; Concrete: Boolean; Unpaved: Integer): Integer;
 var Key: string; H: QWord; I:Integer;
 begin
   H := QWord(AWay);
@@ -203,6 +210,7 @@ begin
   Key := IntToStr(AWay)+':'+IntToStr(Round(AWidth*1000))+':'+IntToStr(MotorLanes);
   Condition:=EnsureRange(Condition,0,5);Key:=Key+':wear='+IntToStr(Condition);
   Key:=Key+':concrete='+IntToStr(Ord(Concrete));
+  Unpaved:=EnsureRange(Unpaved,0,5);Key:=Key+':unpaved='+IntToStr(Unpaved);
   Key:=Key+':'+IntToStr(Layout.Count)+':'+IntToStr(Layout.BothWays)+':'+IntToStr(Round(Layout.Edge*1000));
   for I:=0 to Layout.Count-1 do Key:=Key+':'+IntToStr(Round(Layout.Widths[I]*1000));
   EnterCriticalSection(Lock);
@@ -217,6 +225,7 @@ begin
     Profiles[Result].Seed := Seed;
     Profiles[Result].Condition := Condition;
     Profiles[Result].Concrete := Concrete;
+    Profiles[Result].Unpaved := Unpaved;
     ProfileMap.Add(Key,Result);
   finally LeaveCriticalSection(Lock) end;
 end;
@@ -515,7 +524,7 @@ begin
       'void main(){'+#10+
       ' vec2 uv=((gl_FragCoord.xy-rp_page.xy)/rp_page.z-vec2(0.03125))/0.9375;'+#10+
       ' vec2 p=vec2((rp_profile.x+uv.x)*16.0,(uv.y-0.5)*rp_profile.y+rp_profile.w);'+#10+
-      ' vec3 relief; vec2 heightGradient; rp_roadGradient(p,rp_profile.z,max(16.0,rp_profile.y)/(rp_page.z*0.9375)*0.5,rp_road.xyz,rp_road.w,rp_page.w,color,relief,heightGradient);'+#10+
+      ' vec3 relief; vec2 heightGradient; rp_surfaceGradient(p,rp_profile.z,max(16.0,rp_profile.y)/(rp_page.z*0.9375)*0.5,rp_road.xyz,rp_road.w,rp_page.w,color,relief,heightGradient);'+#10+
       ' vec2 n=rp_gradientNormal(heightGradient);'+#10+
       ' normalData=vec4(n*0.5+0.5,1.0-relief.y,relief.z); heightData=relief.x;'+#10+
       '}', 'Road pages FS');
@@ -570,7 +579,8 @@ begin
     if glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)<>GL_FRAMEBUFFER_COMPLETE then
       raise Exception.Create('Road page framebuffer incomplete');
     glViewport(X,Y,S,S);
-    glUniform4f(UniPage,X,Y,S,Ord(P.Concrete));
+    if P.Unpaved>0 then glUniform4f(UniPage,X,Y,S,P.Unpaved+1)
+    else glUniform4f(UniPage,X,Y,S,Ord(P.Concrete));
     glDrawArrays(GL_TRIANGLES,0,3);
   end;
   if Pages[Page].Profile<>0 then

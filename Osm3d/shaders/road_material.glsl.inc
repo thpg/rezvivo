@@ -73,6 +73,7 @@
 '    vec2 stretch=vec2(0.78)+mineral.xy*0.70;' + #10 +
 '    float radial=max(length(v1*stretch),0.0001);' + #10 +
 '    float radius=mix(0.26,0.76,sqrt(key.z));' + #10 +
+'    if(exposure < -1.5)radius=mix(0.16,0.46,key.z); // separate gravel chips in a fines matrix' + #10 +
 '    float rim=radius-radial;' + #10 +
 '    if(rim<edge){edge=rim;dg=v1*stretch*stretch/radial;}' + #10 +
 '    edge+=(grit.x-0.5)*0.12; dg+=grit.yz*(0.12/0.35);' + #10 +

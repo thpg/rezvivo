@@ -2303,7 +2303,7 @@
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/world.json",
     "bytes": 490711,
-    "sha256": "0f9b4564bfcf0cc008f7bccb6579e6a138ac0845f9c3ae9cb732e15d859d15f6",
+    "sha256": "a63657ecbd1922366fc515a0a217ff88e3970454eeaf490c5d2efda907e6af79",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2311,7 +2311,7 @@
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/world.x3d",
     "bytes": 47435984,
-    "sha256": "a88c3a6377ec26f7790237e5ded4ae131125c23ecc693a9ae5f79b688f23bb47",
+    "sha256": "5f5336105598233ca9667003dba68804d5e5391207eac396c150210cd0fdbb79",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

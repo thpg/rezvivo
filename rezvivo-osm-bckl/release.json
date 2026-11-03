@@ -1,7 +1,7 @@
 {
-  "version": "0.4.5-alpha.1",
-  "build": 20,
-  "file_version": "0.4.5.20",
+  "version": "0.4.6-alpha.1",
+  "build": 21,
+  "file_version": "0.4.6.21",
   "channel": "alpha",
-  "notes": "Fix map loading for local profiles without signing in, including HTTP 401 errors."
+  "notes": "More natural dirt and gravel roads: irregular edges blend into the surrounding ground, with wheel tracks, compacted patches and small stones. Distinct soil, gravel, compacted gravel and sand materials also work in simplified graphics. Correct the unpaved surface examples in Demo-world."
 }

@@ -20067,7 +20067,7 @@
         1,
         4,
         0,
-        1,
+        5,
         2
       ],
       "points": [
@@ -20331,7 +20331,7 @@
         1,
         4,
         0,
-        1,
+        8,
         2
       ],
       "points": [
@@ -20523,7 +20523,7 @@
         1,
         4,
         0,
-        1,
+        4,
         2
       ],
       "points": [
@@ -23602,7 +23602,7 @@
   "tiles": [
     {
       "file": "world.x3d",
-      "sha256": "a88c3a6377ec26f7790237e5ded4ae131125c23ecc693a9ae5f79b688f23bb47",
+      "sha256": "5f5336105598233ca9667003dba68804d5e5391207eac396c150210cd0fdbb79",
       "offset": [
         0,
         0,
@@ -24151,7 +24151,7 @@
       "material": "paving",
       "walkable": true,
       "water": false,
-      "ground_material": 11,
+      "ground_material": 31,
       "grass_material": -1
     },
     "verges_11": {

@@ -1762,7 +1762,7 @@ var
       R.Surface.BackwardLanes := EnsureRange(Round(W[1]), 0, 32);
       R.Surface.UVMin := W[2]; R.Surface.UVMax := W[3];
       R.Surface.UVScale := W[4]; R.Surface.Marked := Round(W[5]);
-      if Length(W)>=7 then R.Surface.Asphalt:=EnsureRange(Round(W[6]),ROAD_SURFACE_UNKNOWN,ROAD_SURFACE_CONCRETE);
+      if Length(W)>=7 then R.Surface.Asphalt:=EnsureRange(Round(W[6]),ROAD_SURFACE_UNKNOWN,ROAD_SURFACE_SAND);
       if Length(W)>=8 then R.Surface.Condition:=EnsureRange(Round(W[7]),0,5);
       if (R.Surface.UVMax <= R.Surface.UVMin) or (W[4] <= 0) or (W[4] > 1000) then
         R.Surface := Default(TRoadSurfaceProfile);
