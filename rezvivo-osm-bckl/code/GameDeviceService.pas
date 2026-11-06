@@ -1088,7 +1088,8 @@ begin
     if FAssignments.Selection[Role].Mode=dsmAutomatic then
       for I:=0 to FDevices.Count-1 do begin
         Entry:=FDevices[I];
-        if(Entry.ConnectionState=gdcsConnected)and IsZwiftControllerName(Entry.DeviceInfo.Name)and
+        if(Entry.ConnectionState=gdcsConnected)and
+          (IsZwiftControllerName(Entry.DeviceInfo.Name)or Entry.DeviceInfo.SupportsShifting)and
           not IsGearController(Entry)then begin
           Changed:=FAssignments.Select(Role,TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],
             Entry.DeviceInfo.Address,Entry.DeviceInfo.Name)or Changed;Break;
@@ -1484,7 +1485,8 @@ begin
   if Result then
   begin
     E:=FindDeviceByAddress(S.DeviceAddress);
-    if (E<>nil) and IsZwiftControllerName(E.DeviceInfo.Name) then Exit(False);
+    { OpenBikeControl angles are calibrated by the controller itself. }
+    if (E<>nil) and (IsZwiftControllerName(E.DeviceInfo.Name) or E.DeviceInfo.SupportsShifting) then Exit(False);
   end;
   if Result then Result:=FAssignments.CenterSteering(S.Instant);
   if Result then begin SaveAssignments; ResetSteeringInput end;
@@ -1617,7 +1619,8 @@ end;
 procedure TGameDeviceService.SelectGearController(Entry:TGameDeviceEntry);
 var Role:TDeviceRole;Transport:String;
 begin
-  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or not IsZwiftControllerName(Entry.DeviceInfo.Name)then Exit;
+  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or
+    not(IsZwiftControllerName(Entry.DeviceInfo.Name)or Entry.DeviceInfo.SupportsShifting)then Exit;
   RefreshAssignmentsProfile;if not FAssignmentsReady then Exit;
   Transport:=TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType];
   if IsGearController(Entry)then begin

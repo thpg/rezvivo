@@ -83,6 +83,7 @@ type
     SupportsSpeed: Boolean;
     SupportsHeartRate: Boolean;
     SupportsSteering: Boolean;
+    SupportsShifting: Boolean;     // OpenBikeControl buttons; Zwift is name-based
   end;
 
   // Возможности трейнера (FTMS Features)

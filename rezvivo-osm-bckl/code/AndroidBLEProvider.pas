@@ -45,7 +45,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs, CastleStringUtils,
   TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol,
-  EliteSterzoProtocol, ZwiftControllerProtocol, GameVirtualGearing;
+  EliteSterzoProtocol, ZwiftControllerProtocol, OpenBikeControlProtocol, GameVirtualGearing;
 
 {$ifdef ANDROID}
 
@@ -75,6 +75,7 @@ type
     FZwiftService: String;
     FZwiftReady, FZwiftEncrypted: Boolean;
     FZwiftCryptoStarted:Boolean;
+    FObcParser: TOpenBikeControlParser;
     function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;override;
 
     procedure ProcessNotification(const CharUUID: string; const Data: TBytes);
@@ -206,6 +207,7 @@ begin
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
   FZwiftParser:=TZwiftControllerParser.Create;
+  FObcParser:=TOpenBikeControlParser.Create;
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'AndroidBLE';
 end;
@@ -219,6 +221,7 @@ begin
   FreeAndNil(FFTMSParser);
   FreeAndNil(FFECParser);
   FreeAndNil(FZwiftParser);
+  FreeAndNil(FObcParser);
   inherited;
 end;
 
@@ -233,7 +236,7 @@ begin
   if FConnectionState = csConnected then Exit(True);
   FTrainerFeatures:=Default(TTrainerFeatures);
   FZwiftService:=''; FZwiftReady:=False; FZwiftEncrypted:=False;FZwiftCryptoStarted:=False;
-  FZwiftParser.Reset;
+  FZwiftParser.Reset; FObcParser.Reset;
   FLastData:=Default(TTrainerDataRecord);
   SetConnectionState(csConnecting, 'Android: connecting...');
   Messaging.Send(['ble-connect', FDeviceInfo.Address, FDeviceInfo.Name]);
@@ -295,6 +298,14 @@ begin
     Messaging.Send(['ble-subscribe',FDeviceInfo.Address,SterzoServiceUUID,SterzoChallengeUUID]);
     WriteCharacteristic(SterzoServiceUUID,SterzoControlUUID,TBytes.Create($03,$10),True);
   end;
+  FDeviceInfo.SupportsShifting:=Pos(OpenBikeControlServiceUUID,LowerCase(ServicesJson))>0;
+  if FDeviceInfo.SupportsShifting then
+  begin
+    Messaging.Send(['ble-subscribe',FDeviceInfo.Address,OpenBikeControlServiceUUID,OpenBikeControlButtonUUID]);
+    { Optional: tells the controller which buttons this app handles. }
+    if Pos(OpenBikeControlAppInfoUUID,LowerCase(ServicesJson))>0 then
+      WriteCharacteristic(OpenBikeControlServiceUUID,OpenBikeControlAppInfoUUID,OpenBikeControlAppInfo,True);
+  end;
 
   Logger.Info(Format('[AndroidBLE] %s services: FTMS=%s POWER=%s FEC=%s HR=%s CSC=%s',
     [FDeviceInfo.Address,
@@ -348,6 +359,11 @@ procedure TAndroidBLESession.ProcessNotification(const CharUUID: string;
   const Data: TBytes);
 var Parsed: TTrainerDataRecord; Response: TBytes; Handshake: TZwiftHandshake;
 begin
+  if CharUUID=OpenBikeControlButtonUUID then
+  begin
+    if FObcParser.Parse(Data,Parsed) then PublishMeasurement(Parsed);
+    Exit;
+  end;
   if CharUUID=SterzoAngleUUID then
   begin
     if ParseSterzoAngle(Data,Parsed) then PublishMeasurement(Parsed);

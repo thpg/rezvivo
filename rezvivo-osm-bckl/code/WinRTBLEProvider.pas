@@ -15,7 +15,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs,
   TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol,
-  ZwiftControllerProtocol, GameVirtualGearing;
+  ZwiftControllerProtocol, OpenBikeControlProtocol, GameVirtualGearing;
 
 type
   TScannedDev = record Name, Address: string; RSSI: Int16; end;
@@ -46,6 +46,9 @@ type
     FZwiftControl: Pointer;
     FZwiftEvent: TEvent;
     FZwiftParser: TZwiftControllerParser;
+    FHasObc: Boolean;
+    FObcAppInfo: Pointer;
+    FObcParser: TOpenBikeControlParser;
     FFTMSCtrlChar: Pointer;
     FFECWriteChar: Pointer;  { FE-C control write (6e40fec3) }
     FFECChannel: Byte;
@@ -671,6 +674,13 @@ begin
     if Valid then PublishMeasurement(Parsed);
     Exit;
   end;
+  if Pos(OpenBikeControlButtonUUID,U)>0 then
+  begin
+    FLock.Enter;
+    try Valid:=FObcParser.Parse(Data,Parsed) finally FLock.Leave end;
+    if Valid then PublishMeasurement(Parsed);
+    Exit;
+  end;
   if Pos(SterzoChallengeUUID,U)>0 then
   begin
     Page:=SterzoChallengeResponse(Data);
@@ -898,6 +908,7 @@ begin
   FSterzoChallengeEvent := TEvent.Create(nil, False, False, '');
   FZwiftEvent:=TEvent.Create(nil,False,False,'');
   FZwiftParser:=TZwiftControllerParser.Create;
+  FObcParser:=TOpenBikeControlParser.Create;
   FDevice := nil;
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
@@ -955,6 +966,7 @@ begin
   FreeAndNil(FSterzoChallengeEvent);
   FreeAndNil(FZwiftEvent);
   FreeAndNil(FZwiftParser);
+  FreeAndNil(FObcParser);
   FFTMSParser.Free;
   FFECParser.Free;
   inherited;
@@ -1049,8 +1061,9 @@ begin
   FHasZwift:=False; FZwiftSubscribed:=False;
   FZwiftReady:=False; FZwiftEncrypted:=False;
   FZwiftParser.Reset; FZwiftEvent.ResetEvent;
+  FHasObc:=False; FObcParser.Reset;
   FSterzoResponse:=nil; FSterzoChallengeEvent.ResetEvent;
-  FDeviceInfo.SupportsSteering:=False;
+  FDeviceInfo.SupportsSteering:=False; FDeviceInfo.SupportsShifting:=False;
   FLock.Enter;
   try FLastData:=Default(TTrainerDataRecord) finally FLock.Leave end;
 
@@ -1137,6 +1150,7 @@ begin
     FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
     FDeviceInfo.SupportsSteering := FHasSteering or
       (FHasZwift and(IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC)));
+    FDeviceInfo.SupportsShifting:=FHasObc;
     FTrainerFeatures.SupportsVirtualGearing:=False;
 
     if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
@@ -1164,6 +1178,8 @@ begin
       SetConnectionState(csError, 'STERZO activation failed. Wake the steering plate and reconnect.');
       Exit;
     end;
+    { Optional: tells the controller which buttons this app handles. }
+    if FHasObc and (FObcAppInfo<>nil) then WriteFTMSControl(FObcAppInfo,OpenBikeControlAppInfo);
 
     Logger.Info(Format('[WinRT] Caps: FTMS=%s Power=%s HR=%s CSC=%s FEC=%s',
       [BoolToStr(FHasFTMS,True), BoolToStr(FHasPower,True),
@@ -1172,7 +1188,8 @@ begin
 
     { Не фитнес-устройство — отключаемся, не засоряем список }
     if (not FHasFTMS) and (not FHasPower) and (not FHasFEC)
-       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) and (not FHasZwift) then
+       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) and (not FHasZwift)
+       and (not FHasObc) then
     begin
       Logger.Info('[WinRT] No fitness services — disconnecting');
       Disconnect;
@@ -1550,6 +1567,7 @@ begin
           if Pos(SterzoServiceUUID, SvcS) > 0 then FHasSteering := True;
           if (Pos(ZwiftServiceUUID,SvcS)>0) or (Pos(ZwiftRideServiceUUID,SvcS)>0) then
             FHasZwift:=True;
+          if Pos(OpenBikeControlServiceUUID,SvcS)>0 then FHasObc:=True;
 
           Svc3 := nil;
           if QI(Svc, IID_ISvc3, Svc3) = S_OK then
@@ -1635,6 +1653,11 @@ begin
                             FSterzoControl:=Ch;
                             TVtNoArg(VT(Ch)^[1])(Ch);
                           end;
+                          if (Pos(OpenBikeControlAppInfoUUID,ChS)>0) and ((Props and $08)<>0) then
+                          begin
+                            FObcAppInfo:=Ch;
+                            TVtNoArg(VT(Ch)^[1])(Ch);
+                          end;
                           if ((Props and $02)<>0) and
                             ((Pos('2acc',ChS)>0) or (Pos('2ad8',ChS)>0) or
                              (Pos('2ad6',ChS)>0) or (Pos('2ad5',ChS)>0) or
@@ -1655,7 +1678,8 @@ begin
                                (Pos('2a5b', ChS) > 0) or (Pos('2ad9', ChS) > 0) or
                                (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) or
                                (Pos(SterzoAngleUUID,ChS)>0) or (Pos(SterzoChallengeUUID,ChS)>0) or
-                               (Pos(ZwiftNotifyUUID,ChS)>0) or (Pos(ZwiftResponseUUID,ChS)>0) then
+                               (Pos(ZwiftNotifyUUID,ChS)>0) or (Pos(ZwiftResponseUUID,ChS)>0) or
+                               (Pos(OpenBikeControlButtonUUID,ChS)>0) then
                             begin
                               { Don't set ProtectionLevel — let Windows handle encryption transparently }
 
@@ -1798,6 +1822,7 @@ begin
   FFTMSCtrlChar := nil;
   if FSterzoControl<>nil then begin SafeRelease(PIUnk(FSterzoControl)); FSterzoControl:=nil end;
   if FZwiftControl<>nil then begin SafeRelease(PIUnk(FZwiftControl)); FZwiftControl:=nil end;
+  if FObcAppInfo<>nil then begin SafeRelease(PIUnk(FObcAppInfo)); FObcAppInfo:=nil end;
   if FFECWriteChar <> nil then begin SafeRelease(PIUnk(FFECWriteChar)); FFECWriteChar := nil; end;
 end;
 
