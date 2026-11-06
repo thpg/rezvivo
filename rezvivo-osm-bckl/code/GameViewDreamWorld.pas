@@ -49,6 +49,7 @@ type
     procedure ClickReload(Sender:TObject);
   private
     procedure FilterChanged(Sender:TObject);
+    procedure RefreshWorldTexts(Sender:TObject);
   private
     FStart:TCastleButton;
     FCarousel:TRideCarousel;
@@ -146,7 +147,7 @@ begin
   FLast:=Event.Position;PlaceCamera;Result:=True;
 end;
 constructor TDreamWorldPage.Create(AOwner:TComponent);
-var Bg:TCastleRectangleControl;I:Integer;J:TJSONData;F:TFileStream;WorldTitle,Thumb,Info:string;Route:TJSONData;
+var Bg:TCastleRectangleControl;I:Integer;WorldTitle,Thumb:string;
 begin
   inherited;FullSize:=True;FSelected:=0;
   Bg:=TCastleRectangleControl.Create(Self);Bg.FullSize:=True;Bg.Color:=MenuBackground;InsertBack(Bg);
@@ -177,18 +178,13 @@ begin
   FCarousel.Anchor(hpLeft);FCarousel.Anchor(vpTop,-54);FCarousel.OnChange:=@SelectWorld;InsertFront(FCarousel);
   FFiles:=DreamWorldFiles(URIToFilenameSafe('castle-data:/dream-worlds/'));
   for I:=0 to FFiles.Count-1 do begin
-    WorldTitle:=ExtractFileName(ExcludeTrailingPathDelimiter(ExtractFileDir(FFiles[I])));J:=nil;Info:='';
-    try
-      F:=TFileStream.Create(FFiles[I],fmOpenRead or fmShareDenyWrite);
-      try J:=GetJSON(F);if J is TJSONObject then begin
-        WorldTitle:=TJSONObject(J).Get('title',WorldTitle);Route:=TJSONObject(J).Find('route');
-        if Route is TJSONObject then Info:=Format(UiText('Loop %.1f km'),[TJSONObject(Route).Get('length_m',0.0)/1000]);
-      end;finally F.Free;end;
-    except end;J.Free;
+    WorldTitle:=ExtractFileName(ExcludeTrailingPathDelimiter(ExtractFileDir(FFiles[I])));
     Thumb:=IncludeTrailingPathDelimiter(ExtractFileDir(FFiles[I]))+'preview.png';
     if not FileExists(Thumb)then Thumb:='';
-    FCarousel.AddItem(WorldTitle,Info,Thumb);
+    FCarousel.AddItem(WorldTitle,'',Thumb);
   end;
+  RefreshWorldTexts(nil);
+  ObserveUiLanguage(Self,@RefreshWorldTexts);
   FSelected:=WorldIndex(UserPreference('last_world',DefaultDreamWorldId));
   FCarousel.Select(FSelected);
   if FFiles.Count=0 then BindUiText(FStatus, 'No worlds in data/dream-worlds yet.');
@@ -240,6 +236,33 @@ end;
 
 procedure TDreamWorldPage.FilterChanged(Sender:TObject);
 begin FCarousel.SetFilter(FSearch.Text);end;
+
+procedure TDreamWorldPage.RefreshWorldTexts(Sender:TObject);
+var I:Integer;J,Route:TJSONData;F:TFileStream;Title,Info,Lang:string;
+begin
+  Lang:=UiLanguage;
+  for I:=0 to FFiles.Count-1 do begin
+    Title:=ExtractFileName(ExcludeTrailingPathDelimiter(ExtractFileDir(FFiles[I])));
+    J:=nil;Info:='';
+    try
+      F:=TFileStream.Create(FFiles[I],fmOpenRead or fmShareDenyWrite);
+      try J:=GetJSON(F);finally F.Free;end;
+      if J is TJSONObject then begin
+        Title:=DreamWorldText(TJSONObject(J),'title',Lang,Title);
+        Route:=TJSONObject(J).Find('route');
+        if Route is TJSONObject then Info:=Format(UiText('Loop %.1f km'),[TJSONObject(Route).Get('length_m',0.0)/1000]);
+      end;
+    except end;
+    J.Free;FCarousel.SetTitle(I,Title);FCarousel.SetInfo(I,Info);
+  end;
+  if(FSelected>=0)and(FSelected<FFiles.Count)then
+    FHeader.SetSelection(FCarousel.ItemTitle(FSelected),FCarousel.ItemInfo(FSelected),WorldReady);
+  if FWorld<>nil then begin
+    FInfo.Caption:=FWorld.DisplayTitle(Lang)+UiText('  ·  Lap ')+FormatFloat('0',FWorld.LengthM)+UiText(' m');
+    FDescription.Caption:=FWorld.DisplayDescription(Lang);
+  end;
+  Layout;
+end;
 
 procedure TDreamWorldPage.Resize;
 begin inherited;Layout;end;
@@ -333,15 +356,15 @@ begin
     FWorld:=FTask.Take;
     if FWorld<>nil then begin
       FPreparedVisual:=FTask.TakeVisual;
-      FPreview.SetWorld(FWorld,FPreparedVisual);FInfo.Caption:=FWorld.Title+UiText('  ·  Lap ')+FormatFloat('0',FWorld.LengthM)+UiText(' m');
-      FDescription.Caption:=FWorld.Description;
+      FPreview.SetWorld(FWorld,FPreparedVisual);FInfo.Caption:=FWorld.DisplayTitle(UiLanguage)+UiText('  ·  Lap ')+FormatFloat('0',FWorld.LengthM)+UiText(' m');
+      FDescription.Caption:=FWorld.DisplayDescription(UiLanguage);
       Layout;
       BindUiText(FStatus, 'Preparing the view…');
     end else begin FStatus.Caption:=UiText('Could not load world: ')+FTask.Error;FReload.Exists:=True;end;
     FreeAndNil(FTask);
   end;
   if WorldReady and not FStart.Enabled then begin
-    FHeader.SetSelection(FWorld.Title,Format(UiText('Loop %.1f km'),[FWorld.LengthM/1000]),True);
+    FHeader.SetSelection(FWorld.DisplayTitle(UiLanguage),Format(UiText('Loop %.1f km'),[FWorld.LengthM/1000]),True);
     FHeader.SetRideState(ViewMenu.RideUnderneath,(ViewPlay.DreamWorld<>nil)and
       (FWorld.Id=ViewPlay.DreamWorld.Id));
     FLoading.Exists:=False;BindUiText(FStatus, 'Rotate: left mouse button  ·  Zoom: mouse wheel');
@@ -376,6 +399,9 @@ begin
   Result.Add('offline_ready',FOffline.Ready);
   Result.Add('offline_missing',FOffline.Missing);
   Result.Add('catalog',A);
+  A:=TJSONArray.Create;for I:=0 to FFiles.Count-1 do A.Add(FCarousel.ItemTitle(I));
+  Result.Add('titles',A);Result.Add('description',FDescription.Caption);
+  Result.Add('language',UiLanguage);
   Result.Add('carousel',FCarousel.Diagnostics);
   Result.Add('preview_rect',TJSONArray.Create([FPreview.RenderRect.Left,FPreview.RenderRect.Bottom,FPreview.RenderRect.Width,FPreview.RenderRect.Height]));
   if FWorld<>nil then Result.Add('world',FWorld.Diagnostics);

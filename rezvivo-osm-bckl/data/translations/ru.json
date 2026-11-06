@@ -1909,5 +1909,10 @@
   "Preparing graphics": "Подготовка графики",
   "Loading cached graphics": "Загрузка графики из кэша",
   "Saving graphics cache": "Сохранение кэша графики",
-  "Elapsed: %d s": "Прошло: %d с"
+  "Elapsed: %d s": "Прошло: %d с",
+  "Anti-aliasing / render scale": "Сглаживание / масштаб рендера",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA сглаживает края после перезапуска. Масштаб сразу уменьшает ширину и высоту 3D: 50% — четверть пикселей. Интерфейс остаётся чётким. Для изменения прежнего числа выборок MSAA нужен перезапуск.",
+  "Smooth upscaling": "Сглаживать при увеличении",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "При пониженном разрешении: без галки — крупные чёткие пиксели; с галкой — сглаживание краёв готового изображения.",
+  "RTX screen shadows (experimental)": "Экранные RTX-тени (эксперимент)"
 }

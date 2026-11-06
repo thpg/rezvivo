@@ -10,6 +10,7 @@ procedure SetRtxMaterialViewport(const View:TVector4);
 function RtxMaterialViewport:TVector4;
 function IsRtxReflector(const Shape:TShape):Boolean;
 function IsRtxGround(const Shape:TShape):Boolean;
+function IsRtxWaterOnly(const Shape:TShape):Boolean;
 function RtxMaterialRevision:QWord;
 function RtxReflectionCaptureActive:Boolean;
 function RtxReflectionsAvailable:Boolean;
@@ -44,7 +45,7 @@ type
     Appearance:TAppearanceNode;
     Revision:QWord;
     Effects:array of TX3DNode;
-    Reflector,Ground:Boolean;
+    Reflector,Ground,Water:Boolean;
     procedure Gone(const Node:TX3DNode);
     procedure Refresh;
   end;
@@ -136,13 +137,14 @@ begin
   if not Changed then for I:=0 to High(Effects) do
     if Effects[I]<>Appearance.FdEffects[I] then begin Changed:=True;Break end;
   if not Changed then Exit;
-  SetLength(Effects,Appearance.FdEffects.Count);Reflector:=False;Ground:=False;
+  SetLength(Effects,Appearance.FdEffects.Count);Reflector:=False;Ground:=False;Water:=False;
   for I:=0 to High(Effects) do begin
     Effects[I]:=Appearance.FdEffects[I];
     if not (Effects[I] is TEffectNode) then Continue;
     E:=TEffectNode(Effects[I]);
     Ground:=Ground or (E.Field('rz_ground_capture')<>nil);
     Reflector:=Reflector or Ground or (E.Field('rz_capture')<>nil);
+    Water:=Water or ((E.Field('wave_size')<>nil) and (E.Field('sea_state')<>nil));
   end;
   Revision:=BindingRevision;
 end;
@@ -164,6 +166,13 @@ begin M:=MaterialClass(Shape);Result:=(M<>nil) and M.Reflector end;
 function IsRtxGround(const Shape:TShape):Boolean;
 var M:TMaterialClass;
 begin M:=MaterialClass(Shape);Result:=(M<>nil) and M.Ground end;
+function IsRtxWaterOnly(const Shape:TShape):Boolean;
+var M:TMaterialClass;
+begin
+  { Standalone Dream water is a receiver/reflector, never an opaque blocker.
+    Mixed ground/water composites still need their per-triangle material test. }
+  M:=MaterialClass(Shape);Result:=(M<>nil) and M.Water and not M.Ground;
+end;
 procedure ReleaseRegistries;
 var I:Integer;B:TBinding;M:TMaterialClass;
 begin

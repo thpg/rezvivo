@@ -378,5 +378,9 @@
   "Preparing graphics": "Préparation des graphismes",
   "Loading cached graphics": "Chargement des graphismes en cache",
   "Saving graphics cache": "Enregistrement du cache graphique",
-  "Elapsed: %d s": "Temps écoulé : %d s"
+  "Elapsed: %d s": "Temps écoulé : %d s",
+  "Anti-aliasing / render scale": "Anticrénelage / échelle de rendu",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "Le MSAA lisse les contours après redémarrage. L’échelle réduit immédiatement la largeur et la hauteur 3D : 50% utilise un quart des pixels. L’interface reste nette. Redémarrez pour modifier le nombre d’échantillons MSAA précédent.",
+  "Smooth upscaling": "Lisser l’agrandissement",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "En résolution réduite : désactivé, grands pixels nets ; activé, lissage des contours de l’image finale."
 }

@@ -377,5 +377,9 @@
   "Preparing graphics": "正在準備圖形",
   "Loading cached graphics": "正在載入快取圖形",
   "Saving graphics cache": "正在儲存圖形快取",
-  "Elapsed: %d s": "已用時：%d 秒"
+  "Elapsed: %d s": "已用時：%d 秒",
+  "Anti-aliasing / render scale": "抗鋸齒 / 渲染比例",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA 重新啟動後生效。渲染比例立即縮小 3D 畫面的寬高；50% 使用四分之一的像素。介面保持清晰。更改原有 MSAA 取樣數需要重新啟動。",
+  "Smooth upscaling": "平滑放大",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "降低解析度時：關閉顯示清晰的大像素；開啟平滑最終畫面的邊緣。"
 }

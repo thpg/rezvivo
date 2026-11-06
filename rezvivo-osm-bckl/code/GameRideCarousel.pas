@@ -69,6 +69,7 @@ type
     function AddItem(const Title,Info,ImagePath:string):Integer;
     procedure SetImage(Index:Integer;const ImagePath:string);
     procedure SetInfo(Index:Integer;const Info:string);
+    procedure SetTitle(Index:Integer;const Title:string);
     procedure SetFilter(const Text:string;DistanceFilter:Integer=0);
     function ItemTitle(Index:Integer):string;
     function ItemInfo(Index:Integer):string;
@@ -257,6 +258,13 @@ begin
   if(Index<0)or(Index>=FItems.Count)then Exit;Item:=TRideCarouselItem(FItems[Index]);
   if Item.Info=Info then Exit;Item.Info:=Info;Inc(Item.Revision);FVisualDirty:=True;
   if FDistanceFilter<>0 then RebuildOrder;
+end;
+procedure TRideCarousel.SetTitle(Index:Integer;const Title:string);
+var Item:TRideCarouselItem;
+begin
+  if(Index<0)or(Index>=FItems.Count)then Exit;Item:=TRideCarouselItem(FItems[Index]);
+  if Item.Title=Title then Exit;Item.Title:=Title;Inc(Item.Revision);FVisualDirty:=True;
+  if FFilterText<>''then RebuildOrder;
 end;
 function TRideCarousel.ItemTitle(Index:Integer):string;
 begin

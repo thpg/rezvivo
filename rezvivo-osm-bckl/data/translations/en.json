@@ -1716,5 +1716,10 @@
   "Preparing graphics": "Preparing graphics",
   "Loading cached graphics": "Loading cached graphics",
   "Saving graphics cache": "Saving graphics cache",
-  "Elapsed: %d s": "Elapsed: %d s"
+  "Elapsed: %d s": "Elapsed: %d s",
+  "Anti-aliasing / render scale": "Anti-aliasing / render scale",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.",
+  "Smooth upscaling": "Smooth upscaling",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.",
+  "RTX screen shadows (experimental)": "RTX screen shadows (experimental)"
 }

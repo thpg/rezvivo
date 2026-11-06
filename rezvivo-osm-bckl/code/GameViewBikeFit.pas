@@ -324,7 +324,7 @@ implementation
 
 uses GameTravelUI, CastleApplicationProperties,UiTranslations,GameUserData,
   jsonparser, CastleKeysMouse,CastleImages,CastleRectangles,
-  GameViewMenu, GameViewPlay, AppSettings, DebugLog, GameBikeAutoFit;
+  GameViewMenu, GameViewPlay, AppSettings, DebugLog, GameBikeAutoFit, GameGraphicsOptions;
 
 const
   DefaultCamPos: TVector3 = (X: 1.6; Y: 0.95; Z: 2.1);
@@ -2949,6 +2949,11 @@ procedure TBikeFitPage.Update(const SecondsPassed: Single; var HandleInput: Bool
 begin
   inherited;
   if (not Exists) or FLoadingPreview then Exit;
+  if FVpResult<>nil then
+  begin
+    FVpResult.ResolutionScale := GraphicsResolutionScale(Settings.GraphicsMSAA);
+    FVpResult.ResolutionSmoothing := Settings.GraphicsUpscaleSmoothing <> 0;
+  end;
 
   FLoadingPreview := True;
   try

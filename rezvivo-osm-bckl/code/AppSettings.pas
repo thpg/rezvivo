@@ -221,6 +221,7 @@ type
     property AudioMenu: Integer index Ord(aoMenu) read GetAudioOption write SetAudioOption;
     property GraphicsFpsLimit: Integer index Ord(goFrameLimit) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsMSAA: Integer index Ord(goAntialiasing) read GetGraphicsOption write SetGraphicsOption;
+    property GraphicsUpscaleSmoothing: Integer index Ord(goUpscaleSmoothing) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsShadowSize: Integer index Ord(goShadowSize) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsShadowFilter: Integer index Ord(goShadowFilter) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsShadowDistance: Integer index Ord(goShadowDistance) read GetGraphicsOption write SetGraphicsOption;

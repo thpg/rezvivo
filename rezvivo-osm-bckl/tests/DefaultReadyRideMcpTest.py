@@ -1,4 +1,4 @@
-"""First ride from a packaged client, empty profile, no authorization or map cache.
+"""Ready-route ride from a packaged client, no authorization or map cache.
 
 Uses the real Home button and public production map/route APIs. Optional recovery
 temporarily removes just the bundled GPX from the disposable package, proving the
@@ -116,13 +116,16 @@ def public_first_ride(game, out, cache, expect_download=False):
     app = session(game, out/'пустой профиль', cache, native_api=True)
     result = {'passed': False, 'recovered_missing_gpx': expect_download,
               'tile_service': app.env.get('REZVIVO_READY_TILES_URL', 'production')}
+    # First-time Just Ride now opens the bundled island. This regression
+    # specifically exercises the downloadable ready route and its recovery.
+    save(app.out/'accounts/0/experience.json',
+         {'last_map_kind': 'real', 'last_route': 'ready-route:'+ROUTE_ID})
     began = time.monotonic()
     with app:
         app.setting('AudioMaster', 0)
         assert not Path(app.env['REZVIVO_TEST_AUTH_FILE']).exists()
-        assert not (app.out/'accounts/0/experience.json').exists()
         # A power source is connected before the user starts their first ride,
-        # just as with a trainer. Keep the map choice and account completely empty.
+        # just as with a trainer. Keep the account and downloaded cache empty.
         fit = out/'test-power.fit'
         write_sim_fit(fit, seconds=900, watts=190, cadence=80)
         app.setting('SimulationFitPath', str(fit))
@@ -216,6 +219,8 @@ def regressions(game, out, cache):
 
     with missing_gpx(game):
         app = session(game, out/'cancel-download', cache, api_handler=API)
+        save(app.out/'accounts/0/experience.json',
+             {'last_map_kind': 'real', 'last_route': 'ready-route:'+ROUTE_ID})
         with app:
             quick_ride(app)
             pending = app.call('menu.inspect')['routes']

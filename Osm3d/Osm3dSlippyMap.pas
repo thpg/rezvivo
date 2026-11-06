@@ -78,6 +78,7 @@ type
   private
     FOwner: TOsm3dSlippyMap;
     FMapHttp:THTTPFetcherWithCache;
+    FJoined:Boolean;
     procedure Fetch(const AJob: TSlippyJob);
   protected
     procedure Execute; override;
@@ -85,6 +86,7 @@ type
     constructor Create(AOwner: TOsm3dSlippyMap);
     destructor Destroy;override;
     procedure Cancel;
+    procedure Join;
   end;
 
   TOsm3dSlippyMap = class(TCastleTransform)
@@ -257,6 +259,8 @@ type
 
 implementation
 
+uses Osm3dPlatformHttp;
+
 const
   { Web-mercator world circumference at the equator (metres) = 2π·6378137
     (экваториальный радиус WGS-84) — СТАНДАРТ тайловой сетки OSM, поэтому
@@ -304,7 +308,13 @@ begin
 end;
 
 destructor TSlippyFetchThread.Destroy;
-begin Cancel;WaitFor;FMapHttp.Free;inherited;end;
+begin Cancel;Join;FMapHttp.Free;inherited;end;
+procedure TSlippyFetchThread.Join;
+begin
+  if FJoined then Exit;
+  WaitFor;
+  FJoined:=True;
+end;
 procedure TSlippyFetchThread.Cancel;
 begin
   Terminate;
@@ -481,7 +491,7 @@ begin
   for I := 0 to High(FWorkers) do
     if FWorkers[I] <> nil then
     begin
-      FWorkers[I].WaitFor;
+      FWorkers[I].Join;
       FWorkers[I].Free;
     end;
 
@@ -934,6 +944,7 @@ var
   R:      TFetchResult;
   Client: TFPHTTPClient;
   Mem:    TMemoryStream;
+  Status: Integer;
 begin
   Result := False;
   AData := nil;
@@ -960,8 +971,12 @@ begin
     try
       Client.AllowRedirect := True;
       Client.AddHeader('User-Agent', FUserAgent);
-      Client.Get(AUrl, Mem);
-      if (Client.ResponseStatusCode = 200) and (Mem.Size > 0) then
+      if not TryPlatformHttp('GET',AUrl,Client.RequestHeaders,nil,8000,15000,Mem,Status,nil) then
+      begin
+        Client.Get(AUrl, Mem);
+        Status := Client.ResponseStatusCode;
+      end;
+      if (Status = 200) and (Mem.Size > 0) then
       begin
         SetLength(AData, Mem.Size);
         System.Move(Mem.Memory^, AData[0], Mem.Size);

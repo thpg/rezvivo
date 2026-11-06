@@ -50,8 +50,8 @@ uses
  GLSL SOURCES — embedded, no external files.
  }
 
-{ Reference: Open Sea / Realtime Ocean.
-  https://qdtipu6rd2myk.ok.kimi.link/ (snapshot docs/water-scale-20260914).
+{ Reference: Open Sea / Realtime Ocean, supplied as a visual reference.
+  https://qdtipu6rd2myk.ok.kimi.link/.
   Reference lighting, gradient FBM, Fresnel/glitter/foam. Infinite crossing
   swells replaced by compact wave packets to avoid a lattice from above.
   Water remains in the terrain composite: normals animate, mesh stays draped.

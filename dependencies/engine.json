@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/thpg/castle-engine.git",
   "branch": "rezvivo",
-  "commit": "dc29c4031db52b3138ae95ad171b0a0211dc83ac",
+  "commit": "d2c639f0a02ea0a3a04e9f55380c3d5654239c99",
   "upstream_repository": "https://github.com/castle-engine/castle-engine.git",
   "upstream_commit": "3ff3cf21a38183c5853b5c49fd3fe61569bb3c03",
   "modified_files": [
@@ -23,7 +23,7 @@
     },
     {
       "path": "src/base_rendering/castlerendercontext.pas",
-      "sha256_lf": "2368f359d70b58e258b47cfb7af8e0aa23fe1a5148fd96980fa4b43f60838a25"
+      "sha256_lf": "78281d4b960dc764662680021a603ec4af0358f9b9b21f2bb570917e20916ee8"
     },
     {
       "path": "src/files/castledownload.pas",
@@ -31,7 +31,7 @@
     },
     {
       "path": "src/files/castledownload_asynchronous.inc",
-      "sha256_lf": "4e4de7bd0e8fbe4022e636a05ba16032509b5f754718817ad884eaa6859395c0"
+      "sha256_lf": "fb9651bbb44ad76bd94a05d8fbaee79a9b22f7121206dfd23bec86a0b66db88d"
     },
     {
       "path": "src/scene/castleinternalbackgroundrenderer.pas",
@@ -131,7 +131,7 @@
     },
     {
       "path": "src/scene/castlescreeneffects.pas",
-      "sha256_lf": "b0d8998c95f79c816fc562939d67272107f4ffc283b0ceaebfb172281000067d"
+      "sha256_lf": "6fae33b86dcebf1b54dfe6c7917f9ffb7061fc240d193b5f11848f8784886396"
     },
     {
       "path": "src/scene/castleshapes.pas",
@@ -139,7 +139,7 @@
     },
     {
       "path": "src/scene/castleviewport.pas",
-      "sha256_lf": "99a6e3f64eda4b18a657d162bae278c9978dc171c143d4026835f7d83aaaec71"
+      "sha256_lf": "58fce24ce3badbcff998b457373f710214059f676666117dc69950e98d31ec85"
     },
     {
       "path": "src/scene/glsl/generated-pascal/lighting_model_physical_add_light.glsl.inc",

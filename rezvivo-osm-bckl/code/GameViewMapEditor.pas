@@ -77,7 +77,7 @@ type
     FAnalyzedUrl, FLoadedUrl: String;
     procedure LayoutActions;
     function MakeAction(const AName, ATitle, AIcon: String;
-      const AColor: TCastleColor; AClick: TNotifyEvent;
+      AClick: TNotifyEvent;
       const AWidth, AHeight: Single): TMenuTile;
     procedure ClickDetails(Sender: TObject);
     procedure ClickCloseDetails(Sender: TObject);
@@ -713,13 +713,13 @@ begin
   BindUiText(FFilters[0],'All distances');BindUiText(FFilters[1],'Up to 25 km');BindUiText(FFilters[2],'Over 25 km');
   SelectMenuButton(FFilters[0],True);
   FActions[2] := MakeAction('RouteAddButton', UiText('Import FIT / GPX'), 'import',
-    Vector4(0.36, 0.52, 0.78, 0.85), @ClickAddFit, 196, BUTTONS_H);
+    @ClickAddFit, 196, BUTTONS_H);
   FActions[3] := MakeAction('RouteCreateButton', UiText('Create'), 'create',
-    Vector4(0.30, 0.58, 0.68, 0.85), @ClickCreate, 196, BUTTONS_H);
+    @ClickCreate, 196, BUTTONS_H);
   FActions[4] := MakeAction('RouteLibraryButton', UiText('Online routes'), 'library',
-    Vector4(0.56, 0.52, 0.78, 0.85), @ClickLibrary, 196, BUTTONS_H);
+    @ClickLibrary, 196, BUTTONS_H);
   FActions[5] := MakeAction('RouteDetailsButton', UiText('Route details'), 'details',
-    Vector4(0.72, 0.64, 0.38, 0.85), @ClickDetails, 196, BUTTONS_H);
+    @ClickDetails, 196, BUTTONS_H);
   for Btn in FActions do if Btn<>nil then InsertFront(Btn);
 
   FStatus := TMenuLabel.Create(Self);
@@ -756,13 +756,13 @@ begin
   Row.Anchor(vpTop, -12);
   FDetailsPanel.InsertFront(Row);
   Btn := MakeAction('RouteFullStatsButton', UiText('Full') + LineEnding + UiText('statistics'),
-    'statistics', Vector4(0.36, 0.52, 0.78, 0.85), @ClickFullStats, 184, 64);
+    'statistics', @ClickFullStats, 184, 64);
   Row.InsertFront(Btn);
   Btn := MakeAction('RouteMultiAnalysisButton', UiText('Combined') + LineEnding + UiText('analysis'),
-    'analysis', Vector4(0.56, 0.52, 0.78, 0.85), @ClickMultiAnalysis, 184, 64);
+    'analysis', @ClickMultiAnalysis, 184, 64);
   Row.InsertFront(Btn);
   Btn := MakeAction('CloseRouteDetails', UiText('Close'), 'close',
-    Vector4(0.37, 0.43, 0.52, 0.85), @ClickCloseDetails, 184, 64);
+    @ClickCloseDetails, 184, 64);
   Row.InsertBack(Btn);
 
   FDetailsScroll := TMenuScrollView.Create(Self);
@@ -784,17 +784,17 @@ begin
   FOfflineLabel.MaxWidth:=PANEL_W-24;
   Col.InsertFront(FOfflineLabel);
   Btn:=MakeAction('PrepareOfflineRoute',UiText('Prepare for offline ride'),
-    'statistics',Vector4(0.36,0.52,0.78,0.85),@ClickPrepareOffline,280,52);
+    'statistics',@ClickPrepareOffline,280,52);
   Col.InsertFront(Btn);
   FOfflinePrepareButton:=Btn;
 
   FReviewLabel:=TMenuLabel.Create(Self);FReviewLabel.FontSize:=15;
   FReviewLabel.MaxWidth:=PANEL_W-24;Col.InsertFront(FReviewLabel);
   FReviewButton:=MakeAction('ReviewPreparedRoute',UiText('Check route geometry'),
-    'analysis',Vector4(0.36,0.52,0.78,0.85),@ClickReview,280,52);
+    'analysis',@ClickReview,280,52);
   Col.InsertFront(FReviewButton);
   FReviewNextButton:=MakeAction('NextRouteWarning',UiText('Next route warning'),
-    'details',Vector4(0.63,0.45,0.22,0.85),@ClickReviewNext,280,52);
+    'details',@ClickReviewNext,280,52);
   FReviewNextButton.Exists:=False;Col.InsertFront(FReviewNextButton);
 
   { Панель «Маршрут»: сводка выбранного маршрута (KV-таблица). }
@@ -835,7 +835,7 @@ begin
 end;
 
 function TRoutesPage.MakeAction(const AName, ATitle, AIcon: String;
-  const AColor: TCastleColor; AClick: TNotifyEvent;
+  AClick: TNotifyEvent;
   const AWidth, AHeight: Single): TMenuTile;
 begin
   Result := TMenuTile.Create(Self);
@@ -843,7 +843,11 @@ begin
   Result.SetTileSize(AWidth, AHeight);
   Result.SetTitle(ATitle);
   Result.SetTitleFontScale(0.8);
-  Result.SetBaseColor(AColor);
+  { Navigation tiles are transparent by default. Map actions need their own
+    opaque surface, also when idle: map colours must not wash out the caption. }
+  Result.BaseColorControl.Color := MenuSurface;
+  TMenuPanel(Result.BaseColorControl).Stroke := MenuBorder;
+  Result.TitleLabel.Color := MenuText;
   Result.SetIconUrl('castle-data:/menu/icons/routes/' + AIcon + '.png');
   Result.OnTileClick := AClick;
 end;
@@ -939,7 +943,10 @@ var I:Integer;
 begin
   if Sender is TMenuButton then FDistanceFilter:=(Sender as TMenuButton).Tag;
   FCarousel.SetFilter(FSearch.Text,FDistanceFilter);
-  for I:=0 to High(FFilters)do SelectMenuButton(FFilters[I],I=FDistanceFilter);
+  for I:=0 to High(FFilters)do begin
+    SelectMenuButton(FFilters[I],I=FDistanceFilter);
+    FFilters[I].CustomColorNormal:=MenuSurface;
+  end;
 end;
 
 function TRoutesPage.MakePanel(const ACaption: String;
@@ -1203,7 +1210,7 @@ begin
 
   { Пересчитать текущий FIT с новыми параметрами. }
   Btn := MakeAction('RouteRecomputeButton', UiText('Recalculate'), 'refresh',
-    Vector4(0.30, 0.58, 0.68, 0.85), @ClickRecompute, 184, 52);
+    @ClickRecompute, 184, 52);
   FParamsHost.InsertFront(Btn);
 
   ParamsChanged(nil);   { начальные подписи + серые слайдеры }

@@ -27,6 +27,8 @@ type
     FBins:array of array of Integer;
     FMinX,FMinZ,FCellX,FCellZ:Single;
     FGridX,FGridZ:Integer;
+    FSurfCoast:TDreamPoints;
+    FSurfNear,FSurfFar,FSurfHeightFade:Single;
     procedure BuildGround(Cancel:TThread);
   public
     Id,Title,Description,ManifestPath:string;
@@ -48,6 +50,8 @@ type
     function EnvironmentSoundsAt(const P:TVector3):TEnvironmentMix;
     procedure PrepareMaterials(Cancel:TThread=nil);
     function ModelFile(TileIndex,InstanceIndex:Integer):string;
+    function DisplayTitle(const Language:string):string;
+    function DisplayDescription(const Language:string):string;
   end;
   TDreamWorldTask = class(TThread)
   private
@@ -68,9 +72,22 @@ type
     function Error:string;
   end;
 function DreamWorldFiles(const Directory:string):TStringList;
+function DreamWorldText(Manifest:TJSONObject;const Field,Language,Default:string):string;
 implementation
 uses AppRuntimePaths, {$IFDEF MSWINDOWS}Windows,{$ENDIF}Math,jsonparser,Osm3dGeomMesh;
 type TThreadAccess=class(TThread);
+function DreamWorldText(Manifest:TJSONObject;const Field,Language,Default:string):string;
+begin
+  Result:=Manifest.Get(Field,Default);
+  { Authored English is the fallback for every non-Russian UI. Older/custom
+    manifests remain usable and keep their own names if no translation exists. }
+  if not SameText(Copy(Language,1,2),'ru')then
+    Result:=Manifest.Get(Field+'_en',Result);
+end;
+function TDreamWorld.DisplayTitle(const Language:string):string;
+begin Result:=DreamWorldText(FManifest,'title',Language,Title);end;
+function TDreamWorld.DisplayDescription(const Language:string):string;
+begin Result:=DreamWorldText(FManifest,'description',Language,Description);end;
 procedure CheckCancel(Cancel:TThread);
 begin if(Cancel<>nil)and TThreadAccess(Cancel).Terminated then raise EAbort.Create('World loading cancelled');end;
 function Vec(J:TJSONData;const Default:TVector3):TVector3;
@@ -98,7 +115,7 @@ begin
 end;
 constructor TDreamWorld.Create(const FileName:string;Cancel:TThread);
 var F:TFileStream;J:TJSONData;A:TJSONArray;O,R:TJSONObject;I,K:Integer;Path,Rel:string;
-    P,Q:TVector3;Measured:Double;
+    P,Q:TVector3;Measured:Double;M:TDreamMaterial;
 begin
   inherited Create;ManifestPath:=ExpandFileName(FileName);
   FDirectory:=IncludeTrailingPathDelimiter(ExtractFilePath(ManifestPath));
@@ -116,6 +133,21 @@ begin
   for I:=1 to Length(Id)do if not(Id[I]in['a'..'z','0'..'9','-','_'])then raise Exception.Create('Invalid world id');
   Revision:=FManifest.Get('revision',1);
   Coastal:=FManifest.Get('coastal',Id='castle-island');
+  O:=FManifest.Get('coastal_audio',TJSONObject(nil));
+  if O<>nil then begin
+    FSurfNear:=O.Get('full_distance_m',25.0);FSurfFar:=O.Get('fade_distance_m',110.0);
+    FSurfHeightFade:=O.Get('height_fade_m',70.0);
+    if IsNan(FSurfNear)or IsInfinite(FSurfNear)or IsNan(FSurfFar)or IsInfinite(FSurfFar)or
+      IsNan(FSurfHeightFade)or IsInfinite(FSurfHeightFade)or
+      (FSurfNear<0)or(FSurfFar<=FSurfNear)or(FSurfFar>1000)or(FSurfHeightFade<=0)then
+      raise Exception.Create('Invalid coastal audio range');
+    A:=O.Get('shoreline',TJSONArray(nil));
+    if(A=nil)or(A.Count<4)or(A.Count>8192)then raise Exception.Create('Invalid audio shoreline');
+    SetLength(FSurfCoast,A.Count);
+    for I:=0 to A.Count-1 do FSurfCoast[I]:=Vec(A.Items[I],TVector3.Zero);
+    if(FSurfCoast[0]-FSurfCoast[High(FSurfCoast)]).Length>0.01 then
+      raise Exception.Create('Audio shoreline is not closed');
+  end;
   RoadCondition:=FManifest.Get('road_condition',0);
   if(RoadCondition<0)or(RoadCondition>5)then raise Exception.Create('Invalid road condition');
   Sun:=Vec(FManifest.Find('sun'),Vector3(-0.55,0.75,-0.35));
@@ -167,6 +199,11 @@ begin
     CheckCancel(Cancel);
     Tiles[I].Soundscape:=TSoundscapeField.Create(Tiles[I].Model,1,
       FManifest.Get('urban_sounds',False),Coastal);
+    if Coastal then for K:=0 to Tiles[I].Model.MeshCount-1 do begin
+      M:=Material(Tiles[I].Model.Meshes[K].Name);
+      if M.Walkable and not M.Water then
+        Tiles[I].Soundscape.MaskMarineLand(Tiles[I].Model.Meshes[K].Mesh);
+    end;
   end;
   for I:=0 to High(Points)do begin
     P:=Points[I];
@@ -193,12 +230,24 @@ begin for I:=0 to High(Tiles)do begin Tiles[I].Soundscape.Free;Tiles[I].Model.Fr
   GroundAtlas.Free;BuildingAtlas.Free;FenceAtlas.Free;FManifest.Free;inherited;end;
 
 function TDreamWorld.EnvironmentSoundsAt(const P:TVector3):TEnvironmentMix;
-var I:Integer;Q:TVector3;Mix:TEnvironmentMix;
+var I:Integer;Q,D:TVector3;Mix:TEnvironmentMix;T,Len2,Best,Distance,SeaY,Fade:Single;
 begin
   Result:=Default(TEnvironmentMix);
   for I:=0 to High(Tiles)do if Tiles[I].Soundscape<>nil then begin
     Q:=P-Tiles[I].Offset;Mix:=Tiles[I].Soundscape.Sample(Q.X,Q.Y,Q.Z);
     MergeEnvironment(Result,Mix);
+  end;
+  if Length(FSurfCoast)>1 then begin
+    Best:=1e30;SeaY:=0;
+    for I:=0 to High(FSurfCoast)-1 do begin
+      D:=FSurfCoast[I+1]-FSurfCoast[I];Len2:=Sqr(D.X)+Sqr(D.Z);
+      if Len2<0.0001 then Continue;
+      Q:=P-FSurfCoast[I];T:=EnsureRange((Q.X*D.X+Q.Z*D.Z)/Len2,0.0,1.0);
+      Q:=FSurfCoast[I]+D*T;Distance:=Sqr(P.X-Q.X)+Sqr(P.Z-Q.Z);
+      if Distance<Best then begin Best:=Distance;SeaY:=Q.Y;end;
+    end;
+    Fade:=EnsureRange((FSurfFar-Sqrt(Best))/(FSurfFar-FSurfNear),0.0,1.0);
+    Result[esSea]:=Fade*Fade*(3-2*Fade)*EnsureRange(1-Abs(P.Y-SeaY)/FSurfHeightFade,0.0,1.0);
   end;
 end;
 procedure TDreamWorld.PrepareMaterials(Cancel:TThread);

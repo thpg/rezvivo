@@ -1,7 +1,7 @@
 {
-  "version": "0.4.6-alpha.1",
-  "build": 23,
-  "channel": "alpha",
+  "version": "0.4.7-alpha.1",
+  "build": 24,
   "platform": "android",
-  "notes": "More natural dirt and gravel roads: irregular edges blend into the surrounding ground, with wheel tracks, compacted patches and small stones. Distinct soil, gravel, compacted gravel and sand materials also work in simplified graphics. Correct the unpaved surface examples in Demo-world."
+  "channel": "alpha",
+  "notes": "New Krylatskoye Island with a smooth cycling loop, varied terrain and coastal scenery, included offline and selected for first-time rides. Existing route choices are preserved. Dream World names follow the interface language, and surf is heard near the coast. Fix intermittent black bands on the sea with RTX screen shadows. Add reduced-resolution rendering with pixelated or smoothed output, clearer map action buttons and less frequent helicopter views on phones. Fix a crash during background resource loading."
 }

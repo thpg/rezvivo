@@ -10,11 +10,17 @@ type TRideHudLayout=record
   RidersWidth,RidersTop,RidersMaxHeight:Single;
 end;
 { All sizes are logical units after physical-DPI/accessibility scaling. }
+function RideSmallScreen(Width,Height:Single):Boolean;
 function RideHudLayout(Width,Height:Single):TRideHudLayout;
 procedure RidePanelHeights(const L:TRideHudLayout;ScreenHeight,HeaderHeight:Single;
   RiderCount:Integer;out ListHeight,MapAvailable:Single);
 implementation
 uses Math;
+function RideSmallScreen(Width,Height:Single):Boolean;
+begin
+  Result:=(Width>0)and(Height>0)and(Min(Width,Height)<600);
+end;
+
 procedure RidePanelHeights(const L:TRideHudLayout;ScreenHeight,HeaderHeight:Single;
   RiderCount:Integer;out ListHeight,MapAvailable:Single);
 var Room,Wanted:Single;

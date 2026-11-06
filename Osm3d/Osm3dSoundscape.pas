@@ -1,7 +1,7 @@
 unit Osm3dSoundscape;
 {$mode objfpc}{$H+}
 interface
-uses CastleVectors,Osm3dTileX3D;
+uses CastleVectors,Osm3dTileX3D,Osm3dGeomMesh;
 type
   TEnvironmentSound=(esCity,esForest,esSea,esHighway,esWind);
   TEnvironmentMix=array[TEnvironmentSound]of Single;
@@ -16,11 +16,12 @@ type
     procedure Triangle(const A,B,C:TVector3;Kind:TEnvironmentSound);
   public
     constructor Create(Model:TTileModel;ScaleX:Single;Civilization,Marine:Boolean);
+    procedure MaskMarineLand(Mesh:TMesh);
     function Sample(X,Y,Z:Single):TEnvironmentMix;
   end;
 procedure MergeEnvironment(var Dest:TEnvironmentMix;const Source:TEnvironmentMix);
 implementation
-uses Math,Osm3dGeomMesh,Osm3dSceneMaterials,Osm3dGroundComposite;
+uses Math,Osm3dSceneMaterials,Osm3dGroundComposite;
 
 procedure MergeEnvironment(var Dest:TEnvironmentMix;const Source:TEnvironmentMix);
 var K:TEnvironmentSound;
@@ -37,7 +38,7 @@ begin
     esForest:FCells[I].Forest:=Min(255,FCells[I].Forest+Amount);
     esSea:begin FCells[I].Sea:=255;FCells[I].SeaY:=Y;end;
     esHighway:FCells[I].Highway:=255;
-    esWind:FCells[I].Land:=1;
+    esWind:begin FCells[I].Land:=1;FCells[I].Sea:=0;end;
   end;
 end;
 
@@ -106,6 +107,18 @@ begin
     cells emit surf; otherwise the middle of a large island sounds coastal. }
   if Marine then for I:=0 to High(FCells)do
     if FCells[I].Land<>0 then FCells[I].Sea:=0;
+end;
+
+procedure TSoundscapeField.MaskMarineLand(Mesh:TMesh);
+var I:Integer;V:TMeshVertexArray;Idx:TMeshIndexArray;
+begin
+  { Dream manifests carry the authoritative material role. Older bakers wrote
+    every rideable ground surface as smkRoad, so the generic tile land mask
+    missed the entire island and the sea underneath became an audio emitter. }
+  if Mesh=nil then Exit;
+  V:=Mesh.Vertices;Idx:=Mesh.Indices;
+  for I:=0 to Length(Idx)div 3-1 do
+    Triangle(V[Idx[I*3]].Position,V[Idx[I*3+1]].Position,V[Idx[I*3+2]].Position,esWind);
 end;
 
 function TSoundscapeField.Sample(X,Y,Z:Single):TEnvironmentMix;

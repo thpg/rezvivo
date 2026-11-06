@@ -378,5 +378,9 @@
   "Preparing graphics": "جارٍ تجهيز الرسومات",
   "Loading cached graphics": "جارٍ تحميل الرسومات المخزنة مؤقتًا",
   "Saving graphics cache": "جارٍ حفظ ذاكرة الرسومات المؤقتة",
-  "Elapsed: %d s": "الوقت المنقضي: %d ث"
+  "Elapsed: %d s": "الوقت المنقضي: %d ث",
+  "Anti-aliasing / render scale": "تنعيم الحواف / مقياس العرض",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "يعمل MSAA بعد إعادة التشغيل. يقلل المقياس عرض وارتفاع المشهد فورًا؛ 50% يستخدم ربع البكسلات. تبقى الواجهة واضحة. أعد التشغيل لتغيير عدد عينات MSAA السابق.",
+  "Smooth upscaling": "تنعيم التكبير",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "عند خفض الدقة: إيقاف الخيار يعرض بكسلات كبيرة واضحة؛ تشغيله ينعم حواف الصورة المكتملة."
 }

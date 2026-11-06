@@ -2731,6 +2731,8 @@ procedure TViewPlay.Render;
 var I: Integer; Focus, Sun: TVector3;
     B:TCacheBatch;T:TCacheTile;Revision:QWord;
 begin
+  MainViewport.ResolutionScale := GraphicsResolutionScale(Settings.GraphicsMSAA);
+  MainViewport.ResolutionSmoothing := Settings.GraphicsUpscaleSmoothing <> 0;
   TOsmImpostorViewport(MainViewport).Rtx:=nil;
   TOsmImpostorViewport(MainViewport).ImpostorCache:=Settings.GetGraphicsOption(Ord(goWorldCache))<>0;
   { Cache only scenery. Bikes, riders, interval gates and markers stay in
@@ -3248,7 +3250,7 @@ begin
   FRidePanelCollapsed:=False;
   {$ifdef ANDROID}
   if Container<>nil then FRidePanelCollapsed:=
-    Math.Min(Container.UnscaledWidth,Container.UnscaledHeight)<600;
+    RideSmallScreen(Container.UnscaledWidth,Container.UnscaledHeight);
   {$endif}
   if Assigned(VerticalGroup1) then
   begin
@@ -4379,6 +4381,8 @@ begin
   if Container <> nil then begin
     LayoutHeight := Container.UnscaledHeight;LayoutWidth:=Container.UnscaledWidth;
   end;
+  if FCinematicCam<>nil then
+    FCinematicCam.SmallScreen:=RideSmallScreen(LayoutWidth,LayoutHeight);
   if FAdminLayoutValid and (FAdminLayoutShown = ShowPanels) and
      (FAdminLayoutHeight = LayoutHeight) and(FAdminLayoutWidth=LayoutWidth)and
      (FAdminLayoutScale=UIScale)then Exit;
@@ -4501,7 +4505,7 @@ procedure TViewPlay.BeginActivityRecord;
 var Title,WorldName:String;
 begin
   Title:=ChangeFileExt(ExtractFileName(FCurrentFitPath),'');WorldName:='';
-  if FDreamWorld<>nil then begin Title:=FDreamWorld.Title;WorldName:=FDreamWorld.Id;end;
+  if FDreamWorld<>nil then begin Title:=FDreamWorld.DisplayTitle(UiLanguage);WorldName:=FDreamWorld.Id;end;
   if Title='' then Title:=UiText('Free ride');
   if WorldName<>'' then RememberRideMap(rmkDream,WorldName)
   else if not FPointExplore then RememberRideMap(rmkReal,FCurrentFitPath);

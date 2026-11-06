@@ -4,8 +4,8 @@ interface
 uses Classes, SysUtils, fpjson, VeloSiteAPI, RiderBodyParameters;
 
 const
-  DefaultDreamWorldId = 'castle-island';
-  FirstRideWorldId = 'lighthouse-island';
+  DefaultDreamWorldId = 'krylatskoye-island';
+  FirstRideWorldId = DefaultDreamWorldId;
 type
   TRideMapKind = (rmkDream, rmkReal);
 
@@ -28,7 +28,7 @@ function WorkoutFavorite(const Url: String): Boolean;
 procedure ToggleWorkoutFavorite(const Url: String);
 
 implementation
-uses GameRouteLibraryData, DebugLog, AppSettings, GameReadyRoutes;
+uses GameRouteLibraryData, DebugLog, AppSettings;
 var Preferences: TJSONObject; BoundDir: String;
 
 function UserDataDir: String;
@@ -95,7 +95,7 @@ begin
     if MapId='' then begin Kind:=rmkReal;MapId:=UserPreference('last_route');end;
   end;
   if MapId='' then begin
-    Kind:=rmkReal;MapId:=ReadyRouteReference(DefaultReadyRouteId);
+    Kind:=rmkDream;MapId:=FirstRideWorldId;
   end;
 end;
 

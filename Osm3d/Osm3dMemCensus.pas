@@ -1,4 +1,5 @@
 unit Osm3dMemCensus;
+{$ifdef ANDROID}{$define OpenGLES}{$endif}
 
 { Единая инвентаризация памяти ("census"). Каждая подсистема с заметным RAM/VRAM регистрирует ЗОНД
   (имя + вид + функция текущих байт) в конструкторе и снимает в деструкторе; MemCensusReport обходит
@@ -40,7 +41,7 @@ implementation
 {$IFDEF TILE_MEM_PROFILE}
 uses
   SysUtils, Classes, dynlibs,
-  CastleGL,         { glGetIntegerv — прямой запрос VRAM у драйвера }
+  {$ifdef OpenGLES}CastleGLES{$else}CastleGL{$endif},         { glGetIntegerv — прямой запрос VRAM у драйвера }
   Osm3dGpuAccount,  { счётчики GL-ресурсов проекта }
   Osm3dMemBudget,   { ProcessRSSBytes — кросс-платформенный RSS процесса }
   Osm3dOSHeap;      { GetOSLargeBytes — крупные блоки в VirtualAlloc/mmap }

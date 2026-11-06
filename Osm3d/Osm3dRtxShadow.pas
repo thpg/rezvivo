@@ -762,6 +762,11 @@ begin
           { CGE's shape-tree visibility accounts for invisible parents;
             Shape.visible itself is checked separately by its renderer. }
           if (Shape.Node<>nil) and not Shape.Node.Visible then Continue;
+          { The screen pass also collects non-casters (terrain for contacts).
+            Do not turn standalone ocean surfaces into opaque ray blockers:
+            depth reconstruction roundoff then shadows alternating scanlines
+            against the same plane. Mixed terrain filters water in AddTriangle. }
+          if IsRtxWaterOnly(Shape) then Continue;
           FGroundShape:=IsRtxGround(Shape);
           if not FScreenShadows and not Accept(Shape) and not (FReflections and FGroundShape) then Continue;
           Box:=Shape.BoundingBox.Transform(Scene.WorldTransform);if not Intersects(Box) then Continue;

@@ -2222,8 +2222,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/castle-island/world.json",
-    "bytes": 339312,
-    "sha256": "65f238c6a71dee7d5763f1797a6a8af4f024d9d35e4e0e54c0bbbc457e2afa7e",
+    "bytes": 339494,
+    "sha256": "24d5b3f89d6b08414ca8e97e0f49d56d0461ff9a25ec622f840828991d750da6",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2302,8 +2302,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/demo-world/world.json",
-    "bytes": 490711,
-    "sha256": "a63657ecbd1922366fc515a0a217ff88e3970454eeaf490c5d2efda907e6af79",
+    "bytes": 490849,
+    "sha256": "2022c1dc040d44fa1df0991e223384eb6ef99426a5c014543d9261d37f7c032a",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2350,8 +2350,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/forest-mountain/world.json",
-    "bytes": 528186,
-    "sha256": "0d6bdcb31bcb8409d6bc20549937ef724d27ffa2c08c7d6a0e48e513f183aac9",
+    "bytes": 528349,
+    "sha256": "c3f20f0d83b991cdd5629e26f1baf7ac48b72e2bc987ae9c32de6d3274a47a5a",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2363,6 +2363,30 @@
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/krylatskoye-island/island.x3d",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created procedural Dream World; route geometry from bundled public ready route",
+    "bytes": 9909116,
+    "sha256": "f54c83f8d0ce98300452022092b00222e485848f1c4b5455db82555e9496db4a"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/krylatskoye-island/preview.png",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created procedural Dream World; route geometry from bundled public ready route",
+    "bytes": 73727,
+    "sha256": "39dd1d09326c978caadbefac4e5585fe9ecf3bef455f3b7abe074440d3abe776"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/dream-worlds/krylatskoye-island/world.json",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created procedural Dream World; route geometry from bundled public ready route",
+    "bytes": 691257,
+    "sha256": "e9bad358725d0f485deabe9c4c426890362be9777652c7219cc863f669f22717"
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/island.x3d",
@@ -2398,8 +2422,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/world.json",
-    "bytes": 340241,
-    "sha256": "831f4b1ed95958b62c7dc289dc84bd01d205c8df054a3ba7b28274e12f7916f8",
+    "bytes": 340463,
+    "sha256": "967f584afc4bb24ffabed8bb422a4cb980fecbdd03dbbb9cf3952a105ca8e671",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2430,8 +2454,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/neon-district/world.json",
-    "bytes": 340434,
-    "sha256": "8c0c0ad45fde40ed8845be7586f1dbad60a50616745c0094d09a6809e9e10a55",
+    "bytes": 340579,
+    "sha256": "efbba2b92cc61144f8bdb42992c03ddac05ce93548ef33ffda145a53cbd3721d",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -2470,8 +2494,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/red-canyon/world.json",
-    "bytes": 339661,
-    "sha256": "5af5a568a5c0ac994534e787edfa7b51df191c3b4a43c540682f6ab4e29ba06c",
+    "bytes": 339789,
+    "sha256": "056ab7c93174ec3d2a34797762e40e91bc83192d24c77db4ca113ea608bb951c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4980,96 +5004,96 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ar.json",
-    "bytes": 28649,
-    "sha256": "68ddb19d7e9899e0f4816ebaed95f7947be4e15ec383018d185bd795c3c8f303",
+    "bytes": 29522,
+    "sha256": "3f0ff286e7b071baaa5b5f446ff0c96bf8bca195addba4dd6c716839a6200df2",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/de.json",
-    "bytes": 23717,
-    "sha256": "0c4b256ab275caabc776f9ddd12f7b88c2559766d4a8485118b7da41eca95d80",
+    "bytes": 24471,
+    "sha256": "fb87eef9eef269f9f3005d2a4a9e758bc99aff083ffb1dde4a5153fa4983a4c1",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 97047,
-    "sha256": "02bea4643be48f3f6556b96ec1dee897e65a1bfcdc230b0f65bb361825250761",
+    "bytes": 97833,
+    "sha256": "59802833e03ee1ee6a77f40387d7abf46d9ed542ee470e734655c7343819e647",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/es.json",
-    "bytes": 23743,
-    "sha256": "fad94715b45c61ad28bebfdd34431aee33bea4f7056c7f6bdfdc0f16a79fd88e",
+    "bytes": 24512,
+    "sha256": "fdcb4680dbf54813c9c075e281ebf003c24b2b97f2d6f8f4bd0f0500d39bd053",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/fr.json",
-    "bytes": 24492,
-    "sha256": "db4a5429a16dfab26f77d627c8c5a6be2525e69be2b1333cd0d4316c5fcf04e0",
+    "bytes": 25281,
+    "sha256": "1edba6650cc344b2c4185d82c9f702b8cd7d7370bc83409311dce0ae25a1eb83",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/it.json",
-    "bytes": 23529,
-    "sha256": "8292e0d2cf1a9f48c4fa42905103f9c2171326b9bcbdd79030bd7905a97b2e75",
+    "bytes": 24271,
+    "sha256": "3d6ba3644a5ff33fbf41929f97f96000d7bdc42ce18250a9a16ed75072f05701",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ja.json",
-    "bytes": 26995,
-    "sha256": "34e7fd9da491f0d2624e3a9fcbc3739356fd07be5565f104da1bd19190dda3b0",
+    "bytes": 27819,
+    "sha256": "2fdedf9e832cc84ec9a1dc2aed24fa322463189a28121978c40fbad8b2c2e733",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ko.json",
-    "bytes": 24781,
-    "sha256": "a338ed04a0069f3f08294f5548b0fb283d54e9d6ea4d6e5667463aa754069b07",
+    "bytes": 25607,
+    "sha256": "0f072b8954a72d917493b97db5f7cd833d2088ad92cbf0cd4e17e30904a024af",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/pt.json",
-    "bytes": 23359,
-    "sha256": "73bc073cdcae3c8e7ace2cc3505eea2d3cff579ef0bb8c8f15a10fb4d1a04d35",
+    "bytes": 24113,
+    "sha256": "f6243dfa2996cbeb1c4c078b8a9fab04cba5654e7e14041632d87acbe06d15ae",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 150856,
-    "sha256": "8de763760cafbb10fe762adecf4df97f01862216e119a9b23ea3d5af252a01ee",
+    "bytes": 151987,
+    "sha256": "aae6aaa4df8833c78fd6ac2b56a5fe2affbb62e2bccec01b3716b10f0ee5b84c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hans.json",
-    "bytes": 21957,
-    "sha256": "b3a353b1bf6a56e450bf0d4e869d0cd7ddf94fa61817dc0af5312f174bd1c4af",
+    "bytes": 22624,
+    "sha256": "a3810fc666f33188f1eeed3c956a180ff4e9c93d20d8b7c43ce3a6308f360f3c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/zh-Hant.json",
-    "bytes": 21765,
-    "sha256": "0f462ee535bf7f3e5bd52acfb461778806bc5931b46992c8056effd638adfff0",
+    "bytes": 22444,
+    "sha256": "0f2ec7a4b64b4855724f262f9cd7b632f2f6b2aaffae71472ce88d21461d8177",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

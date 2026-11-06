@@ -106,6 +106,7 @@ type
     LastPuddleGroup: QWord;
     Encounters:TCameraEncounterTracker;
     ShotAge:Single;
+    HelicopterCooldown:Single;
   end;
 
   {$M+}
@@ -131,6 +132,8 @@ type
     FEncounters:TCameraEncounterTracker;
     FShotAge:Single;
     FRiderShotsEnabled:Boolean;
+    FSmallScreen:Boolean;
+    FHelicopterCooldown:Single;
     FClearPathQuery:TCameraClearPathQuery;
     FRiders:array[0..31]of TCameraRider;
     FRiderCount:Integer;
@@ -256,6 +259,9 @@ type
     property TargetPitchDeg: Single read FTargetPitchDeg write FTargetPitchDeg;
     property PuddleReflections: Boolean read FPuddleReflections write FPuddleReflections;
     property RiderShotsEnabled:Boolean read FRiderShotsEnabled write FRiderShotsEnabled;
+    { Current display size, not a graphics preset or an Android-only flag.
+      Manual ForceMode remains available even while automatic flight is rare. }
+    property SmallScreen:Boolean read FSmallScreen write FSmallScreen;
     property EncounterKind:TCameraEncounterKind read GetEncounterKind;
     property EncounterRider:Int64 read GetEncounterRider;
   end;
@@ -342,6 +348,7 @@ const
     the pitch keeps the horizon in view and the up vector valid. ~58 deg. }
   MaxLookDownSin = 0.85;
   DetailShotMinHold = 4.0; { Let the previous composition read before a detail cut. }
+  SmallScreenFlightGap = 120.0; { seconds outside the aerial shot }
 
 function TCinematicCamera.CaptureReplay: TCameraReplayState;
 begin
@@ -369,6 +376,7 @@ begin
   Result.PuddleCooldown:=FPuddleCooldown;Result.PuddleScan:=FPuddleScan;
   Result.LastPuddleGroup:=FLastPuddleGroup;
   Result.Encounters:=FEncounters;Result.ShotAge:=FShotAge;
+  Result.HelicopterCooldown:=FHelicopterCooldown;
 end;
 
 procedure TCinematicCamera.RestoreReplay(const Saved: TCameraReplayState);
@@ -397,6 +405,7 @@ begin
   FPuddleCooldown:=Saved.PuddleCooldown;FPuddleScan:=Saved.PuddleScan;
   FLastPuddleGroup:=Saved.LastPuddleGroup;
   FEncounters:=Saved.Encounters;FShotAge:=Saved.ShotAge;
+  FHelicopterCooldown:=Saved.HelicopterCooldown;
   if (FViewport<>nil) and (FViewport.Camera<>nil) then FViewport.Camera.SetView(FCamPos,FCamDir,FCamUp);
 end;
 
@@ -422,6 +431,7 @@ begin
   FEnabled := False;
   FAutoSwitch := True;
   FRiderShotsEnabled:=True;
+  FHelicopterCooldown:=SmallScreenFlightGap;
   FGroundQuery := nil;
   FTargetSpeed := 0;
   FStillTime := 0;
@@ -592,8 +602,8 @@ begin
 end;
 
 function TCinematicCamera.PickMovingShot: TCameraMode;
-const Weight:array[TCameraMode]of Integer=(30,15,20,20,10,0,0,0,14,14,0);
-var R,Total: Integer;M:TCameraMode;
+const DefaultWeight:array[TCameraMode]of Integer=(30,15,20,20,10,0,0,0,14,14,0);
+var R,Total: Integer;M:TCameraMode;Weight:array[TCameraMode]of Integer;
   function Allowed(Mode:TCameraMode):Boolean;
   begin
     Result:=(Weight[Mode]>0)and(Mode<>FShot.Mode)and
@@ -602,6 +612,13 @@ var R,Total: Integer;M:TCameraMode;
       (Mode in[cmFrontQuarterLeft,cmFrontQuarterRight])then Result:=False;
   end;
 begin
+  Weight:=DefaultWeight;
+  if FSmallScreen then begin
+    { A wide aerial view makes the rider too small on a phone. Keep the
+      overview, but reduce its selection weight fivefold and prevent clusters. }
+    if FHelicopterCooldown>0 then Weight[cmHelicopter]:=0
+    else Weight[cmHelicopter]:=3;
+  end;
   { No mandatory return behind the rider. Exclude the current shot so every
     cut changes the view; stationary orbit modes remain a separate scenario. }
   Total:=0;
@@ -1439,6 +1456,7 @@ begin
     FPending := False;
     FHeightReady := False;
     FModeTimer := ModeDuration(FShot.Mode);
+    if FShot.Mode=cmHelicopter then FHelicopterCooldown:=SmallScreenFlightGap;
     if FShot.Mode=cmPuddle then begin
       FLastPuddleGroup:=FShot.Puddle.Group;FPuddleCooldown:=35;
     end;
@@ -1495,6 +1513,8 @@ begin
   if IsNan(DT) or IsInfinite(DT) or (DT < 0) then Exit;
   FFrameDT := DT;
   FShotAge:=FShotAge+DT;
+  if FShot.Mode<>cmHelicopter then
+    FHelicopterCooldown:=Max(0,FHelicopterCooldown-DT);
   FPuddleCooldown:=Max(0,FPuddleCooldown-DT);FPuddleScan:=Max(0,FPuddleScan-DT);
 
   { Scene preparation/teleport may move the rider onto a completely different

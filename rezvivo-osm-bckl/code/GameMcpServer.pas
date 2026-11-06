@@ -851,6 +851,8 @@ begin
     AResult.Add('cinematic_mode', Ord(ViewPlay.CinematicCam.Mode));
     AResult.Add('cinematic_pending', ViewPlay.CinematicCam.PendingMode);
     Cine:=ViewPlay.CinematicCam.CaptureReplay;
+    AResult.Add('camera_small_screen',ViewPlay.CinematicCam.SmallScreen);
+    AResult.Add('helicopter_cooldown',Cine.HelicopterCooldown);
     AResult.Add('encounter_kind',Ord(ViewPlay.CinematicCam.EncounterKind));
     AResult.Add('encounter_rider',ViewPlay.CinematicCam.EncounterRider);
     AResult.Add('encounter_cooldown',Cine.Encounters.Cooldown);
@@ -1826,6 +1828,13 @@ begin
   AResult.Add('mode', GameFpsModeStr);
   AResult.Add('limit_fps', ApplicationProperties.LimitFPS);
   AResult.Add('msaa_samples', GLFeatures.CurrentMultiSampling);
+  if (ViewPlay<>nil) and ViewPlay.SessionAlive and (ViewPlay.MainViewport<>nil) then
+  begin
+    AResult.Add('render_scale',ViewPlay.MainViewport.ResolutionScale);
+    AResult.Add('upscale_smoothing',ViewPlay.MainViewport.ResolutionSmoothing);
+    AResult.Add('render_size',TJSONArray.Create([
+      ViewPlay.MainViewport.ResolutionRenderSize.X,ViewPlay.MainViewport.ResolutionRenderSize.Y]));
+  end;
 end;
 
 { ── perf.set / perf.state ────────────────────────────────────────────── }

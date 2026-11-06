@@ -381,5 +381,9 @@
   "Preparing graphics": "Grafik wird vorbereitet",
   "Loading cached graphics": "Grafik aus dem Cache wird geladen",
   "Saving graphics cache": "Grafik-Cache wird gespeichert",
-  "Elapsed: %d s": "Vergangen: %d s"
+  "Elapsed: %d s": "Vergangen: %d s",
+  "Anti-aliasing / render scale": "Kantenglättung / Render-Skalierung",
+  "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA glättet Kanten nach einem Neustart. Die Skalierung reduziert sofort Breite und Höhe der 3D-Ansicht: 50% ergeben ein Viertel der Pixel. Die Oberfläche bleibt scharf. Ein Neustart ändert die bisherige MSAA-Abtastzahl.",
+  "Smooth upscaling": "Hochskalierung glätten",
+  "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "Bei reduzierter Auflösung: aus zeigt große scharfe Pixel; ein glättet Kanten im fertigen Bild."
 }

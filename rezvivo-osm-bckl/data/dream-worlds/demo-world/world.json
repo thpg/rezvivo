@@ -26394,5 +26394,7 @@
       "grass_material": -1,
       "water_scale": 0.015
     }
-  }
+  },
+  "title_en": "Demo World",
+  "description_en": "7.6 km: 119 labelled examples of surfaces, vegetation, buildings, bridges and water."
 }

@@ -14,7 +14,7 @@ procedure IamLiveTrack(AIdx: Integer); inline;
 implementation
 
 uses
-  Classes,
+  AppRuntimePaths, Classes,
   SysUtils;
 
 const
@@ -1886,7 +1886,7 @@ var
   I       : Integer;
 begin
   OutPath := IncludeTrailingPathDelimiter(
-               ExtractFilePath(ParamStr(0))) + 'iamlive.txt';
+               AppDirectory) + 'iamlive.txt';
   SL := TStringList.Create;
   try
     for I := 0 to IAM_LIVE_COUNT - 1 do

@@ -71,6 +71,7 @@ type
     procedure ClearTiles;
     class procedure CleanupSharedGL;
     function DiagString:string;
+    property ErrorMessage:string read FError;
     function OverlapReport:string;
     function MemoryBytesGPU:Int64;
     property SunRayDirection:TVector3 read FSun write FSun;

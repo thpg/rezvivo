@@ -9,7 +9,7 @@ uses SysUtils, Osm3dRenderProfile;
 type
   TGraphicsOption = (goFrameLimit, goAntialiasing, goShadowSize,
     goShadowFilter, goShadowDistance, goGrass, goTrees, goTextures,
-    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer,goWorldCache);
+    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer,goWorldCache,goUpscaleSmoothing);
   TGraphicsPreset = (gpEconomy, gpLight, gpBalanced, gpHigh);
   TGraphicsValues = array[TGraphicsOption] of Integer;
   TGraphicsChangeEvent = procedure(Sender: TObject; Option: TGraphicsOption) of object;
@@ -17,14 +17,14 @@ type
 const
   GraphicsKeys: array[TGraphicsOption] of String =
     ('fps_limit', 'msaa', 'shadow_size', 'shadow_filter', 'shadow_distance',
-     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer','world_cache');
+     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer','world_cache','upscale_smoothing');
   GraphicsTitles: array[TGraphicsOption] of String =
-    ('Frame rate limit', 'Anti-aliasing', 'Shadow map', 'Shadow filtering',
+    ('Frame rate limit', 'Anti-aliasing / render scale', 'Shadow map', 'Shadow filtering',
      'Shadow distance', '3D grass', 'Vegetation quality', 'Texture quality:',
-     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer','World image cache');
+     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer','World image cache','Smooth upscaling');
   GraphicsHints: array[TGraphicsOption] of String =
     ('VSync follows your monitor. A lower limit reduces GPU load.',
-     'MSAA smooths edges. Takes effect after restarting the game.',
+     'MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.',
      'One map for riders, buildings and vegetation. Higher resolution uses more GPU memory.',
      'Hard edges are faster. Softer edges smooth the shadow outline.',
      'Shorter distance reduces the amount of geometry drawn into shadows.',
@@ -41,7 +41,8 @@ const
      'Full keeps detailed road relief. Lower modes use cached normals and remove parallax. Road layout and markings stay unchanged.',
      'Changes branches, needles, blade geometry and wind at the same distance. LOD distance is controlled separately.',
      'Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.',
-     'Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.');
+     'Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.',
+     'In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.');
   GraphicsPresetTitles: array[TGraphicsPreset] of String =
     ('Battery saver', 'Lightweight', 'Balanced', 'High');
   GraphicsPresetHints: array[TGraphicsPreset] of String =
@@ -51,11 +52,11 @@ const
      'Dense vegetation, detailed materials and longer soft shadows.');
   { World image caching is opt-in on every platform because reprojection can
     produce visual artifacts. Preserve this default in presets and Auto. }
-  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0){$endif};
+  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0,0){$endif};
   GraphicsDisplayOrder: array[TGraphicsOption] of TGraphicsOption =
     (goRenderer,goFrameLimit,goAntialiasing,goWorldCache,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
      goShadowDistance,goGrass,goTrees,goTextures,
-     goVegetationCache,goVegetationAdaptive,goHair,goSoftening);
+     goVegetationCache,goVegetationAdaptive,goHair,goSoftening,goUpscaleSmoothing);
 
 function GraphicsPresetValues(Preset: TGraphicsPreset; const Original: TGraphicsValues): TGraphicsValues;
 function MatchingGraphicsPreset(const Values: TGraphicsValues): Integer;
@@ -65,10 +66,23 @@ function GraphicsChoiceValue(Option: TGraphicsOption; Index: Integer): Integer;
 function GraphicsChoiceCaption(Option: TGraphicsOption; Index: Integer): String;
 function ValidGraphicsValue(Option: TGraphicsOption; Value: Integer): Boolean;
 function EffectiveGraphicsValue(Option: TGraphicsOption; Value: Integer): Integer;
+{ Negative AA values are a resolution choice, never a multisample count. }
+function GraphicsResolutionScale(Antialiasing: Integer): Single;
 
 implementation
 
 uses Math;
+
+function GraphicsResolutionScale(Antialiasing: Integer): Single;
+begin
+  case Antialiasing of
+    -75: Result := 0.75;
+    -50: Result := 0.5;
+    -33: Result := 1.0 / 3.0;
+    -25: Result := 0.25;
+  else Result := 1;
+  end;
+end;
 
 function GraphicsPresetValues(Preset: TGraphicsPreset; const Original: TGraphicsValues): TGraphicsValues;
 const
@@ -110,7 +124,8 @@ begin
     goWorldShadows, goRtxReflections, goSoftening, goWorldCache: Result := 0;
     { CGE's EGL backend currently does not request multisample surfaces.
       Do not offer a setting that cannot affect the active Android renderer. }
-    goAntialiasing: Result := {$ifdef OpenGLES}0{$else}Min(Value, 4){$endif};
+    goAntialiasing: if Value >= 0 then
+      Result := {$ifdef OpenGLES}0{$else}Min(Value, 4){$endif};
     goShadowSize: Result := Min(Value, 1024);
     goShadowFilter: Result := Min(Value, 4);
     goShadowDistance: Result := Min(Value, 60);
@@ -125,11 +140,12 @@ begin
   case Option of
     goFrameLimit: Result := 7;
     goShadowSize: Result := 5;
-    goAntialiasing, goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
+    goAntialiasing: Result := 8;
+    goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
     goShadowFilter, goShadowDistance, goVegetationCache,goSoftening: Result := 3;
     goWorldShadows:Result:=4;
     goTrees: Result := 5;
-    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache: Result := 2;
+    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache,goUpscaleSmoothing: Result := 2;
     goRenderer: if FullRendererSupported then Result := 2 else Result := 1;
   end;
 end;
@@ -137,7 +153,7 @@ end;
 function GraphicsChoiceValue(Option: TGraphicsOption; Index: Integer): Integer;
 const
   Caps: array[0..6] of Integer = (-1, 30, 60, 90, 120, 144, 0);
-  AA: array[0..3] of Integer = (0, 2, 4, 8);
+  AA: array[0..7] of Integer = (0, 2, 4, 8, -75, -50, -33, -25);
   Sizes: array[0..4] of Integer = (0, 512, 1024, 2048, 4096);
   Filters: array[0..2] of Integer = (1, 4, 16);
   Distances: array[0..2] of Integer = (60, 100, 160);
@@ -151,7 +167,7 @@ begin
     goShadowFilter: Result := Filters[Index];
     goShadowDistance: Result := Distances[Index];
     goRenderer: if FullRendererSupported then Result := Index else Result := 1;
-    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldCache: Result := Index;
+    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldCache,goUpscaleSmoothing: Result := Index;
   end;
 end;
 
@@ -166,7 +182,8 @@ begin
       if V < 0 then Result := 'VSync'
       else if V = 0 then Result := 'Unlimited' else Result := IntToStr(V);
     goAntialiasing:
-      if V = 0 then Result := 'Off' else Result := 'MSAA ' + IntToStr(V) + 'x';
+      if V < 0 then Result := 'Render ' + IntToStr(-V) + '%'
+      else if V = 0 then Result := 'Off' else Result := 'MSAA ' + IntToStr(V) + 'x';
     goShadowSize:
       if V = 0 then Result := 'Off' else Result := IntToStr(V);
     goShadowFilter:
@@ -176,7 +193,7 @@ begin
       if V = 0 then Result := 'Simplified' else Result := Textures[V-1];
     goVegetationCache:
       case V of 0:Result:='Gentle';1:Result:='Balanced';else Result:='Fast';end;
-    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache:
+    goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache,goUpscaleSmoothing:
       if V = 0 then Result := 'Off' else Result := 'On';
     goTextures,goHair: Result := Textures[V];
     goRiderComplexity,goWorldComplexity,goVegetationComplexity:

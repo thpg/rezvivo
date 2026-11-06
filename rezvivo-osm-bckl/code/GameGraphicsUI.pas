@@ -45,6 +45,8 @@ type
     FButtons: array[TGraphicsOption] of array of TMenuButton;
     FRevision: Cardinal;
     FPreview: TGraphicsPreview;
+    FUpscaleSmoothing: TCastleCheckbox;
+    procedure ClickUpscaleSmoothing(Sender: TObject);
     procedure ClickChoice(Sender: TObject);
     procedure ClickAuto(Sender: TObject);
     procedure LanguageChanged(Sender:TObject);
@@ -193,6 +195,7 @@ begin
   InsertFront(FAutoResult);
   for O := Low(TGraphicsOption) to High(TGraphicsOption) do
   begin
+    if O = goUpscaleSmoothing then Continue; { Inline checkbox in the AA row. }
     FRows[O] := TCastleUserInterface.Create(Self);
     InsertFront(FRows[O]);
     FLabels[O] := TMenuLabel.Create(Self);
@@ -224,6 +227,14 @@ begin
     if O<>goTrees then BindUiText(FHints[O], GraphicsHints[O]);
     FRows[O].InsertFront(FHints[O]);
   end;
+  FUpscaleSmoothing := TCastleCheckbox.Create(Self);
+  FUpscaleSmoothing.Name := 'GraphicsUpscaleSmoothing';
+  BindUiText(FUpscaleSmoothing, 'Smooth upscaling');
+  FUpscaleSmoothing.FontSize := 16;
+  FUpscaleSmoothing.TextColor := MenuText;
+  FUpscaleSmoothing.CheckboxColor := MenuText;
+  FUpscaleSmoothing.OnChange := @ClickUpscaleSmoothing;
+  FChoices[goAntialiasing].InsertFront(FUpscaleSmoothing);
   ObserveUiLanguage(Self,@LanguageChanged);
   Refresh;
 end;
@@ -267,6 +278,7 @@ begin
   Shadows := Settings.GetGraphicsOption(Ord(goShadowSize)) <> 0;
   for O := Low(TGraphicsOption) to High(TGraphicsOption) do
   begin
+    if O = goUpscaleSmoothing then Continue;
     V := Settings.GetGraphicsOption(Ord(O));
     for I := 0 to High(FButtons[O]) do
     begin
@@ -278,6 +290,12 @@ begin
         (EffectiveGraphicsValue(O, GraphicsChoiceValue(O,I)) = GraphicsChoiceValue(O,I));
     end;
   end;
+  FUpscaleSmoothing.Exists := Settings.GraphicsMSAA < 0;
+  FUpscaleSmoothing.Checked := Settings.GraphicsUpscaleSmoothing <> 0;
+  FHints[goAntialiasing].Caption := UiText(GraphicsHints[goAntialiasing]);
+  if FUpscaleSmoothing.Exists then
+    FHints[goAntialiasing].Caption := FHints[goAntialiasing].Caption + #10 +
+      UiText(GraphicsHints[goUpscaleSmoothing]);
   for O:=Low(O) to High(O) do Values[O]:=Settings.GetGraphicsOption(Ord(O));
   Selected:=MatchingGraphicsPreset(Values);
   for P:=Low(P) to High(P) do begin
@@ -305,6 +323,12 @@ begin
   Refresh;
 end;
 
+procedure TGraphicsPanel.ClickUpscaleSmoothing(Sender: TObject);
+begin
+  Settings.GraphicsUpscaleSmoothing := Ord(FUpscaleSmoothing.Checked);
+  Refresh;
+end;
+
 procedure TGraphicsPanel.Arrange;
 var O: TGraphicsOption; Y, X, Top, H, W: Single;
 begin
@@ -325,6 +349,7 @@ begin
   if FAutoResult.Caption <> '' then Y := Y + FAutoResult.EffectiveHeight + 14;
   for O in GraphicsDisplayOrder do
   begin
+    if O = goUpscaleSmoothing then Continue;
     FRows[O].Width := W;
     FRows[O].Anchor(hpLeft); FRows[O].Anchor(vpTop, -Y);
     if W >= 680 then begin X := 240; Top := 0 end

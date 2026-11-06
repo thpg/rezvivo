@@ -160,6 +160,7 @@ type
     procedure RemoveTile(TileX, TileZ: Single);
     function LocalBoundingBox: TBox3D; override;
     function Diagnostics: string;
+    property ErrorMessage: string read FError;
     function CollectRtxTrees(Cache:TRtxShadow;var CellIndex,EntryIndex:Integer):Boolean;
     property SunRayDirection: TVector3 read FSunRayDirection write FSunRayDirection;
     property ShadowGeneration:QWord read FGenerationCount;

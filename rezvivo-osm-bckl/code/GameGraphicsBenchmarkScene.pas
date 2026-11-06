@@ -126,6 +126,10 @@ begin
   Result.Add('grass_active',FGrass.Exists);Result.Add('procedural_trees_active',FProcedural.Exists);
   Result.Add('shadows_active',FValues[goShadowSize]>0);
   Result.Add('shadow_atlas',FShadow.DebugInfo);
+  Result.Add('render_scale',ResolutionScale);
+  Result.Add('upscale_smoothing',ResolutionSmoothing);
+  Result.Add('render_size',TJSONArray.Create([ResolutionRenderSize.X,ResolutionRenderSize.Y]));
+  Result.Add('display_rect',TJSONArray.Create([RenderRect.Left,RenderRect.Bottom,RenderRect.Width,RenderRect.Height]));
 end;
 
 
@@ -447,6 +451,8 @@ end;
 procedure TGraphicsBenchmarkScene.ApplyProfile(const Values: TGraphicsValues);
 begin
   FValues := Values;
+  ResolutionScale := GraphicsResolutionScale(Values[goAntialiasing]);
+  ResolutionSmoothing := Values[goUpscaleSmoothing] <> 0;
   ImpostorCache:=EffectiveGraphicsValue(goWorldCache,Values[goWorldCache])<>0;
   Invalidate;
   FScreenFX.SofteningLevel := Values[goSoftening];
@@ -493,13 +499,6 @@ begin
   Result := StrToInt64Def(Copy(Text, P, E - P), -1);
 end;
 
-function DiagnosticError(const Text: string): string;
-var P: Integer;
-begin
-  P := Pos('error=', Text);
-  if P = 0 then Result := '' else Result := Copy(Text, P + 6, MaxInt);
-end;
-
 procedure TGraphicsBenchmarkScene.CheckReadiness;
 var Tick: QWord; Warm: Boolean; D: string;
 begin
@@ -513,13 +512,13 @@ begin
   if FGrass.Exists then
   begin
     D := FGrass.DiagString;
-    FError := DiagnosticError(D);
+    FError := FGrass.ErrorMessage;
     Warm := Warm and (DiagnosticInteger(D, 'patches') > 0);
   end;
   if FProcedural.Exists then
   begin
     D := FProcedural.Diagnostics;
-    if FError = '' then FError := DiagnosticError(D);
+    if FError = '' then FError := FProcedural.ErrorMessage;
     Warm := Warm and (DiagnosticInteger(D, 'pending') = 0)
       and (DiagnosticInteger(D, 'waiting') = 0)
       and ((not ProceduralVegetationActive and (DiagnosticInteger(D, 'atlases') > 0))

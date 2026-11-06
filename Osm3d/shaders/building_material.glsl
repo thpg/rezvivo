@@ -12,6 +12,7 @@ uniform vec3 u_bld_fallback_rgb[U_BLD_MAT_COUNT];
 uniform float u_bld_metallic[U_BLD_MAT_COUNT];
 uniform float u_bld_tint_amount[U_BLD_MAT_COUNT];
 uniform vec3 u_bld_photo_tints[32];
+uniform vec4 u_bld_window_patterns[8];
 #ifndef GC_SUN_DIR_UNIFORM
 #define GC_SUN_DIR_UNIFORM
 uniform vec3 gc_SunDirToward;
@@ -31,8 +32,9 @@ vec4 position_eye_to_world_space(vec4 p);
 vec3 direction_world_to_eye_space(vec3 d);
 vec3 direction_eye_to_world_space(vec3 d);
 
-vec3 bldAlbedo, bldNormal, bldView, bldEnvironment;
-float bldRoughness, bldMetallic, bldCavity;
+vec3 bldAlbedo=vec3(0), bldNormal=vec3(0,1,0), bldView=vec3(0,0,1), bldEnvironment=vec3(0);
+vec3 bldSceneLinear=vec3(0); bool bldSceneValid=false;
+float bldRoughness=1.0, bldMetallic=0.0, bldCavity=1.0;
 vec4 rzBldRequest=vec4(0);
 
 float bldHash(vec2 p)
@@ -57,6 +59,21 @@ vec3 bldFrameColor(float seed)
     if (kind < 0.5) return vec3(0.22, 0.19, 0.16);
     if (kind < 1.5) return vec3(0.34, 0.36, 0.36);
     return vec3(0.76, 0.75, 0.70);
+}
+
+float bldAge(vec2 seed)
+{
+    return mix(0.06,0.80,bldHash(seed+3.1))*
+           mix(0.45,1.0,smoothstep(0.18,0.65,bldHash(seed+7.3)));
+}
+
+// Contact weathering is shared by atlas facades and photo-authored geometry.
+// It follows ground and roof height rather than arbitrary texture rectangles.
+vec3 bldWallContact(float footing,float eave,float macro)
+{
+    return vec3(1.0-smoothstep(0.08,0.7+macro*0.65,footing),
+        (1.0-smoothstep(0.12,1.6,footing))*smoothstep(0.33,0.77,macro),
+        1.0-smoothstep(0.08,0.46,eave));
 }
 
 float bldRectangle(vec2 p, vec2 lo, vec2 hi, vec2 aa)
@@ -103,6 +120,11 @@ vec3 bldRoom(vec2 p, vec3 ray, float roomSeed, float detail)
 
 void bldEvaluate(const vec3 toCamera)
 {
+#ifdef RZ_LEGACY_BUILDING_CAPTURE
+    bool capture = false;
+#else
+    bool capture = rz_capture > .5;
+#endif
     if (vBldSeed.y <= -1000000.0) {
         // Authored components share this material and all its shadow/reflection
         // hooks. No atlas lookups and no procedural windows painted over them.
@@ -116,11 +138,30 @@ void bldEvaluate(const vec3 toCamera)
         vec3 N=normalize(vBldNormalOS);
         if (dot(N,bldView)<0.0) N=-N;
         bldNormal=N;bldCavity=1.0;bldEnvironment=vec3(0);
+        if (capture) {
+            if ((surface>0.5 && surface<1.5) || (surface>3.5 && surface<4.5))
+                rzBldRequest=vec4(N*.5+.5,1.0);
+            return; // opaque geometry still writes its exact depth
+        }
         if (surface<0.5) {
-            // Metre-scale variation anchored to the house, not world hashes or
-            // frame time. Keep trim paint consistent across adjacent pieces.
-            float weather=bldNoise(vBldMetric*.31);
-            paint*=0.97+0.05*weather;
+            // This is an integer identity carried in an otherwise continuous
+            // UV varying. Perspective interpolation can perturb a constant by
+            // a few ulps; feeding those into the hash makes panes/walls sparkle.
+            float identity=mod(floor(vBldUV.x+0.5),65536.0);
+            vec2 seed=vec2(mod(identity,251.0),floor(identity/251.0));
+            float weather=bldNoise(vBldMetric*.21+seed);
+            float age=bldAge(seed);
+            float wall=1.0-smoothstep(.25,.65,abs(N.y));
+            // Smooth metal/glass frames retain their finish. Rough painted
+            // walls receive the same base/eave ageing as generated facades.
+            float coating=wall*smoothstep(.45,.75,bldRoughness)*(1.0-bldMetallic);
+            vec3 contact=bldWallContact(max(0.0,vBldMetric.y),
+                max(0.0,vBldUV.y-vBldMetric.y),weather);
+            float dirt=dot(contact,vec3(.22,.16,.13))*age*coating;
+            paint*=1.0+(weather-.5)*.16*age*coating-dirt;
+            paint=mix(paint,paint*vec3(.92,.94,.85),contact.y*age*.26*coating);
+            bldRoughness=min(1.0,bldRoughness+dirt*.5);
+            bldCavity=1.0-(contact.z*.12+contact.x*.07)*coating;
         }
         if (surface>1.5 && surface<2.5) {
             // Horizontal timber siding for authored walls, with the same PBR,
@@ -133,8 +174,22 @@ void bldEvaluate(const vec3 toCamera)
             paint*=0.94+0.10*grain-0.24*seam;
             bldCavity=1.0-0.16*seam;
         }
+        if (surface>2.5 && surface<3.5) {
+            // Photo-authored openings retain brickwork on the remaining wall.
+            // Metric running bond; derivatives remove subpixel mortar shimmer.
+            vec2 cell=vBldMetric/vec2(.26,.075);
+            cell.x+=mod(floor(cell.y),2.0)*.5;
+            vec2 edge=min(fract(cell),1.0-fract(cell));
+            vec2 aa=max(fwidth(cell),vec2(.001));
+            vec2 brick=smoothstep(vec2(.017,.047)-aa,vec2(.017,.047)+aa,edge);
+            float detail=1.0-smoothstep(.2,.8,max(aa.x,aa.y));
+            float mortar=(1.0-brick.x*brick.y)*detail;
+            float variation=(bldHash(floor(cell))-.5)*.18*detail;
+            paint=mix(paint*(1.0+variation),paint*.62+vec3(.13),mortar*.72);
+            bldCavity=1.0-.20*mortar;
+        }
         bldAlbedo=gc_SRGBtoLINEAR(paint);
-        if (surface>0.5 && surface<1.5) {
+        if ((surface>0.5 && surface<1.5) || (surface>3.5 && surface<4.5)) {
             vec3 reflected=reflect(-bldView,N);
             vec3 sky=mix(u_sky_ground,u_sky_horizon,smoothstep(-.12,.10,reflected.y));
             sky=mix(sky,u_sky_zenith,smoothstep(.10,.70,reflected.y));
@@ -142,14 +197,26 @@ void bldEvaluate(const vec3 toCamera)
             rzBldRequest=vec4(N*.5+.5,1.0);
             // Opaque recessed pane: no alpha sorting, no sky leaking through
             // the shell. Reflection uses the same RTX request as atlas glass.
+            vec3 interior=gc_SRGBtoLINEAR(paint)*.20;
+            if(surface<1.5 && abs(N.y)<.65 && vBldUV.y>.001){
+                // Authored panes used to bypass the common window material.
+                // Their existing attribute now holds pane-local UV/aspect,
+                // so the same flat window treatment follows real openings.
+                vec3 T=normalize(vec3(N.z,0,-N.x));
+                vec3 ray=vec3(-dot(bldView,T)/vBldUV.y,-bldView.y,-dot(bldView,N));
+                float detail=1.0-smoothstep(25.0,60.0,length(toCamera));
+                interior=bldRoom(clamp(vBldMetric,vec2(0),vec2(1)),ray,
+                    bldHash(vec2(floor(vBldUV.x+0.5),13.7))*233.0,detail);
+            }
             bldEnvironment=rzEnvironment(gc_SRGBtoLINEAR(sky))*fresnel*u_bld_reflect_strength+
-                gc_SRGBtoLINEAR(paint)*(.20*(1.0-fresnel));
+                interior*(1.0-fresnel);
             bldAlbedo*=.035;bldMetallic=0.0;
         }
         return;
     }
     int matId = int(clamp(floor(vBldMatId+0.5),0.0,15.0));
     bool wall = matId < 6 || matId >= 12;
+    if (capture && !wall) { bldNormal=normalize(vBldNormalOS); return; }
     float houseSeed = mod(vBldSeed.x,65536.0);
     int photoTint = int(clamp(floor(vBldSeed.x/65536.0),0.0,31.0));
     bool house = houseSeed > 0.5;
@@ -171,11 +238,16 @@ void bldEvaluate(const vec3 toCamera)
     float inner = 1.0-2.0*u_bld_cell_inset;
     vec2 atlasUV = (cell+u_bld_cell_inset+uv*inner)/grid;
     vec2 dx = du1*inner/grid, dy = du2*inner/grid;
-    vec3 color = textureGrad(u_bld_atlas,atlasUV,dx,dy).rgb;
-    vec3 ns = textureGrad(u_bld_normal_atlas,atlasUV,dx,dy).rgb*2.0-1.0;
-    float glass = textureGrad(u_bld_glow_atlas,atlasUV,dx,dy).r;
-    if (!wall) glass = 0.0;
-    bldRoughness = clamp(textureGrad(u_bld_mask_atlas,atlasUV,dx,dy).r,0.08,1.0);
+    vec3 color=vec3(0), ns=vec3(0,0,1);
+    if (!capture) {
+        color=textureGrad(u_bld_atlas,atlasUV,dx,dy).rgb;
+        ns=textureGrad(u_bld_normal_atlas,atlasUV,dx,dy).rgb*2.0-1.0;
+    }
+    // Generated windows use the pattern atlas below. Do not sample the old
+    // glass mask only to overwrite it; roofs have no glass in either path.
+    float glass = 0.0;
+    if (wall && (!facade || authored)) glass=textureGrad(u_bld_glow_atlas,atlasUV,dx,dy).r;
+    if (!capture) bldRoughness = clamp(textureGrad(u_bld_mask_atlas,atlasUV,dx,dy).r,0.08,1.0);
     bldMetallic = clamp(u_bld_metallic[matId],0.0,1.0);
     bldCavity = 1.0;
     bldEnvironment = vec3(0);
@@ -192,14 +264,43 @@ void bldEvaluate(const vec3 toCamera)
     vec3 B = normalize(cross(N,T));
     if (dot(B,rawB)<0.0) B=-B;
     float moduleWidth = clamp(length(rawT),0.8,8.0);
+    // Parametric opening atlas: one coherent frame pattern per house, also
+    // used by the prepared geometry catalogue. No extra texture fetch/draw.
+    // Replace the OLD painted dividers and their normal map completely;
+    // overlaying a new pattern would leave two incompatible window systems.
+    if (facade && !authored) {
+        float patternId=mod(floor(houseSeed+0.5),8.0);
+        if (matId==1) patternId=3.0+mod(floor(houseSeed+0.5),4.0);
+        vec4 pattern=u_bld_window_patterns[int(patternId)];
+        vec2 paneSize=paneHi-paneLo;
+        vec2 p=(uv-paneLo)/paneSize, pa=aa/paneSize;
+        float opening=bldRectangle(uv,paneLo,paneHi,aa);
+        vec2 halfBar=vec2(.022)/max(vec2(moduleWidth,length(rawB))*paneSize,vec2(.15));
+        float bars=0.0;
+        if(pattern.x>.5){
+            float cells=pattern.x+1.0;
+            float d=abs(fract(p.x*cells+.5)-.5)/cells;
+            bars=max(bars,1.0-smoothstep(halfBar.x-pa.x,halfBar.x+pa.x,d));
+        }
+        if(pattern.y>.5){
+            float cells=pattern.y+1.0;
+            float d=abs(fract(p.y*cells+.5)-.5)/cells;
+            bars=max(bars,1.0-smoothstep(halfBar.y-pa.y,halfBar.y+pa.y,d));
+        }
+        if(pattern.z>.01) bars=max(bars,1.0-smoothstep(halfBar.y-pa.y,halfBar.y+pa.y,abs(p.y-pattern.z)));
+        if (!capture) {
+            color=mix(color,bldFrameColor(houseSeed),opening);
+            ns=mix(ns,vec3(0,0,1),opening);
+            bldRoughness=mix(bldRoughness,.62,opening);
+        }
+        glass=opening*(1.0-bars);
+    }
     vec3 V = normalize(toCamera);
     bldView = V;
     if (dot(N,V)<0.0) { N=-N; B=-B; }
 
     vec2 seed = vec2(mod(houseSeed,251.0),floor(houseSeed/251.0));
-    float age = house ? mix(0.06,0.80,bldHash(seed+3.1)) : 0.0;
-    float upkeep = bldHash(seed+7.3);
-    age *= mix(0.45,1.0,smoothstep(0.18,0.65,upkeep));
+    float age = house ? bldAge(seed) : 0.0;
     vec2 metric = wall ? vec2(baseUV.x*moduleWidth,vBldMetric.x) : vBldMetric;
     float facadeIdentity = mod(vBldSeed.y,65536.0);
     vec2 faceSeed = vec2(mod(facadeIdentity,251.0),floor(facadeIdentity/251.0));
@@ -215,6 +316,7 @@ void bldEvaluate(const vec3 toCamera)
         fine = mix(0.5,fine,continuity);
     }
     float nonGlass = 1.0-glass;
+    if (!capture) {
     color *= mix(vec3(1),u_bld_fallback_rgb[matId],u_bld_tint_amount[matId]);
     if (wall && photoTint>0) {
         // Colour and material are independent. Preserve the material's relief
@@ -231,10 +333,12 @@ void bldEvaluate(const vec3 toCamera)
         color *= mix(vec3(1),tint,nonGlass);
         color *= 1.0+(macro-0.5)*0.16*age*nonGlass;
     }
+    } // color-only tint/age; common normal/mask remains below
     if (wall && house) {
         float footing = max(0.0,vBldMetric.x);
         float eave = max(0.0,vBldMetric.y);
         float buildingHeight = vBldMetric.x+vBldMetric.y;
+        if (!capture) {
         float family = mod(floor(houseSeed+0.5),4.0);
         if (facade && !authored) {
             // A house-wide construction system, rather than independent
@@ -261,9 +365,8 @@ void bldEvaluate(const vec3 toCamera)
                 color=mix(color,color*0.82+vec3(0.12,0.115,0.10),belt*nonGlass);
             }
         }
-        float splash = (1.0-smoothstep(0.08,0.7+macro*0.65,footing));
-        float damp = (1.0-smoothstep(0.12,1.6,footing))*smoothstep(0.33,0.77,macro);
-        float underEave = 1.0-smoothstep(0.08,0.46,eave);
+        vec3 contact=bldWallContact(footing,eave,macro);
+        float splash = contact.x, damp = contact.y, underEave = contact.z;
         float streak = 0.0;
         if (facade) {
             vec2 cellId = floor(baseUV);
@@ -298,9 +401,14 @@ void bldEvaluate(const vec3 toCamera)
         bool plaster = matId==0 || matId==2 || matId>=12;
         float plasterPatch = smoothstep(0.64,0.82,macro)*age*nonGlass;
         if (plaster) color = mix(color,color*0.92+vec3(0.055,0.050,0.044),plasterPatch*0.38);
+        bldRoughness = clamp(bldRoughness+dirt*0.5+plasterPatch*0.09-damp*age*0.09,0.18,1.0);
+        bldCavity *= 1.0-underEave*0.12-splash*0.07;
+        }
+        // Reflection normals depend on this wear gradient too. Evaluate it
+        // over the whole primitive, including non-glass neighbouring lanes.
+        bool plaster = matId==0 || matId==2 || matId>=12;
         float chip = smoothstep(0.66,0.78,fine)*smoothstep(0.50,0.75,macro)*age*nonGlass;
         if (!plaster) chip *= 0.25;
-        bldRoughness = clamp(bldRoughness+dirt*0.5+plasterPatch*0.09-damp*age*0.09,0.18,1.0);
         // Height-gradient normal; derivatives evaluated for all wall fragments.
         // Fine wear fades by projected footprint, macro ageing keeps its mean tone.
         float wearHeight = -chip*0.012;
@@ -310,7 +418,6 @@ void bldEvaluate(const vec3 toCamera)
         vec3 grad = (r1*dFdx(wearHeight)+r2*dFdy(wearHeight)) *
                     ((denom<0.0 ? -1.0 : 1.0)/max(abs(denom),1e-8));
         N = normalize(N-grad*detail);
-        bldCavity *= 1.0-underEave*0.12-splash*0.07;
         if (entrance) {
             // Replace a complete ground-floor window, from footing to its lintel.
             // These physical bounds also drive DoorBounds and the near geometry.
@@ -323,6 +430,8 @@ void bldEvaluate(const vec3 toCamera)
             float door = bldRectangle(doorUV,vec2(-halfWidth,0),vec2(halfWidth,doorHeight),doorAA);
             float innerDoor = bldRectangle(doorUV,vec2(-halfWidth+0.065,0.045),
                                                 vec2(halfWidth-0.065,doorHeight-0.065),doorAA);
+            glass *= 1.0-door;
+            if (!capture) {
             vec2 panelUV = vec2((doorUV.x+halfWidth)/(2.0*halfWidth),doorUV.y/doorHeight);
             vec2 panelAA = doorAA/vec2(2.0*halfWidth,doorHeight);
             float leaves = halfWidth>0.80 ? 2.0 : 1.0;
@@ -338,13 +447,13 @@ void bldEvaluate(const vec3 toCamera)
             color = mix(color,paint,innerDoor);
             // Remove the old pane's reflection and mullion normals as well as
             // its color; otherwise the window remains visible through the door.
-            glass *= 1.0-door;
             ns = mix(ns,vec3(0,0,1),door);
             bldRoughness = mix(bldRoughness,0.63,door);
             bldMetallic *= 1.0-door;
             bldCavity = mix(bldCavity,0.90+0.08*panel,door);
+            }
         }
-    } else if (!wall && house) {
+    } else if (!wall && house && !capture) {
         // The default roof atlas was almost white under noon exposure.
         // Keep authored coloured/white roofs; neutral roofs get realistic
         // mineral/metal reflectance with one stable finish per building.
@@ -359,14 +468,18 @@ void bldEvaluate(const vec3 toCamera)
         bldRoughness = clamp(bldRoughness+patina*0.13,0.1,1.0);
     }
 
-    bldAlbedo = gc_SRGBtoLINEAR(clamp(color,vec3(0.01),vec3(1)));
-    bldNormal = normalize(T*ns.x+B*ns.y+N*max(0.1,ns.z));
+    bldNormal=N;
+    if (!capture) {
+        bldAlbedo = gc_SRGBtoLINEAR(clamp(color,vec3(0.01),vec3(1)));
+        bldNormal = normalize(T*ns.x+B*ns.y+N*max(0.1,ns.z));
+    }
     if (glass>0.01) {
         vec2 cellId = floor(baseUV)+faceSeed;
-        float roomSeed = bldHash(cellId)*233.0;
         vec2 tilt = vec2(bldHash(cellId+5.3),bldHash(cellId+9.2))*2.0-1.0;
         vec3 glassN = normalize(N+(T*tilt.x+B*tilt.y)*u_bld_window_tilt);
         rzBldRequest=vec4(glassN*.5+.5,glass);
+        if (capture) return;
+        float roomSeed = bldHash(cellId)*233.0;
         bldNormal = normalize(mix(bldNormal,glassN,glass));
         vec3 reflected = reflect(-V,glassN);
         vec3 sky = mix(u_sky_ground,u_sky_horizon,smoothstep(-0.12,0.10,reflected.y));
@@ -386,6 +499,7 @@ void bldEvaluate(const vec3 toCamera)
 }
 
 void PLUG_fragment_end(inout vec4 color) {
+    if(bldSceneValid)color.rgb=rzSceneDisplay(bldSceneLinear);
     if(rz_capture>.5) color=rzBldRequest;
 }
 
@@ -403,6 +517,9 @@ void PLUG_fragment_eye_space(const vec4 vertex_eye, inout vec3 normal_eye)
 
 void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)
 {
+#ifndef RZ_LEGACY_BUILDING_CAPTURE
+    if(rz_capture>.5){fragment_color=rzBldRequest;return;}
+#endif
 #ifdef BLD_NATIVE_LIGHTING
     fragment_color.rgb *= bldAlbedo;
 #else
@@ -421,6 +538,11 @@ void PLUG_main_texture_apply(inout vec4 fragment_color, const in vec3 normal)
     vec3 hemi = mix(vec3(0.31,0.29,0.25),vec3(0.49,0.55,0.63),N.y*0.5+0.5);
     vec3 indirect = bldAlbedo*(1.0-bldMetallic)*hemi*bldCavity;
     vec3 linearColor = (sun+indirect+bldEnvironment)*2.0;
+    if(rz_scene.x>.5){
+        bldSceneLinear=sun*(rzSceneSun()/(vec3(1,.97,.92)*8.0))+
+            bldAlbedo*(1.-bldMetallic)*rzSceneSky(N)*bldCavity+bldEnvironment;
+        bldSceneValid=true;
+    }
     fragment_color.rgb = gc_LINEARtoSRGB(linearColor/(linearColor+vec3(1)));
 #endif
     fragment_color.a = 1.0;
