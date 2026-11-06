@@ -450,8 +450,17 @@ begin
     ТОЛЬКО из Update, когда вью полностью запущено: во время Start вью
     ещё не в контейнере, и регистрация контейнера при пересадке падает
     (REGISTERCONTAINER AV). }
-  if FViewport <> nil then
-    FViewport.RemoveControl(FSession.Map.WarmupOverlay);
+  { Teleporting or replacing a route reuses this overlay. It is already a
+    child of the view after the first warmup; inserting it again leaves a
+    duplicate UI entry that outlives the session. Reorder in place for the
+    same host, and detach from the actual previous host when reparenting. }
+  if FOverlayHost = AHost then
+  begin
+    FSession.Map.WarmupOverlay.MoveToFront;
+    Exit;
+  end;
+  if FOverlayHost <> nil then
+    FOverlayHost.RemoveControl(FSession.Map.WarmupOverlay);
   AHost.InsertFront(FSession.Map.WarmupOverlay);
   FOverlayHost := AHost;
 end;

@@ -1,7 +1,7 @@
 {
-  "version": "0.4.7-alpha.1",
-  "build": 22,
-  "file_version": "0.4.7.22",
+  "version": "0.4.8-alpha.1",
+  "build": 23,
+  "file_version": "0.4.8.23",
   "channel": "alpha",
-  "notes": "New Krylatskoye Island with a smooth cycling loop, varied terrain and coastal scenery, included offline and selected for first-time rides. Existing route choices are preserved. Dream World names follow the interface language, and surf is heard near the coast. Fix intermittent black bands on the sea with RTX screen shadows. Add reduced-resolution rendering with pixelated or smoothed output, clearer map action buttons and less frequent helicopter views on phones. Fix a crash during background resource loading."
+  "notes": "Fix a crash when starting another ride after teleporting on the free-exploration map. Reusing the loading screen no longer leaves a stale interface entry after the previous ride ends."
 }

@@ -1405,6 +1405,7 @@
   "rezvivo-osm-bckl/tests/VirtualGearingTests.pas",
   "rezvivo-osm-bckl/tests/VirtualGearingTrainerTests.pas",
   "rezvivo-osm-bckl/tests/VisualHeadingTests.pas",
+  "rezvivo-osm-bckl/tests/WarmupReentryMcpTest.py",
   "rezvivo-osm-bckl/tests/WaterRoadPriorityTests.pas",
   "rezvivo-osm-bckl/tests/ZwiftCryptoInteropTest.py",
   "rezvivo-osm-bckl/tests/ZwiftCryptoProbe.pas",
