@@ -1,7 +1,7 @@
 {
-  "version": "0.4.8-alpha.1",
-  "build": 23,
-  "file_version": "0.4.8.23",
+  "version": "0.4.9-alpha.1",
+  "build": 24,
+  "file_version": "0.4.9.24",
   "channel": "alpha",
-  "notes": "Fix a crash when starting another ride after teleporting on the free-exploration map. Reusing the loading screen no longer leaves a stale interface entry after the previous ride ends."
+  "notes": "Add optional OpenBikeControl BLE support for virtual gear shifting and steering on Windows and Android. Select a controller explicitly in Devices; saved controllers reconnect automatically. Keep smart-trainer telemetry, ERG, FIT simulation, Zwift controls and Elite STERZO behavior independent. Android controllers remain connected if optional application information is rejected."
 }
