@@ -2,7 +2,8 @@ program DeviceProtocolTests;
 {$mode objfpc}{$H+}
 uses Classes,SysUtils,Math,TrainerData,FTMSProtocol,CyclingRevolutions,
   CyclingANTProtocol,FECAcknowledgement,GameTrainerControl,GameTransportBase,
-  GameDeviceSensor,GameDeviceTypes,GameDeviceAssignments,WinRTBLEProvider,ANTPlus;
+  GameDeviceSensor,GameDeviceTypes,GameDeviceAssignments,WinRTBLEProvider,ANTPlus,
+  OpenBikeControlProtocol,ZwiftControllerProtocol,GameControllerGears;
 var Checks: Integer;
 procedure Check(B: Boolean; const S: String);
 begin Inc(Checks); if not B then raise Exception.Create(S) end;
@@ -15,6 +16,51 @@ type TObserver=class
 end;
 procedure TObserver.Receive(S: TTransportSession; const D: TTrainerDataRecord);
 begin Inc(Count); Packet:=D end;
+
+type TOfflineControllerSession=class(TWinRTBLESession)
+  procedure InputState(State:TConnectionState;Obc:Boolean);
+end;
+procedure TOfflineControllerSession.InputState(State:TConnectionState;Obc:Boolean);
+begin
+  FConnectionState:=State;
+  FDeviceInfo.SupportsShifting:=Obc;
+end;
+
+procedure TestControllerRouting;
+var S:TOfflineControllerSession;O:TObserver;Cursor:TControllerGearCursor;G:Integer;
+begin
+  S:=TOfflineControllerSession.Create('00:00:00:00:00:02','offline controller');
+  O:=TObserver.Create;
+  try
+    S.OnDataReceived:=@O.Receive;
+    S.InputState(csConnecting,False);
+    S.ReceiveCharacteristicData(OpenBikeControlButtonUUID,TBytes.Create(1,1,1));
+    Check(O.Count=0,'OBC published before source selection');
+    S.InputState(csConnected,False); { dual-service peripheral selected native }
+    S.ReceiveCharacteristicData(ZwiftNotifyUUID,TBytes.Create($37,8,0,$10,1));
+    Check(O.Count=1,'native controller input lost');
+    Cursor:=Default(TControllerGearCursor);
+    G:=ConsumeControllerGears(Cursor,O.Packet,12,24);
+    Check(G=13,'native shift lost');
+    S.ReceiveCharacteristicData(OpenBikeControlButtonUUID,TBytes.Create(1,1,0));
+    S.ReceiveCharacteristicData(OpenBikeControlButtonUUID,TBytes.Create(1,1,1));
+    Check(O.Count=1,'dual-service OBC input duplicated native input');
+  finally S.Free;O.Free end;
+  S:=TOfflineControllerSession.Create('00:00:00:00:00:03','offline OBC');
+  O:=TObserver.Create;
+  try
+    S.OnDataReceived:=@O.Receive;S.InputState(csConnected,True);
+    S.ReceiveCharacteristicData(OpenBikeControlButtonUUID,TBytes.Create(1,1,1,$1B,$94));
+    Check(O.Count=1,'OBC callback not published');
+    Check(O.Packet.PresentMetrics=[tmController,tmSteering],'OBC metric mask');
+    Near(O.Packet.SteeringAngle,10,'OBC angle');
+    Cursor:=Default(TControllerGearCursor);
+    Check(ConsumeControllerGears(Cursor,O.Packet,12,24)=13,'OBC shift');
+    S.InputState(csDisconnected,True);
+    S.ReceiveCharacteristicData(OpenBikeControlButtonUUID,TBytes.Create(1,2,1));
+    Check(O.Count=1,'late disconnected callback published');
+  finally S.Free;O.Free end;
+end;
 
 procedure TestBLE;
 var S:TWinRTBLESession; O:TObserver; T:TDateTime; E:TGameDeviceEntry;
@@ -170,6 +216,6 @@ begin
   finally A.Free end;
 end;
 begin
-  TestBLE; TestRevolutions; TestANT; TestStatus;
+  TestBLE; TestRevolutions; TestANT; TestStatus; TestControllerRouting;
   Writeln('PASS DeviceProtocolTests ',Checks,' checks');
 end.

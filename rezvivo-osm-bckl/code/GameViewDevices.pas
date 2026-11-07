@@ -278,7 +278,8 @@ begin
     if E.ConnectionState=gdcsConnected then begin
       B:=TMenuButton.Create(Card);B.Name:='DisconnectDevice'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickDisconnect;
       BindUiText(B,'Disconnect');B.FontSize:=14/S;B.Anchor(hpRight,-14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
-      if E.DeviceInfo.SupportsSteering and not IsZwiftControllerName(E.DeviceInfo.Name) then begin
+      if E.DeviceInfo.SupportsSteering and not IsZwiftControllerName(E.DeviceInfo.Name) and
+        not E.DeviceInfo.SupportsShifting then begin
         B:=TMenuButton.Create(Card);B.Name:='CenterSteering'+IntToStr(I);B.Tag:=I;B.OnClick:=@ClickCenterSteering;
         BindUiText(B,'Center steering');B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
       end;
@@ -289,7 +290,7 @@ begin
       else BindUiText(B,'Add to steering pair');
       B.FontSize:=14/S;B.Anchor(hpLeft,14/S);B.Anchor(vpBottom,12/S);Card.InsertFront(B);
     end;
-    if IsZwiftControllerName(E.DeviceInfo.Name)then begin
+    if IsZwiftControllerName(E.DeviceInfo.Name)or E.DeviceInfo.SupportsShifting then begin
       B:=TMenuButton.Create(Card);B.Name:='UseGears'+IntToStr(I);B.Tag:=I;
       B.OnClick:=@ClickGearController;B.FontSize:=14/S;
       if DeviceService.IsGearController(E)then BindUiText(B,'Stop using for shifting')

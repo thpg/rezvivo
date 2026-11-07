@@ -43,7 +43,7 @@ function ZwiftHandshakeRequest(const Name:String=''): TBytes;
 function ZwiftHandshakeReply(const Bytes: TBytes): TZwiftHandshake;
 implementation
 uses Math;
-var ControllerGeneration:LongInt=0;
+
 function ZwiftControllerLocked(const Bytes:TBytes):Boolean;
 begin
   Result:=(Length(Bytes)=5)and(Bytes[0]=$FF)and(Bytes[1]=$05)and
@@ -143,7 +143,7 @@ begin
   FreeAndNil(FCrypto);FEncryptedRequired:=False;
   FEdge.Reset;FSerial:=0;FDirection:=0;FShiftUp:=False;FShiftDown:=False;
   FJournal:=Default(TTrainerDataRecord);
-  FJournal.ControllerGeneration:=Cardinal(InterlockedIncrement(ControllerGeneration));
+  FJournal.ControllerGeneration:=NextControllerGeneration;
 end;
 destructor TZwiftControllerParser.Destroy;
 begin FCrypto.Free;inherited end;
@@ -177,7 +177,7 @@ procedure TZwiftControllerParser.RecordShift(Direction:ShortInt);
 begin
   if FJournal.ControllerSerial=High(Cardinal) then begin
     FJournal.ControllerSerial:=0;
-    FJournal.ControllerGeneration:=Cardinal(InterlockedIncrement(ControllerGeneration));
+    FJournal.ControllerGeneration:=NextControllerGeneration;
   end;
   FJournal.ControllerActions[FJournal.ControllerSerial mod 16]:=Direction;
   Inc(FJournal.ControllerSerial);

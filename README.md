@@ -59,6 +59,7 @@ Read the guide below or [browse all features on the website](https://rezvivo.com
     on-screen controls.
 
 7. **Virtual shifting.** Shift virtual gears using Zwift Click, Play or Ride controllers,
+    [OpenBikeControl BLE controllers and bridges](docs/openbikecontrol.md),
     on-screen buttons, or Page Up / Page Down. The ride panel shows the current gear or ERG mode.
     Enabled by default, with an option to turn it off in device settings. Requires a compatible
     controllable trainer; the calculated-resistance mode also needs live cadence. Experimental

@@ -15,10 +15,10 @@ interface
 uses
   Classes, SysUtils, SyncObjs,
   TrainerData, GameTransportBase, FTMSProtocol, CyclingANTProtocol, EliteSterzoProtocol,
-  ZwiftControllerProtocol, GameVirtualGearing;
+  ZwiftControllerProtocol, OpenBikeControlProtocol, GameVirtualGearing;
 
 type
-  TScannedDev = record Name, Address: string; RSSI: Int16; end;
+  TScannedDev = record Name, Address: string; RSSI: Int16; HasObc: Boolean; end;
 
   TPairOutcome = (poAlreadyPaired, poPaired, poFailed, poCannotPair);
 
@@ -46,6 +46,9 @@ type
     FZwiftControl: Pointer;
     FZwiftEvent: TEvent;
     FZwiftParser: TZwiftControllerParser;
+    FHasObc: Boolean;
+    FObcAppInfo: Pointer;
+    FObcParser: TOpenBikeControlParser;
     FFTMSCtrlChar: Pointer;
     FFECWriteChar: Pointer;  { FE-C control write (6e40fec3) }
     FFECChannel: Byte;
@@ -111,7 +114,7 @@ type
     class function TransportType: TTransportType; override;
     function AdapterDisplayName: string; override;
     function AdapterKey: string; override;
-    procedure AddScanResult(const AName, AAddr: string; ARSSI: Int16);
+    procedure AddScanResult(const AName, AAddr: string; ARSSI: Int16; HasObc: Boolean);
     function PairDevice(const AAddress: string): Boolean;
   end;
 
@@ -149,6 +152,7 @@ type
   TVtNoArg = function(S: PIUnk): HRESULT; stdcall;
   TVtFromAddr = function(S: PIUnk; Addr: UInt64; out Op: PIUnk): HRESULT; stdcall;
   TVtFromId = function(S: PIUnk; Id: HSTRING; out Op: PIUnk): HRESULT; stdcall;
+  TVtGetAtGUID = function(S: PIUnk; Idx: Cardinal; out V: TGUID): HRESULT; stdcall;
   TVtGetAt = function(S: PIUnk; Idx: Cardinal; out V: PIUnk): HRESULT; stdcall;
   TVtCallMode = function(S: PIUnk; Mode: Integer; out Op: PIUnk): HRESULT; stdcall;
   TVtCallMode2 = function(S: PIUnk; Mode1, Mode2: Integer; out Op: PIUnk): HRESULT; stdcall;
@@ -528,6 +532,7 @@ var
   Adv: PIUnk;
   NameH: HSTRING;
   Name, AddrS: string;
+  Uuids: PIUnk; Count: Cardinal; I: Integer; G: TGUID; HasObc: Boolean;
 begin
   Result := S_OK;
   if (Args = nil) or (Self^.UserData = nil) then Exit;
@@ -538,6 +543,7 @@ begin
   TVtGetU64(VT(Args)^[7])(Args, Addr);
   AddrS := MacToStr(Addr);
   Name := '';
+  HasObc := False;
   Adv := nil;
   if TVtGetObj(VT(Args)^[10])(Args, Adv) = S_OK then
   begin
@@ -547,11 +553,22 @@ begin
       TVtGetHS(VT(Adv)^[8])(Adv, NameH);
       Name := HSToStr(NameH);
       if NameH <> 0 then _HDelete(NameH);
-      SafeRelease(Adv);
+      Uuids:=nil;
+      try
+        { IBluetoothLEAdvertisement.ServiceUuids -> IVector<Guid>. }
+        if TVtGetObj(VT(Adv)^[10])(Adv,Uuids)=S_OK then
+          if Uuids<>nil then begin
+            Count:=0;
+            if TVtGetU32(VT(Uuids)^[7])(Uuids,Count)=S_OK then
+              for I:=0 to Min(Integer(Count),64)-1 do
+                if TVtGetAtGUID(VT(Uuids)^[6])(Uuids,I,G)=S_OK then
+                  HasObc:=HasObc or (GuidStr(G)=OpenBikeControlServiceUUID);
+          end;
+      finally SafeRelease(Uuids); SafeRelease(Adv) end;
     end;
   end;
   try
-    UD^.Prov.AddScanResult(Name, AddrS, RSSI);
+    UD^.Prov.AddScanResult(Name, AddrS, RSSI, HasObc);
   except
     on E: Exception do
       Logger.Warning('[WinRT] Scan callback exception: ' + E.Message);
@@ -667,6 +684,15 @@ begin
         if Valid then FZwiftReady:=True;
       end;
       if FZwiftReady or(Handshake<>zhNone)then FZwiftEvent.SetEvent;
+    finally FLock.Leave end;
+    if Valid then PublishMeasurement(Parsed);
+    Exit;
+  end;
+  if Pos(OpenBikeControlButtonUUID,U)>0 then
+  begin
+    FLock.Enter;
+    try Valid:=FObcParser.Parse(Data,Parsed);
+      Valid:=Valid and FDeviceInfo.SupportsShifting and (FConnectionState=csConnected);
     finally FLock.Leave end;
     if Valid then PublishMeasurement(Parsed);
     Exit;
@@ -898,6 +924,7 @@ begin
   FSterzoChallengeEvent := TEvent.Create(nil, False, False, '');
   FZwiftEvent:=TEvent.Create(nil,False,False,'');
   FZwiftParser:=TZwiftControllerParser.Create;
+  FObcParser:=TOpenBikeControlParser.Create;
   FDevice := nil;
   FFTMSParser := TFTMSParser.Create;
   FFECParser := TCyclingANTParser.Create;
@@ -955,6 +982,7 @@ begin
   FreeAndNil(FSterzoChallengeEvent);
   FreeAndNil(FZwiftEvent);
   FreeAndNil(FZwiftParser);
+  FreeAndNil(FObcParser);
   FFTMSParser.Free;
   FFECParser.Free;
   inherited;
@@ -1049,8 +1077,9 @@ begin
   FHasZwift:=False; FZwiftSubscribed:=False;
   FZwiftReady:=False; FZwiftEncrypted:=False;
   FZwiftParser.Reset; FZwiftEvent.ResetEvent;
+  FHasObc:=False; FObcParser.Reset;
   FSterzoResponse:=nil; FSterzoChallengeEvent.ResetEvent;
-  FDeviceInfo.SupportsSteering:=False;
+  FDeviceInfo.SupportsSteering:=False; FDeviceInfo.SupportsShifting:=False;
   FLock.Enter;
   try FLastData:=Default(TTrainerDataRecord) finally FLock.Leave end;
 
@@ -1137,9 +1166,10 @@ begin
     FDeviceInfo.SupportsHeartRate := FDeviceInfo.SupportsHeartRate or FHasHR or FTrainerFeatures.SupportsHeartRate;
     FDeviceInfo.SupportsSteering := FHasSteering or
       (FHasZwift and(IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC)));
+    FDeviceInfo.SupportsShifting:=PreferOpenBikeControl(FHasObc,FHasZwift,FHasSteering);
     FTrainerFeatures.SupportsVirtualGearing:=False;
 
-    if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
+    if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift and not FHasObc then
     begin
       FDeviceInfo.SupportsSteering:=True;
       Disconnect;
@@ -1164,6 +1194,9 @@ begin
       SetConnectionState(csError, 'STERZO activation failed. Wake the steering plate and reconnect.');
       Exit;
     end;
+    { Optional: tells the controller which buttons this app handles. }
+    FDeviceInfo.SupportsSteering:=FDeviceInfo.SupportsSteering or FDeviceInfo.SupportsShifting;
+    if FDeviceInfo.SupportsShifting and (FObcAppInfo<>nil) then WriteFTMSControl(FObcAppInfo,OpenBikeControlAppInfo);
 
     Logger.Info(Format('[WinRT] Caps: FTMS=%s Power=%s HR=%s CSC=%s FEC=%s',
       [BoolToStr(FHasFTMS,True), BoolToStr(FHasPower,True),
@@ -1172,7 +1205,8 @@ begin
 
     { Не фитнес-устройство — отключаемся, не засоряем список }
     if (not FHasFTMS) and (not FHasPower) and (not FHasFEC)
-       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) and (not FHasZwift) then
+       and (not FHasHR) and (not FHasCSC) and (not FHasSteering) and (not FHasZwift)
+       and (not FHasObc) then
     begin
       Logger.Info('[WinRT] No fitness services — disconnecting');
       Disconnect;
@@ -1221,11 +1255,15 @@ begin
       on E: Exception do
         Logger.Warning('[WinRT] ConnectionStatusChanged subscribe error: ' + E.ClassName + ': ' + E.Message);
     end;
-    if FHasSteering or FHasZwift then
+    if FHasSteering or FHasZwift or FDeviceInfo.SupportsShifting then
     begin
       FLock.Enter;
-      try InitialData:=FLastData finally FLock.Leave end;
-      if tmSteering in InitialData.ValidMetrics then PublishMeasurement(InitialData);
+      try
+        if FDeviceInfo.SupportsShifting then InitialData:=FObcParser.Snapshot
+        else InitialData:=FLastData;
+        InitialData.PresentMetrics:=InitialData.ValidMetrics * [tmSteering,tmController];
+      finally FLock.Leave end;
+      if InitialData.PresentMetrics<>[] then PublishMeasurement(InitialData);
     end;
     Result := True;
   finally
@@ -1550,6 +1588,7 @@ begin
           if Pos(SterzoServiceUUID, SvcS) > 0 then FHasSteering := True;
           if (Pos(ZwiftServiceUUID,SvcS)>0) or (Pos(ZwiftRideServiceUUID,SvcS)>0) then
             FHasZwift:=True;
+          if Pos(OpenBikeControlServiceUUID,SvcS)>0 then FHasObc:=True;
 
           Svc3 := nil;
           if QI(Svc, IID_ISvc3, Svc3) = S_OK then
@@ -1635,6 +1674,11 @@ begin
                             FSterzoControl:=Ch;
                             TVtNoArg(VT(Ch)^[1])(Ch);
                           end;
+                          if (Pos(OpenBikeControlAppInfoUUID,ChS)>0) and ((Props and $08)<>0) then
+                          begin
+                            FObcAppInfo:=Ch;
+                            TVtNoArg(VT(Ch)^[1])(Ch);
+                          end;
                           if ((Props and $02)<>0) and
                             ((Pos('2acc',ChS)>0) or (Pos('2ad8',ChS)>0) or
                              (Pos('2ad6',ChS)>0) or (Pos('2ad5',ChS)>0) or
@@ -1655,7 +1699,8 @@ begin
                                (Pos('2a5b', ChS) > 0) or (Pos('2ad9', ChS) > 0) or
                                (Pos('2a19', ChS) > 0) or (Pos('2ada',ChS)>0) or
                                (Pos(SterzoAngleUUID,ChS)>0) or (Pos(SterzoChallengeUUID,ChS)>0) or
-                               (Pos(ZwiftNotifyUUID,ChS)>0) or (Pos(ZwiftResponseUUID,ChS)>0) then
+                               (Pos(ZwiftNotifyUUID,ChS)>0) or (Pos(ZwiftResponseUUID,ChS)>0) or
+                               (Pos(OpenBikeControlButtonUUID,ChS)>0) then
                             begin
                               { Don't set ProtectionLevel — let Windows handle encryption transparently }
 
@@ -1798,6 +1843,7 @@ begin
   FFTMSCtrlChar := nil;
   if FSterzoControl<>nil then begin SafeRelease(PIUnk(FSterzoControl)); FSterzoControl:=nil end;
   if FZwiftControl<>nil then begin SafeRelease(PIUnk(FZwiftControl)); FZwiftControl:=nil end;
+  if FObcAppInfo<>nil then begin SafeRelease(PIUnk(FObcAppInfo)); FObcAppInfo:=nil end;
   if FFECWriteChar <> nil then begin SafeRelease(PIUnk(FFECWriteChar)); FFECWriteChar := nil; end;
 end;
 
@@ -2089,7 +2135,7 @@ begin
   Result := 'Bluetooth';
 end;
 
-procedure TWinRTBLEProvider.AddScanResult(const AName, AAddr: string; ARSSI: Int16);
+procedure TWinRTBLEProvider.AddScanResult(const AName, AAddr: string; ARSSI: Int16; HasObc: Boolean);
 var
   I: Integer;
 begin
@@ -2101,6 +2147,10 @@ begin
         if (AName <> '') and (FScanned[I].Name = '') then
           FScanned[I].Name := AName;
         FScanned[I].RSSI := ARSSI;
+        if HasObc and not FScanned[I].HasObc then begin
+          FScanned[I].HasObc:=True;
+          FLastReported:=Min(FLastReported,I);
+        end;
         Exit;
       end;
     if FScannedCount >= Length(FScanned) then
@@ -2108,6 +2158,7 @@ begin
     FScanned[FScannedCount].Name := AName;
     FScanned[FScannedCount].Address := AAddr;
     FScanned[FScannedCount].RSSI := ARSSI;
+    FScanned[FScannedCount].HasObc := HasObc;
     Inc(FScannedCount);
   finally
     FScannedLock.Leave;
@@ -2210,7 +2261,8 @@ begin
         DevInfo.TransportType := ttBLE;
         DevInfo.ProviderName := 'WinRT';
         DevInfo.RSSI := Snap[J].RSSI;
-        DevInfo.SupportsSteering := IsSterzoName(DevInfo.Name) or IsZwiftControllerName(DevInfo.Name);
+        if Snap[J].HasObc then DiscoverOpenBikeControl(DevInfo,OpenBikeControlServiceUUID);
+        DevInfo.SupportsSteering := DevInfo.SupportsSteering or IsSterzoName(DevInfo.Name) or IsZwiftControllerName(DevInfo.Name);
 
         if Assigned(OnDeviceFound) then
           OnDeviceFound(DevInfo);

@@ -31,6 +31,7 @@ type
     ConnectionState: TGameDeviceConnectionState;
     LastMessage: String;
     TestedNotFitness: Boolean;  { device was connected, found no fitness services }
+    ControllerPairingRequested: Boolean; { explicit Connect, not a discovery probe }
 
     { Время последней реальной смены ConnectionState (TDateTime, локальное).
       Используется CheckStaleConnections для отлова "застрявших"

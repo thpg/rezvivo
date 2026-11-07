@@ -83,6 +83,7 @@ type
     SupportsSpeed: Boolean;
     SupportsHeartRate: Boolean;
     SupportsSteering: Boolean;
+    SupportsShifting: Boolean;     // OpenBikeControl input; native Zwift is name-based
   end;
 
   // Возможности трейнера (FTMS Features)
@@ -124,6 +125,8 @@ const
     'Unknown', 'BLE', 'ANT+', 'Ethernet', 'Wi-Fi', 'USB', 'Serial', 'Sim'
   );
 
+function NextControllerGeneration: Cardinal;
+
 procedure BeginTrainerPacket(var Data: TTrainerDataRecord);
 procedure MarkTrainerMetric(var Data: TTrainerDataRecord; Metric: TTrainerMetric;
   Valid: Boolean = True);
@@ -131,6 +134,13 @@ procedure MergeTrainerData(var Dest: TTrainerDataRecord; const Source: TTrainerD
 function LearnTrainerMetrics(var Info: TDeviceInfo; const Data: TTrainerDataRecord): Boolean;
 
 implementation
+
+var ControllerGeneration: LongInt = 0;
+
+function NextControllerGeneration: Cardinal;
+begin
+  Result := Cardinal(InterlockedIncrement(ControllerGeneration));
+end;
 
 procedure BeginTrainerPacket(var Data: TTrainerDataRecord);
 begin

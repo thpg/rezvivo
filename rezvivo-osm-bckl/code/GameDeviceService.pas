@@ -169,7 +169,7 @@ type
     procedure DisableContinuousScan;
 
     { ── Подключение / отключение конкретного устройства ── }
-    procedure ConnectDevice(AEntry: TGameDeviceEntry);
+    procedure ConnectDevice(AEntry: TGameDeviceEntry; ExplicitRequest: Boolean = True);
     procedure DisconnectDevice(AEntry: TGameDeviceEntry);
 
     { Управление симуляцией: вызывается из ViewPlay.Start/Stop, чтобы
@@ -616,6 +616,10 @@ begin
       Exit;
     end;
 
+    { A discovery probe may find a controller whose advertisement omitted UUIDs.
+      Its queued notifications must not bypass explicit pairing. }
+    if Device.SupportsShifting and (Entry.ConnectionState<>gdcsConnected) then Exit;
+
     if Entry.DiscoverMetrics(Data) then
     begin
       if FAutoAssign then DoAutoAssign;
@@ -673,6 +677,19 @@ begin
 
   Entry.DeviceInfo := Device;
   MappedState := MapState(State);
+
+  if (State=csConnected) and Device.SupportsShifting and
+    not Entry.ControllerPairingRequested and (Entry<>FPendingDevice) and
+    not FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[Device.TransportType],Device.Address) then
+  begin
+    ClearSensorsOfDevice(Entry);
+    Entry.ConnectionState:=gdcsDisconnected;
+    Entry.LastMessage:='Select this controller to use it';
+    FManager.Disconnect(Device.Address);
+    Log('Controller requires explicit pairing: '+Entry.DisplayName);
+    if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
+    Exit;
+  end;
 
   { Запоминаем момент реальной смены состояния — отдельно от
     повторных событий с тем же стейтом. По этому таймстемпу
@@ -805,7 +822,7 @@ begin
       E := FDevices[I];
       if (E.ConnectionState in [gdcsDisconnected, gdcsError]) and
         not E.TestedNotFitness and IsTransportEnabledInGame(E.DeviceInfo.TransportType, E.DeviceInfo.SupportsSteering) and
-        ShouldAutoConnect(E) then ConnectDevice(E);
+        ShouldAutoConnect(E) then ConnectDevice(E,False);
     end;
   if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
 end;
@@ -832,7 +849,7 @@ begin
   if AEntry = FPendingDevice then Exit(True);
   { New controller pairing is explicit. Never claim nearby riders' remotes
     merely because a scan advertises a recognizable controller name. }
-  if IsZwiftControllerName(D.Name) then
+  if IsZwiftControllerName(D.Name) or D.SupportsShifting then
     Exit(FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[D.TransportType],D.Address));
   if not FAssignments.HasRemembered then Exit(True);
   if FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[D.TransportType], D.Address) then Exit(True);
@@ -1069,6 +1086,7 @@ begin
          IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) and
          AcceptSimulationDevice(Entry.DeviceInfo) and
          Entry.IsControllable and
+         (FSimulationEnabled = (Entry.DeviceInfo.TransportType=ttSim)) and
          (FSimulationEnabled or FAssignments.Allows(drControllable,
            TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType], Entry.DeviceInfo.Address)) then
       begin
@@ -1088,7 +1106,8 @@ begin
     if FAssignments.Selection[Role].Mode=dsmAutomatic then
       for I:=0 to FDevices.Count-1 do begin
         Entry:=FDevices[I];
-        if(Entry.ConnectionState=gdcsConnected)and IsZwiftControllerName(Entry.DeviceInfo.Name)and
+        if(Entry.ConnectionState=gdcsConnected)and
+          (IsZwiftControllerName(Entry.DeviceInfo.Name)or Entry.DeviceInfo.SupportsShifting)and
           not IsGearController(Entry)then begin
           Changed:=FAssignments.Select(Role,TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],
             Entry.DeviceInfo.Address,Entry.DeviceInfo.Name)or Changed;Break;
@@ -1196,7 +1215,7 @@ begin
     FOnDevicesChanged;
 end;
 
-procedure TGameDeviceService.ConnectDevice(AEntry: TGameDeviceEntry);
+procedure TGameDeviceService.ConnectDevice(AEntry: TGameDeviceEntry; ExplicitRequest: Boolean);
 begin
   if not Assigned(AEntry) then Exit;
   if not AcceptSimulationDevice(AEntry.DeviceInfo) then Exit;
@@ -1214,6 +1233,7 @@ begin
     Exit;
   end;
 
+  if ExplicitRequest then AEntry.ControllerPairingRequested:=True;
   FManager.Connect(AEntry.DeviceInfo.Address,
     AEntry.DisplayName,
     AEntry.DeviceInfo.ProviderName);
@@ -1467,13 +1487,19 @@ end;
 { ── Чтение активных сенсоров ── }
 
 function TGameDeviceService.ReadSteering(out Degrees: Single): Boolean;
-var S: TDeviceSensor;
+var S: TDeviceSensor; E: TGameDeviceEntry;
 begin
   Degrees:=0; S:=FActiveSensors[skSteering];
   { STERZO may notify only on changes. An unmoved handlebar is not signal
     loss: disconnection/health events clear the active slot instead. }
   Result:=(S<>nil) and S.HasData;
-  if Result then Degrees:=S.Instant-FAssignments.SteeringCenter;
+  if Result then
+  begin
+    Degrees:=S.Instant;
+    E:=FindDeviceByAddress(S.DeviceAddress);
+    if (E=nil) or not E.DeviceInfo.SupportsShifting then
+      Degrees:=Degrees-FAssignments.SteeringCenter;
+  end;
 end;
 
 function TGameDeviceService.CenterSteering: Boolean;
@@ -1484,7 +1510,8 @@ begin
   if Result then
   begin
     E:=FindDeviceByAddress(S.DeviceAddress);
-    if (E<>nil) and IsZwiftControllerName(E.DeviceInfo.Name) then Exit(False);
+    { OpenBikeControl angles are calibrated by the controller itself. }
+    if (E<>nil) and (IsZwiftControllerName(E.DeviceInfo.Name) or E.DeviceInfo.SupportsShifting) then Exit(False);
   end;
   if Result then Result:=FAssignments.CenterSteering(S.Instant);
   if Result then begin SaveAssignments; ResetSteeringInput end;
@@ -1617,7 +1644,8 @@ end;
 procedure TGameDeviceService.SelectGearController(Entry:TGameDeviceEntry);
 var Role:TDeviceRole;Transport:String;
 begin
-  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or not IsZwiftControllerName(Entry.DeviceInfo.Name)then Exit;
+  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or
+    not(IsZwiftControllerName(Entry.DeviceInfo.Name)or Entry.DeviceInfo.SupportsShifting)then Exit;
   RefreshAssignmentsProfile;if not FAssignmentsReady then Exit;
   Transport:=TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType];
   if IsGearController(Entry)then begin

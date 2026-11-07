@@ -21,7 +21,7 @@ interface
 uses
   Classes, SysUtils, SyncObjs,
   SimpleBle, TrainerData, GameTransportBase, FTMSProtocol,
-  ZwiftControllerProtocol, EliteSterzoProtocol, GameVirtualGearing;
+  ZwiftControllerProtocol, EliteSterzoProtocol, OpenBikeControlProtocol, GameVirtualGearing;
 
 type
   TSimpleBLESession = class;
@@ -55,6 +55,9 @@ type
     FSteeringEvent: TEvent;
     FSterzoResponse: TBytes;
     FZwiftParser: TZwiftControllerParser;
+    FHasObc, FObcCanWrite: Boolean;
+    FObcServiceUUID, FObcAppInfoUUID: TSimpleBleUuid;
+    FObcParser: TOpenBikeControlParser;
     function ActivateSteering: Boolean;
     function SetGearedSimulation(Grade,Wind,RiderWeight,BikeWeight,Ratio:Single):Boolean;override;
   private
@@ -477,6 +480,7 @@ begin
   FFTMSParser := TFTMSParser.Create;
   FSteeringEvent:=TEvent.Create(nil,False,False,'');
   FZwiftParser:=TZwiftControllerParser.Create;
+  FObcParser:=TOpenBikeControlParser.Create;
   FHasFTMS := False;
   FHasPower := False;
   FHasFEC := False;
@@ -498,6 +502,7 @@ begin
   FreeAndNil(FFTMSParser);
   FreeAndNil(FSteeringEvent);
   FreeAndNil(FZwiftParser);
+  FreeAndNil(FObcParser);
   inherited;
 end;
 
@@ -597,6 +602,7 @@ begin
   FHasZwift:=False; FHasSterzo:=False; FSteeringReady:=False; FSteeringEncrypted:=False;
   FSteeringSubscribed:=False; FSteeringCanWrite:=False; FSterzoResponse:=nil;
   FSteeringEvent.ResetEvent; FZwiftParser.Reset;
+  FHasObc:=False; FObcCanWrite:=False; FObcParser.Reset;
   FillChar(FFTMSServiceUUID,SizeOf(FFTMSServiceUUID),0);
   FillChar(FFTMSControlUUID,SizeOf(FFTMSControlUUID),0);
   ControlReady:=False;
@@ -650,7 +656,8 @@ begin
          (Pos('6e40fec1', SvcStr) > 0) or  { FE-C }
          (Pos('0000180d', SvcStr) > 0) or  { Heart Rate }
          (Pos('00001816', SvcStr) > 0) or { CSC }
-         (SvcStr=ZwiftServiceUUID) or (SvcStr=ZwiftRideServiceUUID) or (SvcStr=SterzoServiceUUID) then
+         (SvcStr=ZwiftServiceUUID) or (SvcStr=ZwiftRideServiceUUID) or (SvcStr=SterzoServiceUUID) or
+         (SvcStr=OpenBikeControlServiceUUID) then
       begin
         HasUsefulService := True;
         Break;
@@ -701,6 +708,7 @@ begin
     if Pos('00001816', SvcStr) > 0 then begin FHasCSC := True; Logger.Info('[SimpleBLE]     → Cycling Speed & Cadence service detected'); end;
     if (SvcStr=ZwiftServiceUUID) or (SvcStr=ZwiftRideServiceUUID) then FHasZwift:=True;
     if SvcStr=SterzoServiceUUID then FHasSterzo:=True;
+    if SvcStr=OpenBikeControlServiceUUID then FHasObc:=True;
 
     { Subscribe to notifiable characteristics }
     ChCount := Svc.CharacteristicCount;
@@ -715,6 +723,12 @@ begin
         FSteeringServiceUUID:=Svc.Uuid;
         FSteeringControlUUID:=Svc.Characteristics[J].Uuid;
         FSteeringCanWrite:=True;
+      end;
+      if (ChStr=OpenBikeControlAppInfoUUID) and Svc.Characteristics[J].CanWriteRequest then
+      begin
+        FObcServiceUUID:=Svc.Uuid;
+        FObcAppInfoUUID:=Svc.Characteristics[J].Uuid;
+        FObcCanWrite:=True;
       end;
 
       Props := '';
@@ -735,7 +749,8 @@ begin
         fctCyclingPowerMeasurement,fctCSCMeasurement,fctHeartRateMeasurement,
         fctFitnessMachineCP]) and
         (ChStr<>ZwiftNotifyUUID) and (ChStr<>ZwiftResponseUUID) and
-        (ChStr<>SterzoAngleUUID) and (ChStr<>SterzoChallengeUUID) then Continue;
+        (ChStr<>SterzoAngleUUID) and (ChStr<>SterzoChallengeUUID) and
+        (ChStr<>OpenBikeControlButtonUUID) then Continue;
       if Svc.Characteristics[J].CanIndicate and
          ((Pos('2ad9',ChStr)>0) or not Svc.Characteristics[J].CanNotify) and
          Assigned(SimpleBlePeripheralIndicate) then
@@ -767,6 +782,7 @@ begin
   FDeviceInfo.SupportsHeartRate := FHasHR;
   FDeviceInfo.SupportsSteering:=FHasSterzo or
     (FHasZwift and(IsZwiftControllerName(FDeviceInfo.Name)or not(FHasFTMS or FHasPower or FHasFEC)));
+  FDeviceInfo.SupportsShifting:=PreferOpenBikeControl(FHasObc,FHasZwift,FHasSterzo);
   FDeviceInfo.TransportType := ttBLE;
   FDeviceInfo.ProviderName := 'SimpleBLE';
 
@@ -784,7 +800,7 @@ begin
     merely advertising the service is insufficient without its ACK channel. }
   FHasFTMS := ControlReady;
 
-  if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift then
+  if IsZwiftControllerName(FDeviceInfo.Name) and not FHasZwift and not FHasObc then
   begin
     FDeviceInfo.SupportsSteering:=True;
     Disconnect;
@@ -799,12 +815,20 @@ begin
   end;
   FTrainerFeatures.SupportsVirtualGearing:=FHasZwift and FSteeringReady and
     not FDeviceInfo.SupportsSteering and FDeviceInfo.SupportsControl;
+  { Optional: tells the controller which buttons this app handles. }
+  FDeviceInfo.SupportsSteering:=FDeviceInfo.SupportsSteering or FDeviceInfo.SupportsShifting;
+  if FDeviceInfo.SupportsShifting and FObcCanWrite then
+    WriteCharacteristic(FObcServiceUUID,FObcAppInfoUUID,OpenBikeControlAppInfo,True);
   SetConnectionState(csConnected, 'Connected');
   if FDeviceInfo.SupportsSteering then
   begin
     FLock.Enter;
-    try InitialData:=FLastData finally FLock.Leave end;
-    if tmSteering in InitialData.ValidMetrics then PublishMeasurement(InitialData);
+    try
+        if FDeviceInfo.SupportsShifting then InitialData:=FObcParser.Snapshot
+        else InitialData:=FLastData;
+        InitialData.PresentMetrics:=InitialData.ValidMetrics * [tmSteering,tmController];
+      finally FLock.Leave end;
+    if InitialData.PresentMetrics<>[] then PublishMeasurement(InitialData);
   end;
   Logger.Info('[SimpleBLE] Connection complete');
   Result := True;
@@ -868,6 +892,15 @@ begin
       end;
       if Valid then FSteeringReady:=True;
       if FSteeringReady or(Handshake<>zhNone)then FSteeringEvent.SetEvent;
+    finally FLock.Leave end;
+    if Valid then PublishMeasurement(Parsed);
+    Exit;
+  end;
+  if CharUUID=OpenBikeControlButtonUUID then
+  begin
+    FLock.Enter;
+    try Valid:=FObcParser.Parse(Buf,Parsed);
+      Valid:=Valid and FDeviceInfo.SupportsShifting and (FConnectionState=csConnected);
     finally FLock.Leave end;
     if Valid then PublishMeasurement(Parsed);
     Exit;
@@ -1162,7 +1195,7 @@ const
   POLL_INTERVAL_MS = 500;
 
   procedure ReportNewDevices;
-  var J: Integer;
+  var J, K, N: Integer; Service: TSimpleBleService;
   begin
     FScanLock.Enter;
     try
@@ -1183,6 +1216,10 @@ const
         DevInfo.ProviderName := 'SimpleBLE';
         DevInfo.SupportsSteering:=IsSterzoName(DevInfo.Name) or IsZwiftControllerName(DevInfo.Name);
         DevInfo.RSSI := SimpleBlePeripheralRssi(FScanned[J].Handle);
+        N:=Min(Integer(SimpleBlePeripheralServicesCount(FScanned[J].Handle)),64);
+        for K:=0 to N-1 do
+          if SimpleBlePeripheralServicesGet(FScanned[J].Handle,K,Service)=SIMPLEBLE_SUCCESS then
+            DiscoverOpenBikeControl(DevInfo,Service.Uuid.Value);
 
         if Assigned(OnDeviceFound) then
           OnDeviceFound(DevInfo);

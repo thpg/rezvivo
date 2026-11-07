@@ -56,7 +56,9 @@ public final class ServiceRezvivo extends ServiceAbstract {
                     String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
                     if (name == null) name = result.getDevice().getName();
                     if (name == null) name = address;
-                    messageSend(new String[]{"ble-device-found", address, name, Integer.toString(result.getRssi())});
+                    List<ParcelUuid> serviceIds = result.getScanRecord() == null ? null : result.getScanRecord().getServiceUuids();
+                    String services = serviceIds == null ? "" : serviceIds.toString();
+                    messageSend(new String[]{"ble-device-found", address, name, Integer.toString(result.getRssi()), services});
                 } catch (SecurityException e) { stopScan(); }
             });
         }
