@@ -29,8 +29,9 @@ remain unchanged.
 - Changed-button notifications retain held state. Shift presses use the existing
   journal so multiple presses within one rendered frame are preserved.
 - Optional App Information identifies `rezvivo`, its version and exactly these
-  five supported actions. Failure to write optional information does not reject
-  an otherwise usable controller.
+  five supported actions. Unsupported or rejected optional information writes
+  do not reject an otherwise usable controller. A stalled GATT queue still
+  reports a connection error so it can be reconnected safely.
 - Notifications received during discovery are retained and delivered after
   connection completes. Reconnection clears old held state and uses a new shared
   controller generation.
@@ -58,3 +59,8 @@ with an isolated test profile, both without arguments and with `simulation`.
 Existing steering, controller, telemetry and virtual-gearing suites cover the
 native paths. These automated checks do not replace testing physical controllers
 and bridges on each operating system.
+
+`AndroidBleQueueTest.py --jdk /path/to/jdk` runs the actual Android completion
+and rejection methods with substituted scheduling/connection side effects. It
+checks that rejected App Information writes continue the queue, while failed
+subscriptions and trainer commands retain normal error handling.

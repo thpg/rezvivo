@@ -1287,6 +1287,7 @@
   "rezvivo-osm-bckl/rezvivo-windows.manifest",
   "rezvivo-osm-bckl/tests/ActivityAccountingTests.pas",
   "rezvivo-osm-bckl/tests/ActivitySourceTests.pas",
+  "rezvivo-osm-bckl/tests/AndroidBleQueueTest.py",
   "rezvivo-osm-bckl/tests/ArchitectureTests.pas",
   "rezvivo-osm-bckl/tests/AssistantTests.pas",
   "rezvivo-osm-bckl/tests/AssistantVoiceSendTests.pas",

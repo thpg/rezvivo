@@ -118,15 +118,27 @@ public final class ServiceRezvivo extends ServiceAbstract {
         void completed(int status) {
             main.removeCallbacks(timeout);
             if (pending == null) return;
-            if (status != BluetoothGatt.GATT_SUCCESS) { fail("GATT error " + status); return; }
+            if (status != BluetoothGatt.GATT_SUCCESS) { operationRejected("GATT error " + status); return; }
             pending = null; next();
+        }
+        void operationRejected(String reason) {
+            // App Information is optional. A bridge may reject a long write
+            // or expose this characteristic without supporting writes.
+            // Never soften failures of subscriptions or trainer commands.
+            if (pending != null && !pending.subscribe &&
+                pending.service.equalsIgnoreCase("d273f680-d548-419d-b9d1-fa0472345229") &&
+                pending.characteristic.equalsIgnoreCase("d273f683-d548-419d-b9d1-fa0472345229")) {
+                main.removeCallbacks(timeout);
+                messageSend(new String[]{"ble-write-result", address, pending.characteristic, reason});
+                pending = null; next();
+            } else fail(reason);
         }
         void next() {
             if (!ready || pending != null || queue.isEmpty() || gatt == null) return;
             pending = queue.remove();
             BluetoothGattService service = gatt.getService(UUID.fromString(pending.service));
             BluetoothGattCharacteristic c = service == null ? null : service.getCharacteristic(UUID.fromString(pending.characteristic));
-            if (c == null) { fail("GATT characteristic is missing"); return; }
+            if (c == null) { operationRejected("GATT characteristic is missing"); return; }
             boolean accepted;
             if (pending.subscribe) {
                 BluetoothGattDescriptor d = c.getDescriptor(CCCD);
@@ -139,7 +151,7 @@ public final class ServiceRezvivo extends ServiceAbstract {
                 c.setValue(pending.bytes);
                 accepted = gatt.writeCharacteristic(c);
             }
-            if (!accepted) { fail("GATT operation was rejected"); return; }
+            if (!accepted) { operationRejected("GATT operation was rejected"); return; }
             main.postDelayed(timeout, 10000);
         }
         final BluetoothGattCallback callback = new BluetoothGattCallback() {
