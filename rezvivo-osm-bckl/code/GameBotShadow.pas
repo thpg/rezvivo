@@ -96,6 +96,7 @@ begin
   if Bike.RiderJointPos('NeckTwist01',A)and Bike.RiderJointPos('Head',B)then begin
     D:=B-A;if D.Length>0.001 then begin D:=D.Normalize;Segment(B-D*0.03,B+D*0.18,0.10) end;
   end;
+  if not Bike.OnFoot then begin
   Frame('bb','seat_tube_top',0.025);Frame('bb','head_tube_bottom',0.025);
   Frame('seat_tube_top','head_tube_top',0.022);Frame('bb','rear_axle',0.018);
   Frame('seat_tube_top','rear_axle',0.014);Frame('head_tube_bottom','front_axle',0.022);
@@ -106,6 +107,7 @@ begin
     for I:=0 to 15 do begin
       Segment(C+FWheelCircle[I],C+FWheelCircle[I+1],0.02);
     end;
+  end;
   end;
   FCoords.SetPoint(Slice(FPoints,PointCount));
   IndexCount:=(PointCount div 12)*60;

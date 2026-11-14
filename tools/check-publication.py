@@ -160,6 +160,8 @@ def main():
         if p.is_symlink() or ROOT not in p.resolve().parents: errors.append(rel+': symlink/outside repository'); continue
         if (p.suffix.lower() in BLOCKED_SUFFIXES and rel not in public_routes) or lower & BLOCKED_PARTS or p.name.startswith('.env'):
             errors.append(rel+': private/build file type')
+        if any(part.startswith(('anatomyeditor', 'anatomy-editor')) for part in lower) or 'avatareditor' in lower:
+            errors.append(rel+': standalone anatomy/avatar editor is excluded from game publication')
         if rel.startswith('rezvivo-osm-bckl/data/') and rel not in asset_paths:
             errors.append(rel+': not in installer runtime manifest')
         if p.suffix.lower() in TEXT_SUFFIXES or p.name in ('LICENSE', '.gitignore', '.gitattributes'):

@@ -72,6 +72,7 @@ type
     FNextAppearance,FNextOncoming:Double;
     FReferencePower,FFtp:Single;
     FPrepareIndex,FPrepareStage,FVisibleCount,FRenderLimit:Integer;
+    FExternalVisible:Integer;
     FReady,FRenderEnabled,FAnimationEnabled:Boolean;
     FPreparing:Boolean;
     FStarted:Boolean;
@@ -124,6 +125,7 @@ type
     procedure PrepareSocialContact(BotIndex:Integer;AvatarBike:TBikeInstance);
     function SocialAnimationIndex(Slot:Integer):Integer;
     function SocialContactParticipant(BotIndex:Integer):Boolean;
+    function CameraContact(out Helper,Recipient:Integer;out Serial:QWord):Boolean;
     procedure SetRouteExcursion(Active:Boolean;const Nearest:TPathPosition);
     function AnimationStep(Index:Integer;Dt:Single):Single;
     procedure InvalidateShadowPose(Index:Integer);
@@ -131,6 +133,9 @@ type
     procedure SetRenderEnabled(Value:Boolean);
     procedure SetAnimationEnabled(Value:Boolean);
     procedure SetRenderLimit(Value:Integer);
+    function RenderCapacity:Integer;
+    function ReserveAmbientSlot:Boolean;
+    procedure SetExternalVisible(Value:Integer);
     procedure SetPoseCachePolicy(Value:Integer);
     procedure SetCrossings(const Value:TBotCrossingArray);
     function RouteGap(Index:Integer):Single;
@@ -144,6 +149,7 @@ type
     property Ready:Boolean read FReady;
     property PreparedCount:Integer read FPrepareIndex;
     property VisibleCount:Integer read FVisibleCount;
+    property RenderLimit:Integer read FRenderLimit;
     property OnReady:TLocalBotReady read FOnReady write FOnReady;
     property CrossAgent:TLocalBotAgent read FCrossAgent;
     property OnRosterChanged:TNotifyEvent read FOnRosterChanged write FOnRosterChanged;
@@ -157,7 +163,7 @@ uses Math, CastleTimeUtils, CastleURIUtils, RiderBodyParameters, RiderGarmentSta
 function TLocalBotAgent.RequestedCadence:Single;
 begin
   Result:=0;
-  if (State<>nil)and State.AutoMove and(State.AppliedPowerWatts>1)then
+  if (State<>nil)and not State.Walking and State.AutoMove and(State.AppliedPowerWatts>1)then
     Result:=EnsureRange(65.0+State.AppliedPowerWatts*0.1,65.0,105.0);
 end;
 
@@ -641,6 +647,18 @@ begin
     (FSocial.Recipient=BotIndex+1));
 end;
 
+function TLocalBots.CameraContact(out Helper,Recipient:Integer;out Serial:QWord):Boolean;
+begin
+  Helper:=FSocial.Helper;Recipient:=FSocial.Recipient;Serial:=0;
+  Result:=(Helper>0)and(Recipient>=0)and(FSocial.AssistTime>=0.2)and
+    FRenderEnabled and FAnimationEnabled;
+  if not Result then Exit;
+  Result:=GetAgent(Helper-1).Visible and not GetAgent(Helper-1).StartGroundPending;
+  if Recipient>0 then Result:=Result and GetAgent(Recipient-1).Visible and
+    not GetAgent(Recipient-1).StartGroundPending;
+  Serial:=(QWord(Helper)shl 32)or FSocial.Riders[Helper].Helps;
+end;
+
 function TLocalBots.SocialAnimationIndex(Slot:Integer):Integer;
 var H:Integer;
 begin
@@ -702,7 +720,7 @@ begin
     if Behind<>0 then begin
       A.TeleportToPath(P);A.State.CumulativeDistance:=FAvatar.State.CumulativeDistance+Behind;
       A.State.CurrentSpeed:=0;A.State.AppliedPowerWatts:=0;A.Spawned:=True;
-      if FRenderEnabled and(FRenderLimit>0)then SetVisible(0,True);
+      if FRenderEnabled and(FVisibleCount<RenderCapacity)then SetVisible(0,True);
     end else FNextAppearance:=FElapsed+1;
   end;
   Target:=FAvatar.State.AppliedPowerWatts;
@@ -812,15 +830,15 @@ begin
   if FElapsed<FNextAppearance then Exit;
   if not FExcursion.Active and not FAvatar.State.FreeTravel and RiderMoving then TryOncoming;
   if FElapsed<FNextAppearance then Exit;
-  CompanionLimit:=FRenderLimit;
+  CompanionLimit:=RenderCapacity;
   { Keep an overdue encounter's slot available while a bend delays its safe
     distant entry. Otherwise a third companion can starve oncoming traffic
     indefinitely. Close/watched riders are never evicted for this. }
   if not FExcursion.Active and not FAvatar.State.FreeTravel and
      not GetAgent(LocalBotOncomingIndex).Spawned and (FElapsed>=FNextOncoming) and
      (FAvatar.Path.RoadWidthAt(FAvatar.Path.Position)>=3) then
-    CompanionLimit:=Max(1,FRenderLimit-1);
-  if (FVisibleCount>=CompanionLimit)or(FVisibleCount>=FRenderLimit)or not FRenderEnabled then Exit;
+    CompanionLimit:=Max(1,RenderCapacity-1);
+  if (FVisibleCount>=CompanionLimit)or(FVisibleCount>=RenderCapacity)or not FRenderEnabled then Exit;
   for I:=0 to LocalBotCount-1 do begin
     if(FCrossAgent<>nil)and(I=FCrossVisual)then Continue;
     A:=GetAgent(I);if not A.Spawned or A.Visible or A.Oncoming then Continue;
@@ -835,8 +853,8 @@ end;
 function TLocalBots.ReserveTrafficSlot:Boolean;
 var I:Integer;Distance:Single;InCamera:Boolean;
 begin
-  if FRenderLimit=0 then Exit(False);
-  if FVisibleCount>=FRenderLimit then
+  if RenderCapacity=0 then Exit(False);
+  if FVisibleCount>=RenderCapacity then
     for I:=0 to LocalBotCount-1 do
       if GetAgent(I).Visible and not GetAgent(I).Oncoming then begin
         CameraRelation(GetAgent(I),Distance,InCamera);
@@ -845,8 +863,15 @@ begin
           SetVisible(I,False);Break;
         end;
       end;
-  Result:=FVisibleCount<FRenderLimit;
+  Result:=FVisibleCount<RenderCapacity;
 end;
+
+function TLocalBots.RenderCapacity:Integer;
+begin Result:=Max(0,FRenderLimit-FExternalVisible) end;
+function TLocalBots.ReserveAmbientSlot:Boolean;
+begin Result:=ReserveTrafficSlot end;
+procedure TLocalBots.SetExternalVisible(Value:Integer);
+begin FExternalVisible:=EnsureRange(Value,0,LocalBotVisibleLimit) end;
 
 procedure TLocalBots.TryOncoming;
 const AheadM=280.0;
@@ -985,7 +1010,7 @@ end;
 procedure TLocalBots.TryCrossing;
 var I,J,Lap,Visual:Integer;V,P,D,U,ToCam:TVector3;Ahead,Dist,CamDist:Single;
 begin
-  if(FCrossAgent<>nil)or(FRenderLimit=0)or(FAvatar.State.CurrentSpeed<2)or
+  if(FCrossAgent<>nil)or(RenderCapacity=0)or(FAvatar.State.CurrentSpeed<2)or
     (FElapsed<FCrossRetryAt)then Exit;
   Lap:=Floor(Max(0,FAvatar.State.CumulativeDistance)/Max(1,FLength));
   for I:=0 to High(FCrossings)do begin
@@ -1034,9 +1059,9 @@ procedure TLocalBots.SetRenderLimit(Value:Integer);
 var I:Integer;
 begin
   FRenderLimit:=EnsureRange(Value,0,LocalBotVisibleLimit);
-  if(FVisibleCount>FRenderLimit)and(FCrossAgent<>nil)then RemoveCrossing;
+  if(FVisibleCount>RenderCapacity)and(FCrossAgent<>nil)then RemoveCrossing;
   for I:=FAgents.Count-1 downto 0 do
-    if(FVisibleCount>FRenderLimit)and GetAgent(I).Visible then SetVisible(I,False);
+    if(FVisibleCount>RenderCapacity)and GetAgent(I).Visible then SetVisible(I,False);
 end;
 
 procedure TLocalBots.SetPoseCachePolicy(Value:Integer);
@@ -1128,7 +1153,7 @@ begin
     'crossings',Length(FCrossings),'cross_active',FCrossAgent<>nil,
     'cross_created',FCrossSerial,'cross_removed',FCrossRemoved,
     'cross_failed',FCrossFailed,'cross_error',FCrossError,
-    'visible',FVisibleCount,'limit',FRenderLimit,
+    'visible',FVisibleCount,'limit',FRenderLimit,'ambient_visible',FExternalVisible,
     'ready',FReady,'prepared',FPrepareIndex,'max_prepare_ms',Int64(FMaxPrepareMs),
     'last_switch_ms',Int64(FLastSwitchMs),'max_switch_ms',Int64(FMaxSwitchMs),
     'started',FStarted,'elapsed',FElapsed,'reference_power',FReferencePower,

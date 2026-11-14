@@ -11,6 +11,35 @@ function GameVideoStatus: TJSONObject;
 function GameVideoWindTime: Single;
 function GameVideoSurfaceTime: Single;
 implementation
+{$ifdef WASI}
+uses SysUtils, CastleLog;
+
+function CreateGameVideoControl(AOwner: TComponent): TCastleUserInterface;
+begin
+  Result := TCastleUserInterface.Create(AOwner);
+  Result.Exists := False;
+  Result.CapturesEvents := False;
+end;
+procedure StartGameVideo;
+begin
+  WritelnWarning('Video', 'Offline video export requires the desktop encoder and is unavailable in the browser.');
+end;
+procedure StopGameVideo;
+begin end;
+function GameVideoRecording: Boolean;
+begin Result := False end;
+function GameVideoBusy: Boolean;
+begin Result := False end;
+function GameVideoStatus: TJSONObject;
+begin
+  Result := TJSONObject.Create(['state', 'unavailable', 'reason',
+    'The browser cannot run the desktop offline video encoder.']);
+end;
+function GameVideoWindTime: Single;
+begin Result := 0 end;
+function GameVideoSurfaceTime: Single;
+begin Result := 0 end;
+{$else}
 uses SysUtils, CastleKeysMouse, CastleNotifications, CastleImages, CastleGLImages,
   CastleGLUtils, CastleTimeUtils, AppRuntimePaths, UiTranslations, DebugLog,
   GameVideoClock, GameVideoEncoder, Osm3dWind, Osm3dCompositeShader;
@@ -248,4 +277,5 @@ function GameVideoWindTime:Single;
 begin Result:=VideoControl.FWindStart+OfflineVideoClock.Seconds end;
 function GameVideoSurfaceTime:Single;
 begin Result:=VideoControl.FSurfaceStart+OfflineVideoClock.Seconds end;
+{$endif}
 end.

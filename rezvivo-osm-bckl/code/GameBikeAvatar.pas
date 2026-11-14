@@ -96,7 +96,7 @@ procedure ReorientBikeRoot(Root: TX3DRootNode);
 implementation
 
 
-uses GameRiderGarment, RiderGarmentState, GameRiderWardrobe, RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
+uses GameNeuralRiders, GameRiderGarment, RiderGarmentState, GameRiderWardrobe, RiderBodyParameters, RiderHair, RiderHeadAppearance, GameUserData,
   SysUtils, Math, fpjson, jsonparser, CastleURIUtils, CastleVectors, CastleBoxes,
   CastleFilesUtils, BikeJSON, BikeParametric_Animation, BikeGeometryLib,
   DebugLog, AppSettings, GameBikeAutoFit;

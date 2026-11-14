@@ -171,6 +171,7 @@ type
     { Этап 5: позиция сустава в кадре байка для капсульной тени. False —
       сустава нет в риге или SendFrame ещё не считал позиции. }
     function ShadowContact(Index: Integer; out P: TVector3): Boolean;
+    function NeuralJointMatrix(const Name:string;out M:TMatrix4):Boolean;
     function ShadowJoint(const AName: string; out P: TVector3): Boolean;
     function SpineSkin(const Name:string;out M:TMatrix4):Boolean;
     function ShadowHandFrame(Side:Integer;out Forward,Palm:TVector3;out Twist:Single):Boolean;
@@ -258,6 +259,7 @@ constructor TGpuRiderSkin.Create(ARider: TTripoRiderScene);
 begin
   inherited Create;
   FRider := ARider;
+  if FRider<>nil then FRider.NeuralJointQuery:=@NeuralJointMatrix;
   FEffect := nil;
   FReady := False;
   FRestCount := 0;
@@ -277,6 +279,7 @@ destructor TGpuRiderSkin.Destroy;
 begin
   if(FRider<>nil)and(FRider.Lod<>nil)then FRider.Lod.SetBatchActive(False);
   if(FRider<>nil)and(TMethod(FRider.PrepareGpuPose).Data=Pointer(Self))then FRider.PrepareGpuPose:=nil;
+  if(FRider<>nil)and(TMethod(FRider.NeuralJointQuery).Data=Pointer(Self))then FRider.NeuralJointQuery:=nil;
   if(FRider<>nil)and(FRider.Correctives<>nil)then FRider.Correctives.DetachGpu;
   if(FRider<>nil)and(FRider.Face<>nil)then FRider.Face.DetachGpu;
   { FEffect is parented to appearances — it dies with the rider scene.
@@ -1878,6 +1881,16 @@ begin
     end;
 end;
 
+function TGpuRiderSkin.NeuralJointMatrix(const Name:string;out M:TMatrix4):Boolean;
+var J:Integer;Dummy:TVector3;
+begin
+ Result:=False;M:=TMatrix4.Identity;
+ if not Active or not FReady or not FLastValid or(FRider.Rig=nil)then Exit;
+ J:=FRider.Rig.JointIndexByName(Name);if(J<0)or(J>=FRestList.Count)then Exit;
+ ShadowJoint('Head',Dummy);
+ M:=FRider.Scene.Transform*GarmentJointMatrix(J)*FRestList[J].Inverse(FRestList[J].Determinant)*RestToCastle(FRider.Rig.BindWorld[J]);Result:=True;
+end;
+
 function TGpuRiderSkin.ShadowJoint(const AName: string; out P: TVector3): Boolean;
 var I: Integer;
 begin
@@ -2032,7 +2045,7 @@ begin
   for I:=0 to 1 do begin
     FShClavicleDelta[I]:=RiderScapulaDelta(FRider.LeanAxis,
       Pose.ShoulderRoundDeg+Pose.ScapulaProtraction[I],
-      EnsureRange((GripR.X-GripL.X)*220.0,-22.0,22.0),Pose.ScapulaElevation[I],I);
+      FRider.ShoulderTwistDeg,Pose.ScapulaElevation[I],I);
     FScalarsList.Add(FShClavicleDelta[I].X);FScalarsList.Add(FShClavicleDelta[I].Y);
     FScalarsList.Add(FShClavicleDelta[I].Z);FScalarsList.Add(FShClavicleDelta[I].W);
   end;

@@ -279,7 +279,9 @@ begin
 
   { 2. Speed — same acceleration formula at all LODs }
   SpeedBeforeStep := FState.CurrentSpeed;
-  Accel := CalculateAcceleration(FixedDelta);
+  if FState.Walking then
+    Accel:=EnsureRange((EnsureRange(FState.TravelTargetSpeed,0,6)-FState.CurrentSpeed)*4,-4,2)
+  else Accel := CalculateAcceleration(FixedDelta);
   FState.CurrentSpeed := FState.CurrentSpeed + Accel * FixedDelta;
   if FState.CurrentSpeed < 0 then FState.CurrentSpeed := 0;
   if FState.CurrentSpeed > MaxSpeed then FState.CurrentSpeed := MaxSpeed;

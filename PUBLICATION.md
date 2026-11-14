@@ -5,7 +5,7 @@ It contains no history from the private development workspace. The repository's
 existing initial license commit is preserved. No scripts automatically publish
 releases or upload to the REZVIVO website.
 
-Included: Windows game source dependencies, portable build and installer scripts,
+Included: Windows and Android game source dependencies, portable build and installer scripts,
 the installer-selected runtime assets, original workouts, license notices and
 the lock file for our CGE fork. Binary assets use Git LFS. DLLs and generated executables
 belong in reviewed release packages, not Git source history.
@@ -15,6 +15,13 @@ stores, real FIT/GPX activities, generated caches, private diagnostic reports,
 database/server configuration, previous executables, editor-only resources,
 old asphalt textures and third-party workout libraries. Bike JSON files contain
 only model metadata and geometry used by the game's parser.
+
+Anatomy editor source trees, editor applications, training/export tools and
+intermediate anatomy datasets are excluded. Only modules directly used by the
+game and finished runtime models are included. The optional neural rider package
+contains its manifest and the matching `suit.mesh` / `suit.nn` pairs; the game
+does not need the anatomy editor to load them. Installer selection validates
+these pairs and excludes editor instructions, reference dumps and other files.
 
 ## Remaining release work
 

@@ -65,9 +65,30 @@ begin
   if FExploreHint<>nil then FExploreHint.Exists:=FFreeExplore;
 end;
 
+function TViewPlay.NearbyPeopleRoads(const Position:TVector3;Radius:Single):TTravelRoads;
+var I,N,Count:Integer;Q:TVector3;T:Single;R:TTravelRoad;RoadPos:TPathPosition;
+begin
+  Result:=nil;
+  if not HasActiveState then Exit;
+  if(FOsmStreaming<>nil)and(FOsmStreaming.Session<>nil)and(FOsmStreaming.Session.Map<>nil)then
+    Exit(FOsmStreaming.Session.Map.NearbyTravelRoads(Position,Radius));
+  if(FDreamWorld=nil)or(FActiveAvatarAgent.Path.PointCount<3)then Exit;
+  N:=FActiveAvatarAgent.Path.PointCount;Count:=0;
+  for I:=0 to N-1 do begin
+    RoadPos.Segment:=I;RoadPos.T:=0;R:=Default(TTravelRoad);
+    R.A:=FActiveAvatarAgent.Path.RoadCenterAt(RoadPos);
+    R.B:=R.A+FActiveAvatarAgent.Path.FollowTangent(RoadPos);
+    Q:=RoadProjection(Position,R,T);
+    if RoadDistanceSq(Q,Position)>Sqr(Radius)then Continue;
+    R.Width:=FActiveAvatarAgent.Path.PointWidth(I);R.WayId:=1;
+    if Count=Length(Result)then SetLength(Result,Max(64,Count*2));
+    Result[Count]:=R;Inc(Count);
+  end;
+  SetLength(Result,Count);
+end;
+
 function TViewPlay.GuideTravel(Dt,Steer:Single;Turn:Integer):Single;
-var Roads:TTravelRoads;I,N,Count:Integer;P,Q:TVector3;Guided,T,AcquireDelay:Single;
-  R:TTravelRoad;RoadPos:TPathPosition;
+var Roads:TTravelRoads;P:TVector3;Guided,AcquireDelay:Single;
 begin
   Result:=Steer;
   if HasActiveState then FActiveAvatarAgent.State.TravelRoadGuided:=False;
@@ -80,24 +101,7 @@ begin
   if not FFreeExplore and(Turn=0)and(FRoadGuidance.PendingTurn=0)then Exit;
   FRoadRefresh:=FRoadRefresh-Dt;
   if FRoadRefresh<=0 then begin
-    FRoadRefresh:=0.2;Roads:=nil;
-    if(FOsmStreaming<>nil)and(FOsmStreaming.Session<>nil)and(FOsmStreaming.Session.Map<>nil)then
-      Roads:=FOsmStreaming.Session.Map.NearbyTravelRoads(FActiveAvatarAgent.State.WorldPosition,90)
-    else if(FDreamWorld<>nil)and(FActiveAvatarAgent.Path.PointCount>2)then begin
-      { Dream worlds keep their existing authored road/route geometry. }
-      N:=FActiveAvatarAgent.Path.PointCount;Count:=0;
-      for I:=0 to N-1 do begin
-        RoadPos.Segment:=I;RoadPos.T:=0;R:=Default(TTravelRoad);
-        R.A:=FActiveAvatarAgent.Path.RoadCenterAt(RoadPos);
-        R.B:=R.A+FActiveAvatarAgent.Path.FollowTangent(RoadPos);
-        Q:=RoadProjection(FActiveAvatarAgent.State.WorldPosition,R,T);
-        if RoadDistanceSq(Q,FActiveAvatarAgent.State.WorldPosition)>Sqr(90)then Continue;
-        R.Width:=FActiveAvatarAgent.Path.PointWidth(I);R.WayId:=1;
-        if Count=Length(Roads)then SetLength(Roads,Max(64,Count*2));
-        Roads[Count]:=R;Inc(Count);
-      end;
-      SetLength(Roads,Count);
-    end;
+    FRoadRefresh:=0.2;Roads:=NearbyPeopleRoads(FActiveAvatarAgent.State.WorldPosition,90);
     FRoadGuidance.SetRoads(Roads);
   end;
   P:=FActiveAvatarAgent.State.WorldPosition;

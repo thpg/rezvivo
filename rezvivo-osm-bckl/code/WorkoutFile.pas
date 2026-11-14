@@ -156,7 +156,7 @@ type
     function Clone: TWorkoutFile;
 
     { Загрузка из URL (в т. ч. castle-data:/...). True если получилось. }
-    function LoadFromUrl(const AUrl: String): Boolean;
+    function LoadFromUrl(const AUrl: String; const MaxSegments: Integer = 0): Boolean;
 
     { Сохранение в URL — на v1 только file:///. True если получилось.
       После успешного сохранения сбрасывает Modified в False и обновляет
@@ -517,13 +517,20 @@ function DownloadAsString(const AUrl: String): String;
 var
   Stream: TStream;
   SS: TStringStream;
+  Buffer:array[0..16383]of Byte;
+  Count:LongInt;
 begin
   Result := '';
   Stream := Download(AUrl, []);
   try
     SS := TStringStream.Create('');
     try
-      SS.CopyFrom(Stream, 0);
+      { data: and HTTP decoding streams need not implement Seek/Size.
+        CopyFrom(...,0) seeks to zero and breaks browser ZWO imports. }
+      repeat
+        Count:=Stream.Read(Buffer,SizeOf(Buffer));
+        if Count>0 then SS.WriteBuffer(Buffer,Count);
+      until Count=0;
       Result := SS.DataString;
     finally
       SS.Free;
@@ -1359,7 +1366,7 @@ end;
 
 { ── LoadFromUrl ────────────────────────────────────────────────────── }
 
-function TWorkoutFile.LoadFromUrl(const AUrl: String): Boolean;
+function TWorkoutFile.LoadFromUrl(const AUrl: String; const MaxSegments: Integer): Boolean;
 var
   Doc: TXMLDocument;
   Root, WorkoutNode, Child, HeadChild: TDOMElement;
@@ -1372,6 +1379,8 @@ var
     ADuration, APowerLow, APowerHigh: Single;
     ARepeatGroup: Integer; AIsOnPart: Boolean): TWorkoutSegment;
   begin
+    if (MaxSegments > 0) and (FSegments.Count >= MaxSegments) then
+      raise Exception.Create('Workout contains too many intervals');
     Result := TWorkoutSegment.Create;
     Result.Kind := AKind;
     Result.Duration := ADuration;
@@ -1398,7 +1407,7 @@ var
       if AttrNode.NodeType = ATTRIBUTE_NODE then
         if not IsKnownSegmentAttr(Seg.Kind, String(AttrNode.NodeName)) then
           Seg.RawAttrs.Add(
-            String(AttrNode.NodeName) + '=' + String(AttrNode.NodeValue));
+            UTF8Encode(AttrNode.NodeName) + '=' + UTF8Encode(AttrNode.NodeValue));
     end;
   end;
 
@@ -1445,8 +1454,8 @@ var
                    (AttrLower <> 'message') and
                    (AttrLower <> 'text') then
                   Te.RawAttrs.Add(
-                    String(AttrNode.NodeName) + '=' +
-                    String(AttrNode.NodeValue));
+                    UTF8Encode(AttrNode.NodeName) + '=' +
+                    UTF8Encode(AttrNode.NodeValue));
               end;
             end;
 
@@ -1616,16 +1625,16 @@ begin
 
     HeadChild := Root.ChildElement('name', False);
     if HeadChild <> nil then
-      FName := Trim(String(HeadChild.TextContent));
+      FName := Trim(UTF8Encode(HeadChild.TextContent));
     HeadChild := Root.ChildElement('description', False);
     if HeadChild <> nil then
-      FDescription := Trim(String(HeadChild.TextContent));
+      FDescription := Trim(UTF8Encode(HeadChild.TextContent));
     HeadChild := Root.ChildElement('author', False);
     if HeadChild <> nil then
-      FAuthor := Trim(String(HeadChild.TextContent));
+      FAuthor := Trim(UTF8Encode(HeadChild.TextContent));
     HeadChild := Root.ChildElement('sportType', False);
     if HeadChild <> nil then
-      FSportType := Trim(String(HeadChild.TextContent));
+      FSportType := Trim(UTF8Encode(HeadChild.TextContent));
 
     { Pass-through дочерних элементов <workout_file>: всё кроме
       name/description/author/sportType/workout. Сюда попадают

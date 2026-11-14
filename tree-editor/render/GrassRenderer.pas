@@ -32,12 +32,16 @@ type
     FLodSettings:TGrassLodSettings;
     FDensityDistances:GLint;
     FGeometryDetail,FComplexity:GLint;
-    FVertexCache,FViewModel:GLint;
+    FVertexCache,FViewModel,FDecalDepthBias,FDecalRasterScale:GLint;
     FFrameComplexity:Integer;
     FAtlasReady: Boolean;
     FEnvelopes:array[0..GRASS_SPECIES_COUNT-1]of TCardEnvelope;
     FEnvelopeMode,FEnvelopePoints,FEnvelopeViewport:GLint;
     FEnvelopeKind,FFrameBake:Integer;
+    FCardBlend,FBlendSaved:Boolean;
+    FOldBlendSrcRGB,FOldBlendDstRGB,FOldBlendSrcAlpha,FOldBlendDstAlpha:GLint;
+    FOldBlendEquationRGB,FOldBlendEquationAlpha:GLint;
+    procedure SetCardBlend(Enabled:Boolean);
   public
     constructor Create;
     destructor Destroy; override;
@@ -46,7 +50,7 @@ type
     procedure BeginFrame(const Projection,View,Model: TTreeMat4;
       const Camera,Sun: TTreeVec3; Seconds,Wind: Single; Bake: Integer=0; DistanceOverride: Single=-1);
     function DrawSignature(Distant:Boolean;Kind:Integer;NearestDepth,RadialDistance:Single;GroundOnly:Boolean=False):Integer;
-    procedure Draw(Buffer: GLuint; First,Count: Integer; Distant: Boolean; Kind:Integer=-1; NearestDepth:Single=0; GroundOnly:Boolean=False;RadialDistance:Single=-1);
+    function Draw(Buffer: GLuint; First,Count: Integer; Distant: Boolean; Kind:Integer=-1; NearestDepth:Single=0; GroundOnly:Boolean=False;RadialDistance:Single=-1):Integer;
     function DrawAccepted(PatchTexture,Roots,Heads:GLuint;TableWidth,First,Count,StableCount,HeadFirst,HeadCount,WeedCount,Kind:Integer;NearestDepth,RadialDistance:Single):Integer;
     procedure EndFrame;
     function BladeDistance(Kind:Integer):Single;
@@ -226,6 +230,8 @@ begin
   FGeometryDetail:=glGetUniformLocation(FProgram,'uGeometryDetail');
   FVertexCache:=glGetUniformLocation(FProgram,'uVertexCache');
   FViewModel:=glGetUniformLocation(FProgram,'uViewModel');
+  FDecalDepthBias:=glGetUniformLocation(FProgram,'uDecalDepthBias');
+  FDecalRasterScale:=glGetUniformLocation(FProgram,'uDecalRasterScale');
   FTopDistances:=glGetUniformLocation(FProgram,'uTopDistances');
   FBladeViewGain:=glGetUniformLocation(FProgram,'uBladeViewGain');
   FGrowth:=glGetUniformLocation(FProgram,'uGrowth');FVariation:=glGetUniformLocation(FProgram,'uVariation');
@@ -313,10 +319,12 @@ end;
 procedure TGrassPatchRenderer.BeginFrame(const Projection,View,Model:TTreeMat4;const Camera,Sun:TTreeVec3;Seconds,Wind:Single;Bake:Integer;DistanceOverride:Single);
 var K,J:Integer;P,Growth:array[0..31]of Single;Variation:array[0..7]of Single;Weeds:array[0..15]of Single;
     Colors:array[0..23]of Single;ViewGain:array[0..95]of Single;Viewport:array[0..3]of GLint;
-    VerticalX,VerticalY,UpLength:Single;ViewModel:TTreeMat4;Row,Column:Integer;
+    VerticalX,VerticalY,UpLength,DepthScale:Single;ViewModel:TTreeMat4;Row,Column,DepthBits:Integer;
 begin
   FFrameComplexity:=GrassRenderComplexity;if Bake<>0 then FFrameComplexity:=3;
   FTriangles:=0;glGetIntegerv(GL_VIEWPORT,@Viewport[0]);
+  glGetIntegerv(GL_DEPTH_BITS,@DepthBits);
+  if DepthBits<=0 then DepthBits:=24;
   UpLength:=Sqrt(Sqr(Model[4])+Sqr(Model[5])+Sqr(Model[6]));
   VerticalX:=View[0]*Model[4]+View[4]*Model[5]+View[8]*Model[6];
   VerticalY:=View[1]*Model[4]+View[5]*Model[5]+View[9]*Model[6];
@@ -326,6 +334,18 @@ begin
     Max(UpLength*0.35,Sqrt(Sqr(VerticalX)+Sqr(VerticalY)));
   FPerspective:=Abs(Projection[15])<0.5;
   glUseProgram(FProgram);glUniform1i(FComplexity,FFrameComplexity);glBindVertexArray(FVAO);
+  { Allow eight depth steps for rounding in the separately tessellated
+    terrain and instanced patch projections, including float clip precision.
+    A centimetre alone rounds onto the terrain at distant camera angles. }
+  glUniform1f(FDecalDepthBias,Power(2.0,4-Min(24,DepthBits)));
+  { NDC depth change over one screen pixel. The shader evaluates the source
+    plane's slope, like polygon offset, but only for the horizontal carpet.
+    Applying GL_POLYGON_OFFSET_FILL to the whole batch would also pull the
+    upright grass through objects. Works with perspective and ortho bakes. }
+  if FPerspective then DepthScale:=Projection[14] else DepthScale:=Projection[10];
+  glUniform3f(FDecalRasterScale,
+    2*DepthScale/(Projection[0]*Max(1,Viewport[2])),
+    2*DepthScale/(Projection[5]*Max(1,Viewport[3])),Ord(FPerspective));
   FFrameBake:=Bake;glUniform2f(FEnvelopeViewport,Viewport[2],Viewport[3]);
   glUniform1i(FCheapRejects,Ord(VegetationCheapRejects));
   for J:=0 to 3 do begin glEnableVertexAttribArray(J);glVertexAttribDivisor(J,1);end;
@@ -365,6 +385,28 @@ begin
   end else Inc(VegetationGrassProfileHits);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,FAtlas);glUniform1i(FSampler,0);
   glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);
+  FCardBlend:=False;FBlendSaved:=False;
+end;
+procedure TGrassPatchRenderer.SetCardBlend(Enabled:Boolean);
+begin
+  if Enabled=FCardBlend then Exit;
+  if Enabled then begin
+    if not FBlendSaved then begin
+      { Raw rendering also serves the editor. Preserve the caller's blend
+        functions, once per frame, and restore them together in EndFrame. }
+      glGetIntegerv(GL_BLEND_SRC_RGB,@FOldBlendSrcRGB);
+      glGetIntegerv(GL_BLEND_DST_RGB,@FOldBlendDstRGB);
+      glGetIntegerv(GL_BLEND_SRC_ALPHA,@FOldBlendSrcAlpha);
+      glGetIntegerv(GL_BLEND_DST_ALPHA,@FOldBlendDstAlpha);
+      glGetIntegerv(GL_BLEND_EQUATION_RGB,@FOldBlendEquationRGB);
+      glGetIntegerv(GL_BLEND_EQUATION_ALPHA,@FOldBlendEquationAlpha);
+      FBlendSaved:=True;
+      glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+      glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
+    end;
+    glEnable(GL_BLEND);
+  end else glDisable(GL_BLEND);
+  FCardBlend:=Enabled;
 end;
 function TGrassPatchRenderer.DrawSignature(Distant:Boolean;Kind:Integer;NearestDepth,RadialDistance:Single;GroundOnly:Boolean):Integer;
 var Detail,Sparse,Mode:Integer;Pixels,BaseEnd:Single;
@@ -402,19 +444,22 @@ begin
   end;
   Result:=Mode+5*(Detail+3*(Sparse+2*EnsureRange(Kind,0,7)));
 end;
-procedure TGrassPatchRenderer.Draw(Buffer:GLuint;First,Count:Integer;Distant:Boolean;Kind:Integer;NearestDepth:Single;GroundOnly:Boolean;RadialDistance:Single);
+function TGrassPatchRenderer.Draw(Buffer:GLuint;First,Count:Integer;Distant:Boolean;Kind:Integer;NearestDepth:Single;GroundOnly:Boolean;RadialDistance:Single):Integer;
 var I,Grid,Detail,Sparse,IndexCount,Signature,Mode,ShaderMode,AttributeFirst,CardVertices:Integer;Index:GLuint;UseBase,Envelope:Boolean;
   procedure DrawCards(Start,Vertices:Integer);
   begin
+    Inc(Result);
     if UseBase and Assigned(GrassDiagnosticRawDraw)then GrassDiagnosticRawDraw;
     if UseBase then FDrawArraysBase(GL_TRIANGLES,Start,Vertices,Count,First)
     else glDrawArraysInstanced(GL_TRIANGLES,Start,Vertices,Count);
   end;
 begin
+  Result:=0;
   if (Count=0)or(Buffer=0)or(Distant and not FAtlasReady) then Exit;
   glUniform1i(FAcceptedRoots,0);glBindVertexArray(FVAO);
   Signature:=DrawSignature(Distant,Kind,NearestDepth,RadialDistance,GroundOnly);
   if Signature<0 then Exit;
+  SetCardBlend(Distant and(FFrameBake=0));
   Mode:=Signature mod 5;Detail:=(Signature div 5)mod 3;Sparse:=(Signature div 15)mod 2;
   Envelope:=False;
   if Distant and VegetationCardEnvelopes and(FFrameBake=0)and(Kind>=0)and(Kind<GRASS_SPECIES_COUNT)and not(Mode in[3,4])then
@@ -443,9 +488,20 @@ begin
   end;
   if Assigned(GrassDiagnosticDrawMode)then GrassDiagnosticDrawMode(Mode);
   if Distant then begin
-    if Mode in [3,4]then begin DrawCards(CardVertices*GRASS_CARDS,CardVertices);Inc(FTriangles,Int64(CardVertices div 3)*Count);end
-    else if not GrassDrawCarpet then begin DrawCards(0,CardVertices*GRASS_CARDS);Inc(FTriangles,Int64(CardVertices div 3*GRASS_CARDS)*Count);end
-    else begin DrawCards(0,CardVertices*(GRASS_CARDS+1));Inc(FTriangles,Int64(CardVertices div 3*(GRASS_CARDS+1))*Count);end;
+    if not(Mode in [3,4]) then begin
+      DrawCards(0,CardVertices*GRASS_CARDS);
+      Inc(FTriangles,Int64(CardVertices div 3*GRASS_CARDS)*Count);
+    end;
+    if GrassDrawCarpet or(Mode=4)then begin
+      { A decal tests the opaque surface depth, but must retain that surface
+        for RTX reconstruction and subsequent transparent geometry. Writing
+        biased depth produced false terrain normals/shadow seams. Only the
+        mixed card/carpet range needs an extra draw; far carpet stays one. }
+      glDepthMask(GL_FALSE);
+      DrawCards(CardVertices*GRASS_CARDS,CardVertices);
+      glDepthMask(GL_TRUE);
+      Inc(FTriangles,Int64(CardVertices div 3)*Count);
+    end;
   end else begin
     if Mode=1 then begin Index:=FWeedIndices[Ord(Grid=32)];IndexCount:=60 end
     else begin
@@ -462,6 +518,7 @@ begin
     if UseBase and Assigned(GrassDiagnosticRawDraw)then GrassDiagnosticRawDraw;
     if UseBase then FDrawElementsBase(GL_TRIANGLES,IndexCount,GL_UNSIGNED_SHORT,nil,Count,First)
     else glDrawElementsInstanced(GL_TRIANGLES,IndexCount,GL_UNSIGNED_SHORT,nil,Count);
+    Inc(Result);
     Inc(FTriangles,Int64(IndexCount div 3)*Count);
   end;
 end;
@@ -471,6 +528,7 @@ begin
   Result:=0;if PatchTexture=0 then Exit;
   Signature:=DrawSignature(False,Kind,NearestDepth,RadialDistance);
   if Signature<0 then Exit;
+  SetCardBlend(False);
   Mode:=Signature mod 5;Detail:=(Signature div 5)mod 3;Sparse:=(Signature div 15)mod 2;
   Grid:=16;if Kind in[4,6]then Grid:=32;
   if Assigned(GrassDiagnosticDrawMode)then GrassDiagnosticDrawMode(Mode);
@@ -499,7 +557,15 @@ begin
   FLastBuffer:=0;FLastIndex:=0;FLastFirst:=-1;FLastGrid:=-1;FLastMode:=-1;FLastDetail:=-1;
 end;
 procedure TGrassPatchRenderer.EndFrame;
-begin glBindVertexArray(0);glBindBuffer(GL_ARRAY_BUFFER,0);glBindTexture(GL_TEXTURE_2D_ARRAY,0);glUseProgram(0);end;
+begin
+  SetCardBlend(False);
+  if FBlendSaved then begin
+    glBlendFuncSeparate(FOldBlendSrcRGB,FOldBlendDstRGB,FOldBlendSrcAlpha,FOldBlendDstAlpha);
+    glBlendEquationSeparate(FOldBlendEquationRGB,FOldBlendEquationAlpha);
+    FBlendSaved:=False;
+  end;
+  glBindVertexArray(0);glBindBuffer(GL_ARRAY_BUFFER,0);glBindTexture(GL_TEXTURE_2D_ARRAY,0);glUseProgram(0);
+end;
 function TGrassPatchRenderer.BladeDistance(Kind:Integer):Single;
 var H:Single;
 begin

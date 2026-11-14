@@ -125,12 +125,42 @@ def redundant_assets(root):
     return excluded
 
 
+def neural_rider_assets(root):
+    """Ship the inference meshes/weights, never editor exports or diagnostics."""
+    folder = Path(root)/'data/neural-riders'
+    manifest = folder/'manifest.json'
+    if not manifest.is_file():
+        return []  # Optional renderer; the ordinary rider needs none of it.
+    doc = json.loads(manifest.read_text(encoding='utf-8-sig'))
+    if doc.get('schema') != 'rezvivo.game.neural-riders.v1':
+        raise ValueError('Invalid neural rider manifest')
+    result = [manifest]
+    seen = set()
+    for model in doc.get('models', []):
+        directory = model.get('directory')
+        if directory not in ('reduced', 'dense') or directory in seen:
+            raise ValueError('Invalid neural rider model directory')
+        seen.add(directory)
+        for name, key in [('suit.mesh', 'mesh'), ('suit.nn', 'weights')]:
+            path = folder/directory/name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('Missing/linked neural rider asset: '+str(path))
+            if (path.stat().st_size != model.get(key+'_bytes') or
+                    hashlib.sha256(path.read_bytes()).hexdigest() != str(model.get(key+'_sha256', '')).lower()):
+                raise ValueError('Neural rider checksum mismatch: '+str(path))
+            result.append(path)
+    if seen != {'reduced', 'dense'}:
+        raise ValueError('Incomplete neural rider manifest')
+    return result
+
+
 def runtime_assets(root, excluded=None):
     """One resource selection shared by desktop and Android installers."""
     import xml.etree.ElementTree as ET
     root = Path(root)
     seed_files = {p.resolve() for p in ready_route_assets(root)}
     overview_files = {p.resolve() for p in overview_assets(root)}
+    neural_files = {p.resolve() for p in neural_rider_assets(root)}
     if excluded is None:
         excluded = redundant_assets(root)
     for path in sorted((root/'data').rglob('*')):
@@ -151,6 +181,8 @@ def runtime_assets(root, excluded=None):
         if relative.parts[1] == 'ready-routes' and path.resolve() not in seed_files:
             continue
         if relative.parts[1] == 'map-overview' and path.resolve() not in overview_files:
+            continue
+        if relative.parts[1] == 'neural-riders' and path.resolve() not in neural_files:
             continue
         if path.is_symlink():
             raise ValueError(f'Unexpected asset symlink: {path}')

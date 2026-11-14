@@ -1914,5 +1914,10 @@
   "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA сглаживает края после перезапуска. Масштаб сразу уменьшает ширину и высоту 3D: 50% — четверть пикселей. Интерфейс остаётся чётким. Для изменения прежнего числа выборок MSAA нужен перезапуск.",
   "Smooth upscaling": "Сглаживать при увеличении",
   "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "При пониженном разрешении: без галки — крупные чёткие пиксели; с галкой — сглаживание краёв готового изображения.",
-  "RTX screen shadows (experimental)": "Экранные RTX-тени (эксперимент)"
+  "RTX screen shadows (experimental)": "Экранные RTX-тени (эксперимент)",
+  "Neural riders": "Райдеры через нейросеть",
+  "Reduced (18k)": "Уменьшенная (18 тыс.)",
+  "Dense (73k)": "Плотная (73 тыс.)",
+  "Cycling suit for every rider, using selected top and bottom colors. Models are optional and loaded only while enabled. Missing or incompatible models use ordinary riders.": "Велосьют для всех райдеров, с цветами выбранных верха и низа. Сети загружаются только при включении. Если модели отсутствуют или несовместимы, используется обычный вывод.",
+  "Neural rider models are missing or unavailable. Ordinary riders are used.": "Модели нейросетей отсутствуют или недоступны. Используется обычный вывод райдеров."
 }

@@ -258,6 +258,15 @@ const
     '}' + #10 +
     'void PLUG_main_texture_apply(inout vec4 c,const vec3 n) {' + #10 +
     '  c.rgb*=1.0+0.032*rfDetail+0.014*rfMeso+0.027*rfBibsPattern+0.09*rfSeam-0.25*rfPanelTone;' + #10 +
+    '  if(rfRegion>3.5 && rfRegion<4.5){' + #10 +
+    '    // The sewn wrist band follows the authored forearm, not screen/world Y.' + #10 +
+    '    vec3 wrist=vec3(abs(rfPosition.x),rfPosition.y,rfPosition.z)-vec3(.660737,1.386307,.000286);' + #10 +
+    '    float t=dot(wrist,vec3(.913382,0,.407104));' + #10 +
+    '    float aa=max(fwidth(t),.0006);' + #10 +
+    '    float band=1.-smoothstep(-.010-aa,-.010+aa,t);' + #10 +
+    '    float seam=1.-smoothstep(.0006,.0006+aa,abs(t+.029));' + #10 +
+    '    c.rgb*=mix(1.,.58,band);c.rgb=mix(c.rgb,vec3(.38),.35*seam*band);' + #10 +
+    '  }' + #10 +
     '}' + #10 +
     'void PLUG_material_metallic_roughness(inout float m,inout float r) {' + #10 +
     '  m=0.0; r=clamp(rfProfile.z+0.025*rfDetail+0.022*rfMeso+0.020*rfBibsPattern+0.05*rfSeam+rfPanelTone,0.38,0.96);' + #10 +

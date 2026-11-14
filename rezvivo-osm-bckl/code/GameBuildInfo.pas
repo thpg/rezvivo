@@ -4,11 +4,11 @@ unit GameBuildInfo;
 interface
 const
   {$ifdef ANDROID}
-  ClientVersion = '0.4.9-alpha.1';
-  ClientBuild = 26;
+  ClientVersion = '0.4.10-alpha.1';
+  ClientBuild = 27;
   {$else}
-  ClientVersion = '0.4.9-alpha.1';
-  ClientBuild = 24;
+  ClientVersion = '0.4.10-alpha.1';
+  ClientBuild = 25;
   {$endif}
   ClientCaption = 'REZVIVO ' + ClientVersion;
   ClientUserAgent = 'REZVIVO/' + ClientVersion;

@@ -54,7 +54,9 @@ def main():
     for source,relative in runtime_assets(ROOT):
         # Offline Windows speech recognition cannot run on Android. Do not
         # ship its DLLs or a 200 MiB unused language model in the mobile APK.
-        if relative.parts[1]=='speech':continue
+        # Neural suit inference currently requires desktop OpenGL 4.3 compute;
+        # its GLES implementation always falls back to the ordinary rider.
+        if relative.parts[1] in ('speech', 'neural-riders'):continue
         target=stage/relative;target.parent.mkdir(parents=True,exist_ok=True)
         if not target.exists() or target.stat().st_mtime_ns!=source.stat().st_mtime_ns or target.stat().st_size!=source.stat().st_size:
             shutil.copy2(source,target)

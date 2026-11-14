@@ -67,6 +67,7 @@ type
     property StageStartElapsed:Double read FStageStartElapsed;
     property Intensity:Double read FIntensity;
     property SignalLost:Boolean read FSignalLost;
+    property RequireSignal:Boolean read FRequireSignal write FRequireSignal;
     property AutoPaused:Boolean read FAutoPaused;
     property NoPedalingTime:Double read FNoPedalingTime;
     property AutoPauseDelay:Double read GetAutoPauseDelay;
@@ -77,7 +78,7 @@ type
 function WorkoutPedaling(PowerFresh,CadenceFresh:Boolean;PowerWatts,CadenceRpm:Double):Boolean;
 var WorkoutPlayer:TWorkoutPlayer;
 implementation
-uses Math,GameSensorLog,GameWorkoutColors;
+uses Math,GameWorkoutColors{$ifndef WASI},GameSensorLog{$endif};
 
 function WorkoutPedaling(PowerFresh,CadenceFresh:Boolean;PowerWatts,CadenceRpm:Double):Boolean;
 begin
@@ -89,8 +90,10 @@ end;
 
 procedure TWorkoutPlayer.JournalState;
 begin
+  {$ifndef WASI}
   if FPlan<>nil then SensorLog.SetSessionState(FState=wsRunning,FJournalLap,
     EnsureRange(Round(TargetWatts),0,65535));
+  {$endif}
   NotifyStateChanged;
 end;
 
@@ -221,7 +224,9 @@ begin
   FPedalTracking:=False;FNoPedalingTime:=0;
   FIndex:=0;FStageTime:=0;FElapsed:=0;FPosition:=0;
   FStageStartElapsed:=0;Inc(FRevision);
-  Inc(FJournalLap);SensorLog.SetSessionState(False,FJournalLap,0);NotifyStateChanged;
+  Inc(FJournalLap);
+  {$ifndef WASI}SensorLog.SetSessionState(False,FJournalLap,0);{$endif}
+  NotifyStateChanged;
 end;
 
 procedure TWorkoutPlayer.Restart;

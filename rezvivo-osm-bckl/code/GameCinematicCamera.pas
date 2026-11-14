@@ -44,7 +44,7 @@ uses
 type
   TCameraMode = (cmMoto, cmHelicopter, cmRoadside, cmReverse, cmLowTrack,
     cmOrbit, cmStandShot, cmPuddle, cmFrontQuarterLeft, cmFrontQuarterRight,
-    cmRiderPass);
+    cmRiderPass, cmInteraction);
 
   { Optional terrain-height provider. Filled AY with the world Y of the
     terrain mesh at (X, Z); returns True on success, False when the query
@@ -72,6 +72,11 @@ type
     PuddleEntryPosition: TVector3;
     PuddleDuration: Single;
     Subject:TCameraRider;
+    Partner:TCameraRider;
+    PairView:TVector3;
+    PairDistance:Single;
+    LensLift:Single;
+    EventSerial:QWord;
     EncounterKind:TCameraEncounterKind;
     CloseSide:Single;
     { Composition belongs to the shot, including its pending/replay copy.
@@ -107,6 +112,7 @@ type
     Encounters:TCameraEncounterTracker;
     ShotAge:Single;
     HelicopterCooldown:Single;
+    LastInteraction:QWord;
   end;
 
   {$M+}
@@ -137,6 +143,8 @@ type
     FClearPathQuery:TCameraClearPathQuery;
     FRiders:array[0..31]of TCameraRider;
     FRiderCount:Integer;
+    FInteraction,FLastInteraction:QWord;
+    FInteractionA,FInteractionB:Int64;
 
     FCamPos, FCamDir, FCamUp: TVector3;
 
@@ -202,11 +210,15 @@ type
     procedure PlaceStandShot;
     procedure TryPuddleShot;
     procedure TryRiderShot(const Dt:Single);
+    procedure TryInteractionShot;
+    procedure PrepareInteraction(const A,B:TCameraRider;Kind:TCameraEncounterKind;Serial:QWord);
+    function FindSubject(Id:Int64;out Rider:TCameraRider):Boolean;
     procedure PrepareRiderShot(const Rider:TCameraRider;Kind:TCameraEncounterKind);
     function RefreshSubject(var Shot:TCameraShotState):Boolean;
     function SubjectPosition:TVector3;
     function ClearShotPath(const AFrom,ATo:TVector3):Boolean;
     function CloseShotSafe(const P:TVector3):Boolean;
+    procedure KeepLensOutsideRiders(var P,D:TVector3);
     function GetEncounterKind:TCameraEncounterKind;
     function GetEncounterRider:Int64;
   public
@@ -226,7 +238,10 @@ type
     procedure ClearNearby;
     procedure AddNearby(const APos: TVector3);
     procedure AddNearbyRider(Id:Int64;const Position,Direction:TVector3;
-      Speed,Pitch:Single);
+      Speed,Pitch:Single;OnFoot:Boolean=False);
+    { Stable event ID, renewed only for a new physical interaction. Id 0 is
+      the player; the others are the same IDs supplied to AddNearbyRider. }
+    procedure OfferInteraction(Serial:QWord;FirstId,SecondId:Int64);
     procedure NextMode;
     procedure ForceMode(M: TCameraMode);
 
@@ -269,7 +284,7 @@ type
 
 implementation
 
-uses CastleProjection;
+uses CastleProjection, GameCameraRiderClearance;
 
 const
   { Moto — the main REAR VIEW: close behind and low, the whole rider+bike
@@ -377,6 +392,7 @@ begin
   Result.LastPuddleGroup:=FLastPuddleGroup;
   Result.Encounters:=FEncounters;Result.ShotAge:=FShotAge;
   Result.HelicopterCooldown:=FHelicopterCooldown;
+  Result.LastInteraction:=FLastInteraction;
 end;
 
 procedure TCinematicCamera.RestoreReplay(const Saved: TCameraReplayState);
@@ -406,6 +422,7 @@ begin
   FLastPuddleGroup:=Saved.LastPuddleGroup;
   FEncounters:=Saved.Encounters;FShotAge:=Saved.ShotAge;
   FHelicopterCooldown:=Saved.HelicopterCooldown;
+  FLastInteraction:=Saved.LastInteraction;
   if (FViewport<>nil) and (FViewport.Camera<>nil) then FViewport.Camera.SetView(FCamPos,FCamDir,FCamUp);
 end;
 
@@ -459,6 +476,7 @@ begin
     cmFrontQuarterLeft:Result:='front-quarter-left';
     cmFrontQuarterRight:Result:='front-quarter-right';
     cmRiderPass:Result:='rider-pass';
+    cmInteraction:Result:='interaction';
   else
     Result := '?';
   end;
@@ -549,6 +567,7 @@ begin
   FPuddleCooldown:=0;FPuddleScan:=0;FLastPuddleGroup:=0;
   FEncounters:=Default(TCameraEncounterTracker);FShotAge:=0;
   FEncounters.Cooldown:=4;
+  FInteraction:=0;FLastInteraction:=0;
 end;
 
 procedure TCinematicCamera.SetEnabled(const Value: Boolean);
@@ -597,12 +616,13 @@ begin
     cmPuddle:     Result := FShot.PuddleDuration;
     cmFrontQuarterLeft,cmFrontQuarterRight:Result:=4.5+Random*1.5;
     cmRiderPass:if FShot.EncounterKind=ceOncoming then Result:=2.8 else Result:=3.6;
+    cmInteraction:if FShot.EncounterKind=ceSupport then Result:=3.5 else Result:=2.8;
     else Result := 15;
   end;
 end;
 
 function TCinematicCamera.PickMovingShot: TCameraMode;
-const DefaultWeight:array[TCameraMode]of Integer=(30,15,20,20,10,0,0,0,14,14,0);
+const DefaultWeight:array[TCameraMode]of Integer=(30,15,20,20,10,0,0,0,14,14,0,0);
 var R,Total: Integer;M:TCameraMode;Weight:array[TCameraMode]of Integer;
   function Allowed(Mode:TCameraMode):Boolean;
   begin
@@ -864,29 +884,46 @@ end;
 function TCinematicCamera.SubjectPosition:TVector3;
 begin
   if FShot.Mode=cmRiderPass then Result:=FShot.Subject.Position
+  else if FShot.Mode=cmInteraction then Result:=(FShot.Subject.Position+FShot.Partner.Position)*0.5
   else Result:=FTarget.Translation;
 end;
 
 function TCinematicCamera.GetEncounterKind:TCameraEncounterKind;
 begin
-  if FShot.Mode=cmRiderPass then Result:=FShot.EncounterKind else Result:=ceNone;
+  if FShot.Mode in[cmRiderPass,cmInteraction]then Result:=FShot.EncounterKind else Result:=ceNone;
 end;
 
 function TCinematicCamera.GetEncounterRider:Int64;
 begin
-  if FShot.Mode=cmRiderPass then Result:=FShot.Subject.Id else Result:=0;
+  if FShot.Mode in[cmRiderPass,cmInteraction]then Result:=FShot.Subject.Id else Result:=0;
+end;
+
+function TCinematicCamera.FindSubject(Id:Int64;out Rider:TCameraRider):Boolean;
+var I:Integer;
+begin
+  Rider:=Default(TCameraRider);
+  if Id=0 then begin
+    Result:=FTarget<>nil;if not Result then Exit;
+    Rider.Position:=FTarget.Translation;Rider.Direction:=FTarget.Direction;
+    Rider.Speed:=FTargetSpeed;Rider.Pitch:=FTargetPitchDeg;Exit;
+  end;
+  for I:=0 to FRiderCount-1 do if FRiders[I].Id=Id then begin Rider:=FRiders[I];Exit(True) end;
+  Result:=False;
 end;
 
 function TCinematicCamera.RefreshSubject(var Shot:TCameraShotState):Boolean;
-var I:Integer;
-begin
-  if Shot.Mode<>cmRiderPass then Exit(True);
-  for I:=0 to FRiderCount-1 do if FRiders[I].Id=Shot.Subject.Id then begin
-    if(FRiders[I].Position-Shot.Subject.Position).Length>
-      Max(3,FFrameDT*Max(20,Shot.Subject.Speed)*3)then Exit(False);
-    Shot.Subject:=FRiders[I];Exit(True);
+var R:TCameraRider;
+  function Refresh(var Subject:TCameraRider):Boolean;
+  begin
+    Result:=FindSubject(Subject.Id,R);
+    if Result then Result:=(R.Position-Subject.Position).Length<=Max(3,FFrameDT*Max(20,Subject.Speed)*3);
+    if Result then Subject:=R;
   end;
-  Result:=False;
+begin
+  if not(Shot.Mode in[cmRiderPass,cmInteraction])then Exit(True);
+  Result:=Refresh(Shot.Subject);
+  if Result and(Shot.Mode=cmInteraction)then Result:=Refresh(Shot.Partner)and
+    ((Shot.Subject.Position-Shot.Partner.Position).Length<24);
 end;
 
 function TCinematicCamera.ClearShotPath(const AFrom,ATo:TVector3):Boolean;
@@ -909,6 +946,35 @@ begin
   { The destination has already passed the terrain/clearance probes. A cut
     needs a clear view of its subject, not a flyable path from the old lens. }
   Result:=ClearShotPath(P,Focus);
+  if Result and(FShot.Mode=cmInteraction)then
+    Result:=ClearShotPath(P,FShot.Subject.Position+Vector3(0,1,0))and
+      ClearShotPath(P,FShot.Partner.Position+Vector3(0,1,0));
+end;
+
+procedure TCinematicCamera.KeepLensOutsideRiders(var P,D:TVector3);
+var I:Integer;R:TCameraRider;FromP,Focus:TVector3;Top,Dt,Lift:Single;
+begin
+  { A small safety cut, held for the rest of this shot. Releasing the offset
+    every frame would make a drafting rider push the camera up and down. }
+  Focus:=P+D*Max(2,(SubjectPosition+Vector3(0,1,0)-P).Length);
+  P.Y:=P.Y+FShot.LensLift;Top:=P.Y;Dt:=0;FromP:=P;
+  if not FPreparingShot and FHaveTargetPosition then begin
+    FromP:=FCamPos;Dt:=FFrameDT;
+  end;
+  for I:=-1 to FRiderCount-1 do begin
+    if I<0 then begin
+      if not FindSubject(0,R)then Continue;
+    end else R:=FRiders[I];
+    if CameraCrossesRider(FromP,P,R,Dt)then Top:=Max(Top,R.Position.Y+2.8);
+  end;
+  Lift:=Max(0,Top-P.Y);
+  if Lift>0 then begin
+    P.Y:=Top;FShot.LensLift:=FShot.LensLift+Lift;
+    if not FPreparingShot then Inc(FShotSerial);
+  end;
+  if FShot.LensLift>0 then begin
+    D:=Focus-P;if D.LengthSqr>0.001 then D:=D.Normalize;
+  end;
 end;
 
 procedure TCinematicCamera.PrepareRiderShot(const Rider:TCameraRider;
@@ -923,15 +989,75 @@ begin
   FPending:=True;FPendingAge:=0;TryPendingShot;
 end;
 
+procedure TCinematicCamera.OfferInteraction(Serial:QWord;FirstId,SecondId:Int64);
+begin
+  FInteraction:=Serial;FInteractionA:=FirstId;FInteractionB:=SecondId;
+end;
+
+procedure TCinematicCamera.PrepareInteraction(const A,B:TCameraRider;
+  Kind:TCameraEncounterKind;Serial:QWord);
+var Side,Fwd,Span:TVector3;
+begin
+  FPendingShot:=Default(TCameraShotState);FPendingShot.Mode:=cmInteraction;
+  FPendingShot.Subject:=A;FPendingShot.Partner:=B;FPendingShot.EncounterKind:=Kind;
+  FPendingShot.EventSerial:=Serial;Fwd:=A.Direction;Fwd.Y:=0;
+  if Fwd.LengthSqr<0.01 then Fwd:=Vector3(0,0,1)else Fwd:=Fwd.Normalize;
+  Side:=TVector3.CrossProduct(Fwd,Vector3(0,1,0));
+  Span:=B.Position-A.Position;Span.Y:=0;
+  if Kind=ceSupport then begin
+    { Look over the helper's outside shoulder at the hand on the back. }
+    if TVector3.DotProduct(Span,Side)>0 then Side:=-Side;
+    FPendingShot.PairView:=(-Fwd*0.88+Side*0.48).Normalize;
+  end else if(Kind=cePedestrian)and(FPath<>nil)and(FPath.PointCount>=2)then
+    { The passer-by occupies the edge. Film along the carriageway so a
+      bridge parapet/fence does not hide the legs from an off-road lens. }
+    FPendingShot.PairView:=-FPath.FollowDirectionXZ(FPathPos)
+  else if Span.LengthSqr>0.1 then
+    { Put the pair across the wide dimension of the frame, at similar depth.
+      A generic rider angle required retreating 25 m on a wide street. }
+    FPendingShot.PairView:=TVector3.CrossProduct(Span,Vector3(0,1,0)).Normalize
+  else FPendingShot.PairView:=-Fwd;
+  FPendingShot.CloseSide:=1;
+  if(Kind<>ceSupport)and
+    (TVector3.DotProduct(FCamPos-(A.Position+B.Position)*0.5,FPendingShot.PairView)<0)then
+    FPendingShot.CloseSide:=-1;
+  FPending:=True;FPendingAge:=0;TryPendingShot;
+  { Try the other side once if a wall/terrain hides either participant.
+    Once committed, the shot keeps its side; no left/right reconsideration. }
+  if FPending then begin
+    FPendingShot.CloseSide:=-FPendingShot.CloseSide;TryPendingShot;
+  end;
+end;
+
+procedure TCinematicCamera.TryInteractionShot;
+var A,B:TCameraRider;
+begin
+  if not FAutoSwitch or not FRiderShotsEnabled or(FInteraction=0)or
+    (FInteraction=FLastInteraction)or(FShotAge<0.8)or(FShot.Mode=cmInteraction)then Exit;
+  if not FindSubject(FInteractionA,A)or not FindSubject(FInteractionB,B)then Exit;
+  if((A.Position-B.Position).Length>3)or
+    (((A.Position+B.Position)*0.5-FTarget.Translation).Length>22)then Exit;
+  FLastInteraction:=FInteraction;
+  FEncounters.Cooldown:=Max(FEncounters.Cooldown,12);
+  FEncounters.PeopleCooldown:=Max(FEncounters.PeopleCooldown,8);
+  PrepareInteraction(A,B,ceSupport,FInteraction);
+end;
+
 procedure TCinematicCamera.TryRiderShot(const Dt:Single);
-var Index:Integer;Kind:TCameraEncounterKind;
+var Index:Integer;Kind:TCameraEncounterKind;Player:TCameraRider;
 begin
   Index:=UpdateCameraEncounters(FEncounters,FRiders,FRiderCount,
     FTarget.Translation,FTarget.Direction,FTargetSpeed,Dt,
     FRiderShotsEnabled and FAutoSwitch and not FStationary and not FPending and
     (FShotAge>=DetailShotMinHold)and
-    (FShot.Mode in[cmMoto,cmReverse,cmLowTrack,cmFrontQuarterLeft,cmFrontQuarterRight]),Kind);
-  if Index>=0 then PrepareRiderShot(FRiders[Index],Kind);
+    (FShot.Mode in[cmMoto,cmReverse,cmLowTrack,cmFrontQuarterLeft,cmFrontQuarterRight]),Kind,
+    FRiderShotsEnabled and FAutoSwitch and not FPending and(FShotAge>=1.2)and
+    not(FShot.Mode in[cmPuddle,cmRiderPass,cmInteraction]));
+  if Index>=0 then begin
+    if Kind=cePedestrian then begin
+      FindSubject(0,Player);PrepareInteraction(Player,FRiders[Index],Kind,0);
+    end else PrepareRiderShot(FRiders[Index],Kind);
+  end;
 end;
 
 procedure TCinematicCamera.ComputeMode(M: TCameraMode; out P, D, U: TVector3);
@@ -957,6 +1083,12 @@ begin
   LookAt := TPos + Vector3(0, 1.2, 0);
 
   case M of
+    cmInteraction:
+    begin
+      TPos:=SubjectPosition;
+      P:=TPos+FShot.PairView*(6.5*FShot.CloseSide)+Vector3(0,1.9,0);
+      LookAt:=TPos+Vector3(0,1,0);LookSrc:='interaction:pair';
+    end;
     cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass:
     begin
       if M=cmRiderPass then begin
@@ -1170,7 +1302,7 @@ end;
 { ── Nearby riders ── }
 
 procedure TCinematicCamera.ClearNearby;
-begin FNearbyCount := 0;FRiderCount:=0 end;
+begin FNearbyCount := 0;FRiderCount:=0;FInteraction:=0 end;
 
 procedure TCinematicCamera.AddNearby(const APos: TVector3);
 begin
@@ -1180,14 +1312,14 @@ begin
 end;
 
 procedure TCinematicCamera.AddNearbyRider(Id:Int64;const Position,Direction:TVector3;
-  Speed,Pitch:Single);
+  Speed,Pitch:Single;OnFoot:Boolean);
 begin
   if(Id=0)or(FRiderCount>=Length(FRiders))or(FTarget=nil)or
-    ((Position-FTarget.Translation).Length>36)then Exit;
+    (((Position-FTarget.Translation).Length>36)and((Position-FCamPos).Length>12))then Exit;
   AddNearby(Position);
   FRiders[FRiderCount].Id:=Id;FRiders[FRiderCount].Position:=Position;
   FRiders[FRiderCount].Direction:=Direction;FRiders[FRiderCount].Speed:=Speed;
-  FRiders[FRiderCount].Pitch:=Pitch;Inc(FRiderCount);
+  FRiders[FRiderCount].Pitch:=Pitch;FRiders[FRiderCount].OnFoot:=OnFoot;Inc(FRiderCount);
 end;
 
 procedure TCinematicCamera.AdjustForGroup(var P, D: TVector3);
@@ -1281,11 +1413,24 @@ end;
 
 procedure TCinematicCamera.KeepRiderInFrame(var P, D: TVector3);
 var
-  Corners: array[0..7] of TVector3;
+  Corners: array[0..15] of TVector3;
   Center, Fwd, Side, BodyUp, Aim, Right, Up, V, Offset, Candidate: TVector3;
   Fov: TVector2;
   TanX, TanY, Distance, Required, Depth, Lo, Hi, Blend, Pitch: Single;
-  I, Pass: Integer;
+  I, Pass,Count: Integer;
+
+  procedure Envelope(const R:TCameraRider;Start:Integer);
+  var J:Integer;F,S,C,B:TVector3;L,A:Single;
+  begin
+    F:=R.Direction;F.Y:=0;
+    if F.LengthSqr<0.001 then F:=Vector3(0,0,1)else F:=F.Normalize;
+    S:=TVector3.CrossProduct(F,Vector3(0,1,0));A:=DegToRad(R.Pitch);
+    if R.OnFoot then A:=0;
+    B:=Vector3(0,Cos(A),0)-F*Sin(A);F:=F*Cos(A)+Vector3(0,Sin(A),0);
+    C:=R.Position+B*0.95;L:=1.15;if R.OnFoot then L:=0.65;
+    for J:=0 to 7 do Corners[Start+J]:=C+F*(L*(2*(J and 1)-1))+
+      S*(0.5*(2*((J shr 1)and 1)-1))+B*(1.1*(2*((J shr 2)and 1)-1));
+  end;
 
   procedure Basis(const Direction: TVector3);
   begin
@@ -1298,7 +1443,7 @@ var
   var K: Integer; ToCorner: TVector3; Z: Single;
   begin
     Basis(Direction);
-    for K:=0 to High(Corners) do
+    for K:=0 to Count-1 do
     begin
       ToCorner:=Corners[K]-P;
       Z:=TVector3.DotProduct(ToCorner,Direction);
@@ -1322,10 +1467,23 @@ begin
   BodyUp:=Vector3(0,Cos(Pitch),0)-Fwd*Sin(Pitch);
   Fwd:=Fwd*Cos(Pitch)+Vector3(0,Sin(Pitch),0);
   Center:=SubjectPosition+BodyUp*0.95;
-  for I:=0 to High(Corners) do
+  Count:=8;
+  for I:=0 to Count-1 do
     Corners[I]:=Center+Fwd*(1.15*(2*(I and 1)-1))+
       Side*(0.5*(2*((I shr 1) and 1)-1))+
       BodyUp*(1.1*(2*((I shr 2) and 1)-1));
+  if FShot.Mode=cmInteraction then begin
+    Envelope(FShot.Subject,0);Envelope(FShot.Partner,8);Count:=16;
+    Center:=SubjectPosition+Vector3(0,0.95,0);
+    Aim:=Center-P;Distance:=Aim.Length;
+    { Hold the widest composition of this short event, avoiding a zoom in
+      and out as two people meet. Cuts still use the freshly prepared view. }
+    if(Distance>0.01)and(FShot.PairDistance>Distance)then begin
+      P:=Center-Aim*(FShot.PairDistance/Distance);D:=Aim/Distance;
+      ClampAboveGround(P,True);
+    end;
+  end;
+  try
   Fov:=FViewport.Camera.Perspective.EffectiveFieldOfView;
   if Fov.X<=0 then Fov.X:=FViewport.Camera.Perspective.FieldOfView;
   if Fov.Y<=0 then Fov.Y:=FViewport.Camera.Perspective.FieldOfView;
@@ -1340,7 +1498,7 @@ begin
     if Distance<0.01 then Aim:=-Fwd else Aim:=Aim/Distance;
     if Fits(Aim) then Break;
     Basis(Aim); Required:=Distance;
-    for I:=0 to High(Corners) do
+    for I:=0 to Count-1 do
     begin
       Offset:=Corners[I]-Center; Depth:=TVector3.DotProduct(Offset,Aim);
       Required:=Max(Required,Max(Abs(TVector3.DotProduct(Offset,Right))/TanX,
@@ -1367,6 +1525,9 @@ begin
     if Fits(Candidate) then Hi:=Blend else Lo:=Blend;
   end;
   D:=(D*(1-Hi)+Aim*Hi).Normalize;
+  finally
+    if FShot.Mode=cmInteraction then FShot.PairDistance:=Max(FShot.PairDistance,(P-Center).Length);
+  end;
 end;
 
 procedure TCinematicCamera.NextMode;
@@ -1387,7 +1548,7 @@ var
   I,Best:Integer;Distance,Nearest:Single;
 begin
   if not Assigned(FTarget) or not Assigned(FViewport) then Exit;
-  if M=cmPuddle then Exit; { requires a real, visible water-film landmark }
+  if M in[cmPuddle,cmInteraction]then Exit; { requires a real landmark/event }
   if(M in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and not FRiderShotsEnabled then Exit;
   if M=cmRiderPass then begin
     { MCP/manual preview selects an actual visible rider, never an invented
@@ -1430,6 +1591,8 @@ var
   P, D, U: TVector3;
 begin
   if not FPending then Exit;
+  if(FPendingShot.Mode=cmInteraction)and(FPendingShot.EncounterKind=ceSupport)and
+    (FInteraction<>FPendingShot.EventSerial)then begin FPending:=False;Exit end;
   if not RefreshSubject(FPendingShot)then begin FPending:=False;Exit end;
   Active := FShot;
   FShot := FPendingShot;
@@ -1438,7 +1601,8 @@ begin
   try
     ComputeMode(FShot.Mode, P, D, U);
     FrameShot(P, D);
-    if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and
+    KeepLensOutsideRiders(P,D);
+    if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])and
       not CloseShotSafe(P)then FProbeReady:=False;
     FPendingShot := FShot;
   finally
@@ -1494,7 +1658,7 @@ end;
 procedure TCinematicCamera.FrameShot(var P, D: TVector3);
 begin
   if FShot.Mode=cmPuddle then Exit; { water and reflected scenery are the subject }
-  if not(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])then
+  if not(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])then
     AdjustForGroup(P, D);
   if FShot.Mode = cmHelicopter then ClampDownPitch(D, HeliMaxDownSin)
   else ClampDownPitch(D, MaxLookDownSin);
@@ -1540,13 +1704,13 @@ begin
     if (not FStationary) and (FStillTime >= StillEnterDelay) then
     begin
       FStationary := True;
-      ForceMode(cmStandShot);        { enter on the restful STATIC shot }
+      if FShot.Mode<>cmInteraction then ForceMode(cmStandShot);
     end
     else if FStationary and (FTargetSpeed > StillExitSpeed) then
     begin
       FStationary := False;
       FStillTime := 0;
-      ForceMode(cmMoto);             { rolling again — back to the main follow }
+      if FShot.Mode<>cmInteraction then ForceMode(cmMoto);
     end;
   end;
 
@@ -1561,9 +1725,17 @@ begin
       retain a pointer to a bot that may have despawned. }
     ForceMode(cmMoto);
   end;
-  if not FRiderShotsEnabled and(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])then
+  if not FRiderShotsEnabled and(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])then
     ForceMode(cmMoto);
+  if not FirstFrame and(DT>0)then TryInteractionShot;
   if not FirstFrame and(DT>0)then TryRiderShot(DT);
+  if FShot.Mode=cmInteraction then begin
+    if FShot.EncounterKind=ceSupport then begin
+      if(FInteraction=FShot.EventSerial)and(FShotAge<4.5)then FModeTimer:=Max(FModeTimer,0.7)
+      else if FShotAge>0.8 then FModeTimer:=Min(FModeTimer,0.6);
+    end else if(FShotAge>0.9)and
+      ((FShot.Subject.Position-FShot.Partner.Position).Length>12)then FModeTimer:=0;
+  end;
 
   if(FShot.Mode=cmPuddle)and not FPuddleReflections then ForceMode(cmMoto);
   if FPending and(FPendingShot.Mode=cmPuddle)and not FPuddleReflections then FPending:=False;
@@ -1577,7 +1749,8 @@ begin
     FModeTimer := FModeTimer - DT;
     if FModeTimer <= 0 then
     begin
-      if FShot.Mode in[cmPuddle,cmRiderPass]then
+      if(FShot.Mode=cmInteraction)and FStationary then ForceMode(cmStandShot)
+      else if FShot.Mode in[cmPuddle,cmRiderPass,cmInteraction]then
         ForceMode(cmMoto)
       else if FStationary then
         ForceMode(PickStationary)
@@ -1595,8 +1768,9 @@ begin
   { Compute camera for current mode }
   ComputeMode(FShot.Mode, TP, TD, TU);
   FrameShot(TP, TD);
+  KeepLensOutsideRiders(TP,TD);
 
-  if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass])and
+  if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])and
     not CloseShotSafe(TP)then begin
     FModeTimer:=0;
     { An obstruction invalidates even a manually selected close-up. Queue

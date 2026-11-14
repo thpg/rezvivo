@@ -46,7 +46,7 @@ procedure McpUnregisterPlayObjects;
 
 implementation
 
-uses GameVideoCapture, GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
+uses GameAmbientPeopleProfile, GameNeuralRiders, GameVideoCapture, GameRiderVisibility, Osm3dWind, Osm3dSceneLighting, Osm3dShadowSchedule, AppRuntimePaths, GameTravel,GameTouchControls,GameGraphicsBenchmarkScene,GameAssistant,GameAssistantMcp,GameAssistantUI,GameAssistantVoice,GameMcpNavigation,
   GameWorkoutPlayer, GameClientUpdate, GameAudio, GamePerformanceProbe, GameScreenFX, GameFarFieldProbe, GameRiderPoseProbe,
   Osm3dBuildingObstacleIndex, Osm3dRoadMaterial, Osm3dRoadCurbs, Osm3dGeoMath, Osm3dStreamingMap, Osm3dImpostorCache,
   Classes, SysUtils, Math, base64,
@@ -859,9 +859,14 @@ begin
     AResult.Add('camera_shot_age',Cine.ShotAge);
     AResult.Add('camera_shot_serial',Int64(Cine.ShotSerial));
     AResult.Add('camera_transition','cut');
-    if Cine.Shot.Mode=cmRiderPass then
+    if Cine.Shot.Mode in[cmRiderPass,cmInteraction]then
       AResult.Add('encounter_position',TJSONArray.Create([Cine.Shot.Subject.Position.X,
         Cine.Shot.Subject.Position.Y,Cine.Shot.Subject.Position.Z]));
+    if Cine.Shot.Mode=cmInteraction then begin
+      AResult.Add('encounter_partner',Cine.Shot.Partner.Id);
+      AResult.Add('encounter_partner_position',TJSONArray.Create([Cine.Shot.Partner.Position.X,
+        Cine.Shot.Partner.Position.Y,Cine.Shot.Partner.Position.Z]));
+    end;
     AResult.Add('puddle_active',Cine.Shot.Mode=cmPuddle);
     AResult.Add('puddle_sites',RoadPuddleSiteCount);
     AResult.Add('puddle_reflections',ViewPlay.CinematicCam.PuddleReflections);
@@ -1796,6 +1801,12 @@ end;
 
 { ── app.fps_mode ─────────────────────────────────────────────────────── }
 
+procedure CmdNeuralRiders(const AParams:TJSONObject;AResult:TJSONObject);
+begin
+ if AParams.Find('reference')<>nil then AResult.Add('reference_max_error_m',CheckNeuralRiderReference(AParams.Get('density',1),AParams.Get('reference','')));
+ AResult.Add('neural',NeuralRiderDiagnostics);
+end;
+
 procedure CmdGraphicsPreview(const AParams:TJSONObject; AResult:TJSONObject);
 var Scene:TGraphicsBenchmarkScene;Samples:TJSONArray;Ms:Double;
 begin
@@ -2470,6 +2481,20 @@ begin
   AResult.Add('active',PerformanceProbe<>nil);
 end;
 
+procedure CmdAmbientPeople(const AParams:TJSONObject;AResult:TJSONObject);
+var D:TJSONObject;Name,Kind:string;
+begin
+  if(ViewPlay=nil)or(ViewPlay.AmbientPeople=nil)then raise Exception.Create('Active ride required');
+  if AParams.Find('probe_spawn')<>nil then begin
+    Kind:=AParams.Get('probe_spawn','');
+    if(Kind<>'walker')and(Kind<>'runner')then raise Exception.Create('Expected walker or runner');
+    if Kind='runner' then AResult.Add('spawned',ViewPlay.AmbientPeople.ProbeSpawn(akRunner,AParams.Get('ahead',15.0)))
+    else AResult.Add('spawned',ViewPlay.AmbientPeople.ProbeSpawn(akWalker,AParams.Get('ahead',15.0)));
+  end;
+  D:=ViewPlay.AmbientPeople.Diagnostics;
+  try while D.Count>0 do begin Name:=D.Names[0];AResult.Add(Name,D.Extract(0)) end;finally D.Free end;
+end;
+
 procedure CmdLocalBots(const AParams:TJSONObject;AResult:TJSONObject);
 var D:TJSONObject;Name:string;Rows:TJSONArray;I,Mask:Integer;
 begin
@@ -3099,6 +3124,8 @@ begin
     'scene — diagnostic for the lost-wheels culling hypothesis.',
     '{"type":"object","properties":{"enabled":{"type":"boolean"}},"required":["enabled"]}',
     @CmdBikeSetFrustumCulling);
+  RegisterMcpCommand('graphics.neural_riders','Inspect optional rider network residency, fallback and active geometry; compare a native exported reference.',
+    '{"type":"object","properties":{"density":{"type":"integer"},"reference":{"type":"string"}}}',@CmdNeuralRiders);
   RegisterMcpCommand('graphics.preview','Inspect the common settings/Auto benchmark scene; freeze animation or select a repeatable viewpoint.',
     '{"type":"object","properties":{"drain":{"type":"boolean"},"rotate":{"type":"boolean"},"animate":{"type":"boolean"},"view":{"type":"integer","minimum":0,"maximum":2}}}',@CmdGraphicsPreview);
   RegisterMcpCommand('app.fps_mode',
@@ -3158,6 +3185,8 @@ begin
     @CmdShadowTestRiders);
   RegisterMcpCommand('bots.local','Local companion roster and visibility/performance diagnostics; session-only render limit.',
     '{"type":"object","properties":{"limit":{"type":"integer","minimum":0,"maximum":3},"render":{"type":"boolean"},"shaders":{"type":"boolean"},"motion":{"type":"boolean"},"probe_animate_paused":{"type":"boolean"},"probe_mask":{"type":"integer"},"probe_revision_cache":{"type":"boolean"},"probe_pose_cache_policy":{"type":"integer","minimum":-1,"maximum":1}}}',@CmdLocalBots);
+  RegisterMcpCommand('bots.people','Walking/running ambient people diagnostics. probe_spawn requires an isolated test profile.',
+    '{"type":"object","properties":{"probe_spawn":{"type":"string","enum":["walker","runner"]},"ahead":{"type":"number"}}}',@CmdAmbientPeople);
   RegisterMcpCommand('perf.state',
     'Current perf toggles + fps mode + route prep done + live FPS ' +
     '(real / only-render). geometry=true also counts resident OSM tiles, vertices and triangles.',
@@ -3261,8 +3290,8 @@ begin
     'Frame the isolated avatar preview for reproducible screenshots. Zoom 0.5..4, yaw in degrees relative to the default view. Does not affect the ride camera.',
     '{"type":"object","properties":{"zoom":{"type":"number"},"yaw":{"type":"number"},"target_y":{"type":"number","minimum":0,"maximum":2.5}}}',@CmdBikeFitCamera);
   RegisterMcpCommand('bikefit.animation',
-    'Pause and step the isolated walking avatar preview, including cloth, by exact frames. Nonpersistent; use paused=false to resume.',
-    '{"type":"object","properties":{"paused":{"type":"boolean"},"speed":{"type":"number","minimum":0,"maximum":8},"frames":{"type":"integer","minimum":0,"maximum":600},"fps":{"type":"number","minimum":10,"maximum":240},"phase":{"type":"number","minimum":0,"maximum":1}}}',@CmdBikeFitAnimation);
+    'Pause and step the actual fit-page walking/cycling preview. Explicit diagnostic only; model overrides are nonpersistent. Resume with paused=false. Cycling supports pose_index, gpu and CPU skin palettes.',
+    '{"type":"object","properties":{"paused":{"type":"boolean"},"speed":{"type":"number","minimum":0,"maximum":8},"frames":{"type":"integer","minimum":0,"maximum":600},"fps":{"type":"number","minimum":10,"maximum":240},"phase":{"type":"number","minimum":0,"maximum":1},"model":{"type":"string"},"pose_index":{"type":"integer"},"gpu":{"type":"boolean"},"skin":{"type":"boolean"}}}',@CmdBikeFitAnimation);
   RegisterMcpCommand('bikefit.lighting',
     'Set/inspect bike-fit page lighting on the fly (omit an argument to keep it): ' +
     'env = rider IBL ambient, key/fill = result viewport directional lights, ' +

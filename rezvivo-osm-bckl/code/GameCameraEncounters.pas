@@ -3,11 +3,12 @@ unit GameCameraEncounters;
 interface
 uses Math,CastleVectors;
 type
-  TCameraEncounterKind=(ceNone,ceOncoming,ceOvertaken,ceOvertaking);
+  TCameraEncounterKind=(ceNone,ceOncoming,ceOvertaken,ceOvertaking,cePedestrian,ceSupport);
   TCameraRider=record
     Id:Int64;
     Position,Direction:TVector3;
     Speed,Pitch:Single;
+    OnFoot:Boolean;
   end;
   TCameraEncounterTrack=record
     Id:Int64;
@@ -19,17 +20,18 @@ type
   TCameraEncounterTracker=record
     Time:Double;
     Cooldown:Single;
+    PeopleCooldown:Single;
     Tracks:array[0..31]of TCameraEncounterTrack;
   end;
 function UpdateCameraEncounters(var State:TCameraEncounterTracker;
   const Riders:array of TCameraRider;Count:Integer;
   const Position,Direction:TVector3;Speed,Dt:Single;CanSelect:Boolean;
-  out Kind:TCameraEncounterKind):Integer;
+  out Kind:TCameraEncounterKind;CanSelectPeople:Boolean=False):Integer;
 implementation
 function UpdateCameraEncounters(var State:TCameraEncounterTracker;
   const Riders:array of TCameraRider;Count:Integer;
   const Position,Direction:TVector3;Speed,Dt:Single;CanSelect:Boolean;
-  out Kind:TCameraEncounterKind):Integer;
+  out Kind:TCameraEncounterKind;CanSelectPeople:Boolean):Integer;
 var I,J,K,Oldest,SelectedTrack:Integer;Fwd,Side,Delta,RiderDir:TVector3;
   Gap,Lateral,Alignment,Rate,TimeToPass,Score,Best:Single;
   ThisKind:TCameraEncounterKind;
@@ -37,6 +39,7 @@ begin
   Result:=-1;Kind:=ceNone;
   if Dt<=0 then Exit;
   State.Time:=State.Time+Dt;State.Cooldown:=Max(0,State.Cooldown-Dt);
+  State.PeopleCooldown:=Max(0,State.PeopleCooldown-Dt);
   Fwd:=Direction;Fwd.Y:=0;if Fwd.LengthSqr<0.01 then Exit;Fwd:=Fwd.Normalize;
   Side:=TVector3.CrossProduct(Fwd,Vector3(0,1,0));Best:=1e20;SelectedTrack:=-1;
   for I:=0 to Min(Count,Length(Riders))-1 do begin
@@ -67,8 +70,11 @@ begin
       end;
       State.Tracks[K].Ahead:=Gap;State.Tracks[K].Position:=Riders[I].Position;
       SeenAt:=State.Time;
-      if not CanSelect or(State.Cooldown>0)or Used or(StableSeconds<0.35)or
-        (Speed<0.8)or(Riders[I].Speed<0.5)or(Lateral>4.5)or
+      if not(CanSelect or(CanSelectPeople and Riders[I].OnFoot))then Continue;
+      if (Riders[I].OnFoot and(State.PeopleCooldown>0))or
+        (not Riders[I].OnFoot and(State.Cooldown>0))or Used or(StableSeconds<0.35)or
+        ((Speed<0.8)and not Riders[I].OnFoot)or(Riders[I].Speed<0.5)or
+        (Lateral>IfThen(Riders[I].OnFoot,8.0,4.5))or
         (Abs(Delta.Y)>1.8)or(Abs(Gap)<1.5)or(Abs(Gap)>20)then Continue;
       RiderDir:=Riders[I].Direction;RiderDir.Y:=0;
       if RiderDir.LengthSqr<0.01 then Continue;RiderDir:=RiderDir.Normalize;
@@ -81,6 +87,10 @@ begin
       if ThisKind=ceNone then Continue;
       TimeToPass:=Abs(Gap/RelativeRate);
       if(TimeToPass<0.4)or(TimeToPass>2.8)then Continue;
+      if Riders[I].OnFoot then begin
+        if(TimeToPass>0.9)or(Abs(Gap)>10)then Continue;
+        ThisKind:=cePedestrian;
+      end;
       Score:=TimeToPass+Lateral*0.15;
       if Score<Best then begin Best:=Score;Result:=I;SelectedTrack:=K;Kind:=ThisKind end;
     end;
@@ -88,6 +98,7 @@ begin
   if SelectedTrack>=0 then begin
     State.Tracks[SelectedTrack].Used:=True;
     State.Tracks[SelectedTrack].ShotAt:=State.Time;State.Cooldown:=20;
+    if Kind=cePedestrian then State.PeopleCooldown:=12;
   end;
 end;
 end.

@@ -219,6 +219,7 @@ type
     property AudioEffects: Integer index Ord(aoEffects) read GetAudioOption write SetAudioOption;
     property AudioWorkout: Integer index Ord(aoWorkout) read GetAudioOption write SetAudioOption;
     property AudioMenu: Integer index Ord(aoMenu) read GetAudioOption write SetAudioOption;
+    property GraphicsNeuralRiders: Integer index Ord(goNeuralRiders) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsFpsLimit: Integer index Ord(goFrameLimit) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsMSAA: Integer index Ord(goAntialiasing) read GetGraphicsOption write SetGraphicsOption;
     property GraphicsUpscaleSmoothing: Integer index Ord(goUpscaleSmoothing) read GetGraphicsOption write SetGraphicsOption;

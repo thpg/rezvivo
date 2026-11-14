@@ -397,6 +397,8 @@ type
     CompanyLine:Boolean;
     CompanyOffset:Single;
     PassingTime:Single; { keep the agreed right side until the entire pair clears }
+    Pedestrian:Boolean;
+    FootOffset,FootSmoothOffset:Single; { metres, including a validated shoulder }
   end;
 
   TLaneReplayState = array of TLaneRider;
@@ -422,6 +424,7 @@ type
     function WidthAtLoop(ALoopPos: Single): Single;
     function OffsetForWidth(ALane, ARoadWidth: Single): Single;
     function LaneForOffset(Offset, RoadWidth:Single):Single;
+    function TargetOffset(AHandle:Integer):Single;
     procedure PlanOncoming(const Dt:Single);
     function LaneClear(AHandle: Integer; ALane, Clearance: Single): Boolean;
   public
@@ -458,6 +461,7 @@ type
     procedure SetRiderActive(AHandle: TLaneRiderHandle; AActive: Boolean);
     procedure SetSteering(AHandle: TLaneRiderHandle; Enabled: Boolean; Axis: Single);
     procedure SetCompanyLine(AHandle:TLaneRiderHandle;Enabled:Boolean;Offset:Single);
+    procedure SetPedestrianLine(AHandle:TLaneRiderHandle;Offset:Single);
     function GetLane(AHandle: TLaneRiderHandle): Integer;
     function GetLaneOffset(ALane: Integer): Single;
     { Smooth offset — use this for positioning (smooth lane transitions) }
@@ -1161,6 +1165,8 @@ end;
 
 function TLaneManager.GetSmoothOffset(AHandle: TLaneRiderHandle; ARoadWidth: Single): Single;
 begin
+  if(AHandle>=0)and(AHandle<FCount)and FRiders[AHandle].Pedestrian then
+    Exit(FRiders[AHandle].FootSmoothOffset);
   if (AHandle >= 0) and (AHandle < FCount) then
     Result := OffsetForWidth(FRiders[AHandle].SmoothLane, ARoadWidth)
   else

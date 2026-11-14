@@ -19,7 +19,7 @@ uses Classes,fpjson,GameRideMap,GameRidePanel,GameRiderBadge,GameTravel,Osm3dGeo
   CastleSceneCore, CastleColors, CastleShapes, X3DNodes,
   CastleQuaternions, CastleApplicationProperties,
   GameWorkoutHud, GameWorkoutGates, GameTrainingFocus,GameTrainingWindow,GameUiNavigation,GameEnemy, GamePhysicalAgent, GameBotAgent, GameLocalBots, GameLocalBotProfile, GameWorld, GameLoopbackSession,
-  GamePhysicsCommon, GameAgentControllers, GameAgentNetwork, GameMotionTrace,
+  GamePhysicsCommon, GameAgentControllers, GameAgentNetwork, GameMotionTrace, GameAmbientPeople,
   TrainerData, GameRideClient, BikeParametric, GameBikeAvatar,
   CastleTimeUtils,
   GameRemoteRiders, GameBLEHud, GameCameraControl, PBRTextureUnit,
@@ -138,6 +138,7 @@ type
     FShadowTestRoots: TCastleTransformList;
     FShadowTestZones: Boolean;
     FLocalBots: TLocalBots;
+    FAmbientPeople: TAmbientPeople;
     FLocalBotLoading: TCastleLabel;
     FBotBikes: TList; { aliases owned by FLocalBots }
     { Параллельный FBotBikes список агентов ботов (тот же порядок, тот же
@@ -400,6 +401,7 @@ type
     procedure InitializeAtStart;
     procedure PlayShootSound;
     procedure CreateLocalBotCompany;
+    function NearbyPeopleRoads(const Position:TVector3;Radius:Single):TTravelRoads;
     procedure LocalBotPrepared(Bike:TBikeInstance; Agent:TPhysicalAgent);
     function RidePreparationHeld:Boolean;
     procedure ArrangeLocalRidersAtStart;
@@ -653,6 +655,7 @@ type
     function RoutePrepDone: Boolean;
     property SimHistory: TSimReplayHistory read FSimHistory;
     property LocalBots:TLocalBots read FLocalBots;
+    property AmbientPeople:TAmbientPeople read FAmbientPeople;
     property SimCameraReplaying: Boolean read FSimCameraReplaying;
     property SimCameraViewTime: Double read FSimCameraViewTime;
   end;
@@ -1329,7 +1332,7 @@ begin
   FExploreHint.Exists:=FFreeExplore;
   if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=FTravelMode=travelBicycle;
   if FFocusButton<>nil then FFocusButton.Exists:=FTravelMode=travelBicycle;
-  if FLocalBotLoading<>nil then FLocalBotLoading.Exists:=not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready;
+  if FLocalBotLoading<>nil then FLocalBotLoading.Exists:=RidePreparationHeld;
   if (FTravelMode<>travelBicycle) and(FWorkoutHud<>nil) then begin
     FWorkoutHud.ReleaseTrainer;WorkoutPlayer.Stop;FWorkoutHud.Exists:=False;
   end;
@@ -2367,9 +2370,12 @@ var
     { Camera movement is possible while simulation is paused. Re-enter with
       the current pose immediately, not a buffer from the last visible frame. }
     if Needed and not WasNeeded and (PhysicsDt<=0) then begin
-      if Bike.OnFoot and (Bike=FBikeInstance) and HasActiveState then
-        Bike.AnimateOnFoot(0,FActiveAvatarAgent.State.CurrentSpeed,Pi/2,
-          Tan(DegToRad(EnsureRange(FActiveAvatarAgent.State.CurrentGroundPitch,-45,45))))
+      if Bike.OnFoot then begin
+        if (Bike=FBikeInstance) and HasActiveState then
+          Bike.AnimateOnFoot(0,FActiveAvatarAgent.State.CurrentSpeed,Pi/2,
+            Tan(DegToRad(EnsureRange(FActiveAvatarAgent.State.CurrentGroundPitch,-45,45))))
+        else if FAmbientPeople<>nil then FAmbientPeople.RefreshPose(Bike);
+      end
       else Bike.AnimateFrame(Single(0));
     end;
   end;
@@ -2395,6 +2401,7 @@ begin
   Context:=PrepareRiderVisibility(Frustum,CameraValid,ShadowsActive,Sun,RayLength,Cone);
   Apply(FBikeInstance);
   if FBotBikes<>nil then for I:=0 to FBotBikes.Count-1 do Apply(TBikeInstance(FBotBikes[I]));
+  if FAmbientPeople<>nil then for I:=0 to AmbientModelCount-1 do Apply(FAmbientPeople.Bike(I));
   if FRemoteRiders<>nil then for I:=0 to FRemoteRiders.RemoteVisualCount-1 do
     Apply(FRemoteRiders.BikeAtIndex(I));
   if FShadowTestBikes<>nil then for I:=0 to FShadowTestBikes.Count-1 do
@@ -2806,6 +2813,8 @@ begin
         FShadowAtlas.Casters.Add(FBikeInstance.Group);
         if FLocalBots<>nil then FLocalBots.AppendShadowCasters(FShadowAtlas.Casters,
           FShadowAtlas.RtxRequested and not FShadowAtlas.RtxRasterComparison);
+        if FAmbientPeople<>nil then FAmbientPeople.AppendShadowCasters(FShadowAtlas.Casters,
+          FShadowAtlas.RtxRequested and not FShadowAtlas.RtxRasterComparison);
         if Assigned(FRemoteRiders) then FRemoteRiders.AppendShadowCasters(FShadowAtlas.Casters);
         if Assigned(FShadowTestBikes) then
           for I := 0 to FShadowTestBikes.Count - 1 do
@@ -3012,7 +3021,7 @@ begin
   SceneLifecycleLog(Format('=== TViewPlay.Start BEGIN (old bike inst=$%p) ===',
     [Pointer(FBikeInstance)]));
   Enemies := TEnemyList.Create(true);
-  FBotBikes:=nil;FBotAgents:=nil;FBotPoseManagers:=nil;FLocalBots:=nil;
+  FBotBikes:=nil;FBotAgents:=nil;FBotPoseManagers:=nil;FLocalBots:=nil;FAmbientPeople:=nil;
 
   { Маркер сборки — по нему в trainer_*.log видно, какая версия
     gameviewplay реально собрана. SNAP_SWAP помечен явно. }
@@ -4028,6 +4037,7 @@ begin
     и без того, но rig-подграф тогда текал по KeepExisting каждый заезд. }
   { Pose managers BEFORE bikes: managers hold a non-owned bike pointer. }
   if FLocalBots<>nil then FLocalBots.OnRosterChanged:=nil;
+  FreeAndNil(FAmbientPeople);
   FreeAndNil(FLocalBots);
   FBotPoseManagers:=nil;FBotBikes:=nil;FBotAgents:=nil;FLocalBotLoading:=nil;
 
@@ -4199,6 +4209,7 @@ begin
     if Assigned(FOsmStreaming)and Assigned(FOsmStreaming.Session)and Assigned(FOsmStreaming.Session.Map)then
       FLocalBots.SetCrossings(FOsmStreaming.Session.Map.BotCrossings);
   end;
+  if FAmbientPeople<>nil then FAmbientPeople.ResetOnRoute(FLaneManager,FActiveAvatarAgent);
 end;
 
 procedure TViewPlay.CreateLocalBotCompany;
@@ -4208,6 +4219,9 @@ begin
   FLocalBots.OnReady:=@LocalBotPrepared;FLocalBots.OnRosterChanged:=@RiderCountChanged;
   FBotBikes:=FLocalBots.Bikes;FBotAgents:=FLocalBots.Agents;FBotPoseManagers:=FLocalBots.Poses;
   FLocalBots.SetRenderEnabled(FPerfRiders);FLocalBots.SetAnimationEnabled(FPerfAnim);
+  FAmbientPeople:=TAmbientPeople.Create(FreeAtStop,MainViewport,SceneLevel,
+    FOfflineAvatar,FLocalBots,Cardinal(GetTickCount64));
+  FAmbientPeople.OnReady:=@LocalBotPrepared;FAmbientPeople.RoadQuery:=@NearbyPeopleRoads;
   FLocalBotLoading:=TCastleLabel.Create(FreeAtStop);
   FLocalBotLoading.FontSize:=20;FLocalBotLoading.Anchor(hpMiddle);FLocalBotLoading.Anchor(vpMiddle);
   FLocalBotLoading.Color:=Vector4(1,1,1,1);InsertFront(FLocalBotLoading);
@@ -4222,7 +4236,8 @@ end;
 
 function TViewPlay.RidePreparationHeld:Boolean;
 begin
-  Result:=FOsmPrepHold or (not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready);
+  Result:=FOsmPrepHold or (not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready)
+    or ((FAmbientPeople<>nil)and not FAmbientPeople.Ready);
 end;
 
 procedure TViewPlay.SpawnBotOffline(APower: Single);
@@ -4969,6 +4984,7 @@ begin
 
   { Длины пути для lane-менеджера/удалённых райдеров — как в Start/снап-свапе. }
   if WorldChanged then begin
+    if FAmbientPeople<>nil then FAmbientPeople.ResetOnRoute(nil,FActiveAvatarAgent);
     FreeAndNil(FRemoteRiders);FreeAndNil(FLaneManager);
     FRemoteRiders:=TRemoteRidersManager.Create(FreeAtStop);
     FRemoteRiders.OnProfileLog:=@ProfileLogLine;
@@ -5120,6 +5136,7 @@ begin
     for I := 0 to FBotBikes.Count - 1 do
       if FBotBikes[I]<>nil then TBikeInstance(FBotBikes[I]).Group.Exists := AOn;
   if FLocalBots<>nil then FLocalBots.SetRenderEnabled(AOn and(not FFreeExplore or FRouteExcursion));
+  if FAmbientPeople<>nil then FAmbientPeople.BeforePhysics(0,AOn and(FTravelMode<>travelFlight));
   if Assigned(FRemoteRiders) then
     FRemoteRiders.SetRidersVisible(AOn);
   { Теневая плоскость аватара: при скрытых райдерах пробы не нужны. }
@@ -5269,7 +5286,7 @@ begin
   if(Bot=nil)or not Bot.Visible or not Bot.Spawned or Bot.StartGroundPending or
     (Bot.Actor=nil)or(Bot.Actor.Transform=nil)or not Bot.Actor.Transform.Exists then Exit;
   FCinematicCam.AddNearbyRider(Id,Bot.Actor.Transform.Translation,
-    Bot.Actor.Transform.Direction,Bot.State.CurrentSpeed,Bot.State.CurrentModelPitch);
+    Bot.Actor.Transform.Direction,Bot.State.CurrentSpeed,Bot.State.CurrentModelPitch,Bot.State.Walking);
 end;
 
 procedure TViewPlay.Update(const SecondsPassed: Single; var HandleInput: Boolean);
@@ -5282,6 +5299,8 @@ var
   DtPoseCam, DtPoseCull, DtPoseAnimAv, DtPoseAnimBots, DtPoseMgr, DtPoseAnimRem: Double;
   SceneCount, TotalShapes, ViewportItems, BarrierCount, LevelShapes: Integer;
   I, J: Integer;
+  ContactHelper,ContactRecipient:Integer;
+  ContactSerial:QWord;
   S: TCastleScene;
   ProfileLine: string;
   RelayData: TRelayProfilingData;
@@ -5344,10 +5363,16 @@ begin
     MotionTrace.BeginFrame(SecondsPassed);
     FActiveAvatarAgent.TracePosition(mtBegin);
   end;
-  if not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready then begin
-    FLocalBots.PrepareNext;
-    FLocalBotLoading.Caption:=UiText('Preparing riders')+' '+IntToStr(FLocalBots.PreparedCount)+'/'+IntToStr(LocalBotCount);
-    FLocalBotLoading.Exists:=not FLocalBots.Ready;
+  if not FFreeExplore and(FLocalBots<>nil)and not FLocalBots.Ready then
+    FLocalBots.PrepareNext
+  else if (FAmbientPeople<>nil)and not FAmbientPeople.Ready then FAmbientPeople.PrepareNext;
+  if FLocalBotLoading<>nil then begin
+    FLocalBotLoading.Exists:=RidePreparationHeld and not FOsmPrepHold;
+    if (FAmbientPeople<>nil)and(FLocalBots<>nil)then
+      if FFreeExplore then FLocalBotLoading.Caption:=UiText('Preparing riders')+' '+
+        IntToStr(FAmbientPeople.PreparedCount)+'/'+IntToStr(AmbientModelCount)
+      else FLocalBotLoading.Caption:=UiText('Preparing riders')+' '+
+        IntToStr(FLocalBots.PreparedCount+FAmbientPeople.PreparedCount)+'/'+IntToStr(LocalBotCount+AmbientModelCount);
   end;
   UpdateTravelInput(SecondsPassed,HandleInput);
   PhysDt:=AdvanceSimFrame(SecondsPassed);
@@ -5603,21 +5628,23 @@ begin
   T1 := Timer;
   FreezeDiagSetLocation('TViewPlay.Update: physics');
   if HasActiveState then FActiveAvatarAgent.TracePosition(mtBeforePhysics);
+  if FAmbientPeople<>nil then FAmbientPeople.BeforePhysics(PhysDt,FPerfRiders and(FTravelMode<>travelFlight));
   PhysSteps := Ceil(PhysDt / FixedTimeStep) + 2;
   if PhysSteps < 4  then PhysSteps := 4;
   if PhysSteps > 64 then PhysSteps := 64;   { верхний предохранитель от спайков }
   try
     if (not RidePreparationHeld) and (PhysDt>0) then
     begin
+      if (not FFreeExplore or FRouteExcursion)and(FLocalBots<>nil)then FLocalBots.BeforePhysics(PhysDt,FBikeInstance);
+      UpdateRiderTraffic(FLaneManager,PhysDt);
       if FFreeExplore and not FRouteExcursion then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
       else begin
-      if FLocalBots<>nil then FLocalBots.BeforePhysics(PhysDt,FBikeInstance);
-      UpdateRiderTraffic(FLaneManager,PhysDt);
       if Assigned(FLoopbackSession) then
         FLoopbackSession.Update(PhysDt, FixedTimeStep, PhysSteps)
       else if Assigned(FOfflineWorld) then
         FOfflineWorld.Update(PhysDt, FixedTimeStep, PhysSteps);
       end;
+      if FAmbientPeople<>nil then FAmbientPeople.UpdatePhysics(PhysDt);
     end;
   except
     on E: Exception do
@@ -5739,6 +5766,11 @@ begin
           for I:=0 to FBotAgents.Count-1 do FeedCinematicBot(-1-I,TLocalBotAgent(FBotAgents[I]));
         if FPerfRiders and(FLocalBots<>nil)then
           FeedCinematicBot(-1000-Int64(PtrUInt(FLocalBots.CrossAgent)),FLocalBots.CrossAgent);
+        if FPerfRiders and(FAmbientPeople<>nil)then
+          FeedCinematicBot(-1000000-FAmbientPeople.Serial,FAmbientPeople.ActiveAgent);
+        if FPerfRiders and(FLocalBots<>nil)and
+          FLocalBots.CameraContact(ContactHelper,ContactRecipient,ContactSerial)then
+          FCinematicCam.OfferInteraction(ContactSerial,-ContactHelper,-ContactRecipient);
       end;
       { Скорость райдера (м/с) — питает сценарий "райдер стоит": ниже ~0.3 м/с
         дольше ~1.5 с камера переключается на медленный облёт (cmOrbit) вместо
@@ -5909,6 +5941,7 @@ begin
     paused world. Physics, camera, bot roster and GPU resources stay identical. }
   if FPerfAnimatePausedBots and not FFocusMode and (PhysDt<=0) then
     AnimateBotBikes(SecondsPassed);
+  if FAmbientPeople<>nil then FAmbientPeople.Animate(PhysDt,FPerfAnim and FPerfRiders and not FFocusMode);
 
   { Shadow LOD ботов: тень (bsmCGE — свой теневой проход) только ближе 50 м. }
   if not FFocusMode then UpdateBotShadowLOD;
@@ -6892,6 +6925,8 @@ begin
     if Assigned(FBotAgents) then
       for I:=0 to FBotAgents.Count-1 do AddAgent(TPhysicalAgent(FBotAgents[I]));
     if FLocalBots<>nil then C.LocalBots:=FLocalBots.CaptureReplay;
+    C.Ambient.Active:=-1;
+    if FAmbientPeople<>nil then C.Ambient:=FAmbientPeople.CaptureReplay;
     if Assigned(FBikeInstance) then begin C.HasBike:=True; C.Bike:=FBikeInstance.CaptureReplay end;
     if Assigned(FPoseManager) then begin C.HasPose:=True; C.Pose:=FPoseManager.CaptureReplay end;
     if Assigned(FCinematicCam) then begin C.HasCamera:=True; C.Camera:=FCinematicCam.CaptureReplay end;
@@ -6933,6 +6968,7 @@ begin
   if C.HasPose and Assigned(FPoseManager) then FPoseManager.RestoreReplay(C.Pose);
   if HasActiveState then RideHistory.RebaseDistance(FActiveAvatarAgent.State.CumulativeDistance);
   if FLocalBots<>nil then FLocalBots.RestoreReplay(C.LocalBots);
+  if FAmbientPeople<>nil then FAmbientPeople.RestoreReplay(C.Ambient);
   if Assigned(FLaneManager) then begin
     FLaneManager.RestoreReplay(C.Lanes);
     if(C.LocalBots.CrossIdentity<>nil)and(FLocalBots<>nil)then

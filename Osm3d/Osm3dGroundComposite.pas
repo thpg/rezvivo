@@ -1105,6 +1105,17 @@ begin
     '/* Direction TOWARD the sun in world space. Default used only when' + #10 +
     '   the application has not set the uniform. */' + #10 +
     '#ifndef GC_SUN_DIR_UNIFORM' + #10 + '#define GC_SUN_DIR_UNIFORM' + #10 + 'uniform vec3 gc_SunDirToward;' + #10 + '#endif' + #10 +
+    '/* Keep the complete mip/aniso footprint inside its material cell.' + #10 +
+    '   The fixed eight-texel apron only protects the nearest mip levels. */' + #10 +
+    'vec2 gcAtlasSafeUV(vec2 uv,vec2 gx,vec2 gy) {' + #10 +
+    '    vec2 cell=vec2(1.0/float(u_ground_grid_cols),1.0/float(u_ground_grid_rows));' + #10 +
+    '    vec2 origin=floor(uv/cell)*cell;' + #10 +
+    '    /* A mip texel is square within the cell even for a grazing ray.' + #10 +
+    '       Per-component gradients alone miss the cross-axis mip footprint. */' + #10 +
+    '    float footprint=max(length(gx/cell),length(gy/cell));' + #10 +
+    '    vec2 guard=cell*min(.49,max(u_ground_cell_inset,1.5*footprint));' + #10 +
+    '    return clamp(uv,origin+guard,origin+cell-guard);' + #10 +
+    '}' + #10 +
     RockMaterialGLSL +
     '' + #10 +
     '/* gc_ prefix avoids collision with CGE''s built-in LINEARtoSRGB /' + #10 +
@@ -1196,7 +1207,7 @@ begin
     '       interior span to match the apron inset). */' + #10 +
     '    vec2 gradX = dFdx(baseUV) * cellSpan * gspan;' + #10 +
     '    vec2 gradY = dFdy(baseUV) * cellSpan * gspan;' + #10 +
-    '    vec3 srgb  = textureGrad(u_ground_atlas, atlasUV, gradX, gradY).rgb;' + #10 +
+    '    vec3 srgb  = textureGrad(u_ground_atlas, gcAtlasSafeUV(atlasUV,gradX,gradY), gradX, gradY).rgb;' + #10 +
     '    return gc_SRGBtoLINEAR(srgb);' + #10 +
     '}' + #10 +
     '' + #10 +
@@ -1515,6 +1526,12 @@ begin
     '        rndGY3 = (rndR3 * rnd_dUVdy) * cellSpan * gspan;' + #10 +
     '    }' + #10 +
     '' + #10 +
+    '    atlasUV=gcAtlasSafeUV(atlasUV,gradX,gradY);' + #10 +
+    '    if(rndOn>.5){' + #10 +
+    '      rndAUV1=gcAtlasSafeUV(rndAUV1,rndGX1,rndGY1);' + #10 +
+    '      rndAUV2=gcAtlasSafeUV(rndAUV2,rndGX2,rndGY2);' + #10 +
+    '      rndAUV3=gcAtlasSafeUV(rndAUV3,rndGX3,rndGY3);' + #10 +
+    '    }' + #10 +
     '#ifdef DIAG_RND' + #10 +
     '    fragment_color = vec4(rndOn, float(matId)/31.0, 0.0, 1.0); return;' + #10 +
     '#endif' + #10 +
@@ -1983,7 +2000,7 @@ end;
 function TGroundAtlas.BuildSignature: string;
 var i: Integer;
 begin
-  Result := Format('GROUND;GRASS_TOP=5;L=%dx%dx%d;N=%d',
+  Result := Format('GROUND;GRASS_TOP=6;L=%dx%dx%d;N=%d',
     [Layout.GridCols, Layout.GridRows, Layout.TilePixels, GROUND_MAT_COUNT]);
   for i := 0 to GROUND_MAT_COUNT - 1 do
     with GROUND_MATERIALS[i] do

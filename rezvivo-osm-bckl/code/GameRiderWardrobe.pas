@@ -8,6 +8,8 @@ const
 function WardrobeSelection(Slot:Integer):string;
 procedure SelectWardrobe(const Slot,Preset:string);
 function WardrobeRiderPath(const BasePath:string):string;
+{ Explicit selections for NPCs; never read or modify the user's outfit. }
+function WardrobeRiderPathFor(const BasePath:string;const Presets:array of string):string;
 function WardrobeHeadwear:TRiderHeadwear;
 procedure WardrobeState(Rider:TTripoRiderScene;Result:TJSONObject);
 type
@@ -74,13 +76,20 @@ begin
 end;
 
 function WardrobeRiderPath(const BasePath:string):string;
+var Presets:array[0..4]of string;I:Integer;
+begin
+  for I:=0 to High(Presets)do Presets[I]:=WardrobeSelection(I);
+  Result:=WardrobeRiderPathFor(BasePath,Presets);
+end;
+
+function WardrobeRiderPathFor(const BasePath:string;const Presets:array of string):string;
 var O:TJSONObject;A:TJSONArray;I:Integer;Preset,Key,Dir:string;Info:TSearchRec;
 begin
   Result:=BasePath;O:=TJSONObject.Create;
   try
     A:=TJSONArray.Create;O.Add('items',A);
     for I:=0 to High(WardrobeSlots)do begin
-      Preset:=WardrobeSelection(I);
+      Preset:='';if I<=High(Presets)then Preset:=Presets[I];
       if Preset<>''then A.Add(TJSONObject.Create(['slot',WardrobeSlots[I],'preset',Preset]));
     end;
     if(A.Count=0)or(BasePath='')then Exit;
@@ -153,6 +162,7 @@ type
     procedure HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);override;
     procedure ColorState(O:TJSONObject);
     function DisplayTopColor(out Color:TVector3):Boolean;override;
+    function DisplayBottomColor(out Color:TVector3):Boolean;override;
     destructor Destroy;override;
     procedure Update(Dt,Speed:Single);override;
   end;
@@ -235,6 +245,12 @@ begin
 end;
 procedure TWardrobeAppearance.HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);
 begin ApplyColor(4,Color,Enabled) end;
+function TWardrobeAppearance.DisplayBottomColor(out Color:TVector3):Boolean;
+var I:Integer;
+begin
+ for I:=0 to High(Tints)do if Tints[I].Slot=1 then begin Color:=Tints[I].Material.BaseColor;Exit(True)end;
+ Result:=False;
+end;
 function TWardrobeAppearance.DisplayTopColor(out Color:TVector3):Boolean;
 var I,Slot:Integer;
 begin

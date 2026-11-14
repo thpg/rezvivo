@@ -81,6 +81,7 @@
 '    vec2 gx=vec2(dot(dx,T),dot(dx,B))*0.125*span*interior;' + #10 +
 '    vec2 gy=vec2(dot(dy,T),dot(dy,B))*0.125*span*interior;' + #10 +
 '    vec2 atlas=cell+(u_ground_cell_inset+fract(uv)*interior)*span;' + #10 +
+'    atlas=gcAtlasSafeUV(atlas,gx,gy);' + #10 +
 '    color+=weight*textureGrad(u_ground_atlas,atlas,gx,gy).rgb;' + #10 +
 '    vec3 n=textureGrad(u_ground_normal_atlas,atlas,gx,gy).xyz*2.0-1.0;' + #10 +
 '    gradient+=weight*(T*n.x+B*n.y)/max(n.z,0.35);' + #10 +

@@ -6,6 +6,8 @@ layout(location=3) in vec4 inC;
 layout(location=4) in ivec4 aVertexTemplate;
 uniform mat4 uProjection,uView,uModel;
 uniform mat4 uViewModel;
+uniform float uDecalDepthBias;
+uniform vec3 uDecalRasterScale;
 uniform int uVertexCache;
 uniform int uCardEnvelope;
 uniform vec2 uEnvelopePoints[8],uEnvelopeViewport;
@@ -53,6 +55,15 @@ float edge(vec2 a,vec2 b,vec2 p){vec2 d=b-a;return d.x*(p.y-a.y)-d.y*(p.x-a.x);}
 bool inside(vec2 p){vec3 e=vec3(edge(aAB.xy,aAB.zw,p),edge(aAB.zw,aC.xy,p),edge(aC.xy,aAB.xy,p));return all(greaterThanEqual(e,vec3(0)))||all(lessThanEqual(e,vec3(0)));}
 const int tri[15]=int[15](0,1,2,1,3,2,2,3,4,3,5,4,4,5,6);
 const vec2 quad[6]=vec2[6](vec2(0,0),vec2(1,0),vec2(0,1),vec2(1,0),vec2(1,1),vec2(0,1));
+// Tall herbs share the existing two 30-vertex slots. Habitat-weighted choices:
+// burdock, thistle, oxeye daisy, yarrow, willowherb, dock, grass, nettle, mullein.
+// Entries 0..5 are also representatives in the three side-atlas slices.
+const int herbPalette[64]=int[64](
+  2,3,6,5,4,1,0,3,  0,7,5,4,6,7,0,7,
+  6,3,8,5,1,6,6,3,  2,3,4,1,6,2,3,2,
+  0,0,0,0,0,0,0,0,  6,5,8,1,3,6,6,5,
+  2,3,6,5,4,1,0,6,  4,2,3,1,6,4,2,4);
+const float herbHeight[9]=float[9](0.54,0.90,0.62,0.72,1.0,0.91,0.93,0.85,1.0);
 vec3 canopyViewGain(){
   vec3 groundNormal=normalize(vec3(-aSurface.x,1,-aSurface.y));
   float e=dot(normalize(uCamera-aBase.xyz+vec3(0,0.0001,0)),groundNormal);
@@ -137,7 +148,10 @@ void main(){
     right=right*cos(angle)+toward*sin(angle);
     float canopyHeight=uWeeds[vKind].x>0.0?max(profile.x,uWeeds[vKind].y):profile.x;
     float weedCardChoice=float(hash(cardBits^0xa3c59ac3u)&65535u)/65535.0;
-    vWeedCard=vec2(profile.x/canopyHeight,weedCardChoice<uWeeds[vKind].x*0.75?1.0:0.0);
+    // Each of the three slices now contains two herbs. Four cards times
+    // (abundance / 4) times two plants matches the two live candidates.
+    float cardAbundance=uWeeds[vKind].x*mix(0.25,1.65,smoothstep(0.2,0.8,community));
+    vWeedCard=vec2(profile.x/canopyHeight,weedCardChoice<cardAbundance*0.25?1.0:0.0);
     // A high-weed atlas is cropped at a habitat-dependent height on ordinary
     // cards. Its convex hull cannot be rescaled to that lower UV interval;
     // keep the original rectangle there. Full plants use the union envelope.
@@ -163,45 +177,88 @@ void main(){
     if(uVertexCache==0 && uBake!=2 && (uBake!=1 || aSurface.w<=0.0))vBladeGain=canopyViewGain();
     int headStart=uGrid*uGrid*7;bool head=vertexID>=headStart;
     int row=uVertexCache!=0?vertexTemplate.y:(head?(vertexID-headStart)/30:(vertexID/7)/uGrid);
-    // Reuse two existing flower slots for whole plants. Their descriptors,
-    // density and silhouettes stay identical in the live and baked paths.
+    // Reuse two existing flower slots for whole plants. Admission remains
+    // identical to GrassRoots: species/size do not alter roots or counts.
     // These sparse plants survive thinning of the ordinary fine grass.
     if(head && row<2 && uWeeds[vKind].x>0.0){
       uint weedBits=hash(uint(aSurface.z)^uint(row)*0x85ebca6bu^0xb4f03e77u);
       vec4 wr=vec4(weedBits&255u,(weedBits>>8u)&255u,(weedBits>>16u)&255u,weedBits>>24u)/255.0;
       vec2 root=(wr.xy-0.5)*0.76;
       float abundance=uWeeds[vKind].x*mix(0.25,1.65,smoothstep(0.2,0.8,community));
-      if(uBake==1 && uSlice>=0)abundance=1.01;
+      bool atlasHerb=uBake==1 && uSlice>=0;
+      if(atlasHerb){
+        abundance=1.01;
+        // Two different representatives in EACH slice, instead of baking
+        // the same thistle into one slice and leaving the other slices bare.
+        root=vec2(row==0?-0.24:0.24,(float(uSlice)+0.5)/3.0-0.5);
+      }
       if(wr.w>=abundance || !inside(root) || (uBake==1 && aSurface.w>1.0) ||
          (uSlice>=0 && int(floor((root.y+0.5)*3.0))!=uSlice)){
         gl_Position=vec4(2,2,2,1);return;
       }
-      float h=uWeeds[vKind].y*mix(0.72,1.0,wr.z);
+      // Neighbouring plants usually share a community (5 m patches), but
+      // individuals retain independent size, lean and occasional outsiders.
+      ivec2 colony=ivec2(floor((aBase.xz-0.5)/5.0));
+      uint colonyBits=hash(uint(colony.x)*0x9e3779b9u^uint(colony.y)*0x85ebca6bu);
+      uint identity=hash(weedBits^0x68bc21ebu);
+      int choice=int(((identity&3u)==0u?identity:colonyBits)>>8u)&7;
+      if(atlasHerb)choice=uSlice*2+row;
+      int species=herbPalette[vKind*8+choice];
+      float size=float((identity>>16u)&255u)/255.0;
+      float h=uWeeds[vKind].y*herbHeight[species]*mix(0.48,1.0,sqrt(size));
+      if(atlasHerb)h=uWeeds[vKind].y*herbHeight[species]*mix(0.76,0.94,wr.z);
       int slot=(vertexID-headStart)%30;int section=slot/6;
       vec2 uv=quad[slot%6];float yaw=wr.z*6.2831853;
       float phase=dot(mod(aBase.xz,256.0),vec2(0.17180585,0.12271846))+uTime*0.75;
-      vec2 wind=vec2(1,0.35)*sin(phase+wr.y)*h*uWind*0.018;
+      vec2 wind=vec2(1,0.35)*sin(phase+wr.y)*h*(uComplexity==0?0.0:uWind)*0.018;
+      vec2 lean=vec2(cos(yaw),sin(yaw))*h*mix(0.015,0.12,wr.x)+wind;
       vec2 off;float y;
-      if(row==1 && section<2){
-        // Crossed stems with a small spiny flower head, trimmed in fragment.
+      if(species!=0 && section<2){
+        // Crossed stems carry species-specific silhouettes: open panicles,
+        // branching seed stalks or tapered flower racemes, not tinted balls.
         float a=yaw+float(section)*1.5707963;
         vec2 side=vec2(cos(a),sin(a));
-        off=side*((uv.x-0.5)*h*0.10)+wind*uv.y*uv.y;
+        float width=species==6?0.25:(species==3?0.18:(species==5?0.18:0.10));
+        off=side*((uv.x-0.5)*h*width)+lean*uv.y;
         y=h*uv.y;vBlade=vec2(uv.y,uv.x*2.0-1.0);vForm=6;
+        if(species==2 || species==7)vForm=7;
+        else if(species==3)vForm=8;
+        else if(species==4)vForm=9;
+        else if(species==5)vForm=10;
+        else if(species==6)vForm=11;
+        else if(species==8)vForm=16;
         normal=vec3(-side.y,0.5,side.x);albedo*=vec3(0.86,0.98,1.15);
+        if(species==6)albedo=mix(albedo,vec3(0.28,0.23,0.09),0.45+uGrowth[vKind].w*0.45);
+      }else if((species==2 || species==3) && section==4){
+        // A real inclined flower surface reads from above as well as from
+        // the riding camera. Yarrow is a broad, flat cluster; daisy a disk.
+        vec2 along=vec2(cos(yaw),sin(yaw)),side=vec2(-along.y,along.x);
+        float radius=species==2?mix(0.019,0.032,size):h*0.095;
+        vec2 flower=(uv*2.0-1.0)*radius;
+        off=lean+side*flower.x+along*flower.y;
+        y=h+flower.y*0.38;vBlade=uv*2.0-1.0;vForm=species==2?14:15;
+        normal=vec3(-along.x*0.38,1,-along.y*0.38);albedo=vec3(0.60,0.58,0.47);
       }else{
-        bool burdock=row==0;
+        bool burdock=species==0;
         float a=yaw+float(section)*2.399963;
         vec2 along=vec2(cos(a),sin(a)),side=vec2(-along.y,along.x);
         // The quadrilateral folds slightly across its diagonal. Burdock
         // carries broad drooping leaves; thistle leaves climb the stalk.
-        float length=h*(burdock?0.45:0.30)*mix(0.8,1.1,fract(wr.x+float(section)*0.37));
-        float halfWidth=length*(burdock?0.39:0.24);
+        float length=h*(burdock?0.85:(species==8?0.30:0.26))*mix(0.8,1.1,fract(wr.x+float(section)*0.37));
+        float halfWidth=length*(burdock?0.39:(species==7?0.33:(species==4 || species==6?0.09:0.23)));
         float t=uv.y,s=uv.x*2.0-1.0;
-        off=along*(length*t)+side*(halfWidth*s)+wind*(burdock?0.3:0.65);
-        y=burdock?h*(0.13+0.16*t-0.10*abs(s)):h*(0.22+float(section-2)*0.18+0.08*t-0.08*abs(s));
-        vBlade=vec2(t,s);vForm=burdock?4:5;normal=vec3(-along.x,1.5,-along.y);
+        float attachment=burdock?0.26:(species==8?0.10+float(section-2)*0.09:0.22+float(section-2)*0.18);
+        off=along*(length*t)+side*(halfWidth*s)+lean*attachment;
+        y=h*(attachment+0.16*t-0.10*abs(s));
+        vBlade=vec2(t,s);vForm=burdock?4:5;
+        if(species==2 || species==4 || species==6)vForm=13;
+        else if(species==3)vForm=18;
+        else if(species==5)vForm=19;
+        else if(species==7)vForm=12;
+        else if(species==8)vForm=17;
+        normal=vec3(-along.x,1.5,-along.y);
         albedo*=burdock?vec3(0.72,0.93,1.26):vec3(0.90,0.96,1.24);
+        if(species==8)albedo=mix(albedo,vec3(0.22,0.27,0.17),0.6);
       }
       vRoot=root+off;p=aBase.xyz+vec3(vRoot.x,dot(aSurface.xy,vRoot)+y-0.002,vRoot.y);
     }else{
@@ -326,11 +383,23 @@ void main(){
   vec4 eyePosition=uVertexCache!=0?uViewModel*vec4(p,1):uView*uModel*vec4(p,1);
   gl_Position=uProjection*eyePosition;
   if(uMode!=0 && vSlice==3){
-    // Bias only depth by one centimetre in view space. Screen XY stays on
-    // the terrain (no silhouette/parallax); a fixed NDC bias would grow
-    // quadratically with distance and let grass leak through other objects.
-    // Projecting the biased point also works with orthographic editor views.
-    vec4 decalDepth=uProjection*(eyePosition+vec4(0,0,0.01,0));
-    gl_Position.z=decalDepth.z/decalDepth.w*gl_Position.w;
+    // Separately tessellated coplanar primitives also need slope-scaled bias:
+    // subpixel XY rounding changes their depth by up to one pixel's slope.
+    // A fixed depth-unit allowance alone leaves stripes at oblique angles.
+    // Analytic plane gradients avoid fragment-depth writes (early Z stays
+    // enabled), extra draws and offsets on the upright cards/live blades.
+    vec3 tx=uViewModel[0].xyz+uViewModel[1].xyz*aSurface.x;
+    vec3 tz=uViewModel[2].xyz+uViewModel[1].xyz*aSurface.y;
+    vec3 planeNormal=cross(tx,tz);
+    vec3 planeOrigin=(uViewModel*vec4(aBase.xyz,1)).xyz;
+    float denominator=uDecalRasterScale.z>0.5
+      ? dot(planeNormal,planeOrigin) : planeNormal.z;
+    vec2 rasterSlope=abs(uDecalRasterScale.xy*planeNormal.xy)
+      /max(abs(denominator),1e-8);
+    float depthBias=uDecalDepthBias+max(rasterSlope.x,rasterSlope.y);
+    // Keep screen XY and shading coordinates on the actual surface. A second
+    // projection with a metric eye-Z shift is unsafe for clipped patches:
+    // vertices behind the near plane can flip that projection's W sign.
+    gl_Position.z-=depthBias*gl_Position.w;
   }
 }

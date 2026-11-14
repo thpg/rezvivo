@@ -32,7 +32,7 @@ uses AppRuntimePaths, AvatarGait, SysUtils,
   CastleFilesUtils, CastleSceneCore, CastleKeysMouse, CastleColors,
   CastleUIControls, CastleApplicationProperties, CastleSoundEngine,
   CastleTransform, CastleRenderOptions, CastleGLShaders, CastleGLVersion,
-  OpenSSL, OpenSSLSockets, SSLSockets,
+  {$ifndef WASI}OpenSSL, OpenSSLSockets, SSLSockets,{$endif}
   DebugLog,
   {$ifdef ANDROID}GameAndroidPlatform,{$endif}
   {$ifdef MSWINDOWS}
@@ -50,7 +50,7 @@ uses AppRuntimePaths, AvatarGait, SysUtils,
   RideUploadQueue, VeloSiteAPI, GameOsmAccess,
   GameLocalization, AppSettings, GameGraphicsOptions,
   GameMcpServer,GameClientUpdate,GameCrashReports,GameAudio,GameOfflineReadiness,
-  GameStreamingRetirement, GameShaderCache, GameScreenshots, GameVideoCapture;
+  GameStreamingRetirement, GameShaderCache, GameScreenshots, GameVideoCapture, GameNeuralRiders;
 
 var
   Window: TCastleWindow;
@@ -65,6 +65,7 @@ var
   валиться позже корректно через except. }
 procedure TryInitOpenSSL;
 
+{$ifndef WASI}
   function TryNames(const ASslName, ACryptoName: String): Boolean;
   begin
     DLLSSLName := ASslName;
@@ -101,6 +102,11 @@ begin
   Logger.Warning('[OpenSSL] Failed to load any of: libssl-3, libssl-1_1, libssl, ssleay32. ' +
     'HTTPS calls will fail. Install OpenSSL DLLs next to the .exe.');
 end;
+{$else}
+begin
+  { Browser fetch owns HTTPS and certificate verification. }
+end;
+{$endif}
 
 { One-time initialization of resources. }
 procedure GameFilesDropped(Container:TCastleContainer;const FileNames:array of String);
@@ -180,6 +186,7 @@ begin
   Window.Container.Controls.InsertFront(CreateGameFpsControl(Window));
   Window.Container.Controls.InsertFront(CreateGameScreenshotControl(Window));
   Window.Container.Controls.InsertFront(CreateGameVideoControl(Window));
+  Window.Container.Controls.InsertFront(CreateNeuralRiderNoticeControl(Window));
 
   { Скан недозагруженных заездов. Если приложение упало с активной
     сессией, CSV остался без маркера .uploaded — фоновая очередь

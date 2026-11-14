@@ -1,4 +1,4 @@
-﻿unit Osm3dWarmupOverlay;
+unit Osm3dWarmupOverlay;
 
 { Оверлей «прогрева» маршрута — общая фича стримера Osm3d, одинаковая для
   Osm3dStudio и игры.

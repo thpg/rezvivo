@@ -3016,19 +3016,56 @@ begin
 end;
 
 procedure TBikeFitPage.McpAnimation(AParams,AResult:TJSONObject);
-var I,Frames:Integer;Hz,Phase:Single;
+var I,J,Frames,PoseIndex:Integer;Hz,Phase:Single;ModelPath:String;
+  State:TBikePlaybackState;Skin,Row,Angles,JointNames:TJSONArray;
 begin
   if FLiveRide then raise Exception.Create('Use ride simulation controls during an activity');
-  if not FOnFootPreview then raise Exception.Create('Walking preview required');
   if (FResultBike=nil)or not FResultBike.HasTripoRider or(FWantRiderPath<>'')then
     raise Exception.Create('Wait for the avatar to finish loading');
+  ModelPath:=AParams.Get('model','');
+  if ModelPath<>'' then begin
+    if not FileExists(ModelPath) then raise Exception.Create('Preview model does not exist');
+    if not FResultBike.LoadTripoRider(ModelPath) then raise Exception.Create('Could not load preview model');
+    ApplyRiderShapeToPreview;ReapplyColorsAfterBuild;
+  end;
   FPreviewAnimationPaused:=AParams.Get('paused',True);
-  FWalkPreviewSpeed:=EnsureRange(AParams.Get('speed',Double(FWalkPreviewSpeed)),0.0,8.0);
   Frames:=EnsureRange(AParams.Get('frames',0),0,600);
   Hz:=EnsureRange(AParams.Get('fps',60.0),10.0,240.0);
   Phase:=AParams.Get('phase',-1.0);
-  if Phase>=0 then FResultBike.AnimateOnFoot(0,FWalkPreviewSpeed,0,0,Frac(Phase));
-  for I:=1 to Frames do FResultBike.AnimateOnFoot(1/Hz,FWalkPreviewSpeed,0);
+  if FOnFootPreview then begin
+    FWalkPreviewSpeed:=EnsureRange(AParams.Get('speed',Double(FWalkPreviewSpeed)),0.0,8.0);
+    if Phase>=0 then FResultBike.AnimateOnFoot(0,FWalkPreviewSpeed,0,0,Frac(Phase));
+    for I:=1 to Frames do FResultBike.AnimateOnFoot(1/Hz,FWalkPreviewSpeed,0);
+  end else begin
+    if AParams.Find('gpu')<>nil then FResultBike.GpuAnim:=AParams.Get('gpu',False);
+    if AParams.Find('pose_index')<>nil then begin
+      PoseIndex:=AParams.Get('pose_index',0);
+      if (PoseIndex<0)or(PoseIndex>=BuiltinRiderPoseCount)then raise Exception.Create('Invalid rider pose');
+      FResultBike.ApplyRiderPose(BuiltinRiderPose(PoseIndex),0);
+      for I:=0 to FPoseNames.Count-1 do
+        if PtrInt(FPoseNames.Objects[I])=PoseIndex then begin FSelPose:=I;Break end;
+    end;
+    if Phase>=0 then begin
+      State:=FResultBike.CaptureReplay;
+      State.Phase:=Frac(Phase);State.WheelPhase:=0;
+      State.BreathPhase:=0;State.BreathLoad:=0;
+      State.RiderEffort:=FPreviewEffortPct/100;State.RiderEffortTarget:=State.RiderEffort;
+      State.MotionCadence:=FCadenceRpm;State.PedalRate:=FCadenceRpm/60;
+      FResultBike.RestoreReplay(State);FResultBike.SampleRiderDynamics;
+    end;
+    for I:=1 to Frames do FResultBike.AnimateFrame(1/Hz);
+    if AParams.Get('skin',False)then begin
+      if FResultBike.GpuAnim then raise Exception.Create('Skin palette requires CPU preview');
+      Skin:=TJSONArray.Create;Angles:=TJSONArray.Create;JointNames:=TJSONArray.Create;
+      AResult.Add('skin_matrices',Skin);AResult.Add('local_x_angles',Angles);AResult.Add('joint_names',JointNames);
+      for I:=0 to FResultBike.TripoRider.Rig.JointCount-1 do begin
+        Row:=TJSONArray.Create;Skin.Add(Row);
+        for J:=0 to 15 do Row.Add(FResultBike.TripoRider.Rig.SkinMatrix[I][J]);
+        Angles.Add(ArcTan2(FResultBike.TripoRider.Rig.Delta[I][6],FResultBike.TripoRider.Rig.Delta[I][10]));
+        JointNames.Add(FResultBike.TripoRider.Rig.JointName[I]);
+      end;
+    end;
+  end;
   UpdateLabels;
   McpFillStatus(AResult);
   AResult.Add('animation_paused',FPreviewAnimationPaused);

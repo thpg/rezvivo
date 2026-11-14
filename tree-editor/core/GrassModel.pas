@@ -16,7 +16,7 @@ const
   GRASS_CARDS = 4; { scattered volume cards, plus the continuous ground carpet }
   GRASS_ATLAS_LAYERS = GRASS_SPECIES_COUNT * GRASS_ATLAS_VIEWS;
   GRASS_BLADES = 256;
-  GRASS_MODEL_VERSION = 9;
+  GRASS_MODEL_VERSION = 10;
   GRASS_VIEW_ELEVATIONS:array[0..3]of Single=(0.125,0.25,0.5,0.98);
 type
   TGrassLodSettings = record
@@ -40,7 +40,7 @@ type
     { A habitat contains several growth forms. Shared by live geometry and
       every atlas view; no additional per-plant CPU/GPU descriptors. }
     Broadleaf,Rosettes,SeedHeads,Dryness,Variation: Single;
-    { Expected weed pairs per square metre and maximum stalk height. The
+    { Expected herb pairs per square metre and maximum stalk height. The
       ordinary grass stays low; these are independent, sparse plants. }
     Weeds,WeedHeight: Single;
     Color: TTreeVec3;
@@ -108,14 +108,14 @@ const Names: array[0..7] of string = ('meadow','broadleaf','dry','blue-flowers',
 begin Result:=Names[EnsureRange(Kind,0,7)]; end;
 function GrassDescription(Kind: Integer): string;
 const Descriptions:array[0..7]of string=(
-  'Meadow: grasses, broad leaves, clover and seed heads',
-  'Woodland: ferns, broad leaves and low rosettes',
-  'Dry meadow: curled blades and straw seed heads',
-  'Wildflowers: blue, white and yellow flowers',
+  'Meadow: daisies, yarrow, willowherb, dock and grass panicles',
+  'Woodland: ferns, burdock, nettles and scattered willowherb',
+  'Dry meadow: straw panicles, yarrow, mullein and dry dock',
+  'Wildflowers: daisies, yarrow, willowherb and scattered thistles',
   'Lawn: short blades with a little clover',
-  'Tall dry grass: tussocks and oat-like seed heads',
-  'Low ground cover: fine grass, burdock leaves and scattered thistles',
-  'Flower garden: pink flowers and leafy rosettes');
+  'Tall dry grass: tussocks, open panicles and scattered seed stalks',
+  'Low ground cover: sparse mixed herbs of different heights',
+  'Flower garden: willowherb, daisies, yarrow and leafy rosettes');
 begin Result:=Descriptions[EnsureRange(Kind,0,7)];end;
 function DefaultGrassProfile(Kind: Integer): TGrassProfile;
 var I:Integer;
@@ -124,21 +124,21 @@ begin
   Result.Density:=1;Result.Color:=Vec(0.09,0.22,0.028);
   Result.Broadleaf:=0.07;Result.Rosettes:=0.06;Result.SeedHeads:=0.12;
   Result.Dryness:=0.14;Result.Variation:=0.72;Result.Flowers:=0.012;
-  Result.Weeds:=0.04;Result.WeedHeight:=0.80;
+  Result.Weeds:=0.04;Result.WeedHeight:=1.15;
   for I:=0 to 3 do Result.BladeViewGain[I]:=Vec(1,1,1);
   case Kind of
     1:begin Result.Height:=0.38;Result.Width:=0.010;Result.Color:=Vec(0.065,0.18,0.024);
-      Result.Broadleaf:=0.35;Result.Rosettes:=0.12;Result.SeedHeads:=0.015;Result.Dryness:=0.035;Result.Flowers:=0;Result.Weeds:=0.08;Result.WeedHeight:=0.78;end;
+      Result.Broadleaf:=0.35;Result.Rosettes:=0.12;Result.SeedHeads:=0.015;Result.Dryness:=0.035;Result.Flowers:=0;Result.Weeds:=0.08;Result.WeedHeight:=1.10;end;
     2:begin Result.Height:=0.38;Result.Color:=Vec(0.23,0.20,0.060);
-      Result.Broadleaf:=0.06;Result.Rosettes:=0.09;Result.SeedHeads:=0.25;Result.Dryness:=0.65;Result.Flowers:=0;Result.Weeds:=0.04;end;
+      Result.Broadleaf:=0.06;Result.Rosettes:=0.09;Result.SeedHeads:=0.25;Result.Dryness:=0.65;Result.Flowers:=0;Result.Weeds:=0.04;Result.WeedHeight:=1.25;end;
     3:begin Result.Height:=0.39;Result.Flowers:=0.075;Result.Broadleaf:=0.24;Result.Rosettes:=0.17;Result.Dryness:=0.06;end;
     4:begin Result.Height:=0.09;Result.Width:=0.0045;Result.Color:=Vec(0.080,0.205,0.030);
       Result.Broadleaf:=0.015;Result.Rosettes:=0.055;Result.SeedHeads:=0;Result.Dryness:=0.025;Result.Variation:=0.25;Result.Flowers:=0;Result.Weeds:=0;end;
     5:begin Result.Height:=0.62;Result.Width:=0.007;Result.Color:=Vec(0.24,0.19,0.050);
-      Result.Broadleaf:=0.035;Result.Rosettes:=0.045;Result.SeedHeads:=0.42;Result.Dryness:=0.78;Result.Variation:=0.9;Result.Flowers:=0;Result.Weeds:=0.04;end;
+      Result.Broadleaf:=0.035;Result.Rosettes:=0.045;Result.SeedHeads:=0.42;Result.Dryness:=0.78;Result.Variation:=0.9;Result.Flowers:=0;Result.Weeds:=0.04;Result.WeedHeight:=1.25;end;
     6:begin Result.Height:=0.12;Result.Width:=0.0045;Result.Color:=Vec(0.07,0.20,0.025);
-      Result.Broadleaf:=0.04;Result.Rosettes:=0.08;Result.SeedHeads:=0;Result.Dryness:=0.04;Result.Variation:=0.5;Result.Flowers:=0;Result.Weeds:=0.025;Result.WeedHeight:=0.65;end;
-    7:begin Result.Height:=0.37;Result.Flowers:=0.10;Result.Broadleaf:=0.30;Result.Rosettes:=0.22;Result.Dryness:=0.06;Result.Weeds:=0.025;Result.WeedHeight:=0.70;end;
+      Result.Broadleaf:=0.04;Result.Rosettes:=0.08;Result.SeedHeads:=0;Result.Dryness:=0.04;Result.Variation:=0.5;Result.Flowers:=0;Result.Weeds:=0.025;Result.WeedHeight:=0.95;end;
+    7:begin Result.Height:=0.37;Result.Flowers:=0.10;Result.Broadleaf:=0.30;Result.Rosettes:=0.22;Result.Dryness:=0.06;Result.Weeds:=0.025;Result.WeedHeight:=1.05;end;
   end;
 end;
 function GrassHash(N: LongWord): LongWord;

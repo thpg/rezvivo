@@ -52,6 +52,12 @@ def main(game, out, executable):
             world = wait_for(lambda: app.call('dream.inspect'),
                              lambda r: r.get('ride', {}).get('id') == WORLD, 180, 'default island')
             wait_for(lambda: app.call('perf.state'), lambda s: s.get('active') and s.get('prep_done'), 180, 'ride ready')
+            # Dream World geometry is ready before the staged rider/proximity
+            # models. RidePreparationHeld keeps physics and FIT time at zero
+            # until both managers finish; do not spend the movement timeout
+            # compiling their shaders on a first installation.
+            wait_for(lambda: app.call('bots.local'), lambda s: s.get('ready'), 300, 'local riders ready')
+            wait_for(lambda: app.call('bots.people'), lambda s: s.get('ready'), 300, 'pedestrians ready')
             result['ready_seconds'] = round(time.monotonic()-began, 2)
             assert not world['osm_streaming']
             app.call('app.screenshot', path=str(out/'first-ride.png'), inline=False)

@@ -1,6 +1,6 @@
 {
   "id": "krylatskoye-island",
-  "revision": 2,
+  "revision": 3,
   "coastal": true,
   "road_condition": 2,
   "title": "Крылатский остров",
@@ -32903,7 +32903,7 @@
   "tiles": [
     {
       "file": "island.x3d",
-      "sha256": "f54c83f8d0ce98300452022092b00222e485848f1c4b5455db82555e9496db4a",
+      "sha256": "02535b137a4f6c12cf4dd9aad1ffd295ba7c32896dfee76c755bdadb33a0926b",
       "offset": [
         0,
         0,
@@ -33104,14 +33104,6 @@
       "grass_material": -1,
       "grass_kind": 0
     },
-    "shore_boulders": {
-      "material": "rock",
-      "walkable": false,
-      "water": false,
-      "ground_material": 10,
-      "grass_material": -1,
-      "cast_shadow": true
-    },
     "ocean": {
       "material": "water",
       "walkable": false,
@@ -33119,6 +33111,14 @@
       "ground_material": -1,
       "grass_material": -1,
       "water_scale": 1.0
+    },
+    "shore_boulders": {
+      "material": "rock",
+      "walkable": false,
+      "water": false,
+      "ground_material": 10,
+      "grass_material": -1,
+      "cast_shadow": true
     }
   }
 }

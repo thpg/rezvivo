@@ -105,6 +105,10 @@ function RiderSpineDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TT
 { Articulation in the anatomical bind frame. Compose with the parent's delta,
   unlike RiderSpineDelta, which orients the whole rider in the bike frame. }
 function RiderSpineJointDelta(const LeanAxis: TVector3; Pitch, Yaw, Roll: Single): TTripoVec4;
+{ Turn the rib cage through the lumbar/thoracic chain in the support frame.
+  Preserve the gaze; arm contacts are solved after the new shoulder bases. }
+function RiderTorsoTurnPose(const Base:TRiderPose;const LeanAxis,UpAxis:TVector3;
+  TurnDeg:Single):TRiderPose;
 function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
   const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
 function RiderHeadRotation(const P:TRiderPose;const LeanAxis:TVector3):TTripoVec4;
@@ -217,8 +221,16 @@ type
     BreathPhase:Double;
   end;
 
+  TRiderNeuralJointQuery=function(const Name:string;out M:TMatrix4):Boolean of object;
+  TRiderSurfaceOverride = class
+  public
+    function Active:Boolean;virtual;abstract;
+    procedure Update(Dt,Effort,PedalPhase:Single;BreathPhase:Double);virtual;abstract;
+  end;
+
   TRiderAppearanceAddon = class
     function DisplayTopColor(out Color:TVector3):Boolean;virtual;
+    function DisplayBottomColor(out Color:TVector3):Boolean;virtual;
     procedure Update(Dt,Speed:Single);virtual;abstract;
     procedure ClothColorChanged(Slot:TClothSlot;const Color:TVector3;Enabled:Boolean);virtual;
     procedure HeadwearColorChanged(const Color:TVector3;Enabled:Boolean);virtual;
@@ -263,7 +275,7 @@ type
     FShoulderRoundDeg: Single;             { clavicles swing fwd/together (round shoulders) }
     FScapulaProtraction, FScapulaElevation: TShoulderAngles;
     FHandLevel: Single;                    { wrist leveling 0..1: rotate the hand toward horizontal }
-    FShoulderTwistDeg: Single;             { transient torso/shoulder yaw (set by bike during asymmetric hand moves) }
+    FShoulderTwistDeg: Single;             { optional clavicle-only editor adjustment }
     { ── live, possibly-animating body pose (owned here; the bike reads it back
       for offset/stance/ankle and no longer pushes the posture each frame). ── }
     FPose: TRiderPose;                     { current (interpolated) pose }
@@ -349,6 +361,8 @@ type
     FBaldHead: Boolean;
     FFabric: TRiderFabric;
     FAppearanceAddon:TRiderAppearanceAddon;
+    FSurfaceOverride:TRiderSurfaceOverride;
+    FNeuralJointQuery:TRiderNeuralJointQuery;
     FSelfOcclusion: TRiderOcclusion;
     FOcclusionJointQuery: TRiderJointQuery;
     FClothingSkinQuery:TRiderSkinQuery;
@@ -515,6 +529,8 @@ type
     function OrientQuat(YawRad: Single): TTripoVec4;  { heading * fileBaseYaw * upright }
   public
     function CaptureReplay: TRiderPoseReplay;
+    { Call before a mounted rider graph is detached/destroyed by its host. }
+    procedure ReleaseSurfaceOverride;
     procedure RestoreReplay(const Saved: TRiderPoseReplay);
     procedure UpdateAppearance(const Dt, Speed: Single;const Effort:Single=0.7;const PedalPhase:Single=0;
       const BreathPhase:Double=0;const BreathLoad:Single=0);
@@ -775,9 +791,8 @@ type
     { + rounds the shoulders forward/together, - pulls them back/open (degrees) }
     property ShoulderRoundDeg: Single read FShoulderRoundDeg write FShoulderRoundDeg;
     property HandLevel: Single read FHandLevel write FHandLevel;
-    { Transient shoulder/torso yaw in degrees, driven each frame by the bike from the
-      fore-aft asymmetry of the two hand grips (e.g. during a staggered hand change).
-      Same vertical axis as ShoulderRound, so they simply add. }
+    { Optional clavicle-only adjustment. Automatic asymmetric reach rotates
+      the spine through RiderTorsoTurnPose before the arm contact solve. }
     property ShoulderTwistDeg: Single read FShoulderTwistDeg write FShoulderTwistDeg;
 
     { ── Pose application (animated) ──
@@ -886,6 +901,8 @@ type
     { Posed world position of a named joint (e.g. 'R_Foot' — the lowest leg bone),
       in the rider's parent (bike) frame. Same rig->parent lift PosedContactParent
       uses, exposed so the pedal log can print the foot bone next to its cleat. }
+    property NeuralJointQuery:TRiderNeuralJointQuery read FNeuralJointQuery write FNeuralJointQuery;
+    function NeuralJointMatrix(const JointName:string;out M:TMatrix4):Boolean;
     function PosedJointParent(const JointName: string; out P: TVector3): Boolean;
     { BIND position of a named joint in the rider's parent (bike) frame —
       same lift as PosedJointParent but from the rest pose, so it works with
@@ -939,16 +956,20 @@ function ResolveGlbFilesystemPath(const APath: string): string;
 
 type
   TRiderAssetResolver=function(const Path:string):string;
+  TRiderSurfaceFactory=function(Rider:TTripoRiderScene):TRiderSurfaceOverride;
   TRiderAppearanceFactory=function(Rider:TTripoRiderScene;const Path:string):TRiderAppearanceAddon;
 var
   { Optional game-owned assets; standalone editors keep their normal loader. }
   RiderAssetResolver:TRiderAssetResolver=nil;
+  RiderSurfaceFactory:TRiderSurfaceFactory=nil;
   RiderAppearanceFactory:TRiderAppearanceFactory=nil;
 
 implementation
 
 uses AppRuntimePaths, RiderGarmentState;
 
+function TRiderAppearanceAddon.DisplayBottomColor(out Color:TVector3):Boolean;
+begin Result:=False end;
 function TRiderAppearanceAddon.DisplayTopColor(out Color:TVector3):Boolean;
 begin Color:=TVector3.Zero;Result:=False end;
 
@@ -1332,18 +1353,14 @@ begin
   SetRiderSpineJointRotation(P,4,LeanAxis,QuatNormalize(QuatMul(QuatConj(Parent),Desired)));
 end;
 
-function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
-  const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
+function RiderTorsoTurnPose(const Base:TRiderPose;const LeanAxis,UpAxis:TVector3;
+  TurnDeg:Single):TRiderPose;
 const TurnShare:array[0..3]of Single=(0.08,0.08,0.53,1.0);
-var Original,Desired,BaseParent,TurnedParent,Local:TTripoVec4;
-  I:Integer;Yaw,Torso:Single;Up,ForwardAxis:TVector3;
+var Original,Desired,BaseParent,TurnedParent,Local:TTripoVec4;I:Integer;Up:TVector3;
 begin
   Result:=Base;
-  if Abs(Attention.Yaw)+Abs(Attention.Pitch)+Abs(Attention.Roll)+Abs(Attention.TorsoYaw)<0.00001 then Exit;
+  if Abs(TurnDeg)<0.00001 then Exit;
   Up:=UpAxis.Normalize;
-  Torso:=EnsureRange(Attention.TorsoYaw,-28.0,28.0);
-  Yaw:=EnsureRange(Attention.Yaw,Torso-RiderAttentionNeckYawLimit,
-    Torso+RiderAttentionNeckYawLimit);
   Original:=RiderHeadRotation(Base,LeanAxis);
   BaseParent:=QuatFromAxisAngle(0,1,0,0);TurnedParent:=BaseParent;
   for I:=0 to 3 do begin
@@ -1353,11 +1370,26 @@ begin
       joint's parent frame: adding local yaw to a leaned thorax raised one
       shoulder and left the head to undo the resulting roll. The optional
       Spine slot gets no added turn; both rider rigs can omit it. }
-    Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(Torso*TurnShare[I])),BaseParent);
+    Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(TurnDeg*TurnShare[I])),BaseParent);
     Local:=QuatNormalize(QuatMul(QuatConj(TurnedParent),Desired));
     SetRiderSpineJointRotation(Result,I,LeanAxis,Local);
     TurnedParent:=Desired;
   end;
+  SetRiderHeadRotation(Result,LeanAxis,Original);
+end;
+
+function RiderAttentionPose(const Base:TRiderPose;const LeanAxis:TVector3;
+  const Attention:TRiderAttentionFrame;const UpAxis:TVector3):TRiderPose;
+var Original,Desired:TTripoVec4;Yaw,Torso:Single;Up,ForwardAxis:TVector3;
+begin
+  Result:=Base;
+  if Abs(Attention.Yaw)+Abs(Attention.Pitch)+Abs(Attention.Roll)+Abs(Attention.TorsoYaw)<0.00001 then Exit;
+  Up:=UpAxis.Normalize;
+  Torso:=EnsureRange(Attention.TorsoYaw,-28.0,28.0);
+  Yaw:=EnsureRange(Attention.Yaw,Torso-RiderAttentionNeckYawLimit,
+    Torso+RiderAttentionNeckYawLimit);
+  Original:=RiderHeadRotation(Base,LeanAxis);
+  Result:=RiderTorsoTurnPose(Base,LeanAxis,Up,Torso);
   { Pelvis pitch and rider orientation are already included in UpAxis.
     Solve only the remaining cervical turn, before contact IK and skinning. }
   Desired:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,DegToRad(Yaw)),Original);
@@ -1384,6 +1416,18 @@ var FaceDetail,FaceStrain: Single;FaceTime:Double;TorsoA,TorsoB:TVector3;
   Query:TRiderJointQuery;
 begin
   CountRiderWork(rwAppearance);
+
+  if(FSurfaceOverride<>nil)and FSurfaceOverride.Active then
+  begin
+    { The replacement exterior owns its skin and cloth response. Keep the
+      game's current bone palette, but do not solve hidden ordinary garments. }
+    FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
+    FAppearanceBreathPhase:=BreathPhase;FAppearanceBreathLoad:=BreathLoad;
+    if Assigned(FPrepareGpuPose)then FPrepareGpuPose(Self);
+    FSurfaceOverride.Update(Dt,Effort,PedalPhase,BreathPhase);
+    Exit;
+  end;
+
   if FLod<>nil then FLod.Update;
   if FAppearanceAddon<>nil then FAppearanceAddon.Update(Dt,Speed);
   FAppearanceEffort:=Effort;FAppearancePhase:=PedalPhase;
@@ -1422,6 +1466,8 @@ begin
   end;
   if (FHeadAppearance<>nil)and(FFace<>nil)then FHeadAppearance.UpdateFace(FFace);
   if Assigned(FPrepareGpuPose)then FPrepareGpuPose(Self);
+  if (FSurfaceOverride=nil)and Assigned(RiderSurfaceFactory)then FSurfaceOverride:=RiderSurfaceFactory(Self);
+  if FSurfaceOverride<>nil then FSurfaceOverride.Update(Dt,Effort,PedalPhase,BreathPhase);
 end;
 
 procedure TTripoRiderScene.SetFaceTime(const Value:Double);
@@ -1496,6 +1542,7 @@ end;
 destructor TTripoRiderScene.Destroy;
 var i: Integer;
 begin
+  FreeAndNil(FSurfaceOverride);
   FreeAndNil(FLod);
   FreeAndNil(FAppearanceAddon);
   { Filters are chained hair -> face. Remove them in reverse order. }
@@ -1525,6 +1572,9 @@ begin
   FreeAndNil(FRig);
   inherited Destroy;
 end;
+
+procedure TTripoRiderScene.ReleaseSurfaceOverride;
+begin FreeAndNil(FSurfaceOverride) end;
 
 procedure TTripoRiderScene.MountInto(AScene: TCastleScene; AParent: TAbstractGroupingNode);
 begin
@@ -6094,6 +6144,7 @@ var
   RigTh: TRigParseThread;
   Path: string;
 begin
+  FreeAndNil(FSurfaceOverride);
   FreeAndNil(FLod);
   FreeAndNil(FAppearanceAddon);
   FreeAndNil(FFace);
@@ -6167,6 +6218,7 @@ function TTripoRiderScene.LoadPrepared(APrep: TTripoGlbPrepared; Log: TStrings):
 var
   TD0: QWord;
 begin
+  FreeAndNil(FSurfaceOverride);
   FreeAndNil(FAppearanceAddon);
   FreeAndNil(FCorrectives);
   FreeAndNil(FBodyMorph);
@@ -6833,6 +6885,7 @@ begin
   BodyMeta:=ReadRiderExtra(AFileName,'bodyParameters');
   try FBodyParameters:=ReadRiderBody(BodyMeta,DefaultRiderBody(1));
   finally BodyMeta.Free end;
+  FreeAndNil(FSurfaceOverride);
   FreeAndNil(FAppearanceAddon);
   if Assigned(RiderAppearanceFactory)then
     FAppearanceAddon:=RiderAppearanceFactory(Self,AFileName);
@@ -8984,6 +9037,15 @@ begin
   P := Vector3(0, 0, 0);
   Result := PosedContactRig(LimbIdx, pr);
   if Result then P := FScene.Transform.MultPoint(Vector3(pr.X, pr.Y, pr.Z));
+end;
+
+function TTripoRiderScene.NeuralJointMatrix(const JointName:string;out M:TMatrix4):Boolean;
+var J:Integer;Local:TMatrix4;
+begin
+ if Assigned(FNeuralJointQuery)and FNeuralJointQuery(JointName,M)then Exit(True);
+ Result:=False;M:=TMatrix4.Identity;if FRig=nil then Exit;
+ J:=FRig.JointIndexByName(JointName);if(J<0)or(J>=Length(FRig.WorldPose))then Exit;
+ Move(FRig.WorldPose[J],Local,SizeOf(Local));M:=FScene.Transform*Local;Result:=True;
 end;
 
 function TTripoRiderScene.PosedJointParent(const JointName: string; out P: TVector3): Boolean;

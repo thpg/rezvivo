@@ -13,7 +13,7 @@ function FindCompanionStartBehind(Path:TGamePath;const Start:TPathPosition;
 procedure UpdateRiderTraffic(Manager: TLaneManager; Dt: Single);
 procedure ClearTrafficConstraints(Agent:TPhysicalAgent);
 implementation
-uses Math, CastleVectors;
+uses Math, CastleVectors, GamePedestrianTraffic;
 
 function FindCompanionStartBehind(Path:TGamePath;const Start:TPathPosition;
   MaxBehind:Single;out Position:TPathPosition;out Behind:Single):Boolean;
@@ -88,6 +88,8 @@ begin
   if (Manager=nil) or (Agent=nil) or (Agent.Path.PointCount<2) then Exit;
   if Agent.State.FreeTravel then begin RegisterTrafficAgent(Manager,Agent);Exit end;
   H:=RegisterTrafficAgent(Manager,Agent);
+  if Agent.State.Walking then
+    Manager.SetPedestrianLine(H,PedestrianEdge(Agent.Path.RoadWidthAt(Agent.Path.Position)));
   Manager.InvalidateRiderPose(H);
   Start:=Agent.Path.Position; Advance:=0; Found:=False;
   for Row:=0 to Manager.RiderCount do begin

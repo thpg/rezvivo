@@ -3,7 +3,7 @@ unit GameSimReplay;
 interface
 uses Classes, SysUtils, Contnrs, CastleVectors, GamePhysicalAgent,
   GameCinematicCamera, GameRiderPoseControl, BikeParametric, GamePhysicsCommon,
-  GameSimCameraTrack, GameLocalBots;
+  GameSimCameraTrack, GameLocalBots, GameAmbientPeople;
 type
   TSimAgentCheckpoint = record
     Agent: TPhysicalAgent; { identity only; never dereferenced after removal }
@@ -17,6 +17,7 @@ type
     Agents: array of TSimAgentCheckpoint;
     Lanes: TLaneReplayState;
     LocalBots:TLocalBotsReplay;
+    Ambient:TAmbientReplay;
     Bike: TBikePlaybackState;
     Pose: TPoseManagerReplay;
     Camera: TCameraReplayState;

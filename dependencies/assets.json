@@ -777,32 +777,32 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/blue-flowers-top.png",
-    "bytes": 428781,
-    "sha256": "eb2dfa3ac246b6c78746ff1e9a10a5f4805f0ce55531dea534eb0d4ad81b657c",
+    "bytes": 428854,
+    "sha256": "24407a6207c5a8c731611a3b1b66e5e1c3f8945753be91d55f5e534c9b22c1ad",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/broadleaf-top.png",
-    "bytes": 556441,
-    "sha256": "f5d894b9ea1fd065e405203e778fc63bdde6400371bc9851f716cff247209727",
+    "bytes": 556309,
+    "sha256": "0747c51f00c0903d6642543cbfac47a5290d3ba833f422c3d5a16e5171c72959",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/dry-tall-top.png",
-    "bytes": 408319,
-    "sha256": "f9ec469796c23a97943955fa8a390341bdf6404d1e22d7c94c85435e23cf6e81",
+    "bytes": 408092,
+    "sha256": "930038b8aea427ff8ab07c2dc535da5694f122835c2ae29e4955a973a49fab69",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/dry-top.png",
-    "bytes": 478799,
-    "sha256": "a3f7354158a96092db155f135b4a900f7d9d3f64849115ec049fe18a5363e55f",
+    "bytes": 478666,
+    "sha256": "018ba575089d6540c1c60810567a88ec21b60ea5f8a668ee19cb083c948f0e59",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
@@ -817,24 +817,24 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/meadow-top.png",
-    "bytes": 420944,
-    "sha256": "accb734c2a9aee8db7151a4d6bfa9c539b88eaf9518bb10c666e595ed88a8bd5",
+    "bytes": 421004,
+    "sha256": "b56e37d62f74d607e33f1e3450476ebcdceab9e791d3d8ea3dca51e784f8a0d6",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/pink-flowers-top.png",
-    "bytes": 445336,
-    "sha256": "b22b1ef665d313608d7bbc83a5014021df7f1a4a2aa0f1b72288078426b9b871",
+    "bytes": 445500,
+    "sha256": "71fa60e0bb04877e5062e03856c3786aadcb518d56599a5144e52726afec4f66",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
   },
   {
     "path": "rezvivo-osm-bckl/data/Osm3d/resources/textures/surfaces/procedural-grass/short-top.png",
-    "bytes": 351166,
-    "sha256": "ce8f7a398e3ef8f5b646850961bfa2fb21fe1f21e237ca8aeb8765ebb63dbad4",
+    "bytes": 351128,
+    "sha256": "871a4edc45301d1d68a4d49918604347d7971e34fb4782363eef193911ed35c9",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-generated model, texture or configuration"
@@ -1134,8 +1134,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/avatars/RIDER.glb",
-    "bytes": 20459420,
-    "sha256": "f4e0bf5e49a79a0122fe3f5835232b785ed3ee47082e18f68d8f9c74a7c93690",
+    "bytes": 20778680,
+    "sha256": "bd7d4ba14d234002675240eea24fe8c69dd6827e5a7b1e09d5ff439a75167579",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO; MakeHuman CC0 head asset data",
     "evidence": "Project-created rider with adapted CC0 head; data/licenses/makehuman/NOTICE.txt"
@@ -2369,8 +2369,8 @@
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "Project-created procedural Dream World; route geometry from bundled public ready route",
-    "bytes": 9909116,
-    "sha256": "f54c83f8d0ce98300452022092b00222e485848f1c4b5455db82555e9496db4a"
+    "bytes": 9850382,
+    "sha256": "02535b137a4f6c12cf4dd9aad1ffd295ba7c32896dfee76c755bdadb33a0926b"
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/krylatskoye-island/preview.png",
@@ -2386,7 +2386,7 @@
     "source": "REZVIVO",
     "evidence": "Project-created procedural Dream World; route geometry from bundled public ready route",
     "bytes": 691257,
-    "sha256": "e9bad358725d0f485deabe9c4c426890362be9777652c7219cc863f669f22717"
+    "sha256": "a5bc98793694c1bbce5c8b8a519d1e6d17581362c4c2cf356ed72655f6a28138"
   },
   {
     "path": "rezvivo-osm-bckl/data/dream-worlds/lighthouse-island/island.x3d",
@@ -3601,6 +3601,46 @@
     "evidence": "project-created assets / procedural output"
   },
   {
+    "path": "rezvivo-osm-bckl/data/neural-riders/dense/suit.mesh",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created runtime asset or procedural output",
+    "bytes": 27442226,
+    "sha256": "b32cb1e70b537a6442b26dd95b6a183d2a341dea7d384490c8bb6203c1684df8"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/neural-riders/dense/suit.nn",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created runtime asset or procedural output",
+    "bytes": 116631943,
+    "sha256": "206bfcba5836b1f3642f45061ee8084e1830ef8467223ada79c90000cf04dd2d"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/neural-riders/manifest.json",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created runtime asset or procedural output",
+    "bytes": 1266,
+    "sha256": "004fcf136f5bfe9bab72d44c52a9fb04defd6b2573540d946313ad986bad7f66"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/neural-riders/reduced/suit.mesh",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created runtime asset or procedural output",
+    "bytes": 6950642,
+    "sha256": "c1c0d8ed6f2846751097c619fbe0e6dc37bb656d58692c781380f44cbfd75ad5"
+  },
+  {
+    "path": "rezvivo-osm-bckl/data/neural-riders/reduced/suit.nn",
+    "license": "GPL-3.0-or-later",
+    "source": "REZVIVO",
+    "evidence": "Project-created runtime asset or procedural output",
+    "bytes": 29699383,
+    "sha256": "d8458eadfc4ddebe68246df12b12adbff9a2c24e13ba813584b8c6058d485abc"
+  },
+  {
     "path": "rezvivo-osm-bckl/data/procedural-trees/bark/bark_willow-Diffuse.jpg",
     "license": "CC0-1.0",
     "source": "rezvivo-osm-bckl/data/procedural-trees/bark/sources.json",
@@ -3675,15 +3715,15 @@
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/grass-atlases/grass.rgba",
     "bytes": 33554452,
-    "sha256": "9ff8e7821886b82340be83fde494d39a917ddd6bdc5d63d2152912983630b4ba",
+    "sha256": "4bf201f6fb9ea72dfb7128de3412afff90ac9455b5e1274c2b0276d22bde4581",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/grass-atlases/profiles.json",
-    "bytes": 8234,
-    "sha256": "06d453bac71f8b658aba37f36baf47737cdf8a9b4c915e659ea49fcd4458beaf",
+    "bytes": 8235,
+    "sha256": "834b809f8bd768962bd210f5a56c5b7d93cb350b44ae16ec2c239801bdaaca58",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -4650,16 +4690,16 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.frag",
-    "bytes": 5580,
-    "sha256": "cd97fb3ddaa45395f3c205f401498a55d7cedf0f765b3cf0f1005e1fa8c014dd",
+    "bytes": 8351,
+    "sha256": "76af2302821e3bafdec5b035112157db900c5c8f7bfc2225d2e8fabe96e13778",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
   },
   {
     "path": "rezvivo-osm-bckl/data/procedural-trees/shaders/grass.vert",
-    "bytes": 19680,
-    "sha256": "3abbcf1feb09566747f2160a1a94b6dabfbfd6c5ed5b6736e4f6816c93cb7ec2",
+    "bytes": 23706,
+    "sha256": "22c37cdfe0d30892e1350be298bf99fd6965a95be376226ee959b2edf7aab778",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -5076,8 +5116,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 151987,
-    "sha256": "aae6aaa4df8833c78fd6ac2b56a5fe2affbb62e2bccec01b3716b10f0ee5b84c",
+    "bytes": 152890,
+    "sha256": "93c66ad6752874211f98571749038395e63c99704d69ef6af555e86dc6ba53f0",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

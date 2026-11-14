@@ -52,6 +52,10 @@ type
     FPrepareFrames,FPrepareSkipped:QWord;
     FDrawRuns:array of TGrassDrawRun;
     FDrawRunCount:Integer;
+    FRenderView:TMatrix4;
+    FRenderCameraId:PtrUInt;
+    procedure RenderAfterOpaque(const Transformation:TTransformation;
+      const PassParams:TRenderOnePassParams);
     procedure ContextClose(Sender:TObject);
     procedure AddSource(Mesh:TMesh;const TriMat:array of Integer;CX,CZ:Single);
     procedure RebuildBox;
@@ -909,6 +913,21 @@ begin N:=0;T:=0;Visited:=0;IndexBytes:=0;for I:=0 to FSources.Count-1 do begin I
 function TGrassRenderer.OverlapReport:string;
 begin Result:='grass: global 1m cells, roots clipped to source triangles';end;
 procedure TGrassRenderer.LocalRender(const Params:TRenderParams);
+begin
+  FDrawn:=0;FDrawCalls:=0;FDrawRunCount:=0;
+  if RtxReflectionCaptureActive or not CheckVisible or not RenderGrassActive then Exit;
+  if Params.RenderingCamera.Target in [rtShadowMap,rtVarianceShadowMap] then Exit;
+  { LocalRender collects the world's shapes; their ground pixels do not exist
+    yet. Draw at the start of the blending stage, after all opaque geometry
+    but before water/shadow catchers. The canopy can then blend with actual
+    soil rather than the background. Blades/cards still write opaque depth. }
+  FRenderView:=Params.RenderingCamera.Matrix;
+  FRenderCameraId:=PtrUInt(Params.RenderingCamera.Camera);
+  Params.AddRenderEvent(@RenderAfterOpaque);
+end;
+
+procedure TGrassRenderer.RenderAfterOpaque(const Transformation:TTransformation;
+  const PassParams:TRenderOnePassParams);
 type TDrawRun=record
     First,Count,Kind,Signature:Integer;
     Depth,Distance:Single;
@@ -977,20 +996,23 @@ var Camera,WorldCamera,Sun,HalfSize,ViewCenter:TVector3;Projection,View,Model,Vi
     end;
   end;
 begin
-  if RtxReflectionCaptureActive then Exit;
-  FDrawn:=0;FDrawCalls:=0;FDrawRunCount:=0;if not CheckVisible or not RenderGrassActive then Exit;
-  if Params.RenderingCamera.Target=rtShadowMap then Exit;
-  View:=Params.RenderingCamera.Matrix;WorldCamera:=CameraWorldPosFromView(View);
+  { Custom events also run in the opaque, stencil receiver and depth-only
+    passes. Grass has its own lighting/shadow binding: render it once. }
+  if not PassParams.UsingBlending or
+     not(False in PassParams.FilterShadowVolumesReceivers) or
+     PassParams.OnlyDepth or PassParams.OnlyShadowCatchers then Exit;
+  FDrawn:=0;FDrawCalls:=0;FDrawRunCount:=0;
+  View:=FRenderView;WorldCamera:=CameraWorldPosFromView(View);
   Camera:=WorldInverseTransform.MultPoint(WorldCamera);
   PrepareFrame:=FLastPrepareFrame<>TFramesPerSecond.RenderFrameId;
   if PrepareFrame then begin
     { Cache slabs and RTX depth may render this object several times. Keep
       one upload budget per displayed frame and identical buffers in every
       pass; completed worker results wait for the next frame. }
-    WindObserveCamera(WorldCamera,PtrUInt(Params.RenderingCamera.Camera));
+    WindObserveCamera(WorldCamera,FRenderCameraId);
     if FMotion.Observe(Camera,
       WorldInverseTransform.MultDirection(Vector3(-View.Data[0,2],-View.Data[1,2],-View.Data[2,2])),
-      GetTickCount64,PtrUInt(Params.RenderingCamera.Camera)) then InterlockedIncrement(FGeneration);
+      GetTickCount64,FRenderCameraId) then InterlockedIncrement(FGeneration);
     Schedule(Camera);
   end else Inc(FPrepareSkipped);
   if FSources.Count=0 then Exit;
@@ -1048,7 +1070,7 @@ begin
      for I:=0 to FDrawRunCount-1 do with FDrawRuns[I] do begin
        if Accepted then begin
          Inc(FDrawCalls,FRenderer.DrawAccepted(PatchTexture,RootBuffer,HeadBuffer,1024,RootFirst,RootCount,StableCount,HeadFirst,HeadCount,WeedCount,Kind,Depth,Distance));
-       end else begin FRenderer.Draw(Buffer,First,Count,Distant,Kind,Depth,False,Distance);Inc(FDrawCalls) end;
+       end else Inc(FDrawCalls,FRenderer.Draw(Buffer,First,Count,Distant,Kind,Depth,False,Distance));
      end;
   finally
     if FRenderer<>nil then FRenderer.EndFrame;

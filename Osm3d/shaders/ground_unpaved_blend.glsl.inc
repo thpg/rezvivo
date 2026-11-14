@@ -8,6 +8,7 @@
 '    float inset=u_ground_cell_inset,inside=1.-2.*inset;' + #10 +
 '    vec2 at=(cell+inset+clamp(fract(uv),vec2(.001),vec2(.999))*inside)*span;' + #10 +
 '    vec2 gx=dx*span*inside,gy=dy*span*inside;' + #10 +
+'    at=gcAtlasSafeUV(at,gx,gy);' + #10 +
 '    albedo+=textureGrad(u_ground_atlas,at,gx,gy).rgb*weight;' + #10 +
 '    if(!grass){normal+=textureGrad(u_ground_normal_atlas,at,gx,gy).rgb*weight;' + #10 +
 '      mask+=textureGrad(u_ground_mask_atlas,at,gx,gy)*weight;}' + #10 +

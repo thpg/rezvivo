@@ -9,7 +9,7 @@ uses SysUtils, Osm3dRenderProfile;
 type
   TGraphicsOption = (goFrameLimit, goAntialiasing, goShadowSize,
     goShadowFilter, goShadowDistance, goGrass, goTrees, goTextures,
-    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer,goWorldCache,goUpscaleSmoothing);
+    goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goRenderer,goWorldCache,goUpscaleSmoothing,goNeuralRiders);
   TGraphicsPreset = (gpEconomy, gpLight, gpBalanced, gpHigh);
   TGraphicsValues = array[TGraphicsOption] of Integer;
   TGraphicsChangeEvent = procedure(Sender: TObject; Option: TGraphicsOption) of object;
@@ -17,11 +17,11 @@ type
 const
   GraphicsKeys: array[TGraphicsOption] of String =
     ('fps_limit', 'msaa', 'shadow_size', 'shadow_filter', 'shadow_distance',
-     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer','world_cache','upscale_smoothing');
+     'grass', 'vegetation_quality', 'textures', 'vegetation_cache', 'vegetation_adaptive','hair_quality','cinematic_softening','world_shadow_backend','rtx_reflections','rider_complexity','world_complexity','vegetation_complexity','renderer','world_cache','upscale_smoothing','neural_riders');
   GraphicsTitles: array[TGraphicsOption] of String =
     ('Frame rate limit', 'Anti-aliasing / render scale', 'Shadow map', 'Shadow filtering',
      'Shadow distance', '3D grass', 'Vegetation quality', 'Texture quality:',
-     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer','World image cache','Smooth upscaling');
+     'Vegetation preparation', 'Adapt vegetation to frame rate','Hair quality','Cinematic softness','World shadows','RTX reflections','Rider material complexity','Road material complexity','Vegetation complexity','Renderer','World image cache','Smooth upscaling','Neural riders');
   GraphicsHints: array[TGraphicsOption] of String =
     ('VSync follows your monitor. A lower limit reduces GPU load.',
      'MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.',
@@ -42,7 +42,8 @@ const
      'Changes branches, needles, blade geometry and wind at the same distance. LOD distance is controlled separately.',
      'Universal keeps GPU animation and procedural shaders with lighter materials, vegetation and shadows. Takes effect after restarting the game.',
      'Improves performance by reusing distant scenery, but may cause visual artifacts. Uses additional GPU memory. Off by default.',
-     'In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.');
+     'In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.',
+     'Cycling suit for every rider, using selected top and bottom colors. Models are optional and loaded only while enabled. Missing or incompatible models use ordinary riders.');
   GraphicsPresetTitles: array[TGraphicsPreset] of String =
     ('Battery saver', 'Lightweight', 'Balanced', 'High');
   GraphicsPresetHints: array[TGraphicsPreset] of String =
@@ -52,9 +53,9 @@ const
      'Dense vegetation, detailed materials and longer soft shadows.');
   { World image caching is opt-in on every platform because reprojection can
     produce visual artifacts. Preserve this default in presets and Auto. }
-  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0,0){$endif};
+  GraphicsDefaults: TGraphicsValues = {$ifdef OpenGLES}(30,0,0,1,60,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0,0){$else} (-1, 0, 2048, 16, 160, 1, 2, 3, 1, 1,2,1,1,0,3,3,3,0,0,0,0){$endif};
   GraphicsDisplayOrder: array[TGraphicsOption] of TGraphicsOption =
-    (goRenderer,goFrameLimit,goAntialiasing,goWorldCache,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
+    (goRenderer,goFrameLimit,goAntialiasing,goWorldCache,goNeuralRiders,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldShadows,goRtxReflections,goShadowSize,goShadowFilter,
      goShadowDistance,goGrass,goTrees,goTextures,
      goVegetationCache,goVegetationAdaptive,goHair,goSoftening,goUpscaleSmoothing);
 
@@ -142,7 +143,7 @@ begin
     goShadowSize: Result := 5;
     goAntialiasing: Result := 8;
     goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
-    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening: Result := 3;
+    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening,goNeuralRiders: Result := 3;
     goWorldShadows:Result:=4;
     goTrees: Result := 5;
     goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache,goUpscaleSmoothing: Result := 2;
@@ -167,7 +168,7 @@ begin
     goShadowFilter: Result := Filters[Index];
     goShadowDistance: Result := Distances[Index];
     goRenderer: if FullRendererSupported then Result := Index else Result := 1;
-    goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldCache,goUpscaleSmoothing: Result := Index;
+    goNeuralRiders,goTrees, goGrass, goTextures, goVegetationCache, goVegetationAdaptive,goHair,goSoftening,goWorldShadows,goRtxReflections,goRiderComplexity,goWorldComplexity,goVegetationComplexity,goWorldCache,goUpscaleSmoothing: Result := Index;
   end;
 end;
 
@@ -177,6 +178,7 @@ var V: Integer;
 begin
   V := GraphicsChoiceValue(Option, Index);
   case Option of
+    goNeuralRiders: case V of 0:Result:='Off';1:Result:='Reduced (18k)';else Result:='Dense (73k)';end;
     goRenderer: if V = 0 then Result := 'Full' else Result := 'Universal';
     goFrameLimit:
       if V < 0 then Result := 'VSync'

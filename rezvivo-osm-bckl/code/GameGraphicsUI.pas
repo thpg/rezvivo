@@ -61,7 +61,7 @@ type
 
 implementation
 
-uses CastleKeysMouse, Math, SysUtils, AppSettings, UiTranslations, CastleColors, Osm3dVegetationQuality;
+uses GameNeuralRiders, CastleKeysMouse, Math, SysUtils, AppSettings, UiTranslations, CastleColors, Osm3dVegetationQuality;
 
 type
   TGraphicsPreviewWindow=class(TCastleView)
@@ -379,6 +379,8 @@ begin
     Refresh;
   end;
   if FRevision <> Settings.GraphicsRevision then Refresh;
+  FHints[goNeuralRiders].Caption:=UiText(GraphicsHints[goNeuralRiders]);
+  if NeuralRiderStatus<>''then FHints[goNeuralRiders].Caption:=FHints[goNeuralRiders].Caption+#10+NeuralRiderStatus;
   Arrange;
 end;
 

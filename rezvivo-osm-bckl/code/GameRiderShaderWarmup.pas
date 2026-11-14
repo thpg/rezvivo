@@ -123,6 +123,7 @@ var
   OldScissor: array[0..3] of GLint;
   OldDelta: TVector2Integer;
   OldOcclusion, OldMultisample, HadScissor: Boolean;
+  OldModelVisible, OldModelExists, OldActorVisible, OldActorExists:Boolean;
   OldShapeFilter: TRenderShapeFilter;
   Started: QWord;
 begin
@@ -158,6 +159,12 @@ begin
     OldShapeFilter := RiderScene.OnRenderShapeFilter;
     RiderScene.OnRenderShapeFilter := nil;
   end;
+  { Runtime culling deliberately hides detached actors. A hidden model must
+    still warm all its programs; otherwise FVisited stays zero and both
+    passes falsely report completion, deferring links to first appearance. }
+  OldModelVisible:=Model.Visible;OldModelExists:=Model.Exists;
+  OldActorVisible:=Actor.Visible;OldActorExists:=Actor.Exists;
+  Model.Visible:=True;Model.Exists:=True;Actor.Visible:=True;Actor.Exists:=True;
   Viewport.Items.Add(Actor);
   try
     Box := Model.WorldBoundingBox;
@@ -200,6 +207,8 @@ begin
     Inc(FDraws, FSelected);
   finally
     Viewport.Items.Remove(Actor);
+    Model.Visible:=OldModelVisible;Model.Exists:=OldModelExists;
+    Actor.Visible:=OldActorVisible;Actor.Exists:=OldActorExists;
     if RiderScene <> nil then RiderScene.OnRenderShapeFilter := OldShapeFilter;
     Viewport.OcclusionCulling := OldOcclusion;
     RenderContext.ProjectionMatrix := OldProjection;

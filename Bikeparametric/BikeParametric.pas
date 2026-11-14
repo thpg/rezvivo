@@ -807,6 +807,7 @@ type
       PhaseOverride: Single = -1);
     property OnFoot: Boolean read FOnFoot write SetOnFoot;
     property OnFootFrame: TGaitFrame read FOnFootFrame;
+    property OnFootPhase: Single read FOnFootPhase;
     property GroundTurn: TGroundTurnFrame read FGroundTurn write FGroundTurn;
     procedure SetRiderEffort(Intensity: Single);
     procedure SetRiderAttention(const Value: TRiderAttentionFrame);
@@ -4102,6 +4103,9 @@ begin
   if (NewRider = nil) or (not NewRider.Loaded) then Exit;
   if FTripoRider <> nil then
   begin
+    { The surface owns nodes under RiderVisContent. Release it while that
+      graph is still alive, before RemoveChildren destroys RiderVis below. }
+    FTripoRider.ReleaseSurfaceOverride;
     { Disable GPU plug, drop the wrapper. The TEffectNode stays on the
       old appearances and dies with FreeAndNil(FTripoRider) below. }
     InvalidateGpuRiderSkin;
@@ -5547,17 +5551,19 @@ begin
   FTripoRider.FootYawDeg := FTripoFootYawDeg*(1-FGroundTurn.Blend);
 
 
-  { shoulder twist: when the hands are at different fore-aft positions (e.g. mid-way
-    through a staggered hand change — one hand already moved, the other not yet), yaw
-    the shoulder line toward the leading hand. Zero when the grips are level (settled
-    symmetric pose), so it appears only in the asymmetric intermediate position.
-    Gain is deg per metre of fore-aft (X) asymmetry; flip its sign to mirror. }
-  twistDeg := (GripR.X - GripL.X) * 220.0*(1-FPartnerContact.Blend);
-  if twistDeg >  22.0 then twistDeg :=  22.0;
-  if twistDeg < -22.0 then twistDeg := -22.0;
+  { Share asymmetric reach through the spine before solving the hands.
+    Turning only the clavicles about a leaned chest axis lifted one shoulder
+    instead of rotating the thorax. The support-up axis is expressed in the
+    rider frame, so the same pose reaches CPU and GPU, including pelvic lean.
+    Most reach stays in the arms; the rib cage follows part of the grip angle. }
+  twistDeg:=EnsureRange(0.72*RadToDeg(ArcTan2(GripR.X-GripL.X,
+    Max(0.18,Abs(GripR.Z-GripL.Z)))),-18.0,18.0)*(1-FPartnerContact.Blend);
+  SeatV:=QuatRotateV3(QuatConj(BodyQ),V3(0,1,0));
+  LivePose:=RiderTorsoTurnPose(LivePose,FTripoRider.LeanAxis,
+    Vector3(SeatV.X,SeatV.Y,SeatV.Z),twistDeg);
   FTripoRider.AdaptPoseReach(LivePose, GripR, GripL);
   FTripoRider.ApplyFramePose(LivePose);
-  FTripoRider.ShoulderTwistDeg := twistDeg;
+  FTripoRider.ShoulderTwistDeg := 0;
   FFrameContacts[0] := AnkleR; FFrameContacts[1] := AnkleL;
 
   { ── GPU-аним (этап 2): вся процедурная поза (ноги/спина/руки, LBS) считается
