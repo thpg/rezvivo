@@ -90,6 +90,8 @@ type
     Shot: TCameraShotState;
     PendingShot: TCameraShotState;
     Pending: Boolean;
+    RetargetCutPending:Boolean;
+    GroupRadius:Single;
     PendingAge: Single;
     LastTargetPosition: TVector3;
     HaveTargetPosition: Boolean;
@@ -102,6 +104,7 @@ type
     CamUp: TVector3;
     Enabled: Boolean;
     AutoSwitch: Boolean;
+    ExternalSubjectDirector:Boolean;
     TargetSpeed: Single;
     TargetPitchDeg: Single;
     StillTime: Single;
@@ -126,6 +129,8 @@ type
     FShot, FPendingShot: TCameraShotState;
     FShotSerial: Cardinal;
     FPending, FPreparingShot, FProbeReady: Boolean;
+    FRetargetCutPending:Boolean;
+    FGroupRadius:Single;
     FPendingAge: Single;
     FLastTargetPosition: TVector3;
     FHaveTargetPosition, FTraceCamera: Boolean;
@@ -150,7 +155,7 @@ type
 
     FNearby: array of TVector3;
     FNearbyCount: Integer;
-    FEnabled, FAutoSwitch: Boolean;
+    FEnabled, FAutoSwitch, FExternalSubjectDirector: Boolean;
 
     { ── stationary-rider scenario ── }
     FTargetSpeed: Single;   { m/s, fed by the owner each frame (0 if never fed) }
@@ -197,6 +202,8 @@ type
       var Sample: TCameraGroundSample; out GY: Single): Boolean;
     procedure ComputeMode(M: TCameraMode; out P, D, U: TVector3);
     procedure FrameShot(var P, D: TVector3);
+    procedure FrameLocalGroup(var P,D:TVector3);
+    procedure SetGroupRadius(Value:Single);
     procedure SmoothHeight(var P: TVector3);
     procedure AdjustForGroup(var P, D: TVector3);
     procedure KeepRiderInFrame(var P, D: TVector3);
@@ -233,6 +240,10 @@ type
     { New ride: discard the previous shot and place the camera immediately,
       without advancing simulation time (also works while paused). }
     procedure ResetAtTarget;
+    { Keep providers and viewport; prepare the new destination before cutting.
+      The previous displayed view stays fixed while terrain data is pending. }
+    procedure Retarget(ATarget:TCastleTransform;APath:TGamePath;Cut:Boolean=True);
+    property GroupRadius:Single read FGroupRadius write SetGroupRadius;
     procedure Update(const DT: Single);
 
     procedure ClearNearby;
@@ -261,6 +272,7 @@ type
   published
     property Enabled: Boolean read FEnabled write SetEnabled;
     property AutoSwitch: Boolean read FAutoSwitch write FAutoSwitch;
+    property ExternalSubjectDirector:Boolean read FExternalSubjectDirector write FExternalSubjectDirector;
     { Запись идёт через ForceMode — тот же путь, что и ручное
       переключение, со сбросом таймера режима. }
     property Mode: TCameraMode read GetMode write ForceMode;
@@ -371,6 +383,7 @@ begin
   Result.Shot:=FShot;
   Result.PendingShot:=FPendingShot;
   Result.Pending:=FPending;
+  Result.RetargetCutPending:=FRetargetCutPending;Result.GroupRadius:=FGroupRadius;
   Result.PendingAge:=FPendingAge;
   Result.LastTargetPosition:=FLastTargetPosition;
   Result.HaveTargetPosition:=FHaveTargetPosition;
@@ -383,6 +396,7 @@ begin
   Result.CamUp:=FCamUp;
   Result.Enabled:=FEnabled;
   Result.AutoSwitch:=FAutoSwitch;
+  Result.ExternalSubjectDirector:=FExternalSubjectDirector;
   Result.TargetSpeed:=FTargetSpeed;
   Result.TargetPitchDeg:=FTargetPitchDeg;
   Result.StillTime:=FStillTime;
@@ -401,6 +415,7 @@ begin
   FShot:=Saved.Shot;
   FPendingShot:=Saved.PendingShot;
   FPending:=Saved.Pending;
+  FRetargetCutPending:=Saved.RetargetCutPending;FGroupRadius:=Saved.GroupRadius;
   FPendingAge:=Saved.PendingAge;
   FLastTargetPosition:=Saved.LastTargetPosition;
   FHaveTargetPosition:=Saved.HaveTargetPosition;
@@ -413,6 +428,7 @@ begin
   FCamUp:=Saved.CamUp;
   FEnabled:=Saved.Enabled;
   FAutoSwitch:=Saved.AutoSwitch;
+  FExternalSubjectDirector:=Saved.ExternalSubjectDirector;
   FTargetSpeed:=Saved.TargetSpeed;
   FTargetPitchDeg:=Saved.TargetPitchDeg;
   FStillTime:=Saved.StillTime;
@@ -533,6 +549,7 @@ procedure TCinematicCamera.Setup(AViewport: TCastleViewport;
   ATarget: TCastleTransform; APath: TGamePath);
 begin
   FViewport := AViewport;
+  FGroupRadius:=0;
   FTarget := ATarget;
   FPath := APath;
   ResetTracking;
@@ -549,9 +566,28 @@ begin
   Update(0);
 end;
 
+procedure TCinematicCamera.Retarget(ATarget:TCastleTransform;APath:TGamePath;Cut:Boolean);
+begin
+  if ATarget=nil then Exit;
+  if(FTarget=ATarget)and(FPath=APath)and not Cut then Exit;
+  FTarget:=ATarget;FPath:=APath;
+  ClearNearby;ResetTracking;
+  if Cut then begin
+    FRetargetCutPending:=True;
+    ForceMode(cmMoto);
+  end;
+end;
+
+procedure TCinematicCamera.SetGroupRadius(Value:Single);
+begin
+  if IsNan(Value)or IsInfinite(Value)then Value:=0;
+  FGroupRadius:=EnsureRange(Value,0,100);
+end;
+
 procedure TCinematicCamera.ResetTracking;
 begin
   Inc(FShotSerial);
+  FRetargetCutPending:=False;
   FShot.Mode := cmMoto;
   FShot.CameraGround.Valid := False;
   FShot.LookGround.Valid := False;
@@ -1046,6 +1082,9 @@ end;
 procedure TCinematicCamera.TryRiderShot(const Dt:Single);
 var Index:Integer;Kind:TCameraEncounterKind;Player:TCameraRider;
 begin
+  { A group centre is not a person for automatic two-person encounters.
+    Explicit interactions use the real participant ids and remain enabled. }
+  if FGroupRadius>0 then Exit;
   Index:=UpdateCameraEncounters(FEncounters,FRiders,FRiderCount,
     FTarget.Translation,FTarget.Direction,FTargetSpeed,Dt,
     FRiderShotsEnabled and FAutoSwitch and not FStationary and not FPending and
@@ -1602,7 +1641,7 @@ begin
     ComputeMode(FShot.Mode, P, D, U);
     FrameShot(P, D);
     KeepLensOutsideRiders(P,D);
-    if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])and
+    if((FGroupRadius>0)or(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction]))and
       not CloseShotSafe(P)then FProbeReady:=False;
     FPendingShot := FShot;
   finally
@@ -1618,6 +1657,7 @@ begin
     FShot := FPendingShot;
     FShotAge:=0;
     FPending := False;
+    FRetargetCutPending:=False;
     FHeightReady := False;
     FModeTimer := ModeDuration(FShot.Mode);
     if FShot.Mode=cmHelicopter then FHelicopterCooldown:=SmallScreenFlightGap;
@@ -1655,8 +1695,28 @@ begin
   FHeightReady := True;
 end;
 
+procedure TCinematicCamera.FrameLocalGroup(var P,D:TVector3);
+var Aim,Offset:TVector3;Fov:TVector2;HalfAngle,Required:Single;
+begin
+  if(FTarget=nil)or(FViewport=nil)or(FViewport.Camera=nil)then Exit;
+  Aim:=FTarget.Translation+Vector3(0,1,0);Offset:=P-Aim;
+  if Offset.LengthSqr<0.001 then Offset:=-FTarget.Direction+Vector3(0,0.3,0);
+  HalfAngle:=DegToRad(22);
+  if FViewport.Camera.ProjectionType=ptPerspective then begin
+    Fov:=FViewport.Camera.Perspective.EffectiveFieldOfView;
+    if Fov.X<=0 then Fov.X:=FViewport.Camera.Perspective.FieldOfView;
+    if Fov.Y<=0 then Fov.Y:=FViewport.Camera.Perspective.FieldOfView;
+    HalfAngle:=EnsureRange(Min(Fov.X,Fov.Y)*0.5,DegToRad(5),DegToRad(65));
+  end;
+  Required:=(FGroupRadius+1.6)/Max(0.05,Sin(HalfAngle*0.85));
+  P:=Aim+Offset.Normalize*Max(Offset.Length,Required);
+  ClampAboveGround(P,True);
+  D:=(Aim-P).Normalize;
+end;
+
 procedure TCinematicCamera.FrameShot(var P, D: TVector3);
 begin
+  if FGroupRadius>0 then begin FrameLocalGroup(P,D);Exit end;
   if FShot.Mode=cmPuddle then Exit; { water and reflected scenery are the subject }
   if not(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])then
     AdjustForGroup(P, D);
@@ -1676,6 +1736,12 @@ begin
   if not Assigned(FViewport) or not Assigned(FTarget) or (FViewport.Camera = nil) then Exit;
   if IsNan(DT) or IsInfinite(DT) or (DT < 0) then Exit;
   FFrameDT := DT;
+  if FRetargetCutPending then begin
+    SyncPathPosition;
+    if not FPending then ForceMode(cmMoto);
+    if FPending then begin FPendingAge:=FPendingAge+DT;TryPendingShot end;
+    if FRetargetCutPending then Exit;
+  end;
   FShotAge:=FShotAge+DT;
   if FShot.Mode<>cmHelicopter then
     FHelicopterCooldown:=Max(0,FHelicopterCooldown-DT);
@@ -1752,6 +1818,8 @@ begin
       if(FShot.Mode=cmInteraction)and FStationary then ForceMode(cmStandShot)
       else if FShot.Mode in[cmPuddle,cmRiderPass,cmInteraction]then
         ForceMode(cmMoto)
+      else if FExternalSubjectDirector then
+        FModeTimer:=1
       else if FStationary then
         ForceMode(PickStationary)
       else
@@ -1770,7 +1838,7 @@ begin
   FrameShot(TP, TD);
   KeepLensOutsideRiders(TP,TD);
 
-  if(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction])and
+  if((FGroupRadius>0)or(FShot.Mode in[cmFrontQuarterLeft,cmFrontQuarterRight,cmRiderPass,cmInteraction]))and
     not CloseShotSafe(TP)then begin
     FModeTimer:=0;
     { An obstruction invalidates even a manually selected close-up. Queue

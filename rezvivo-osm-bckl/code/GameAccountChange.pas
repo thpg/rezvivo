@@ -1,46 +1,88 @@
 unit GameAccountChange;
 {$mode objfpc}{$H+}
 interface
-{ Acquired on the UI thread before starting an auth worker. A detached worker
-  keeps the lease until its response has finished mutating the current account. }
-function BeginAccountChange:QWord;
+{ Leases belong to a stable local rider key. EndAccountChange uses its token,
+  so a detached worker never resolves a changing UI selection. }
+function BeginAccountChange(RiderIndex:Integer=0):QWord;
 procedure EndAccountChange(const Token:QWord);
-function AccountChangePending:Boolean;
-procedure BeginRideAccount;
-procedure EndRideAccount;
+function AccountChangePending(RiderIndex:Integer=0):Boolean;
+function RiderAccountChangeError(RiderIndex:Integer=0):String;
+procedure BeginRideAccount(RiderIndex:Integer=0);
+procedure EndRideAccount(RiderIndex:Integer=0);
 implementation
-uses SysUtils,Classes;
-var Lock:TRTLCriticalSection;Generation,Pending:QWord;Rides:Integer;
-function BeginAccountChange:QWord;
+uses SysUtils,Classes,GameUserData;
+type TAccountGate=record Key:String;Pending:QWord;Rides:Integer;end;
+var Lock:TRTLCriticalSection;Generation:QWord;Gates:array of TAccountGate;
+function GateFor(const Key:String):Integer;
+var I:Integer;
 begin
+  for I:=0 to High(Gates)do if Gates[I].Key=Key then Exit(I);
+  Result:=Length(Gates);SetLength(Gates,Result+1);Gates[Result].Key:=Key;
+end;
+function BeginAccountChange(RiderIndex:Integer):QWord;
+var I:Integer;Key:String;
+begin
+  Key:=LocalRider(RiderIndex).Key;
   EnterCriticalSection(Lock);
   try
-    if Rides<>0 then raise EInvalidOperation.Create('Finish your ride before switching accounts.');
-    if Pending<>0 then raise EInvalidOperation.Create('Account change in progress. Please wait.');
+    I:=GateFor(Key);
+    if Gates[I].Rides<>0 then raise EInvalidOperation.Create('Finish this rider''s ride before switching accounts.');
+    if Gates[I].Pending<>0 then raise EInvalidOperation.Create('Account change in progress. Please wait.');
     Inc(Generation);if Generation=0 then Inc(Generation);
-    Pending:=Generation;Result:=Pending;
+    Gates[I].Pending:=Generation;Result:=Generation;
   finally LeaveCriticalSection(Lock);end;
 end;
 procedure EndAccountChange(const Token:QWord);
+var I:Integer;
 begin
+  if Token=0 then Exit;
   EnterCriticalSection(Lock);
-  try if(Token<>0)and(Pending=Token)then Pending:=0;finally LeaveCriticalSection(Lock);end;
-end;
-function AccountChangePending:Boolean;
-begin EnterCriticalSection(Lock);try Result:=Pending<>0;finally LeaveCriticalSection(Lock);end;end;
-procedure BeginRideAccount;
-begin
-  EnterCriticalSection(Lock);
-  try
-    if Pending<>0 then raise EInvalidOperation.Create('Account change in progress. Please wait.');
-    Inc(Rides);
+  try for I:=0 to High(Gates)do if Gates[I].Pending=Token then begin Gates[I].Pending:=0;Break end;
   finally LeaveCriticalSection(Lock);end;
 end;
-procedure EndRideAccount;
-begin EnterCriticalSection(Lock);try if Rides>0 then Dec(Rides);finally LeaveCriticalSection(Lock);end;end;
+function AccountChangePending(RiderIndex:Integer):Boolean;
+var I:Integer;Key:String;
+begin
+  Key:=LocalRider(RiderIndex).Key;
+  EnterCriticalSection(Lock);
+  try I:=GateFor(Key);Result:=Gates[I].Pending<>0;finally LeaveCriticalSection(Lock);end;
+end;
+function RiderAccountChangeError(RiderIndex:Integer):String;
+var I:Integer;Key:String;
+begin
+  Key:=LocalRider(RiderIndex).Key;
+  EnterCriticalSection(Lock);
+  try
+    I:=GateFor(Key);Result:='';
+    if Gates[I].Rides<>0 then Result:='Finish this rider''s ride before switching accounts.'
+    else if Gates[I].Pending<>0 then Result:='Account change in progress. Please wait.';
+  finally LeaveCriticalSection(Lock);end;
+end;
+procedure BeginRideAccount(RiderIndex:Integer);
+var I:Integer;Key:String;
+begin
+  Key:=LocalRider(RiderIndex).Key;
+  EnterCriticalSection(Lock);
+  try
+    I:=GateFor(Key);
+    if Gates[I].Pending<>0 then raise EInvalidOperation.Create('Account change in progress. Please wait.');
+    LocalRider(RiderIndex).HoldRideIdentity;
+    Inc(Gates[I].Rides);
+  finally LeaveCriticalSection(Lock);end;
+end;
+procedure EndRideAccount(RiderIndex:Integer);
+var I:Integer;Key:String;
+begin
+  Key:=LocalRider(RiderIndex).Key;
+  EnterCriticalSection(Lock);
+  try
+    I:=GateFor(Key);
+    if Gates[I].Rides>0 then begin
+      Dec(Gates[I].Rides);LocalRider(RiderIndex).ReleaseRideIdentity;
+    end;
+  finally LeaveCriticalSection(Lock);end;
+end;
 initialization
   InitCriticalSection(Lock);
-  { Process-lifetime lock: detached auth workers are joined by the route-task
-    owner, whose unit may finalize after this one. Never destroy their gate
-    while a final EndAccountChange can still arrive. The OS reclaims it. }
+  { Process-lifetime lock: detached workers may release leases late. }
 end.

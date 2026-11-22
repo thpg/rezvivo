@@ -1,7 +1,7 @@
 {
-  "version": "0.4.10-alpha.1",
-  "build": 27,
+  "version": "0.5.0-alpha.1",
+  "build": 28,
   "platform": "android",
   "channel": "alpha",
-  "notes": "Add occasional pedestrians and runners with varied appearances, roadside yielding and camera views of interactions. Improve rider anatomy and glove cuffs. Avoid camera intersections with riders and unnecessary stops when passing oncoming traffic. Fix flickering beach surfaces and the island shoreline. Add varied meadow flowers, tall herbs and grasses, including their distant representations."
+  "notes": "Train together with up to eight local riders, each with their own devices, avatar, bike, account or guest profile and separate ride records. Compare multiple power meters per rider. Adaptive rider panels and shared or individual camera views keep everyone visible. Add a light menu and responsive device tiles with role icons. Improve bot group riding, walking and running motion, and bicycle sway. Fix avatar editor crashes when switching profiles and clipping in the graphics preview. Android remains experimental."
 }

@@ -6,7 +6,7 @@ type
   TBotEffortInput=record
     SustainableWatts,CapacitySeconds,RecoverySeconds,Aggression:Single;
     Gap,Speed,RiderSpeed:Single; { gap positive = ahead of the rider }
-    Racing,UnderPressure:Boolean;
+    Racing,UnderPressure,JoiningGroup:Boolean;
     CompanyControl:Boolean;
     CompanyPower:Single;
   end;
@@ -59,7 +59,7 @@ begin
       if (S.ModeTime>=S.ModeDuration)and(S.Energy>=0.76)then ChangeMode(S,bemCruise);
     bemChase:
       if (V.Gap>=-18)and(S.Energy>0.38)then ChangeMode(S,bemOvertake)
-      else if S.ModeTime>=S.ModeDuration then ChangeMode(S,bemRecover);
+      else if (S.ModeTime>=S.ModeDuration)and not V.JoiningGroup then ChangeMode(S,bemRecover);
     bemOvertake:
       if V.Gap>8 then begin
         if(S.Energy>0.48)and(NextRandom(S)<0.40+0.45*V.Aggression)then ChangeMode(S,bemAttack)
@@ -68,7 +68,7 @@ begin
     bemAttack:
       if(S.ModeTime>=S.ModeDuration)or(S.Energy<0.28)then ChangeMode(S,bemRecover);
     bemCruise:begin
-      if V.Racing and(S.ModeTime>6)and(S.Energy>0.45)and(V.Gap< -14)then ChangeMode(S,bemChase)
+      if V.Racing and((S.ModeTime>6)or V.JoiningGroup)and(S.Energy>0.45)and(V.Gap< -14)then ChangeMode(S,bemChase)
       else if S.ModeTime>=S.ModeDuration then begin
         if V.Racing and(S.Energy>0.68)and(Abs(V.Gap)<100)and
            (NextRandom(S)<0.35+0.45*V.Aggression+0.15*Ord(V.UnderPressure))then begin

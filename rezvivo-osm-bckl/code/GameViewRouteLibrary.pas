@@ -85,7 +85,7 @@ var Row:TCastleUserInterface;B:TCastleButton;Background:TCastleRectangleControl;
   function EditText(const Caption:String;W:Single):TCastleEdit;
   var C:TCastleVerticalGroup;Lab:TCastleLabel;
   begin C:=TCastleVerticalGroup.Create(Self);C.Spacing:=3;Row.InsertFront(C);
-    Lab:=TMenuLabel.Create(Self);BindUiText(Lab, Caption);Lab.FontSize:=13;Lab.Color:=Vector4(0.86,0.9,0.94,1);C.InsertFront(Lab);
+    Lab:=TMenuLabel.Create(Self);BindUiText(Lab, Caption);Lab.FontSize:=13;Lab.Color:=MenuText;C.InsertFront(Lab);
     Result:=TMenuEdit.Create(Self);Result.Width:=W;C.InsertFront(Result);end;
 begin
   inherited;FullSize:=True;FItems:=TJSONArray.Create;FSort:='date';FDirection:='desc';FFitMap:=True;
@@ -95,7 +95,7 @@ begin
   FMapButton:=ButtonText(UiText('Map'),@ClickMap);B:=ButtonText(UiText('Create'),@ClickCreate);B:=ButtonText(UiText('Add FIT / GPX'),@ClickUpload);
   FSearchBar:=TMenuFlow.Create(Self);FSearchBar.Spacing:=8;Row:=FSearchBar;InsertFront(Row);
   FQuery:=EditText(UiText('Search routes'),280);FQuery.OnChange:=@FilterEdited;
-  FOnlyFavorites:=TCastleCheckbox.Create(Self);BindUiText(FOnlyFavorites, 'Favorites only ♥');FOnlyFavorites.FontSize:=14;FOnlyFavorites.TextColor:=Vector4(0.9,0.93,0.97,1);FOnlyFavorites.CheckboxColor:=Vector4(0.8,0.85,0.9,1);Row.InsertFront(FOnlyFavorites);
+  FOnlyFavorites:=TCastleCheckbox.Create(Self);BindUiText(FOnlyFavorites, 'Favorites only ♥');FOnlyFavorites.FontSize:=14;FOnlyFavorites.TextColor:=MenuText;FOnlyFavorites.CheckboxColor:=MenuAccent;Row.InsertFront(FOnlyFavorites);
   FOnlyFavorites.OnChange:=@FilterEdited;B:=ButtonText(UiText('Filters'),@ClickFilters);
   FFilterBar:=TMenuFlow.Create(Self);FFilterBar.Spacing:=8;FFilterBar.Exists:=False;Row:=FFilterBar;InsertFront(Row);
   FDistMin:=EditText(UiText('Min distance, km'),120);FDistMax:=EditText(UiText('Max, km'),120);FGainMin:=EditText(UiText('Min ascent, m'),120);FGainMax:=EditText(UiText('Max, m'),120);
@@ -103,7 +103,7 @@ begin
   FDateBar:=TMenuFlow.Create(Self);FDateBar.Spacing:=8;FDateBar.Exists:=False;Row:=FDateBar;InsertFront(Row);
   FAfter:=EditText(UiText('From: YYYY-MM-DD'),145);FBefore:=EditText(UiText('Until'),145);FAfter.OnChange:=@FilterEdited;FBefore.OnChange:=@FilterEdited;
   Row:=FToolbar;FMoreButton:=ButtonText(UiText('More'),@ClickMore);FMoreButton.Exists:=False;
-  FStatus:=TMenuLabel.Create(Self);FStatus.FontSize:=14;FStatus.Color:=Vector4(0.8,0.88,0.95,1);FStatus.Anchor(hpLeft,8);FStatus.Anchor(vpTop,-178);InsertFront(FStatus);
+  FStatus:=TMenuLabel.Create(Self);FStatus.FontSize:=14;FStatus.Color:=MenuMuted;FStatus.Anchor(hpLeft,8);FStatus.Anchor(vpTop,-178);InsertFront(FStatus);
   FMap:=TRouteMap.Create(Self);FMap.WidthFraction:=1;FMap.Height:=250;FMap.Anchor(hpLeft);FMap.Anchor(vpTop,-205);FMap.OnChanged:=@MapChanged;FMap.OnSelect:=@MapSelected;FMap.Exists:=False;InsertFront(FMap);
   FAttribution:=TMenuButton.Create(Self);BindUiText(FAttribution, '© OpenStreetMap contributors · Natural Earth · Copernicus DEM');FAttribution.FontSize:=11;FAttribution.Anchor(hpRight,-6);FAttribution.Anchor(vpTop,-431);FAttribution.OnClick:=@ClickAttribution;FAttribution.Exists:=False;InsertFront(FAttribution);
   FScroll:=TMenuScrollView.Create(Self);FScroll.FullSize:=True;FScroll.Border.Left:=8;FScroll.Border.Right:=8;FScroll.Border.Bottom:=108;InsertFront(FScroll);
@@ -112,7 +112,7 @@ begin
   B:=ButtonText(UiText('Route ↕'),@ClickSort);B.Tag:=0;B:=ButtonText(UiText('Date ↕'),@ClickSort);B.Tag:=1;
   B:=ButtonText(UiText('Distance ↕'),@ClickSort);B.Tag:=2;B:=ButtonText(UiText('Ascent ↕'),@ClickSort);B.Tag:=3;B:=ButtonText(UiText('Author ↕'),@ClickSort);B.Tag:=4;
   B:=ButtonText(UiText('Source ↕'),@ClickSort);B.Tag:=5;
-  FDetails:=TMenuLabel.Create(Self);FDetails.FontSize:=14;FDetails.Color:=Vector4(0.9,0.93,0.97,1);FDetails.Anchor(hpLeft,8);FDetails.Anchor(vpBottom,54);InsertFront(FDetails);
+  FDetails:=TMenuLabel.Create(Self);FDetails.FontSize:=14;FDetails.Color:=MenuText;FDetails.Anchor(hpLeft,8);FDetails.Anchor(vpBottom,54);InsertFront(FDetails);
   FActions:=TCastleHorizontalGroup.Create(Self);FActions.Spacing:=6;FActions.Anchor(hpLeft,8);FActions.Anchor(vpBottom,8);InsertFront(FActions);Row:=FActions;
   FDownload:=ButtonText(UiText('Start ride'),@ClickDownload);FDownload.Name:='StartOnlineRoute';
   FFavorite:=ButtonText(UiText('♡ Favorite'),@ClickFavorite);FShare:=ButtonText(UiText('Share'),@ClickShare);FAdd:=ButtonText(UiText('Add to my routes'),@ClickAdd);
@@ -201,7 +201,7 @@ begin
     if O.Get('status','')='rejected'then Values[2]:=UiText('Error');
     B:=TMenuButton.Create(FList);B.Caption:='';B.FontSize:=14;B.AutoSize:=False;B.Width:=Max(500,EffectiveWidth-40);B.Height:=38;B.Tag:=I;B.OnClick:=@ClickRow;B.Toggle:=True;B.Pressed:=O.Get('id',Int64(0))=FSelected;FList.InsertFront(B);
     X:=8;W:=B.Width-20;
-    for J:=0 to 5 do begin L:=TMenuLabel.Create(B);L.Caption:=Values[J];L.FontSize:=13;L.Color:=Vector4(0.92,0.95,1,1);L.MaxWidth:=W*Widths[J]-8;L.Anchor(hpLeft,X);L.Anchor(vpMiddle);B.InsertFront(L);X:=X+W*Widths[J]+4;end;
+    for J:=0 to 5 do begin L:=TMenuLabel.Create(B);L.Caption:=Values[J];L.FontSize:=13;L.Color:=MenuText;L.MaxWidth:=W*Widths[J]-8;L.Anchor(hpLeft,X);L.Anchor(vpMiddle);B.InsertFront(L);X:=X+W*Widths[J]+4;end;
   end;
   FMoreButton.Exists:=FMore;FMap.SetRoutes(FItems,FFitMap and not FShared);FFitMap:=False;UpdateSelection;
 end;

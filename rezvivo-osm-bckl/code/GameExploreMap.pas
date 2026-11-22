@@ -77,6 +77,7 @@ var B: TMenuButton; I: Integer;
 begin
   inherited;FullSize:=True;
   FMap:=TExploreMap.Create(Self);FMap.Name:='ExploreStartMap';FMap.FullSize:=True;
+  FMap.BackgroundColor:=MenuBackground;
   FMap.OnPick:=@Pick;InsertBack(FMap);
   FPanel:=TCastleRectangleControl.Create(Self);FPanel.Color:=MenuSurface;
   FPanel.Width:=352;FPanel.Height:=256;FPanel.Anchor(hpLeft,8);FPanel.Anchor(vpTop,-8);InsertFront(FPanel);

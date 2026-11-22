@@ -1091,8 +1091,7 @@ begin
 
   ChartBaseY := R.Bottom + CHART_PAD;
 
-  { Тёмный фон chart-а — отделяет его от родительского цвета окна. }
-  DrawRectangle(R, Vector4(0, 0, 0, 0.30));
+  DrawRectangle(R, MenuInset);
 
   { Сетка по 25/50/75/100/125 % FTP }
   GridLevels[0] := 0.25;
@@ -1100,7 +1099,7 @@ begin
   GridLevels[2] := 0.75;
   GridLevels[3] := 1.00;
   GridLevels[4] := 1.25;
-  GridCol := Vector4(1, 1, 1, CHART_GRID_ALPHA);
+  GridCol := MenuMuted;GridCol.W:=CHART_GRID_ALPHA;
   for K := 0 to High(GridLevels) do
   begin
     GL := GridLevels[K];
@@ -1395,7 +1394,7 @@ procedure TViewWorkoutEditor.BuildUi;
     Result := TMenuLabel.Create(FreeAtStop);
     BindUiText(Result, ACaption);
     Result.FontScale := AFontScale;
-    Result.Color := Vector4(0.92, 0.92, 0.95, 1);
+    Result.Color := MenuText;
   end;
 
   function MkButton(const ACaption: String;
@@ -1408,7 +1407,7 @@ procedure TViewWorkoutEditor.BuildUi;
     Result.FontScale := 1.0;
     Result.CustomBackground := True;
     Result.CustomTextColorUse := True;
-    Result.CustomTextColor := Vector4(0.95, 0.95, 0.97, 1);
+    Result.CustomTextColor := MenuText;
     Result.OnClick := AOnClick;
   end;
 
@@ -1698,7 +1697,7 @@ begin
   FBackground.InsertFront(FButtonTeAdd);
 
   FLabelTeHint := MkLabel(T('This segment has no text messages'));
-  FLabelTeHint.Color := Vector4(0.65, 0.68, 0.75, 1);
+  FLabelTeHint.Color := MenuMuted;
   FLabelTeHint.Anchor(hpLeft, LeftPad + 220);
   FLabelTeHint.Anchor(vpTop, TEXT_EVENT_Y);
   FBackground.InsertFront(FLabelTeHint);
@@ -1709,7 +1708,7 @@ begin
   { Stats и Palette в одном ряду над чартом. Stats слева,
     «Добавить сегмент: …» с кнопками — правее. }
   FLabelStats := MkLabel('—', 0.9);
-  FLabelStats.Color := Vector4(0.85, 0.88, 0.95, 1.0);
+  FLabelStats.Color := MenuMuted;
   FLabelStats.Anchor(hpLeft, LeftPad);
   FLabelStats.Anchor(vpTop, ABOVE_CHART_Y);
   FBackground.InsertFront(FLabelStats);
@@ -2462,7 +2461,7 @@ var
     Result.FontScale := 1.0;
     Result.CustomBackground := True;
     Result.CustomTextColorUse := True;
-    Result.CustomTextColor := Vector4(0.95, 0.95, 0.97, 1);
+    Result.CustomTextColor := MenuText;
     Result.OnClick := AOnClick;
     Result.Tag := ATag;
   end;

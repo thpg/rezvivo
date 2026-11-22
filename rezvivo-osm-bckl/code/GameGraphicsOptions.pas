@@ -1,6 +1,7 @@
 unit GameGraphicsOptions;
 
 {$I castleconf.inc}
+{$I GameBuildFeatures.inc}
 
 interface
 
@@ -67,12 +68,21 @@ function GraphicsChoiceValue(Option: TGraphicsOption; Index: Integer): Integer;
 function GraphicsChoiceCaption(Option: TGraphicsOption; Index: Integer): String;
 function ValidGraphicsValue(Option: TGraphicsOption; Value: Integer): Boolean;
 function EffectiveGraphicsValue(Option: TGraphicsOption; Value: Integer): Integer;
+function GraphicsOptionAvailable(Option: TGraphicsOption): Boolean;
 { Negative AA values are a resolution choice, never a multisample count. }
 function GraphicsResolutionScale(Antialiasing: Integer): Single;
 
 implementation
 
 uses Math;
+
+function GraphicsOptionAvailable(Option: TGraphicsOption): Boolean;
+begin
+  Result := True;
+  {$ifdef REZVIVO_NO_NEURAL_RIDERS}
+  if Option = goNeuralRiders then Result := False;
+  {$endif}
+end;
 
 function GraphicsResolutionScale(Antialiasing: Integer): Single;
 begin
@@ -119,6 +129,7 @@ end;
 
 function EffectiveGraphicsValue(Option: TGraphicsOption; Value: Integer): Integer;
 begin
+  if not GraphicsOptionAvailable(Option) then Exit(0);
   Result := Value;
   if not UniversalRenderer then Exit;
   case Option of
@@ -143,7 +154,8 @@ begin
     goShadowSize: Result := 5;
     goAntialiasing: Result := 8;
     goTextures,goHair,goRiderComplexity,goWorldComplexity,goVegetationComplexity: Result := 4;
-    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening,goNeuralRiders: Result := 3;
+    goShadowFilter, goShadowDistance, goVegetationCache,goSoftening: Result := 3;
+    goNeuralRiders: if GraphicsOptionAvailable(Option) then Result := 3 else Result := 1;
     goWorldShadows:Result:=4;
     goTrees: Result := 5;
     goGrass, goVegetationAdaptive,goRtxReflections,goWorldCache,goUpscaleSmoothing: Result := 2;

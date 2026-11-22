@@ -6,6 +6,7 @@ type
   TWorkoutState=(wsIdle,wsReady,wsRunning,wsPaused,wsFinished);
   TWorkoutPlayer=class
   private
+    FRiderIndex: Integer;
     FPlan:TWorkoutFile;
     FState:TWorkoutState;
     FIndex:Integer;
@@ -33,6 +34,7 @@ type
     function GetVisualPowerScale:Single;
   public
     OnFinished:TNotifyEvent;
+    constructor Create(ARiderIndex:Integer=0);
     destructor Destroy;override;
     procedure Start(Plan:TWorkoutFile;ReferenceWatts:Double;WaitForPedal,RequireSignal:Boolean);
     procedure Stop;
@@ -76,6 +78,7 @@ type
 { A fresh cadence sample is authoritative, including zero. Power is a fallback
   for devices without cadence; flywheel speed never indicates pedalling. }
 function WorkoutPedaling(PowerFresh,CadenceFresh:Boolean;PowerWatts,CadenceRpm:Double):Boolean;
+function WorkoutPlayerForRider(Index:Integer=0):TWorkoutPlayer;
 var WorkoutPlayer:TWorkoutPlayer;
 implementation
 uses Math,GameWorkoutColors{$ifndef WASI},GameSensorLog{$endif};
@@ -91,7 +94,7 @@ end;
 procedure TWorkoutPlayer.JournalState;
 begin
   {$ifndef WASI}
-  if FPlan<>nil then SensorLog.SetSessionState(FState=wsRunning,FJournalLap,
+  if FPlan<>nil then SensorLogForRider(FRiderIndex).SetSessionState(FState=wsRunning,FJournalLap,
     EnsureRange(Round(TargetWatts),0,65535));
   {$endif}
   NotifyStateChanged;
@@ -225,7 +228,7 @@ begin
   FIndex:=0;FStageTime:=0;FElapsed:=0;FPosition:=0;
   FStageStartElapsed:=0;Inc(FRevision);
   Inc(FJournalLap);
-  {$ifndef WASI}SensorLog.SetSessionState(False,FJournalLap,0);{$endif}
+  {$ifndef WASI}SensorLogForRider(FRiderIndex).SetSessionState(False,FJournalLap,0);{$endif}
   NotifyStateChanged;
 end;
 
@@ -401,8 +404,22 @@ begin
       Result:=E.Message;
   end;
 end;
+var Players:array[1..7]of TWorkoutPlayer;
+constructor TWorkoutPlayer.Create(ARiderIndex:Integer);
+begin inherited Create;FRiderIndex:=ARiderIndex;end;
+function WorkoutPlayerForRider(Index:Integer):TWorkoutPlayer;
+begin
+  if(Index<0)or(Index>7)then raise ERangeError.Create('Invalid rider');
+  if Index=0 then Exit(WorkoutPlayer);
+  if Players[Index]=nil then Players[Index]:=TWorkoutPlayer.Create(Index);
+  Result:=Players[Index];
+end;
+procedure FreePlayers;
+var I:Integer;
+begin for I:=1 to 7 do FreeAndNil(Players[I]);end;
 initialization
   WorkoutPlayer:=TWorkoutPlayer.Create;
 finalization
+  FreePlayers;
   FreeAndNil(WorkoutPlayer);
 end.

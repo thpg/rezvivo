@@ -5,6 +5,8 @@ uses Classes,SysUtils,fpjson,GameTrainingLoad;
 type
   TRideHistory=class
   private
+    FRiderIndex:Integer;
+    FOwnerDir:String;
     FCurrent,FLast,FPending:TJSONObject;
     FRestoreNeeded,FAccountHeld:Boolean;
     FLoad:TTrainingLoad;
@@ -14,7 +16,7 @@ type
     FLastSave:QWord;
     procedure Save(Completed:Boolean);
   public
-    constructor Create;
+    constructor Create(ARiderIndex:Integer=0);
     destructor Destroy;override;
     procedure BeginRide(const Title,Route,World:String);
     procedure SetWorkout(const Title,Url:String);
@@ -35,24 +37,38 @@ type
     function List:TJSONArray;
     property LastResult:TJSONObject read FLast;
   end;
+function RideHistoryForRider(Index:Integer=0):TRideHistory;
 var RideHistory:TRideHistory;
 implementation
 uses Math,DateUtils,GameUserData,GameRouteLibraryData,GameSensorLog,DebugLog,
   GameWorkoutPlayer,GameDailyTraining,GameActivityAccounting,GameRideCompletion,GameAccountChange,
   GameRideJournalRecovery;
 
-constructor TRideHistory.Create;
-begin inherited;FLoad:=TTrainingLoad.Create;end;
+constructor TRideHistory.Create(ARiderIndex:Integer);
+begin inherited Create;FRiderIndex:=ARiderIndex;FLoad:=TTrainingLoad.Create;end;
 destructor TRideHistory.Destroy;
-begin Finish;FPending.Free;FLast.Free;FLoad.Free;inherited;end;
+begin
+  { Only an explicit Finish completes a ride. Shutdown preserves crash recovery. }
+  try
+    if FCurrent<>nil then begin
+      if not FRestoreNeeded then Save(False);
+      SensorLogForRider(FRiderIndex).Close(False);
+    end;
+  finally
+    if FAccountHeld then begin EndRideAccount(FRiderIndex);FAccountHeld:=False;end;
+    FCurrent.Free;FPending.Free;FLast.Free;FLoad.Free;
+    inherited;
+  end;
+end;
 
 procedure TRideHistory.BeginRide(const Title,Route,World:String);
 var Id:String;Resume,Rider:TJSONData;
 begin
   Finish;
-  BeginRideAccount;FAccountHeld:=True;
+  BeginRideAccount(FRiderIndex);FAccountHeld:=True;
   try
-  SensorLog.OwnerKey:=UserDataDir;
+  FOwnerDir:=RiderDataDir(FRiderIndex);
+  SensorLogForRider(FRiderIndex).OwnerKey:=FOwnerDir;
   { A cancelled load must not apply its checkpoint to a different map/profile. }
   if(FPending<>nil)and(not CanResume(FPending)or
     (FPending.Get('world','')<>World)or
@@ -61,7 +77,7 @@ begin
   if FPending<>nil then begin
     FCurrent:=FPending;FPending:=nil;FRestoreNeeded:=True;
     RecoverJournalTail(FCurrent,TSensorLog.LoadSession(FCurrent.Get('journal','')));
-    FFile:=UserDataDir+'activities'+PathDelim+FCurrent.Get('id','')+'.json';
+    FFile:=RiderDataDir(FRiderIndex)+'activities'+PathDelim+FCurrent.Get('id','')+'.json';
     FElapsed:=FCurrent.Get('seconds',0.0);FDistance:=FCurrent.Get('distance_m',0.0);
     FWork:=FCurrent.Get('work_j',0.0);FPowerSeconds:=FCurrent.Get('power_seconds',0.0);
     FGain:=FCurrent.Get('gain_m',0.0);FHeight:=FCurrent.Get('height',0.0);FHeightValid:=False;
@@ -79,18 +95,18 @@ begin
     FLastRawDistanceValid:=FLastRawDistanceValid and not IsNan(FLastRawDistance) and
       not IsInfinite(FLastRawDistance) and(FLastRawDistance>=0);
     if FCurrent.Find('load') is TJSONObject then FLoad.RestoreState(FCurrent.Objects['load']);
-    SensorLog.Resume(FCurrent.Get('journal',''),FCurrent.Get('journal_elapsed',0.0));
+    SensorLogForRider(FRiderIndex).Resume(FCurrent.Get('journal',''),FCurrent.Get('journal_elapsed',0.0));
     FLastSave:=GetTickCount64;Exit;
   end;
   Id:=FormatDateTime('yyyymmdd-hhnnss-zzz',Now);
-  FFile:=UserDataDir+'activities'+PathDelim+Id+'.json';
+  FFile:=RiderDataDir(FRiderIndex)+'activities'+PathDelim+Id+'.json';
   FCurrent:=TJSONObject.Create(['id',Id,'title',Title,'route',Route,'world',World,
-    'date',FormatDateTime('yyyy-mm-dd hh:nn',Now),'complete',False,'account',UserDataDir]);
+    'date',FormatDateTime('yyyy-mm-dd hh:nn',Now),'complete',False,'account',FOwnerDir,'rider_key',LocalRider(FRiderIndex).Key]);
   FElapsed:=0;FDistance:=0;FWork:=0;FPowerSeconds:=0;FGain:=0;
   FHeightValid:=False;FLastRawDistance:=0;FLastRawDistanceValid:=False;
   FLoad.Reset;FLastSave:=GetTickCount64;
   except
-    EndRideAccount;FAccountHeld:=False;raise;
+    EndRideAccount(FRiderIndex);FAccountHeld:=False;raise;
   end;
 end;
 
@@ -141,13 +157,13 @@ begin
   FCurrent.Floats['last_raw_distance']:=FLastRawDistance;
   FCurrent.Booleans['last_raw_distance_valid']:=FLastRawDistanceValid;
   if FPowerSeconds>0 then FCurrent.Floats['avg_power']:=FWork/FPowerSeconds;
-  if SensorLog.IsOpen then begin
-    FCurrent.Strings['journal']:=SensorLog.FileName;
-    FCurrent.Floats['journal_elapsed']:=SensorLog.JournalElapsed;
+  if SensorLogForRider(FRiderIndex).IsOpen then begin
+    FCurrent.Strings['journal']:=SensorLogForRider(FRiderIndex).FileName;
+    FCurrent.Floats['journal_elapsed']:=SensorLogForRider(FRiderIndex).JournalElapsed;
   end;
   FCurrent.Delete('save_error');
   try
-    if SensorLog.IsOpen then SensorLog.SaveCheckpoint(FFile,FCurrent.AsJSON)
+    if SensorLogForRider(FRiderIndex).IsOpen then SensorLogForRider(FRiderIndex).SaveCheckpoint(FFile,FCurrent.AsJSON)
     else WriteAccountJSON(FFile,FCurrent);
   except on E:Exception do begin
     FCurrent.Strings['save_error']:=E.Message;Logger.Warning('[RideHistory] '+E.Message);
@@ -160,14 +176,14 @@ begin
   try
   if FCurrent=nil then Exit;
   if FRestoreNeeded then begin
-    FRestoreNeeded:=False;FreeAndNil(FCurrent);SensorLog.Close(False);Exit;
+    FRestoreNeeded:=False;FreeAndNil(FCurrent);SensorLogForRider(FRiderIndex).Close(False);Exit;
   end;
   FRestoreNeeded:=False;FCurrent.Delete('resume');
   if FElapsed>0.1 then begin
     Save(True);FreeAndNil(FLast);FLast:=FCurrent;FCurrent:=nil;
   end else FreeAndNil(FCurrent);
   finally
-    if FAccountHeld then begin EndRideAccount;FAccountHeld:=False;end;
+    if FAccountHeld then begin EndRideAccount(FRiderIndex);FAccountHeld:=False;end;
   end;
 end;
 
@@ -176,14 +192,14 @@ var Id:String;
 begin
   Result:=False;if Activity=nil then Exit;Id:=Activity.Get('id','');
   if(Id='')or(ExtractFileName(Id)<>Id)or(Pos('..',Id)>0)then Exit;
-  Result:=not Activity.Get('complete',False)and(Activity.Get('account','')=UserDataDir)
+  Result:=not Activity.Get('complete',False)and(Activity.Get('account','')=RiderDataDir(FRiderIndex))
     and(Activity.Find('resume') is TJSONObject)and
     FileExists(Activity.Get('journal',''))and FileExists(Activity.Get('journal','')+'.active');
 end;
 procedure TRideHistory.RequestResume(Activity:TJSONObject);
 begin
   if not CanResume(Activity)then raise Exception.Create('Saved ride is unavailable');
-  CancelSavedRideCompletion(UserDataDir+'activities'+PathDelim+Activity.Get('id','')+'.json',UserDataDir);
+  CancelSavedRideCompletion(RiderDataDir(FRiderIndex)+'activities'+PathDelim+Activity.Get('id','')+'.json',RiderDataDir(FRiderIndex));
   FreeAndNil(FPending);FPending:=Activity.Clone as TJSONObject;
 end;
 procedure TRideHistory.CancelResume;
@@ -202,11 +218,11 @@ var O:TJSONObject;
 begin
   if FCurrent=nil then begin Rider.Free;Exit;end;
   O:=TJSONObject.Create(['version',1]);O.Add('rider',Rider);
-  O.Add('workout',WorkoutPlayer.SaveState);O.Add('daily',DailyTraining.SaveState);
+  O.Add('workout',WorkoutPlayerForRider(FRiderIndex).SaveState);O.Add('daily',DailyTrainingForRider(FRiderIndex).SaveState);
   FCurrent.Delete('resume');FCurrent.Add('resume',O);
   FCurrent.Delete('load');FCurrent.Add('load',FLoad.SaveState);
   { Open the journal before serializing its name, including waiting starts. }
-  SensorLog.SaveCheckpoint('','');Save(False);
+  SensorLogForRider(FRiderIndex).SaveCheckpoint('','');Save(False);
 end;
 procedure TRideHistory.CompleteSaved(Activity:TJSONObject);
 var Path,Id:String;
@@ -214,21 +230,21 @@ begin
   if Activity=nil then Exit;
   Id:=Activity.Get('id','');
   if(Id='')or(ExtractFileName(Id)<>Id)or(Pos('..',Id)>0)or
-    (Activity.Get('account','')<>UserDataDir)then
+    (Activity.Get('account','')<>RiderDataDir(FRiderIndex))then
     raise Exception.Create('Saved ride belongs to a different account');
   if(FCurrent<>nil)and(FCurrent.Get('id','')=Id)then
     raise Exception.Create('Finish the current ride before completing its recording');
-  Path:=UserDataDir+'activities'+PathDelim+Id+'.json';
-  CompleteSavedRide(Path,UserDataDir);
+  Path:=RiderDataDir(FRiderIndex)+'activities'+PathDelim+Id+'.json';
+  CompleteSavedRide(Path,RiderDataDir(FRiderIndex));
 end;
 
 function TRideHistory.AccountChangeError(const HasLiveWorld:Boolean):String;
 begin
   Result:='';
-  if AccountChangePending then Exit('Account change in progress. Please wait.');
-  if HasLiveWorld or(FCurrent<>nil)or SensorLog.IsOpen then
+  if AccountChangePending(FRiderIndex) then Exit('Account change in progress. Please wait.');
+  if HasLiveWorld or(FCurrent<>nil)or SensorLogForRider(FRiderIndex).IsOpen then
     Exit('Finish your ride before switching accounts.');
-  if(SensorLog.ErrorText<>'')or((FLast<>nil)and(FLast.Get('save_error','')<>''))then
+  if(SensorLogForRider(FRiderIndex).ErrorText<>'')or((FLast<>nil)and(FLast.Get('save_error','')<>''))then
     Result:='The last ride could not be saved. Restart the app to recover it before switching accounts.';
 end;
 function TRideHistory.LatestUnfinished:TJSONObject;
@@ -242,7 +258,7 @@ end;
 function TRideHistory.List:TJSONArray;
 var Files:TStringList;Search:TSearchRec;Dir:String;I:Integer;O:TJSONObject;
 begin
-  Result:=TJSONArray.Create;Dir:=UserDataDir+'activities'+PathDelim;
+  Result:=TJSONArray.Create;Dir:=RiderDataDir(FRiderIndex)+'activities'+PathDelim;
   Files:=TStringList.Create;
   try
     if FindFirst(Dir+'*.json',faAnyFile,Search)=0 then begin
@@ -251,14 +267,26 @@ begin
     end;
     Files.Sort;
     for I:=Files.Count-1 downto Max(0,Files.Count-200)do begin
-      try O:=ReadCompletedRide(Dir+Files[I],UserDataDir);if O<>nil then Result.Add(O);
+      try O:=ReadCompletedRide(Dir+Files[I],RiderDataDir(FRiderIndex));if O<>nil then Result.Add(O);
       except on E:Exception do Logger.Warning('[RideHistory] '+E.Message);end;
     end;
   finally Files.Free;end;
 end;
 
+var Histories:array[1..7]of TRideHistory;
+function RideHistoryForRider(Index:Integer):TRideHistory;
+begin
+  if(Index<0)or(Index>7)then raise ERangeError.Create('Invalid rider');
+  if Index=0 then Exit(RideHistory);
+  if Histories[Index]=nil then Histories[Index]:=TRideHistory.Create(Index);
+  Result:=Histories[Index];
+end;
+procedure FreeHistories;
+var I:Integer;
+begin for I:=1 to 7 do FreeAndNil(Histories[I]);end;
 initialization
   RideHistory:=TRideHistory.Create;
 finalization
+  FreeHistories;
   FreeAndNil(RideHistory);
 end.

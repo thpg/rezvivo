@@ -1,5 +1,6 @@
 unit GameNeuralRiders;
 {$mode objfpc}{$H+}
+{$I GameBuildFeatures.inc}
 interface
 uses Classes,fpjson,CastleUIControls;
 function CreateNeuralRiderNoticeControl(AOwner:TComponent):TCastleUserInterface;
@@ -7,6 +8,28 @@ function NeuralRiderStatus:string;
 function NeuralRiderDiagnostics:TJSONObject;
 function CheckNeuralRiderReference(const Density:Integer;const FileName:string):Double;
 implementation
+{$ifdef REZVIVO_NO_NEURAL_RIDERS}
+uses SysUtils;
+function CreateNeuralRiderNoticeControl(AOwner:TComponent):TCastleUserInterface;
+begin
+ Result:=TCastleUserInterface.Create(AOwner);
+ Result.CapturesEvents:=False;
+end;
+function NeuralRiderStatus:string;
+begin Result:='' end;
+function NeuralRiderDiagnostics:TJSONObject;
+begin
+ Result:=TJSONObject.Create(['compiled',False,'mode',0,'model_loads',0,
+  'message','','error','']);
+ Result.Add('models',TJSONArray.Create);
+ Result.Add('riders',TJSONArray.Create);
+end;
+function CheckNeuralRiderReference(const Density:Integer;const FileName:string):Double;
+begin
+ Result:=0;
+ raise Exception.Create('Neural rider inference is not included in this build');
+end;
+{$else}
 uses SysUtils,Math,CastleVectors,CastleScene,CastleImages,CastleColors,CastleNotifications,
  X3DNodes,CastleURIUtils,CastleFilesUtils,CastleTimeUtils,
  AppSettings,UiTranslations,DebugLog,RiderTripo,RiderBodyParameters,TripoRig,
@@ -406,4 +429,5 @@ initialization
 finalization
  RiderSurfaceFactory:=nil;Instances.Free;
  Assets[1].Free;Assets[2].Free;
+{$endif}
 end.

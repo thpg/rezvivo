@@ -16,6 +16,7 @@ type
   TDeviceRoleAssignments = class
   private
     FSelections: array[TDeviceRole] of TDeviceSelection;
+    FPowerMeters: array of TDeviceSelection;
     function GetSelection(Role: TDeviceRole): TDeviceSelection;
     function GetSteeringCenter: Single;
   public
@@ -31,6 +32,13 @@ type
     function HasRemembered: Boolean;
     function UsesDevice(const Transport, Address: String): Boolean;
     function CenterSteering(Degrees: Single): Boolean;
+    function AddPowerMeter(const Transport, Address, Name: String): Boolean;
+    function RemovePowerMeter(const Transport, Address: String): Boolean;
+    procedure ClearPowerMeters;
+    function RemoveDevice(const Transport, Address: String): Boolean;
+    function HasPowerMeter(const Transport, Address: String): Boolean;
+    function PowerMeterCount: Integer;
+    function PowerMeter(Index: Integer): TDeviceSelection;
     property SteeringCenter: Single read GetSteeringCenter;
     property Selection[Role: TDeviceRole]: TDeviceSelection read GetSelection;
   end;
@@ -55,6 +63,7 @@ begin Result := FSelections[Role]; end;
 procedure TDeviceRoleAssignments.Reset(Disabled: Boolean);
 var R: TDeviceRole;
 begin
+  SetLength(FPowerMeters,0);
   for R := Low(TDeviceRole) to High(TDeviceRole) do
   begin
     FSelections[R] := Default(TDeviceSelection);
@@ -84,6 +93,7 @@ begin
   Result := (FSelections[Role].Mode <> S.Mode) or
     (FSelections[Role].Transport <> S.Transport) or
     (FSelections[Role].Address <> S.Address) or (FSelections[Role].Name <> S.Name);
+  if Role=drPower then Result:=RemovePowerMeter(S.Transport,S.Address)or Result;
   FSelections[Role] := S;
 end;
 
@@ -131,6 +141,7 @@ end;
 function TDeviceRoleAssignments.HasRemembered: Boolean;
 var R: TDeviceRole;
 begin
+  if Length(FPowerMeters)>0 then Exit(True);
   for R := Low(TDeviceRole) to High(TDeviceRole) do
     if FSelections[R].Mode <> dsmAutomatic then Exit(True);
   Result := False;
@@ -141,18 +152,66 @@ var R: TDeviceRole;
 begin
   for R := Low(TDeviceRole) to High(TDeviceRole) do
     if Matches(R, Transport, Address) then Exit(True);
-  Result := False;
+  Result := HasPowerMeter(Transport,Address);
+end;
+
+function TDeviceRoleAssignments.PowerMeterCount: Integer;
+begin Result:=Length(FPowerMeters) end;
+function TDeviceRoleAssignments.PowerMeter(Index: Integer): TDeviceSelection;
+begin
+  Result:=Default(TDeviceSelection);
+  if(Index>=0)and(Index<Length(FPowerMeters))then Result:=FPowerMeters[Index];
+end;
+function TDeviceRoleAssignments.HasPowerMeter(const Transport,Address:String):Boolean;
+var I:Integer;
+begin
+  for I:=0 to High(FPowerMeters)do
+    if SameText(FPowerMeters[I].Transport,Trim(Transport))and
+      SameText(FPowerMeters[I].Address,Trim(Address))then Exit(True);
+  Result:=False;
+end;
+function TDeviceRoleAssignments.AddPowerMeter(const Transport,Address,Name:String):Boolean;
+var N:Integer;
+begin
+  Result:=False;
+  if(Trim(Transport)='')or(Trim(Address)='')or HasPowerMeter(Transport,Address)or Matches(drPower,Transport,Address)then Exit;
+  N:=Length(FPowerMeters);if N>=16 then Exit;
+  SetLength(FPowerMeters,N+1);
+  FPowerMeters[N].Mode:=dsmDevice;
+  FPowerMeters[N].Transport:=LowerCase(Trim(Transport));
+  FPowerMeters[N].Address:=LowerCase(Trim(Address));
+  FPowerMeters[N].Name:=Trim(Name);Result:=True;
+end;
+function TDeviceRoleAssignments.RemovePowerMeter(const Transport,Address:String):Boolean;
+var I,J:Integer;
+begin
+  Result:=False;
+  for I:=High(FPowerMeters)downto 0 do
+    if SameText(FPowerMeters[I].Transport,Trim(Transport))and
+      SameText(FPowerMeters[I].Address,Trim(Address))then begin
+      for J:=I to High(FPowerMeters)-1 do FPowerMeters[J]:=FPowerMeters[J+1];
+      SetLength(FPowerMeters,Length(FPowerMeters)-1);Result:=True;
+    end;
+end;
+procedure TDeviceRoleAssignments.ClearPowerMeters;
+begin SetLength(FPowerMeters,0);end;
+function TDeviceRoleAssignments.RemoveDevice(const Transport,Address:String):Boolean;
+var R:TDeviceRole;
+begin
+  Result:=RemovePowerMeter(Transport,Address);
+  for R:=Low(TDeviceRole)to High(TDeviceRole)do
+    if Matches(R,Transport,Address)then begin Disable(R);Result:=True end;
 end;
 
 procedure TDeviceRoleAssignments.LoadJSON(Data: TJSONData);
-var R: TDeviceRole; O, V: TJSONObject; D: TJSONData; Mode: String;
+var R: TDeviceRole; O, V: TJSONObject; D: TJSONData; Mode: String; I:Integer;
 begin
   Reset(Data <> nil);
   if Data = nil then Exit;
   if not (Data is TJSONObject) then Exit;
   O := TJSONObject(Data);
   D := O.Find('version');
-  if (D = nil) or (D.JSONType <> jtNumber) or (D.AsInteger <> 1) then Exit;
+  if (D = nil) or (D.JSONType <> jtNumber) or not(D.AsInteger in [1,2]) then Exit;
   for R := Low(TDeviceRole) to High(TDeviceRole) do
   begin
     D := O.Find(DeviceRoleKeys[R]);
@@ -173,12 +232,18 @@ begin
       if (D<>nil) and (D.JSONType=jtNumber) then CenterSteering(D.AsFloat);
     end;
   end;
+  D:=O.Find('power_meters');
+  if D is TJSONArray then for I:=0 to Min(15,D.Count-1)do
+    if D.Items[I] is TJSONObject then begin
+      V:=TJSONObject(D.Items[I]);
+      AddPowerMeter(JsonString(V,'transport'),JsonString(V,'address'),JsonString(V,'name'));
+    end;
 end;
 
 function TDeviceRoleAssignments.ToJSON: TJSONObject;
-var R: TDeviceRole; O: TJSONObject; S: TDeviceSelection;
+var R: TDeviceRole; O: TJSONObject; S: TDeviceSelection; A:TJSONArray; I:Integer;
 begin
-  Result := TJSONObject.Create(['version', 1]);
+  Result := TJSONObject.Create(['version', 2]);
   for R := Low(TDeviceRole) to High(TDeviceRole) do
   begin
     S := FSelections[R];
@@ -188,6 +253,10 @@ begin
       'address', S.Address, 'name', S.Name]);
     if (R=drSteering) and (S.Mode=dsmDevice) then O.Add('center_degrees',S.CenterDegrees);
     Result.Add(DeviceRoleKeys[R], O);
+  end;
+  A:=TJSONArray.Create;Result.Add('power_meters',A);
+  for I:=0 to High(FPowerMeters)do begin
+    S:=FPowerMeters[I];A.Add(TJSONObject.Create(['transport',S.Transport,'address',S.Address,'name',S.Name]));
   end;
 end;
 end.

@@ -5,13 +5,13 @@ uses Classes, SysUtils, fpjson, RiderTripo, RiderHeadAppearance,
   CastleUIControls, CastleControls, CastleVectors, GameMenuTheme;
 const
   WardrobeSlots:array[0..4]of string=('top','bottom','outer','feet','head');
-function WardrobeSelection(Slot:Integer):string;
-procedure SelectWardrobe(const Slot,Preset:string);
-function WardrobeRiderPath(const BasePath:string):string;
+function WardrobeSelection(Slot:Integer;RiderIndex:Integer=0):string;
+procedure SelectWardrobe(const Slot,Preset:string;RiderIndex:Integer=0);
+function WardrobeRiderPath(const BasePath:string;RiderIndex:Integer=0):string;
 { Explicit selections for NPCs; never read or modify the user's outfit. }
 function WardrobeRiderPathFor(const BasePath:string;const Presets:array of string):string;
-function WardrobeHeadwear:TRiderHeadwear;
-procedure WardrobeState(Rider:TTripoRiderScene;Result:TJSONObject);
+function WardrobeHeadwear(RiderIndex:Integer=0):TRiderHeadwear;
+procedure WardrobeState(Rider:TTripoRiderScene;Result:TJSONObject;RiderIndex:Integer=0);
 type
   TGameWardrobePanel=class(TCastleUserInterface)
   private
@@ -24,6 +24,7 @@ type
     procedure Click(Sender:TObject);
     procedure ClickColor(Sender:TObject);
   public
+    ProfileIndex:Integer;
     constructor Create(AOwner:TComponent);override;
     procedure Resize;override;
     procedure Refresh;
@@ -55,30 +56,30 @@ begin
   for Result:=0 to OptionCount[Slot]-1 do if Options[Slot,Result]=Preset then Exit;
   Result:=-1;
 end;
-function WardrobeSelection(Slot:Integer):string;
+function WardrobeSelection(Slot:Integer;RiderIndex:Integer):string;
 begin
-  Result:=UserPreference('avatar_clothing_'+WardrobeSlots[Slot]);
+  Result:=RiderPreference('avatar_clothing_'+WardrobeSlots[Slot],'',RiderIndex);
   if OptionIndex(Slot,Result)<0 then Result:='';
 end;
-procedure SelectWardrobe(const Slot,Preset:string);
+procedure SelectWardrobe(const Slot,Preset:string;RiderIndex:Integer);
 var I:Integer;
 begin
   for I:=0 to High(WardrobeSlots)do if Slot=WardrobeSlots[I]then begin
     if OptionIndex(I,Preset)<0 then raise EArgumentException.Create('Unknown clothing preset for '+Slot);
-    SetUserPreference('avatar_clothing_'+Slot,Preset);Exit;
+    SetRiderPreference('avatar_clothing_'+Slot,Preset,RiderIndex);Exit;
   end;
   raise EArgumentException.Create('Unknown clothing slot: '+Slot);
 end;
-function WardrobeHeadwear:TRiderHeadwear;
+function WardrobeHeadwear(RiderIndex:Integer):TRiderHeadwear;
 begin
-  if WardrobeSelection(4)<>''then Result:=rhwNone
-  else Result:=ParseHeadwear(UserPreference('rider_headwear','helmet'));
+  if WardrobeSelection(4,RiderIndex)<>''then Result:=rhwNone
+  else Result:=ParseHeadwear(RiderPreference('rider_headwear','helmet',RiderIndex));
 end;
 
-function WardrobeRiderPath(const BasePath:string):string;
+function WardrobeRiderPath(const BasePath:string;RiderIndex:Integer):string;
 var Presets:array[0..4]of string;I:Integer;
 begin
-  for I:=0 to High(Presets)do Presets[I]:=WardrobeSelection(I);
+  for I:=0 to High(Presets)do Presets[I]:=WardrobeSelection(I,RiderIndex);
   Result:=WardrobeRiderPathFor(BasePath,Presets);
 end;
 
@@ -339,11 +340,11 @@ begin
     Result:=A;A:=nil;
   finally Doc.Free;A.Free end;
 end;
-procedure WardrobeState(Rider:TTripoRiderScene;Result:TJSONObject);
+procedure WardrobeState(Rider:TTripoRiderScene;Result:TJSONObject;RiderIndex:Integer);
 var O:TJSONObject;I:Integer;
 begin
   O:=TJSONObject.Create;Result.Add('clothing',O);
-  for I:=0 to High(WardrobeSlots)do O.Add(WardrobeSlots[I],WardrobeSelection(I));
+  for I:=0 to High(WardrobeSlots)do O.Add(WardrobeSlots[I],WardrobeSelection(I,RiderIndex));
   if(Rider<>nil)and(Rider.Garment<>nil)then O.Add('garment',WriteRiderGarment(Rider.Garment.Garment));
   if(Rider<>nil)and(Rider.AppearanceAddon is TWardrobeAppearance)then
   begin
@@ -382,9 +383,9 @@ end;
 procedure TGameWardrobePanel.Refresh;
 var I:Integer;
 begin
-  for I:=0 to High(FLabels)do BindUiText(FChoices[I],Titles[I,OptionIndex(I,WardrobeSelection(I))]);
-  FColors[0].Enabled:=WardrobeSelection(2)='';
-  FColors[2].Enabled:=WardrobeSelection(2)<>'';
+  for I:=0 to High(FLabels)do BindUiText(FChoices[I],Titles[I,OptionIndex(I,WardrobeSelection(I,ProfileIndex))]);
+  FColors[0].Enabled:=WardrobeSelection(2,ProfileIndex)='';
+  FColors[2].Enabled:=WardrobeSelection(2,ProfileIndex)<>'';
   Resize;
 end;
 procedure TGameWardrobePanel.SetColor(Slot:Integer;const C:TVector4);
@@ -417,10 +418,10 @@ end;
 procedure TGameWardrobePanel.Click(Sender:TObject);
 var Slot,Index:Integer;
 begin
-  Slot:=TComponent(Sender).Tag div 2;Index:=OptionIndex(Slot,WardrobeSelection(Slot));
+  Slot:=TComponent(Sender).Tag div 2;Index:=OptionIndex(Slot,WardrobeSelection(Slot,ProfileIndex));
   if Odd(TComponent(Sender).Tag)then Inc(Index)else Dec(Index);
   Index:=(Index+OptionCount[Slot])mod OptionCount[Slot];
-  SelectWardrobe(WardrobeSlots[Slot],Options[Slot,Index]);Refresh;
+  SelectWardrobe(WardrobeSlots[Slot],Options[Slot,Index],ProfileIndex);Refresh;
   if Assigned(FOnChange)then FOnChange(Self);
 end;
 initialization

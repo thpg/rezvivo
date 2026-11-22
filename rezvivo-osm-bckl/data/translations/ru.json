@@ -1919,5 +1919,19 @@
   "Reduced (18k)": "Уменьшенная (18 тыс.)",
   "Dense (73k)": "Плотная (73 тыс.)",
   "Cycling suit for every rider, using selected top and bottom colors. Models are optional and loaded only while enabled. Missing or incompatible models use ordinary riders.": "Велосьют для всех райдеров, с цветами выбранных верха и низа. Сети загружаются только при включении. Если модели отсутствуют или несовместимы, используется обычный вывод.",
-  "Neural rider models are missing or unavailable. Ordinary riders are used.": "Модели нейросетей отсутствуют или недоступны. Используется обычный вывод райдеров."
+  "Neural rider models are missing or unavailable. Ordinary riders are used.": "Модели нейросетей отсутствуют или недоступны. Используется обычный вывод райдеров.",
+  "Each rider has their own avatar, bicycle and account.": "У каждого райдера свой аватар, велосипед и аккаунт.",
+  "Finish the ride to change local riders.": "Завершите поездку, чтобы изменить локальных райдеров.",
+  "Local riders": "Локальные райдеры",
+  "No devices yet. Search again or open the device list.": "Устройств пока нет. Повторите поиск или откройте список устройств.",
+  "Not compatible": "Несовместимо",
+  "Primary": "Основной",
+  "Rider %d": "Райдер %d",
+  "Selected": "Выбрано",
+  "Use as primary power": "Использовать как основной измеритель мощности",
+  "Power meters": "Измерители мощности",
+  "Steering / buttons": "Руление / кнопки",
+  "Select devices for each rider. A device belongs to one rider.": "Выберите устройства для каждого райдера. Устройство принадлежит одному райдеру.",
+  "Repeat for everyone": "Повторить для всех",
+  "Finish this rider's ride before switching accounts.": "Завершите поездку этого райдера перед сменой аккаунта."
 }

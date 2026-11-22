@@ -170,9 +170,11 @@ begin
     There is no second phase oscillator. Stabilizing feedback keeps the rear
     tyre close to its route; the front swings through the wheelbase lever. }
   Omega:=Max(2.0,U.Cadence*2*Pi/60);
-  MaxAccel:=0.012*(Sqr(Omega)+9);
-  Excitation:=Active*(-0.14*LegDifference/U.MassKg+
-    0.40*G*(S.Q[BR]-LeanTarget)+0.08*G*S.V[BR]);
+  { The arms absorb much of the alternating pedal moment. Excite the tyre
+    path modestly; preserve the one steering/yaw/track solution below. }
+  MaxAccel:=0.008*(Sqr(Omega)+9);
+  Excitation:=Active*(-0.08*LegDifference/U.MassKg+
+    0.25*G*(S.Q[BR]-LeanTarget)+0.05*G*S.V[BR]);
   Excitation:=MaxAccel*Tanh(Excitation/MaxAccel);
   Accel:=Excitation-9*S.RearTrack-6*Speed*Sin(S.Heading);
   { Steering actuator has finite response. Actual yaw and tyre tracks below
@@ -302,7 +304,7 @@ begin
   Force[LA]:=-LegDiff*Width*0.035;
   Force[TA]:=-(S.HandLoad[0]-S.HandLoad[1])*U.BarWidth*0.22;
   Force[TR]:=-(S.HandLoad[0]-S.HandLoad[1])*U.TorsoLength*0.18;
-  Force[BR]:=LegDiff*Width*(0.25+0.65*Stand);
+  Force[BR]:=LegDiff*Width*(0.20+0.45*Stand);
   { All gravity is supported by either leg control, hands or a compressive
     seat contact. Standing has feed-forward leg support, not a seat tether. }
   LegK:=9000+61000*Stand;

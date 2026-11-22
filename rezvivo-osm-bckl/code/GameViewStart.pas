@@ -15,6 +15,14 @@ type
     FTodayOnly:TMenuButton;
     FTodayKey,FTodayName,FScheduleLanguage:String;
     FScheduleRevision:QWord;
+    FLocalRidersTitle,FLocalRidersHint:TCastleLabel;
+    FLocalRidersMinus,FLocalRidersPlus:TMenuButton;
+    FLocalAccounts,FLocalSignIn:array[0..7]of TMenuButton;
+    FLocalRidersSignature:String;
+    FLocalRidersPoll,FRequiredHeight:Single;
+    procedure ClickRiderCount(Sender:TObject);
+    procedure ClickRiderAccount(Sender:TObject);
+    procedure ClickRiderSignIn(Sender:TObject);
     procedure UpdateToday;
     procedure ClickTodayOnly(Sender:TObject);
     procedure ClickContinue(Sender:TObject);
@@ -23,11 +31,20 @@ type
   public
     constructor Create(AOwner:TComponent);override;
     destructor Destroy;override;
+    procedure RefreshLocalRiders;
+    property RequiredHeight:Single read FRequiredHeight;
     procedure PageShown;override;
     procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
     procedure Resize;override;
   end;
   THistoryPage=class(TMenuEmbeddedPage)
+  private
+    FProfileIndex:Integer;
+    FOwnerKey,FHistorySignature:String;
+    FHistoryPoll:Single;
+    procedure SetProfileIndex(Value:Integer);
+    procedure ClickRider(Sender:TObject);
+    function CheckOwner:Boolean;
   private
     FScroll:TCastleScrollView;
     FContent:TCastleUserInterface;
@@ -44,6 +61,8 @@ type
     procedure ClickContinue(Sender:TObject);
     procedure ClickFinishSaved(Sender:TObject);
   public
+    property ProfileIndex:Integer read FProfileIndex write SetProfileIndex;
+    procedure Update(const SecondsPassed:Single;var HandleInput:Boolean);override;
     constructor Create(AOwner:TComponent);override;
     destructor Destroy;override;
     procedure PageShown;override;
@@ -52,7 +71,7 @@ type
     function HandleBack:Boolean;override;
   end;
 implementation
-uses GameTravelUI, Math,CastleVectors,CastleColors,CastleWindow,CastleURIUtils,CastleApplicationProperties,UiTranslations,
+uses GameRiderPalette,GameTravelUI, Math,CastleVectors,CastleColors,CastleWindow,CastleURIUtils,CastleApplicationProperties,UiTranslations,
   CastleMessages,
   GameViewMenu,GameUserData,GameRideHistory,WorkoutFile,GameSensorLog,FitFile,
   RideUploadQueue,VeloSiteAPI,GameWorkoutSchedule,GameViewSchedule;
@@ -96,6 +115,23 @@ begin
   FFinishSaved:=TMenuButton.Create(Self);FFinishSaved.Name:='FinishSavedRide';FFinishSaved.AutoSize:=False;
   BindUiText(FFinishSaved,'Finish saved ride');FFinishSaved.OnClick:=@ClickFinishSaved;InsertFront(FFinishSaved);
   FContinue.Exists:=False;FFinishSaved.Exists:=False;
+  FLocalRidersTitle:=TMenuLabel.Create(Self);FLocalRidersTitle.Color:=MenuText;InsertFront(FLocalRidersTitle);
+  FLocalRidersHint:=TMenuLabel.Create(Self);FLocalRidersHint.Color:=MenuMuted;InsertFront(FLocalRidersHint);
+  FLocalRidersMinus:=TMenuButton.Create(Self);FLocalRidersMinus.Name:='LocalRidersDecrease';
+  FLocalRidersMinus.AutoSize:=False;FLocalRidersMinus.AutoIcon:=False;FLocalRidersMinus.Caption:='-';
+  FLocalRidersMinus.Tag:=-1;FLocalRidersMinus.OnClick:=@ClickRiderCount;InsertFront(FLocalRidersMinus);
+  FLocalRidersPlus:=TMenuButton.Create(Self);FLocalRidersPlus.Name:='LocalRidersIncrease';
+  FLocalRidersPlus.AutoSize:=False;FLocalRidersPlus.AutoIcon:=False;FLocalRidersPlus.Caption:='+';
+  FLocalRidersPlus.Tag:=1;FLocalRidersPlus.OnClick:=@ClickRiderCount;InsertFront(FLocalRidersPlus);
+  for I:=0 to High(FLocalAccounts)do begin
+    FLocalAccounts[I]:=TMenuButton.Create(Self);FLocalAccounts[I].AutoSize:=False;FLocalAccounts[I].AutoIcon:=False;
+    FLocalAccounts[I].Name:='LocalRiderAccount'+IntToStr(I+1);FLocalAccounts[I].Tag:=I;
+    FLocalAccounts[I].Style:=mbGhost;FLocalAccounts[I].OnClick:=@ClickRiderAccount;InsertFront(FLocalAccounts[I]);
+    FLocalSignIn[I]:=TMenuButton.Create(Self);FLocalSignIn[I].AutoSize:=False;FLocalSignIn[I].AutoIcon:=False;
+    FLocalSignIn[I].Name:='LocalRiderSignIn'+IntToStr(I+1);FLocalSignIn[I].Tag:=I;
+    FLocalSignIn[I].OnClick:=@ClickRiderSignIn;BindUiText(FLocalSignIn[I],'Sign in');InsertFront(FLocalSignIn[I]);
+  end;
+  RefreshLocalRiders;
 end;
 destructor TStartPage.Destroy;
 begin FRecovery.Free;inherited;end;
@@ -117,7 +153,7 @@ begin
   if not ViewMenu.SessionUnderneath then FRecovery:=RideHistory.LatestUnfinished;
   FContinue.Exists:=FRecovery<>nil;FFinishSaved.Exists:=FRecovery<>nil;
   WorkoutSchedule.Tick;UpdateToday;
-  FButtons[3].Exists:=UserPreference('last_workout')<>'';Resize;
+  FButtons[3].Exists:=UserPreference('last_workout')<>'';RefreshLocalRiders;Resize;
 end;
 procedure TStartPage.ClickTodayOnly(Sender:TObject);
 begin StartScheduledWorkout(FTodayKey,True);end;
@@ -136,10 +172,58 @@ begin
   end;
   FTodayOnly.Exists:=E<>nil;Resize;
 end;
+procedure TStartPage.RefreshLocalRiders;
+var I,Count:Integer;Editable:Boolean;Sig:String;
+begin
+  Count:=LocalRiderCount;Editable:=ViewMenu.LocalRidersEditable;
+  Sig:=IntToStr(Count)+'|'+BoolToStr(Editable,True)+'|'+UiLanguage;
+  for I:=0 to Count-1 do begin
+    Sig:=Sig+'|'+LocalRider(I).DisplayName+'|'+BoolToStr(RiderApi(I).IsAuthorized,True);
+    if Count>1 then Sig:=Sig+'|'+RiderPaletteSignature(I);
+  end;
+  if Sig=FLocalRidersSignature then Exit;
+  FLocalRidersSignature:=Sig;
+  FLocalRidersTitle.Caption:=UiText('Local riders')+': '+IntToStr(Count);
+  if Editable then FLocalRidersHint.Caption:=UiText('Each rider has their own avatar, bicycle and account.')
+  else FLocalRidersHint.Caption:=UiText('Finish the ride to change local riders.');
+  FLocalRidersMinus.Enabled:=Editable and(Count>1);
+  FLocalRidersPlus.Enabled:=Editable and(Count<MaxLocalRiders);
+  for I:=0 to High(FLocalAccounts)do begin
+    FLocalAccounts[I].Exists:=I<Count;FLocalSignIn[I].Exists:=False;
+    if I>=Count then Continue;
+    FLocalAccounts[I].Caption:=IntToStr(I+1)+'. '+LocalRider(I).DisplayName+'  |  '+UiText('Profile');
+    FLocalSignIn[I].Exists:=not RiderApi(I).IsAuthorized;
+    if Count>1 then begin
+      ApplyRiderMenuButtonPalette(FLocalAccounts[I],I);
+      ApplyRiderMenuButtonPalette(FLocalSignIn[I],I);
+    end else begin
+      FLocalAccounts[I].Style:=mbGhost;FLocalSignIn[I].Style:=mbSecondary;
+    end;
+  end;
+  Resize;
+end;
+
+procedure TStartPage.ClickRiderCount(Sender:TObject);
+begin
+  if not ViewMenu.LocalRidersEditable then Exit;
+  SetLocalRiderCount(EnsureRange(LocalRiderCount+TComponent(Sender).Tag,1,MaxLocalRiders));
+  ViewMenu.LocalRidersChanged;
+end;
+
+procedure TStartPage.ClickRiderAccount(Sender:TObject);
+begin ViewMenu.OpenLocalRiderProfile(TComponent(Sender).Tag) end;
+procedure TStartPage.ClickRiderSignIn(Sender:TObject);
+begin ViewMenu.OpenLocalRiderLogin(TComponent(Sender).Tag) end;
+
 procedure TStartPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
-begin inherited;if(FScheduleRevision<>WorkoutSchedule.Revision)or(FScheduleLanguage<>UiLanguage)then UpdateToday;end;
+begin
+  inherited;
+  if(FScheduleRevision<>WorkoutSchedule.Revision)or(FScheduleLanguage<>UiLanguage)then UpdateToday;
+  FLocalRidersPoll:=FLocalRidersPoll+SecondsPassed;
+  if FLocalRidersPoll>=1 then begin FLocalRidersPoll:=0;RefreshLocalRiders end;
+end;
 procedure TStartPage.Resize;
-var S,W,Top,TitleY,HintY,ButtonY,CardY,CardW,CardH:Single;I:Integer;Compact,ShortLayout:Boolean;
+var S,W,Top,TitleY,HintY,ButtonY,CardY,CardW,CardH,RidersY,AccountWidth:Single;I:Integer;Compact,ShortLayout:Boolean;
 begin
   inherited;if FButtons[3]=nil then Exit;S:=Max(0.65,Min(1,UIScale));
   Compact:=(Container<>nil) and ((Container.UnscaledWidth<1180) or (Container.UnscaledHeight<690));
@@ -204,11 +288,61 @@ begin
   end;
   FButtons[3].Width:=W;FButtons[3].Height:=44/S;FButtons[3].FontSize:=14/S;
   FButtons[3].Anchor(hpLeft,24/S);FButtons[3].Anchor(vpTop,-(CardY+CardH+8/S));
+  if FLocalSignIn[High(FLocalSignIn)]=nil then Exit;
+  RidersY:=CardY+CardH+24/S;
+  if FButtons[3].Exists then RidersY:=RidersY+44/S;
+  FLocalRidersTitle.FontSize:=18/S;FLocalRidersTitle.MaxWidth:=Max(40,W-100/S);
+  FLocalRidersTitle.Anchor(hpLeft,24/S);FLocalRidersTitle.Anchor(vpTop,-RidersY);
+  FLocalRidersMinus.Width:=40/S;FLocalRidersMinus.Height:=34/S;FLocalRidersMinus.FontSize:=18/S;
+  FLocalRidersMinus.Anchor(hpLeft,24/S+W-88/S);FLocalRidersMinus.Anchor(vpTop,-(RidersY-4/S));
+  FLocalRidersPlus.Width:=40/S;FLocalRidersPlus.Height:=34/S;FLocalRidersPlus.FontSize:=18/S;
+  FLocalRidersPlus.Anchor(hpLeft,24/S+W-40/S);FLocalRidersPlus.Anchor(vpTop,-(RidersY-4/S));
+  FLocalRidersHint.FontSize:=13/S;FLocalRidersHint.MaxWidth:=W;
+  FLocalRidersHint.Anchor(hpLeft,24/S);FLocalRidersHint.Anchor(vpTop,-(RidersY+36/S));
+  RidersY:=RidersY+36/S+FLocalRidersHint.EffectiveHeight+8/S;
+  for I:=0 to LocalRiderCount-1 do begin
+    AccountWidth:=W;if FLocalSignIn[I].Exists then AccountWidth:=Max(40,W-104/S);
+    FLocalAccounts[I].Width:=AccountWidth;FLocalAccounts[I].Height:=40/S;FLocalAccounts[I].FontSize:=14/S;
+    FLocalAccounts[I].Anchor(hpLeft,24/S);FLocalAccounts[I].Anchor(vpTop,-RidersY);
+    FLocalSignIn[I].Width:=96/S;FLocalSignIn[I].Height:=40/S;FLocalSignIn[I].FontSize:=14/S;
+    FLocalSignIn[I].Anchor(hpLeft,24/S+W-96/S);FLocalSignIn[I].Anchor(vpTop,-RidersY);
+    RidersY:=RidersY+46/S;
+  end;
+  FRequiredHeight:=RidersY+20/S;
 end;
 procedure TStartPage.ClickAction(Sender:TObject);
 begin case TComponent(Sender).Tag of
   0:ViewMenu.QuickRide;1:if FTodayKey<>''then StartScheduledWorkout(FTodayKey,False)else ViewMenu.OpenTab('intervals');2:ViewMenu.OpenTab('routes');3:ViewMenu.RepeatWorkout;
 end;end;
+
+procedure THistoryPage.SetProfileIndex(Value:Integer);
+begin
+  if(Value<0)or(Value>=LocalRiderCount)then raise ERangeError.Create('Invalid rider');
+  if Value=FProfileIndex then Exit;
+  FProfileIndex:=Value;FreeAndNil(FDetails);FHistorySignature:='';
+  if FContent<>nil then PageShown;
+end;
+procedure THistoryPage.ClickRider(Sender:TObject);
+begin ProfileIndex:=TComponent(Sender).Tag;end;
+function THistoryPage.CheckOwner:Boolean;
+begin
+  Result:=(FProfileIndex<LocalRiderCount)and(FOwnerKey=RiderDataDir(FProfileIndex));
+  if Result and(FDetails<>nil)then Result:=FDetails.Get('account','')=FOwnerKey;
+  if not Result then begin FreeAndNil(FDetails);PageShown end;
+end;
+procedure THistoryPage.Update(const SecondsPassed:Single;var HandleInput:Boolean);
+var Sig:String;I:Integer;
+begin
+  inherited;FHistoryPoll:=FHistoryPoll+SecondsPassed;
+  if FHistoryPoll<0.5 then Exit;FHistoryPoll:=0;
+  if not CheckOwner then Exit;
+  Sig:=IntToStr(LocalRiderCount)+FOwnerKey+UiLanguage;
+  for I:=0 to LocalRiderCount-1 do begin
+    Sig:=Sig+'|'+LocalRider(I).DisplayName;
+    if LocalRiderCount>1 then Sig:=Sig+'|'+RiderPaletteSignature(I);
+  end;
+  if Sig<>FHistorySignature then begin FHistorySignature:=Sig;Build end;
+end;
 
 constructor THistoryPage.Create(AOwner:TComponent);
 var Bg:TCastleRectangleControl;
@@ -221,15 +355,31 @@ end;
 destructor THistoryPage.Destroy;
 begin FItems.Free;FDetails.Free;inherited;end;
 procedure THistoryPage.PageShown;
-begin inherited;FreeAndNil(FItems);FItems:=RideHistory.List;Build;end;
+var I:Integer;
+begin
+  inherited;
+  if FProfileIndex>=LocalRiderCount then FProfileIndex:=0;
+  if FOwnerKey<>RiderDataDir(FProfileIndex)then FreeAndNil(FDetails);
+  FOwnerKey:=RiderDataDir(FProfileIndex);
+  FreeAndNil(FItems);FItems:=RideHistoryForRider(FProfileIndex).List;
+  for I:=FItems.Count-1 downto 0 do
+    if(FItems.Items[I]is TJSONObject)and(FItems.Objects[I].Get('account','')<>FOwnerKey)then FItems.Delete(I);
+  Build;
+end;
 procedure THistoryPage.ShowResult;
-begin FreeAndNil(FDetails);if RideHistory.LastResult<>nil then FDetails:=RideHistory.LastResult.Clone as TJSONObject;Build;end;
+begin
+  FOwnerKey:=RiderDataDir(FProfileIndex);FreeAndNil(FDetails);
+  if(RideHistoryForRider(FProfileIndex).LastResult<>nil)and
+    (RideHistoryForRider(FProfileIndex).LastResult.Get('account','')=FOwnerKey)then
+    FDetails:=RideHistoryForRider(FProfileIndex).LastResult.Clone as TJSONObject;
+  Build;
+end;
 procedure THistoryPage.Resize;
 begin inherited;if(FContent<>nil)and(Abs(FLastWidth-EffectiveWidth)>1)then Build;end;
 procedure THistoryPage.Build;
-var S,Y,W:Single;I,J:Integer;Journal,SyncText:String;Queue:TQueueItemArray;O:TJSONObject;B:TMenuButton;L:TCastleLabel;FS:TFormatSettings;
+var S,Y,W:Single;I,J:Integer;Selector:TMenuFlow;Journal,SyncText:String;Queue:TQueueItemArray;O:TJSONObject;B:TMenuButton;L:TCastleLabel;FS:TFormatSettings;
   procedure Text(const Value:String;Size:Single);
-  begin L:=TMenuLabel.Create(FOwner);L.Caption:=Value;L.Color:=White;L.FontSize:=Size/S;L.MaxWidth:=W;
+  begin L:=TMenuLabel.Create(FOwner);L.Caption:=Value;L.Color:=MenuText;L.FontSize:=Size/S;L.MaxWidth:=W;
     L.Anchor(hpLeft,8);L.Anchor(vpTop,-Y);FContent.InsertFront(L);Y:=Y+Max(38/S,L.EffectiveHeight+16/S);end;
   function Action(const Name,Caption:String;Click:TNotifyEvent):TMenuButton;
   begin Result:=TMenuButton.Create(FOwner);Result.Name:=Name;BindUiText(Result,Caption);Result.FontSize:=17/S;
@@ -239,6 +389,17 @@ begin
   if FOwner<>nil then ApplicationProperties.FreeDelayed(FOwner);FOwner:=TComponent.Create(Self);
   S:=Max(0.65,Min(1,UIScale));W:=FScroll.EffectiveWidth-32/S;Y:=8/S;
   FS:=DefaultFormatSettings;FS.DecimalSeparator:='.';
+  Text(UiText('Rider'),18);
+  Selector:=TMenuFlow.Create(FOwner);Selector.Width:=W;Selector.Spacing:=8/S;
+  Selector.Anchor(hpLeft,8);Selector.Anchor(vpTop,-Y);FContent.InsertFront(Selector);
+  for I:=0 to LocalRiderCount-1 do begin
+    B:=TMenuButton.Create(FOwner);B.Name:='HistoryRider'+IntToStr(I);B.Tag:=I;
+    B.FontSize:=15/S;B.Caption:=Format(UiText('Rider %d'),[I+1])+': '+LocalRider(I).DisplayName;
+    B.Caption:=MenuEllipsis(B.Caption,B.Font,W-32/S);
+    B.OnClick:=@ClickRider;Selector.InsertFront(B);SelectMenuButton(B,I=FProfileIndex);
+    if LocalRiderCount>1 then ApplyRiderMenuButtonPalette(B,I,I=FProfileIndex);
+  end;
+  Selector.Arrange;Y:=Y+Selector.Height+16/S;
   if FDetails<>nil then begin
     O:=FDetails;Text(O.Get('title',''),25);Text(O.Get('workout',''),20);
     Text(Format(UiText('%s · %.1f km · %.0f m ascent'),[FormatWorkoutDuration(O.Get('seconds',0.0)),O.Get('distance_m',0.0)/1000,O.Get('gain_m',0.0)]),20);
@@ -253,8 +414,8 @@ begin
     Journal:=O.Get('journal','');
     if Journal<>''then begin
       SyncText:=UiText('Sync pending');
-      if not VeloSite.IsAuthorized then SyncText:=UiText('Sign in to upload this ride');
-      Queue:=UploadQueue.Snapshot;
+      if not RiderApi(FProfileIndex).IsAuthorized then SyncText:=UiText('Sign in to upload this ride');
+      Queue:=RideUploadQueueForRider(FProfileIndex).Snapshot;
       for J:=0 to High(Queue)do if SameFileName(Queue[J].CsvPath,Journal)then
         case Queue[J].Status of
           usUploading:SyncText:=UiText('Syncing…');usDone:SyncText:=UiText('Synced');
@@ -263,11 +424,11 @@ begin
       if not FileExists(Journal)and FileExists(ChangeFileExt(Journal,'.fit'))then SyncText:=UiText('Synced');
       Text(SyncText,16);
     end;
-    if RideHistory.CanResume(O)then begin
+    if RideHistoryForRider(FProfileIndex).CanResume(O)then begin
       Action('ContinueActivity','Continue saved ride',@ClickContinue);
       Action('FinishSavedActivity','Finish saved ride',@ClickFinishSaved);
     end;
-    Action('RepeatActivity','Repeat',@ClickRepeat);
+    Action('RepeatActivity','Repeat for everyone',@ClickRepeat);
     if(Journal<>'')and(FileExists(Journal)or FileExists(ChangeFileExt(Journal,'.fit')))then
       Action('ExportActivityFit','Export FIT',@ClickExportFit);
     Action('ExportActivity','Export result',@ClickExport);
@@ -284,30 +445,32 @@ begin
 end;
 procedure THistoryPage.ClickItem(Sender:TObject);
 var I:Integer;
-begin I:=TComponent(Sender).Tag;if(I<0)or(FItems=nil)or(I>=FItems.Count)then Exit;
+begin if not CheckOwner then Exit;I:=TComponent(Sender).Tag;if(I<0)or(FItems=nil)or(I>=FItems.Count)then Exit;
   FreeAndNil(FDetails);FDetails:=FItems.Objects[I].Clone as TJSONObject;Build;end;
 procedure THistoryPage.ClickBack(Sender:TObject);
 begin FreeAndNil(FDetails);Build;end;
 function THistoryPage.HandleBack:Boolean;
 begin Result:=FDetails<>nil;if Result then ClickBack(nil);end;
 procedure THistoryPage.ClickRepeat(Sender:TObject);
-begin if FDetails<>nil then ViewMenu.RepeatActivity(FDetails);end;
+begin if CheckOwner and(FDetails<>nil)then ViewMenu.RepeatActivity(FDetails);end;
 procedure THistoryPage.ClickContinue(Sender:TObject);
 begin
-  try if FDetails<>nil then ViewMenu.ResumeActivity(FDetails);
+  if not CheckOwner then Exit;
+  try if FDetails<>nil then ViewMenu.ResumeActivity(FDetails,FProfileIndex);
   except on E:Exception do MessageOK(Application.MainWindow,
     UiText('Continue saved ride')+': '+E.Message);end;
 end;
 procedure THistoryPage.ClickFinishSaved(Sender:TObject);
 begin
-  try RideHistory.CompleteSaved(FDetails);UploadQueue.Scan;FreeAndNil(FDetails);PageShown;
+  if not CheckOwner then Exit;
+  try RideHistoryForRider(FProfileIndex).CompleteSaved(FDetails);RideUploadQueueForRider(FProfileIndex).Scan;FreeAndNil(FDetails);PageShown;
   except on E:Exception do MessageOK(Application.MainWindow,
     UiText('Could not finish saved ride')+': '+E.Message);end;
 end;
 procedure THistoryPage.ClickExport(Sender:TObject);
 var Url,Text:String;F:TFileStream;
 begin
-  if FDetails=nil then Exit;Url:='ride-result.json';
+  if not CheckOwner or(FDetails=nil)then Exit;Url:='ride-result.json';
   if not Application.MainWindow.FileDialog(UiText('Export result'),Url,False,'JSON|*.json')then Exit;
   Text:=FDetails.FormatJSON;F:=TFileStream.Create(URIToFilenameSafe(Url),fmCreate);
   try if Text<>''then F.WriteBuffer(Text[1],Length(Text));finally F.Free;end;
@@ -315,7 +478,7 @@ end;
 procedure THistoryPage.ClickExportFit(Sender:TObject);
 var Url,Journal,FitPath:String;Records:TSensorSessionRecordArray;Writer:TFitFileWriter;Src,Dst:TFileStream;
 begin
-  if FDetails=nil then Exit;Journal:=FDetails.Get('journal','');FitPath:=ChangeFileExt(Journal,'.fit');
+  if not CheckOwner or(FDetails=nil)then Exit;Journal:=FDetails.Get('journal','');FitPath:=ChangeFileExt(Journal,'.fit');
   Url:='ride.fit';
   if not Application.MainWindow.FileDialog(UiText('Export FIT'),Url,False,'FIT|*.fit')then Exit;
   try

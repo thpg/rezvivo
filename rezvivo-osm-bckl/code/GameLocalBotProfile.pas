@@ -9,8 +9,8 @@ const
   LocalBotEnterBehind = 65.0;
   LocalBotEnterFar = 160.0;
   LocalBotLeaveDistance = 240.0;
-  LocalBotJoinInterval = 30.0;
-  LocalBotAppearanceInterval = 20.0;
+  LocalBotJoinInterval = 8.0;
+  LocalBotAppearanceInterval = 8.0;
   LocalBotOncomingIndex = LocalBotCount-1;
   LocalBotOncomingFirst = 45.0;
   LocalBotOncomingInterval = 90.0;

@@ -25,7 +25,7 @@ unit GameRideClient;
 interface
 
 uses
-  Classes, SysUtils, Math, SyncObjs, fpjson, jsonparser, GameHttpClient;
+  Classes, SysUtils, Math, SyncObjs, fpjson, jsonparser, GameHttpClient, VeloSiteAPI;
 
 type
   TRiderBroadcast = record
@@ -45,6 +45,10 @@ type
   TRelayThread = class(TThread)
   private
     FServerUrl: string;
+    FApi:TVeloSiteAPI;
+    FOwnerKey:string;
+    FReceiveEnabled:Boolean;
+    FReceiveGeneration:QWord;
     FLock: TCriticalSection;
     FPushData: TRiderBroadcast; { latest state; serialize only when sending }
     FPushReady: Boolean;
@@ -74,6 +78,8 @@ type
     FConfigResultCount: Integer;
     { Guest sync — computed positions pushed back to server }
     FGuestSyncData: string;
+    function ReceiveSnapshot(out Generation:QWord):Boolean;
+    function ReceiveCurrent(Generation:QWord):Boolean;
     function Request(const Method,Path,Body:string):string;
   protected
     procedure Execute; override;
@@ -82,11 +88,12 @@ type
     procedure DoGuestSync;
   public
     constructor Create(const AServerUrl: string; AInterval: Integer;
-      APrivateRoom:Boolean=False;AAuthRiderId:Integer=0;const ARoomToken:string='');
+      APrivateRoom:Boolean=False;AAuthRiderId:Integer=0;const ARoomToken:string='';ProfileIndex:Integer=0;ReceiveEnabled:Boolean=True);
     destructor Destroy; override;
     procedure Cancel;
     procedure Join;
 
+    procedure SetReceiveEnabled(Value:Boolean);
     procedure SetPushState(const State: TRiderBroadcast);
     procedure SetGuestSyncData(const AJson: string);
     function GetPullResult(out AJson: string): Boolean;
@@ -102,8 +109,13 @@ type
   private
     FThread: TRelayThread;
     FServerUrl: string;
+    FApi:TVeloSiteAPI;
+    FOwnerKey:string;
+    FReceiveEnabled:Boolean;
     FLocalRiderId: Integer;
     FLocalRiderName: string;
+    FProfileIndex:Integer;
+    FLocalRiderIds:array of Integer;
     FRemoteRiders: TRiderBroadcastArray;
     FRemoteLock: TCriticalSection;
     FStarted: Boolean;
@@ -113,6 +125,8 @@ type
     FKnownRiders: array of Integer;  { rider IDs we already fetched config for }
     FHasNewData: Boolean;            { true after UpdateRemoteRiders got fresh pull }
     FOnRiderCountChanged: TNotifyEvent; { main thread, membership count only }
+    procedure SetReceiveEnabled(Value:Boolean);
+    function IsLocalRiderId(Id:Integer):Boolean;
     function IsKnownRider(ARiderId: Integer): Boolean;
     procedure MarkRiderKnown(ARiderId: Integer);
     { ApiBotUrl превращает FServerUrl ('https://rezvivo.com/relay') в
@@ -122,9 +136,10 @@ type
       ломает JSON-парсер. }
     function ApiBotUrl(const ABotPath: string): string;
   public
-    constructor Create;
+    constructor Create(ProfileIndex:Integer=0);
     destructor Destroy; override;
 
+    procedure SetLocalRiderIds(const Ids:array of Integer);
     procedure Start;
     procedure Stop;
 
@@ -163,6 +178,9 @@ type
     procedure RemoveBot(ARiderId: Integer);
     procedure SetBotPower(ARiderId, APowerW: Integer);
 
+    property ReceiveEnabled:Boolean read FReceiveEnabled write SetReceiveEnabled;
+    property ProfileIndex:Integer read FProfileIndex;
+    property OwnerKey:string read FOwnerKey;
     property ServerUrl: string read FServerUrl write FServerUrl;
     property LocalRiderId: Integer read FLocalRiderId write FLocalRiderId;
     property LocalRiderName: string read FLocalRiderName write FLocalRiderName;
@@ -178,7 +196,7 @@ implementation
 
 
 uses
-  VeloSiteAPI, DebugLog, GameThreadWatch;
+  GameUserData, DebugLog, GameThreadWatch;
 
 type
   TRelayResponseStream=class(TStringStream)
@@ -192,11 +210,11 @@ begin
   Result:=inherited Write(Buffer,Count);
 end;
 
-function AuthHeaders: TStringList;
+function AuthHeaders(Api:TVeloSiteAPI): TStringList;
 begin
   Result := TStringList.Create;
   Result.NameValueSeparator := ':';
-  Result.Add('Authorization: Bearer ' + VeloSite.GetAccessToken);
+  Result.Add('Authorization: Bearer ' + Api.GetAccessToken);
 end;
 
 { ═══════════════════════════════════════════════════════════════════
@@ -204,12 +222,13 @@ end;
   ═══════════════════════════════════════════════════════════════════ }
 
 constructor TRelayThread.Create(const AServerUrl: string; AInterval: Integer;
-  APrivateRoom:Boolean;AAuthRiderId:Integer;const ARoomToken:string);
+  APrivateRoom:Boolean;AAuthRiderId:Integer;const ARoomToken:string;ProfileIndex:Integer;ReceiveEnabled:Boolean);
 begin
   inherited Create(true); { create suspended }
   FreeOnTerminate := false;
   FServerUrl := AServerUrl;
   FInterval := AInterval;
+  FApi:=RiderApi(ProfileIndex);FOwnerKey:=LocalRider(ProfileIndex).Key;FReceiveEnabled:=ReceiveEnabled;
   FLock := TCriticalSection.Create;
   FPrivateRoom:=APrivateRoom;FAuthRiderId:=AAuthRiderId;FRoomToken:=ARoomToken;FCancel:=TGameHttpCancellation.Create;
   FPushData := Default(TRiderBroadcast);
@@ -246,7 +265,7 @@ begin
   FCancel.Check;H:=TStringList.Create;Input:=TStringStream.Create(Body);Output:=TRelayResponseStream.Create('');
   try
     if FPrivateRoom then begin
-      Token:=FRoomToken;if Token=''then Token:=VeloSite.GetAccessTokenForUser(FAuthRiderId);
+      Token:=FRoomToken;if Token=''then Token:=FApi.GetAccessTokenForUser(FAuthRiderId);
       if Token=''then raise Exception.Create('Room account changed');
       H.Add('Authorization: Bearer '+Token);
     end;
@@ -254,12 +273,31 @@ begin
     GameHttpRequest(Method,FServerUrl+Path,H,Input,2000,3000,Output,Status,FCancel);
     if(Status<200)or(Status>=300)then begin
       if(Status=401)and FPrivateRoom and(FRoomToken='')and(GetTickCount64>=FRefreshAt)then begin
-        FRefreshAt:=GetTickCount64+10000;VeloSite.RefreshProfileAsync;
+        FRefreshAt:=GetTickCount64+10000;FApi.RefreshProfileAsync;
       end;
       raise Exception.CreateFmt('Relay HTTP %d',[Status]);
     end;
     Result:=Output.DataString;
   finally Output.Free;Input.Free;H.Free end;
+end;
+
+procedure TRelayThread.SetReceiveEnabled(Value:Boolean);
+begin
+  FLock.Enter;
+  try
+    if FReceiveEnabled=Value then Exit;
+    FReceiveEnabled:=Value;Inc(FReceiveGeneration);
+    FPullReady:=False;FPullResult:='';FConfigFetchCount:=0;FConfigResultCount:=0;
+    FConfigFetchQueue:=nil;FConfigResults:=nil;FGuestSyncData:='';FConfigRetryAt:=0;
+  finally FLock.Leave end;
+end;
+function TRelayThread.ReceiveSnapshot(out Generation:QWord):Boolean;
+begin
+  FLock.Enter;try Generation:=FReceiveGeneration;Result:=FReceiveEnabled;finally FLock.Leave end;
+end;
+function TRelayThread.ReceiveCurrent(Generation:QWord):Boolean;
+begin
+  FLock.Enter;try Result:=FReceiveEnabled and(FReceiveGeneration=Generation);finally FLock.Leave end;
 end;
 
 procedure TRelayThread.SetPushState(const State: TRiderBroadcast);
@@ -278,7 +316,7 @@ begin
   FLock.Enter;
   try
     Result := FPullReady;
-    if FPullReady then
+    if FReceiveEnabled and FPullReady then
     begin
       AJson := FPullResult;
       FPullReady := false;
@@ -316,6 +354,7 @@ var N, I: Integer;
 begin
   FLock.Enter;
   try
+    if not FReceiveEnabled then Exit;
     AlreadyQueued := False;
     { Don't add duplicates }
     for I := 0 to FConfigFetchCount - 1 do
@@ -402,12 +441,13 @@ var
   Raw, CJson: string;
   JData: TJSONData;
   JObj: TJSONObject;
-  N: Integer;
+  N: Integer;Generation:QWord;
 begin
   { Take one rider ID from queue }
   if GetTickCount64<FConfigRetryAt then Exit;
   FLock.Enter;
-  if FConfigFetchCount = 0 then begin FLock.Leave; Exit; end;
+  if not FReceiveEnabled or(FConfigFetchCount=0)then begin FLock.Leave;Exit end;
+  Generation:=FReceiveGeneration;
   RId := FConfigFetchQueue[0];
   if FConfigFetchCount > 1 then
     Move(FConfigFetchQueue[1], FConfigFetchQueue[0],
@@ -425,10 +465,12 @@ begin
         if not FPrivateRoom then Logger.Info('[RelayThread] ' + 'Config HTTP failed for rider ' +
           IntToStr(RId) + ': ' + E.Message);
         Raw := '';
+        if not ReceiveCurrent(Generation)then Exit;
         if FPrivateRoom and not Terminated then begin FConfigRetryAt:=GetTickCount64+5000;QueueConfigFetch(RId);Exit end;
       end;
     end;
 
+    if not ReceiveCurrent(Generation)then Exit;
     if Raw <> '' then
     begin
       try
@@ -457,10 +499,12 @@ begin
 
   { A peer can publish its bike just after joining. Retry one queued request
     per successful polling cycle instead of permanently caching absence. }
+  if not ReceiveCurrent(Generation)then Exit;
   if FPrivateRoom and(CJson='')and not Terminated then begin FConfigRetryAt:=GetTickCount64+1000;QueueConfigFetch(RId);Exit end;
   { Legacy public relay may intentionally have riders without a config. }
   FLock.Enter;
   try
+    if not FReceiveEnabled or(FReceiveGeneration<>Generation)then Exit;
     N := FConfigResultCount;
     if N >= Length(FConfigResults) then
       SetLength(FConfigResults, N + 8);
@@ -490,6 +534,7 @@ var
 begin
   if FPrivateRoom then Exit;
   FLock.Enter;
+  if not FReceiveEnabled then begin FLock.Leave;Exit end;
   Data := FGuestSyncData;
   FGuestSyncData := '';
   FLock.Leave;
@@ -509,7 +554,7 @@ var
   State: TRiderBroadcast;
   Obj: TJSONObject;
   Delay,Waited:Integer;
-  Connected,HasPush:Boolean;
+  Connected,HasPush:Boolean;Generation:QWord;
 begin
   Delay:=FInterval;
   while not Terminated do
@@ -540,7 +585,7 @@ begin
           PushJson := Obj.AsJSON;
         finally Obj.Free end;
         try
-          Request('POST','/push',PushJson);
+          Request('POST','/push',PushJson);Connected:=True;
           FLock.Enter;
           FErrorMsg := '';
           FLock.Leave;
@@ -555,11 +600,12 @@ begin
       end;
 
       { 2. Pull all riders }
-      try
+      if ReceiveSnapshot(Generation)then try
         PullJson := Request('GET','/pull','');Connected:=True;
         FLock.Enter;
-        FPullResult := PullJson;
-        FPullReady := true;
+        if FReceiveEnabled and(FReceiveGeneration=Generation)then begin
+          FPullResult := PullJson;FPullReady := True;
+        end;
         FErrorMsg := '';
         FLock.Leave;
       except
@@ -597,12 +643,14 @@ end;
   TRideRelayClient
   ═══════════════════════════════════════════════════════════════════ }
 
-constructor TRideRelayClient.Create;
+constructor TRideRelayClient.Create(ProfileIndex:Integer);
 begin
   inherited Create;
   FServerUrl := 'https://rezvivo.com/relay';
   FLocalRiderId := 1;
-  FLocalRiderName := 'Rider';
+  FProfileIndex:=ProfileIndex;FApi:=RiderApi(ProfileIndex);
+  FOwnerKey:=LocalRider(ProfileIndex).Key;FReceiveEnabled:=True;
+  FLocalRiderName:=EffectiveRiderProfile(ProfileIndex).Nickname;
   FRemoteLock := TCriticalSection.Create;
   FStarted := false;
   FAccumDistance := 0;
@@ -615,10 +663,44 @@ begin
   inherited;
 end;
 
+procedure TRideRelayClient.SetReceiveEnabled(Value:Boolean);
+var HadRiders:Boolean;
+begin
+  if FReceiveEnabled=Value then Exit;
+  FReceiveEnabled:=Value;if FThread<>nil then FThread.SetReceiveEnabled(Value);
+  FKnownRiders:=nil;FHasNewData:=False;
+  FRemoteLock.Enter;
+  try HadRiders:=Length(FRemoteRiders)>0;FRemoteRiders:=nil;finally FRemoteLock.Leave end;
+  if HadRiders and Assigned(FOnRiderCountChanged)then FOnRiderCountChanged(Self);
+end;
+
+procedure TRideRelayClient.SetLocalRiderIds(const Ids:array of Integer);
+var I,N:Integer;Changed:Boolean;
+begin
+  SetLength(FLocalRiderIds,Length(Ids));
+  for I:=0 to High(Ids)do FLocalRiderIds[I]:=Ids[I];
+  FRemoteLock.Enter;
+  try
+    N:=0;
+    for I:=0 to High(FRemoteRiders)do if not IsLocalRiderId(FRemoteRiders[I].RiderId)then begin
+      FRemoteRiders[N]:=FRemoteRiders[I];Inc(N);
+    end;
+    Changed:=N<>Length(FRemoteRiders);SetLength(FRemoteRiders,N);
+  finally FRemoteLock.Leave end;
+  if Changed and Assigned(FOnRiderCountChanged)then FOnRiderCountChanged(Self);
+end;
+function TRideRelayClient.IsLocalRiderId(Id:Integer):Boolean;
+var I:Integer;
+begin
+  Result:=Id=FLocalRiderId;if Result then Exit;
+  for I:=0 to High(FLocalRiderIds)do if FLocalRiderIds[I]=Id then Exit(True);
+end;
 procedure TRideRelayClient.Start;
 begin
   if FStarted then Exit;
-  FThread := TRelayThread.Create(FServerUrl, 500,FPrivateRoom,FLocalRiderId,FRoomToken); { 2 Hz }
+  if not FPrivateRoom and(LocalRiderCount>1)then
+    raise Exception.Create('Multiple local riders require a scoped ride room.');
+  FThread := TRelayThread.Create(FServerUrl, 500,FPrivateRoom,FLocalRiderId,FRoomToken,FProfileIndex,FReceiveEnabled); { 2 Hz }
   FThread.Start;
   FStarted := true;
 end;
@@ -676,7 +758,7 @@ var
   CountChanged: Boolean;
 begin
   FHasNewData := False;
-  if not FStarted then Exit;
+  if not FStarted or not FReceiveEnabled then Exit;
   if not FThread.GetPullResult(Json) then Exit;
 
   try
@@ -692,7 +774,7 @@ begin
         JObj := TJSONObject(JArr[I]);
         R.RiderId := JObj.Get('rider_id', 0);
         { Skip self }
-        if R.RiderId = FLocalRiderId then Continue;
+        if IsLocalRiderId(R.RiderId) then Continue;
         R.Name := JObj.Get('name', '');
         DistanceValue := JObj.Get('distance', 0.0);
         SpeedValue := JObj.Get('speed', 0.0);
@@ -819,7 +901,7 @@ end;
 
 procedure TRideRelayClient.RequestBikeConfig(ARiderId: Integer);
 begin
-  if not FStarted then Exit;
+  if not FStarted or not FReceiveEnabled then Exit;
   if IsKnownRider(ARiderId) then Exit;
   Logger.Info('[RelayConfig] ' + 'RequestBikeConfig queued: rider_id=' + IntToStr(ARiderId));
   FThread.QueueConfigFetch(ARiderId);
@@ -877,7 +959,7 @@ begin
   Result := 0;
   if FServerUrl = '' then Exit;
 
-  Hdr := AuthHeaders;
+  Hdr := AuthHeaders(FApi);
   try
     ReqJson := TJSONObject.Create;
     try
@@ -914,7 +996,7 @@ var
   Hdr: TStringList;
 begin
   if FServerUrl = '' then Exit;
-  Hdr := AuthHeaders;
+  Hdr := AuthHeaders(FApi);
   try
     GameHttpPost(ApiBotUrl('remove_all'), 'application/json', '{}', Hdr, 5000, 10000);
   except
@@ -931,7 +1013,7 @@ var
   Hdr: TStringList;
 begin
   if FServerUrl = '' then Exit;
-  Hdr := AuthHeaders;
+  Hdr := AuthHeaders(FApi);
   try
     ReqJson := TJSONObject.Create;
     try
@@ -955,7 +1037,7 @@ var
   Hdr: TStringList;
 begin
   if FServerUrl = '' then Exit;
-  Hdr := AuthHeaders;
+  Hdr := AuthHeaders(FApi);
   try
     ReqJson := TJSONObject.Create;
     try

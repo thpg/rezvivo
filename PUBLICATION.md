@@ -18,10 +18,11 @@ only model metadata and geometry used by the game's parser.
 
 Anatomy editor source trees, editor applications, training/export tools and
 intermediate anatomy datasets are excluded. Only modules directly used by the
-game and finished runtime models are included. The optional neural rider package
-contains its manifest and the matching `suit.mesh` / `suit.nn` pairs; the game
-does not need the anatomy editor to load them. Installer selection validates
-these pairs and excludes editor instructions, reference dumps and other files.
+game are included. The Windows 0.5.0 release disables experimental neural rider
+inference at compile time and excludes its model files from the installer.
+Ordinary rider geometry and animation remain available. The optional neural
+code is retained for development, but cannot be enabled in this Windows binary
+through settings or environment variables.
 
 ## Remaining release work
 

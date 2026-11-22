@@ -29,6 +29,7 @@ type
   {$M+}
   TAppSettings = class
   private
+    FLocalAppearance:Boolean;
     FFileName: string;
     FStorageInitialized: Boolean;
     FLock: TCriticalSection;
@@ -104,7 +105,9 @@ type
     procedure LoadFromFile;
     procedure SaveToFile;
   public
-    constructor Create;
+    { A rider-scoped file owns appearance/fit preferences only. It never
+      changes process-wide graphics, adapter discovery or simulation. }
+    constructor Create(const RiderFile: string = '');
     procedure InitializeStorage;
     destructor Destroy; override;
 
@@ -295,7 +298,7 @@ implementation
 
 uses
   fpjson, jsonparser, CastleFilesUtils, CastleURIUtils, Osm3dRenderProfile, Osm3dGpuGround,
-  RenderComplexity, TreeRenderer, GrassRenderer, DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair, GameUserData;
+  RenderComplexity, TreeRenderer, GrassRenderer, DebugLog, Osm3dStudioSettings, TreeSeason, PBRTextureUnit, Osm3dVegetationQuality,RiderHair;
 
 const
   SETTINGS_FILE = 'settings.json';
@@ -367,9 +370,10 @@ end;
   TAppSettings
   ═══════════════════════════════════════════════════════════════════ }
 
-constructor TAppSettings.Create;
+constructor TAppSettings.Create(const RiderFile: string);
 begin
   inherited Create;
+  FLocalAppearance:=RiderFile<>'';
   FLock := TCriticalSection.Create;
   FAdapters := TStringList.Create;
   FAdapters.CaseSensitive := True;
@@ -409,7 +413,13 @@ begin
   // на sorted list запрещён. У нас всего ~единицы адаптеров, lookup
   // всё равно будет O(N) — sorting не нужен.
 
-  {$ifndef ANDROID}InitializeStorage;{$endif}
+  if RiderFile<>'' then begin
+    FFileName:=RiderFile;
+    LoadFromFile;
+    FStorageInitialized:=True;
+  end else begin
+    {$ifndef ANDROID}InitializeStorage;{$endif}
+  end;
 end;
 
 procedure TAppSettings.InitializeStorage;
@@ -622,7 +632,7 @@ begin
   end
   else
     FGender := CanonicalGender(FGender);
-  FSelectedRiderGlb := RiderGlbUrlForGender(FGender);
+  if Trim(FSelectedRiderGlb)=''then FSelectedRiderGlb:=RiderGlbUrlForGender(FGender);
 end;
 
 procedure TAppSettings.SaveToFile;
@@ -981,6 +991,7 @@ end;
 
 procedure TAppSettings.ApplyGraphicsGlobals;
 begin
+  if FLocalAppearance then Exit;
   SetRenderComplexity(rdRider,GetGraphicsOption(Ord(goRiderComplexity)));
   SetRenderComplexity(rdWorld,GetGraphicsOption(Ord(goWorldComplexity)));
   TreeRenderComplexity:=GetGraphicsOption(Ord(goVegetationComplexity));
@@ -1086,7 +1097,7 @@ begin
       FGraphicsPreviewActive:=False;
       ApplyGraphicsGlobals;
       FProceduralTrees:=FGraphicsPreviewProceduralTrees;
-      ProceduralVegetationActive:=FProceduralTrees;
+      if not FLocalAppearance then ProceduralVegetationActive:=FProceduralTrees;
       Inc(FGraphicsRevision);
     end;
   finally FLock.Leave end;
@@ -1108,7 +1119,7 @@ begin
   FLock.Enter;
   try
     FGraphics[Option] := Value;
-    case Option of
+    if not FLocalAppearance then case Option of
       goHair:RiderHairQuality:=GetGraphicsOption(Index);
       goRiderComplexity:SetRenderComplexity(rdRider,GetGraphicsOption(Index));
       goWorldComplexity:SetRenderComplexity(rdWorld,GetGraphicsOption(Index));
@@ -1149,13 +1160,13 @@ begin
   if not AEnabled then SetGraphicsOption(Ord(goTrees), 0)
   else if GetGraphicsOption(Ord(goTrees)) = 0 then
     SetGraphicsOption(Ord(goTrees), GraphicsDefaults[goTrees])
-  else ProceduralVegetationActive := True;
+  else if not FLocalAppearance then ProceduralVegetationActive := True;
 end;
 procedure TAppSettings.SetTreeSeason(AValue: Single);
 begin
   FLock.Enter;
   try
-    AValue:=WrapTreeSeason(AValue);ProceduralVegetationSeason:=AValue;
+    AValue:=WrapTreeSeason(AValue);if not FLocalAppearance then ProceduralVegetationSeason:=AValue;
     if FTreeSeason=AValue then Exit;
     FTreeSeason:=AValue;SaveToFile;
   finally FLock.Leave;end;
@@ -1240,8 +1251,8 @@ begin
   Rider := RiderGlbUrlForGender(G);
   FLock.Enter;
   try
+    if(FGender=G)and(Trim(FSelectedRiderGlb)<>'')then Rider:=FSelectedRiderGlb;
     Changed := (FGender <> G) or (FSelectedRiderGlb <> Rider);
-    if FGender<>G then SelectAvatarBodySex(Ord(G='female'));
     FGender := G;
     FSelectedRiderGlb := Rider;
     if Changed then

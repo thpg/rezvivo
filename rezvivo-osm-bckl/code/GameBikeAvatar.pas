@@ -56,38 +56,38 @@ procedure AttachTripoRiderFromJSON(Inst: TBikeInstance; const AJsonText: string;
 
 { Selected bike URL: Insights provides geometry overrides for the base bike.
   Rider postures are defined independently in RiderPoseCatalog. }
-function ResolveActiveBikeJsonUrl: string;
+function ResolveActiveBikeJsonUrl(RiderIndex:Integer=0): string;
 
 { Base JSON used to build the bicycle geometry and attach the avatar. }
-function ResolveActiveBikeBuildUrl: string;
+function ResolveActiveBikeBuildUrl(RiderIndex:Integer=0): string;
 
 { castle-data:/ или file:// → путь на диске. Если URI не резолвится,
   но AUrl уже существующий файл — возвращает AUrl. }
 function BikeJsonUrlToFilename(const AUrl: string): string;
 
 { Подмена/добавление tripoRider.path в тексте bike JSON (для превью Байкфита). }
-function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean=True): string;
+function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean=True;RiderIndex:Integer=0): string;
 
 { Загрузка с учётом Байкфита: bike JSON + подмена tripoRider.path на
   SelectedRiderGlb (если задан). }
 function LoadActiveBikeInstance(AOwner: TComponent;
   LOD3Dist: Single = 15.0;
   LOD2Dist: Single = 40.0;
-  LOD1Dist: Single = 80.0): TBikeInstance;
+  LOD1Dist: Single = 80.0; RiderIndex:Integer=0): TBikeInstance;
 
 { Рост/inseam в см относительно rest-меша, bulk/belly — доли (0 = как в модели). }
 procedure ApplyRiderShapeAdjustments(Inst: TBikeInstance;
-  HeightCm, InseamCm, Bulk, Belly: Single);
+  HeightCm, InseamCm, Bulk, Belly: Single;RiderIndex:Integer=0);
 
 { Байкфит: knee flare / ankle flex поверх позы (не из RiderPoseCatalog). }
 procedure ApplyFitKneeAnkle(Inst: TBikeInstance; KneeFlare, AnkleFlex: Single);
 
 { Применить к инстансу цвета, сохранённые на вкладке Байкфит
-  (Settings.BikeFitColors: 10 hex-csv — 7 слотов одежды, рама, обода, шлем;
+  (RiderSettings(RiderIndex).BikeFitColors: 10 hex-csv — 7 слотов одежды, рама, обода, шлем;
   пустая строка = выкл). Одежда стейджится в preset и запекается при
   следующем LoadTripoRider / AttachTripoRiderFromJSON — без повторной
   загрузки glb. Шлем — live tint, если райдер уже смонтирован. }
-procedure ApplyBikeFitColorsToInstance(Inst: TBikeInstance);
+procedure ApplyBikeFitColorsToInstance(Inst: TBikeInstance;RiderIndex:Integer=0);
 
 { Helper procedures — also used by gameviewplay for incremental build assembly }
 procedure StripEnvironmentNodes(Root: TX3DRootNode);
@@ -473,14 +473,14 @@ begin
   Logger.Info('[BikeAvatar] ' + '<<< LoadBikeInstanceFromJSONString done');
 end;
 
-function ResolveActiveBikeJsonUrl: string;
+function ResolveActiveBikeJsonUrl(RiderIndex:Integer): string;
 var
   S: string;
   Fn: string;
 begin
   S := '';
-  if Settings <> nil then
-    S := Trim(Settings.SelectedBikeJson);
+  if RiderSettings(RiderIndex) <> nil then
+    S := Trim(RiderSettings(RiderIndex).SelectedBikeJson);
   if S <> '' then
   begin
     if Pos('://', S) > 0 then
@@ -498,11 +498,11 @@ begin
   Result := 'castle-data:/bike_road.json';
 end;
 
-function ResolveActiveBikeBuildUrl: string;
+function ResolveActiveBikeBuildUrl(RiderIndex:Integer): string;
 var
   S: string;
 begin
-  S := ResolveActiveBikeJsonUrl;
+  S := ResolveActiveBikeJsonUrl(RiderIndex);
   { Same redirect LoadActiveBikeInstance / BikeFit (BaseBikeUrl) already
     use: Insights contains geometry overrides for the base build. }
   if IsBikeInsightsPath(S) then
@@ -524,7 +524,7 @@ begin
 end;
 
 { Inject/override tripoRider.path in bike JSON text. }
-function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean): string;
+function InjectRiderPath(const AJsonText, ARiderGlb: string; UseProfile:Boolean;RiderIndex:Integer): string;
 var
   Data: TJSONData;
   Root, Sec: TJSONObject;
@@ -548,8 +548,8 @@ begin
       end;
       Sec.Strings['path'] := Path;
       if UseProfile then begin
-        Sec.Delete('body');Sec.Add('body',WriteRiderBody(AvatarBodyParameters));
-        Sec.Delete('garment');Sec.Add('garment',WriteRiderGarment(AvatarGarment));
+        Sec.Delete('body');Sec.Add('body',WriteRiderBody(AvatarBodyParameters(RiderIndex)));
+        Sec.Delete('garment');Sec.Add('garment',WriteRiderGarment(AvatarGarment(RiderIndex)));
       end;
       if Sec.Find('showRider') = nil then
         Sec.Add('showRider', True)
@@ -566,7 +566,7 @@ begin
 end;
 
 function LoadActiveBikeInstance(AOwner: TComponent;
-  LOD3Dist: Single; LOD2Dist: Single; LOD1Dist: Single): TBikeInstance;
+  LOD3Dist: Single; LOD2Dist: Single; LOD1Dist: Single; RiderIndex:Integer): TBikeInstance;
 var
   Url, Fn, JsonText, Rider, Size: string;
   SL, Sizes: TStringList;
@@ -575,19 +575,19 @@ var
   Info: TBikeModelInfo;
   Fit: TAutomaticBikeFit;
 begin
-  if (Settings<>nil)and not Settings.FitParamsValid and
-     (Trim(Settings.SelectedBikeJson)='')then begin
+  if (RiderSettings(RiderIndex)<>nil)and not RiderSettings(RiderIndex).FitParamsValid and
+     (Trim(RiderSettings(RiderIndex).SelectedBikeJson)='')then begin
     { Match the first model shown by BikeFit. Otherwise the first ride would
       fit the JSON template, but opening BikeFit would silently apply those
       post/stem lengths to a different catalogue frame. }
     SL:=TStringList.Create;
     try
       ScanInsightsCatalog(SL,nil);
-      if SL.Count>0 then Settings.SelectedBikeJson:=SL[0];
+      if SL.Count>0 then RiderSettings(RiderIndex).SelectedBikeJson:=SL[0];
     finally SL.Free end;
   end;
-  Insights := IsBikeInsightsPath(ResolveActiveBikeJsonUrl);
-  Url := ResolveActiveBikeBuildUrl;
+  Insights := IsBikeInsightsPath(ResolveActiveBikeJsonUrl(RiderIndex));
+  Url := ResolveActiveBikeBuildUrl(RiderIndex);
   Logger.Info('[BikeAvatar] LoadActiveBikeInstance url=' + Url +
     ' insights=' + BoolToStr(Insights, True));
   SL := TStringList.Create;
@@ -602,16 +602,16 @@ begin
   end;
   Rider := '';
   Size := '';
-  if Settings <> nil then
+  if RiderSettings(RiderIndex) <> nil then
   begin
-    Rider := WardrobeRiderPath(ResolveRiderGlbPath(Settings.SelectedRiderGlb));
-    Size := Trim(Settings.SelectedBikeSize);
+    Rider := WardrobeRiderPath(ResolveRiderGlbPath(RiderSettings(RiderIndex).SelectedRiderGlb),RiderIndex);
+    Size := Trim(RiderSettings(RiderIndex).SelectedBikeSize);
   end;
   if PerformanceRiderModel <> '' then Rider := PerformanceRiderModel;
   if Rider <> '' then
   begin
     Logger.Info('[BikeAvatar] override rider glb=' + Rider);
-    JsonText := InjectRiderPath(JsonText, Rider);
+    JsonText := InjectRiderPath(JsonText, Rider,True,RiderIndex);
   end;
   { Как BikeFit: сначала геометрия байка, потом dye-preset, потом один
     LoadGlb. Раньше Attach шёл сразу, а ApplyBikeFitColorsToInstance
@@ -619,35 +619,35 @@ begin
     и ~11 с запечки на выброшенном первом экземпляре. }
   Result := LoadBikeInstanceFromJSONString(JsonText, AOwner,
     LOD3Dist, LOD2Dist, LOD1Dist, False);
-  if Insights and (Settings <> nil) and (Result <> nil) then
+  if Insights and (RiderSettings(RiderIndex) <> nil) and (Result <> nil) then
   begin
-    Fn := URIToFilenameSafe(Settings.SelectedBikeJson);
+    Fn := URIToFilenameSafe(RiderSettings(RiderIndex).SelectedBikeJson);
     if (Fn = '') or (not FileExists(Fn)) then
-      Fn := Settings.SelectedBikeJson;
+      Fn := RiderSettings(RiderIndex).SelectedBikeJson;
     if ApplyInsightsFileToBikeInstance(Result, Fn, Size) then
       Logger.Info('[BikeAvatar] applied insights ' + ExtractFileName(Fn) +
         ' size=' + Size)
     else
       Logger.Info('[BikeAvatar] insights apply failed ' + Fn);
   end;
-  if (Settings <> nil) and Settings.FitParamsValid and (Result <> nil) then
+  if (RiderSettings(RiderIndex) <> nil) and RiderSettings(RiderIndex).FitParamsValid and (Result <> nil) then
     ApplyFitAdjustments(Result,
-      Settings.FitSeatpostExt, Settings.FitSaddleOffset,
-      Settings.FitHeadsetSpacer, Settings.FitStemLength);
+      RiderSettings(RiderIndex).FitSeatpostExt, RiderSettings(RiderIndex).FitSaddleOffset,
+      RiderSettings(RiderIndex).FitHeadsetSpacer, RiderSettings(RiderIndex).FitStemLength);
   if Result <> nil then
     Result.ClothDyePresetMode := cdmShader;
-  ApplyBikeFitColorsToInstance(Result);
+  ApplyBikeFitColorsToInstance(Result,RiderIndex);
   AttachTripoRiderFromJSON(Result, JsonText);
-  if Result<>nil then Result.BodyParameters:=AvatarBodyParameters;
-  if (Settings <> nil) and Settings.FitParamsValid and (Result <> nil) then
+  if Result<>nil then Result.BodyParameters:=AvatarBodyParameters(RiderIndex);
+  if (RiderSettings(RiderIndex) <> nil) and RiderSettings(RiderIndex).FitParamsValid and (Result <> nil) then
   begin
     ApplyRiderShapeAdjustments(Result,
-      Settings.FitHeightCm, Settings.FitInseamCm,
-      Settings.FitBulk, Settings.FitBelly);
-    ApplyFitKneeAnkle(Result, Settings.FitKneeFlare, Settings.FitAnkleFlex);
+      RiderSettings(RiderIndex).FitHeightCm, RiderSettings(RiderIndex).FitInseamCm,
+      RiderSettings(RiderIndex).FitBulk, RiderSettings(RiderIndex).FitBelly,RiderIndex);
+    ApplyFitKneeAnkle(Result, RiderSettings(RiderIndex).FitKneeFlare, RiderSettings(RiderIndex).FitAnkleFlex);
   end;
-  if (Result<>nil)and Result.HasTripoRider and(Settings<>nil)and
-     not Settings.FitParamsValid then begin
+  if (Result<>nil)and Result.HasTripoRider and(RiderSettings(RiderIndex)<>nil)and
+     not RiderSettings(RiderIndex).FitParamsValid then begin
     { A fresh profile has no personal fit. The base JSON's fixed post length
       is only a construction default, not a fit for every body. Do this once
       after applying the actual body and retain later manual adjustments. }
@@ -655,7 +655,7 @@ begin
     if Insights then begin
       Geometries:=nil;Sizes:=TStringList.Create;
       try
-        if ExtractBikeInsights(Settings.SelectedBikeJson,Info,Geometries)then begin
+        if ExtractBikeInsights(RiderSettings(RiderIndex).SelectedBikeJson,Info,Geometries)then begin
           CollectInsightSizes(Geometries,Sizes);
           Fitted:=FitCatalogBike(Result,Geometries,Sizes,Info,Result.BodyParameters,Fit);
           if Fitted then Size:=Sizes[Fit.SizeIndex];
@@ -666,18 +666,18 @@ begin
       if Fitted then ReadFitAdjustments(Result,Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem);
     end;
     if Fitted then begin
-      Settings.BeginUpdate;
+      RiderSettings(RiderIndex).BeginUpdate;
       try
-        if Insights then Settings.SelectedBikeSize:=Size;
-        Settings.SetFitAdjustments(Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem);
-      finally Settings.EndUpdate end;
+        if Insights then RiderSettings(RiderIndex).SelectedBikeSize:=Size;
+        RiderSettings(RiderIndex).SetFitAdjustments(Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem);
+      finally RiderSettings(RiderIndex).EndUpdate end;
       Logger.Info(Format('[BikeAvatar] initial fit size=%s seat=%.1f offset=%.1f spacers=%.0f stem=%.0f',
         [Size,Fit.SeatExt,Fit.SaddleOffset,Fit.Spacers,Fit.Stem]));
     end;
   end;
   { Шлем — live tint: райдер уже в сцене. Повторный вызов только
     применяет шлем; glb больше не грузится. }
-  ApplyBikeFitColorsToInstance(Result);
+  ApplyBikeFitColorsToInstance(Result,RiderIndex);
 end;
 
 procedure ApplyFitKneeAnkle(Inst: TBikeInstance; KneeFlare, AnkleFlex: Single);
@@ -687,7 +687,7 @@ begin
   Inst.TripoAnkleFlex := AnkleFlex;
 end;
 
-procedure ApplyBikeFitColorsToInstance(Inst: TBikeInstance);
+procedure ApplyBikeFitColorsToInstance(Inst: TBikeInstance;RiderIndex:Integer);
 
   function VecOf(const H: string; out C: TVector3): Boolean;
   var
@@ -707,13 +707,13 @@ var
   AnyCloth, HelmetOn: Boolean;
   HelmetC: TVector3;
 begin
-  if (Inst = nil) or (Settings = nil) then Exit;
+  if (Inst = nil) or (RiderSettings(RiderIndex) = nil) then Exit;
   if Inst.TripoRider<>nil then begin
-    Inst.TripoRider.HairStyle:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
-    Inst.TripoRider.SetHeadAppearance(WardrobeHeadwear,
-      ParseBeard(UserPreference('rider_beard','none')),ParseMustache(UserPreference('rider_mustache','none')));
+    Inst.TripoRider.HairStyle:=ParseRiderHairStyle(RiderPreference('rider_hair_style','short',RiderIndex));
+    Inst.TripoRider.SetHeadAppearance(WardrobeHeadwear(RiderIndex),
+      ParseBeard(RiderPreference('rider_beard','none',RiderIndex)),ParseMustache(RiderPreference('rider_mustache','none',RiderIndex)));
   end;
-  if Trim(Settings.BikeFitColors) = '' then begin
+  if Trim(RiderSettings(RiderIndex).BikeFitColors) = '' then begin
     Inst.SetHeadwearColorLive(Vector3(1,1,1),False);
     Exit;
   end;
@@ -724,7 +724,7 @@ begin
   try
     SL.StrictDelimiter := True;
     SL.Delimiter := ',';
-    SL.DelimitedText := Settings.BikeFitColors;
+    SL.DelimitedText := RiderSettings(RiderIndex).BikeFitColors;
     for S := Low(TClothSlot) to High(TClothSlot) do
       if (Ord(S) < SL.Count) and VecOf(SL[Ord(S)], C) then
       begin
@@ -758,7 +758,7 @@ begin
 end;
 
 procedure ApplyRiderShapeAdjustments(Inst: TBikeInstance;
-  HeightCm, InseamCm, Bulk, Belly: Single);
+  HeightCm, InseamCm, Bulk, Belly: Single;RiderIndex:Integer);
 var
   RestH, RestI, HeightF, HeightK, LegK, UpperK: Single;
   H, I, Upper0, Upper1: Single;
@@ -767,7 +767,7 @@ begin
   if (Inst = nil) or (Inst.TripoRider = nil) then Exit;
   if Inst.TripoRider.HasParametricBody then
   begin
-    Inst.BodyParameters:=AvatarBodyParameters;
+    Inst.BodyParameters:=AvatarBodyParameters(RiderIndex);
     Exit;
   end;
   RestH := Inst.TripoRider.RestHeight;

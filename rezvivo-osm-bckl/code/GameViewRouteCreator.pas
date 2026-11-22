@@ -164,14 +164,14 @@ var BG,Credit:TCastleRectangleControl;Col:TCastleVerticalGroup;Row:TCastleHorizo
     Result.OnClick:=Click;Row.InsertFront(Result);end;
   procedure LabelText(const Caption:string);
   begin L:=TMenuLabel.Create(Self);BindUiText(L, Caption);L.FontSize:=15;
-    L.Color:=Vector4(0.88,0.92,0.96,1);L.MaxWidth:=350;Col.InsertFront(L);end;
+    L.Color:=MenuText;L.MaxWidth:=350;Col.InsertFront(L);end;
 begin
   inherited;FullSize:=True;FSelected:=-1;FReadyRevision:=-1;
   Settings:=TStudioSettings.Defaults;FCacheRoot:=Settings.CacheRoot;FEndpoints:=Settings.OverpassEndpoints;
   BG:=TCastleRectangleControl.Create(Self);BG.FullSize:=True;BG.Color:=MenuBackground;InsertBack(BG);
   Row:=TCastleHorizontalGroup.Create(Self);Row.Spacing:=18;Row.Anchor(hpLeft,8);Row.Anchor(vpTop,-8);InsertFront(Row);
   B:=ButtonText(UiText('← Routes'),@ClickBack);
-  L:=TMenuLabel.Create(Self);BindUiText(L, 'Create route');L.FontSize:=24;L.Color:=White;Row.InsertFront(L);
+  L:=TMenuLabel.Create(Self);BindUiText(L, 'Create route');L.FontSize:=24;L.Color:=MenuText;Row.InsertFront(L);
   Map:=TPlannerMap.Create(Self);Map.FPage:=Self;Map.Anchor(hpLeft,380);Map.Anchor(vpTop,-58);
   Map.OnChanged:=@MapChanged;Map.CenterAt(TLatLon.Make(55.75,37.62),0);InsertFront(Map);
   Col:=TCastleVerticalGroup.Create(Self);Col.Spacing:=16;Col.Anchor(hpLeft,8);Col.Anchor(vpTop,-58);InsertFront(Col);
@@ -182,11 +182,11 @@ begin
   LabelText(UiText('Route name'));
   TitleEdit:=TMenuEdit.Create(Self);TitleEdit.Name:='RouteTitleInput';TitleEdit.Width:=350;TitleEdit.Text:=UiText('New route');TitleEdit.OnChange:=@DraftChanged;Col.InsertFront(TitleEdit);
   LoopCheck:=TCastleCheckbox.Create(Self);BindUiText(LoopCheck, 'Loop route');LoopCheck.FontSize:=16;
-  LoopCheck.TextColor:=White;LoopCheck.CheckboxColor:=Vector4(0.8,0.85,0.9,1);LoopCheck.OnChange:=@ChangeLoop;Col.InsertFront(LoopCheck);
+  LoopCheck.TextColor:=MenuText;LoopCheck.CheckboxColor:=MenuAccent;LoopCheck.OnChange:=@ChangeLoop;Col.InsertFront(LoopCheck);
   LabelText(UiText('Click the map to add a point.')+LineEnding+
     UiText('Drag a point to change the route.')+LineEnding+
     UiText('Drag the globe to rotate it.')+LineEnding+UiText('Use the mouse wheel to zoom.'));
-  FDetails:=TMenuLabel.Create(Self);FDetails.FontSize:=16;FDetails.Color:=White;FDetails.MaxWidth:=350;Col.InsertFront(FDetails);
+  FDetails:=TMenuLabel.Create(Self);FDetails.FontSize:=16;FDetails.Color:=MenuText;FDetails.MaxWidth:=350;Col.InsertFront(FDetails);
   Row:=TCastleHorizontalGroup.Create(Self);Row.Spacing:=8;Col.InsertFront(Row);
   FDelete:=ButtonText(UiText('Delete point'),@ClickDelete);FClear:=ButtonText(UiText('Clear'),@ClickClear);
   Row:=TCastleHorizontalGroup.Create(Self);Row.Spacing:=8;Col.InsertFront(Row);
@@ -201,9 +201,9 @@ begin
   B:=ButtonText('−',@ClickZoom);B.Tag:=-1;B:=ButtonText('+',@ClickZoom);B.Tag:=1;
   L:=TMenuLabel.Create(Self);BindUiText(L, '© OpenStreetMap contributors · Natural Earth · Copernicus DEM');L.FontSize:=11;
   Credit:=TCastleRectangleControl.Create(Self);Credit.Width:=450;Credit.Height:=22;
-  Credit.Color:=Vector4(0.013,0.025,0.045,0.82);Credit.Anchor(hpRight,-8);Credit.Anchor(vpBottom,42);InsertFront(Credit);
-  L.Color:=Vector4(0.9,0.94,0.96,1);L.Anchor(hpRight,-4);L.Anchor(vpBottom,4);Credit.InsertFront(L);
-  Status:=TMenuLabel.Create(Self);Status.FontSize:=15;Status.Color:=Vector4(0.86,0.92,1,1);
+  Credit.Color:=MenuSurface;Credit.Anchor(hpRight,-8);Credit.Anchor(vpBottom,42);InsertFront(Credit);
+  L.Color:=MenuMuted;L.Anchor(hpRight,-4);L.Anchor(vpBottom,4);Credit.InsertFront(L);
+  Status:=TMenuLabel.Create(Self);Status.FontSize:=15;Status.Color:=MenuText;
   Status.Anchor(hpLeft,8);Status.Anchor(vpBottom,8);InsertFront(Status);
   BindUiText(Status, 'Find a place and add points on roads');LoadDraft;UpdateDetails;Layout;
 end;

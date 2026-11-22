@@ -1,8 +1,25 @@
 unit GameDailyTraining;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses Classes,SysUtils,GameTrainingLoad,GameRouteLibraryData,fpjson;
+uses Classes,SysUtils,GameTrainingLoad,GameRouteLibraryData,fpjson,VeloSiteAPI,SyncObjs;
 type
+  TDailyRiderTask=class(TThread)
+  private
+    FApi:TVeloSiteAPI;
+    FLock:TCriticalSection;
+    FDone:Boolean;
+    FUserId:Int64;
+    FMethod,FPath,FBody:String;
+  protected
+    procedure Execute;override;
+  public
+    Response:TJSONData;
+    ErrorText:String;
+    RequestTimeoutMS:Integer;
+    constructor Create(Api:TVeloSiteAPI;UserId:Int64;const Method,Path,Body:String);
+    destructor Destroy;override;
+    function Done:Boolean;
+  end;
   TDailyTraining = class
   private
     type TDay = record
@@ -11,14 +28,15 @@ type
       Revision,Ack:Int64;
       Work,TSS,OtherWork,OtherTSS:Double;
     end;
-    var FDays:array of TDay;
+    var FRiderIndex:Integer;
+      FDays:array of TDay;
       FUserId:Int64;
       FAccountDir:String;
       FIndex,FTaskIndex:Integer;
       FBound,FDirty,FInRide:Boolean;
       FBaseTSS,FFtp:Double;
       FLoad:TTrainingLoad;
-      FTask:TRouteTask;
+      FTask:TDailyRiderTask;
       FLastSave,FNextSync,FLastPoll:QWord;
     procedure BindUser;
     procedure SetDay(Day:Integer);
@@ -29,7 +47,7 @@ type
     function GetWork:Double;
     function GetTSS:Double;
   public
-    constructor Create;
+    constructor Create(ARiderIndex:Integer=0);
     destructor Destroy;override;
     procedure BeginRide;
     procedure EndRide;
@@ -40,14 +58,15 @@ type
     property WorkJoules:Double read GetWork;
     property TSS:Double read GetTSS;
   end;
+function DailyTrainingForRider(Index:Integer=0):TDailyTraining;
 var DailyTraining:TDailyTraining;
 implementation
-uses Math,DateUtils,VeloSiteAPI,CastleApplicationProperties,CastleLog,GameUserData;
+uses Math,DateUtils,CastleApplicationProperties,CastleLog,GameUserData;
 
 function TDailyTraining.SaveState:TJSONObject;
 begin
   BindUser;SetDay(Trunc(Date));
-  with FDays[FIndex]do Result:=TJSONObject.Create(['account',UserDataDir,'day',Day,
+  with FDays[FIndex]do Result:=TJSONObject.Create(['account',RiderDataDir(FRiderIndex),'day',Day,
     'source',Source,'revision',Revision,'work',Work,'tss',TSS,'ftp',FFtp]);
   Result.Add('load',FLoad.SaveState);
 end;
@@ -58,7 +77,7 @@ var SavedDay,I:Integer;Recovered:TJSONData;
   procedure MergeRecovered(Draft:TJSONObject);
   var Day:Integer;NewWork,NewTSS:Double;
   begin
-    if(Draft=nil)or(Draft.Get('account','')<>UserDataDir)then Exit;
+    if(Draft=nil)or(Draft.Get('account','')<>RiderDataDir(FRiderIndex))then Exit;
     Day:=Draft.Get('day',0);
     if(Day<Trunc(Date)-7)or(Day>Trunc(Date))then Exit;
     NewWork:=Draft.Get('work',0.0);NewTSS:=Draft.Get('tss',0.0);
@@ -79,7 +98,7 @@ var SavedDay,I:Integer;Recovered:TJSONData;
     end;
   end;
 begin
-  if(O=nil)or(O.Get('account','')<>UserDataDir)then Exit;
+  if(O=nil)or(O.Get('account','')<>RiderDataDir(FRiderIndex))then Exit;
   BindUser;
   if O.Get('recovery_max',False)then begin
     Recovered:=O.Find('recovered_days');
@@ -105,11 +124,11 @@ end;
 
 function DayText(Day:Integer):String;
 begin Result:=FormatDateTime('yyyy-mm-dd',TDateTime(Day));end;
-constructor TDailyTraining.Create;
-begin inherited;FIndex:=-1;FLoad:=TTrainingLoad.Create;end;
+constructor TDailyTraining.Create(ARiderIndex:Integer);
+begin inherited Create;FRiderIndex:=ARiderIndex;FIndex:=-1;FLoad:=TTrainingLoad.Create;end;
 destructor TDailyTraining.Destroy;
 begin
-  Save;RouteDetach(FTask);FLoad.Free;inherited;
+  Save;if FTask<>nil then begin FTask.WaitFor;FreeAndNil(FTask);end;FLoad.Free;inherited;
 end;
 function TDailyTraining.FileName:String;
 begin Result:=FAccountDir+'daily-training.json';end;
@@ -153,9 +172,9 @@ end;
 procedure TDailyTraining.BindUser;
 var Id:Int64;Dir:String;
 begin
-  Id:=0;if VeloSite.IsAuthorized then Id:=VeloSite.CachedProfile.Id;Dir:=UserDataDir;
+  Id:=EffectiveRiderProfile(FRiderIndex).Id;Dir:=RiderDataDir(FRiderIndex);
   if FBound and(Id=FUserId)and(FAccountDir=Dir)then Exit;
-  Save;RouteDetach(FTask);FDays:=nil;FIndex:=-1;FDirty:=False;
+  Save;if FTask<>nil then begin FTask.WaitFor;FreeAndNil(FTask);end;FDays:=nil;FIndex:=-1;FDirty:=False;
   FUserId:=Id;FAccountDir:=Dir;FBound:=True;FNextSync:=0;FLoad.Reset;Load;
   SetDay(Trunc(Date));
 end;
@@ -238,24 +257,59 @@ begin
   { Isolated tests exercise the real local accounting; only HTTP is disabled. }
   if(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'')and
     (GetEnvironmentVariable('REZVIVO_TEST_NO_UPLOAD')='1')then Exit;
-  if(FTask<>nil)or(Stamp<FNextSync)or(FUserId<=0)or not VeloSite.IsAuthorized then Exit;
+  if(FTask<>nil)or(Stamp<FNextSync)or(FUserId<=0)or not RiderApi(FRiderIndex).IsAuthorized then Exit;
   I:=0;while(I<Length(FDays))and(FDays[I].Ack>=FDays[I].Revision)do Inc(I);
   if I=Length(FDays)then begin
     I:=FIndex;Path:='/me/training-day?date='+DayText(FDays[I].Day)+'&source_id='+FDays[I].Source;
-    FTask:=TRouteTask.Create(FUserId,'GET',Path,'');
+    FTask:=TDailyRiderTask.Create(RiderApi(FRiderIndex),FUserId,'GET',Path,'');
   end else begin
     Save; // Durable contribution precedes the network request.
     if FDirty then begin FNextSync:=Stamp+30000;Exit end;
     O:=TJSONObject.Create(['date',DayText(FDays[I].Day),'source_id',FDays[I].Source,
       'revision',FDays[I].Revision,'work_j',FDays[I].Work,'tss',FDays[I].TSS]);
-    Body:=O.AsJSON;O.Free;FTask:=TRouteTask.Create(FUserId,'PUT','/me/training-day',Body);
+    Body:=O.AsJSON;O.Free;FTask:=TDailyRiderTask.Create(RiderApi(FRiderIndex),FUserId,'PUT','/me/training-day',Body);
   end;
   FTaskIndex:=I;FTask.RequestTimeoutMS:=2000;FTask.Start;
+end;
+var Trainings:array[1..7]of TDailyTraining;
+constructor TDailyRiderTask.Create(Api:TVeloSiteAPI;UserId:Int64;const Method,Path,Body:String);
+begin
+  inherited Create(True);FreeOnTerminate:=False;FApi:=Api;FUserId:=UserId;
+  FMethod:=Method;FPath:=Path;FBody:=Body;FLock:=TCriticalSection.Create;
+end;
+destructor TDailyRiderTask.Destroy;
+begin Response.Free;FLock.Free;inherited;end;
+function TDailyRiderTask.Done:Boolean;
+begin FLock.Enter;try Result:=FDone;finally FLock.Leave;end;end;
+procedure TDailyRiderTask.Execute;
+begin
+  try
+    if not Terminated then Response:=FApi.LibraryRequest(FUserId,FMethod,FPath,FBody,RequestTimeoutMS);
+  except on E:Exception do ErrorText:=E.Message;end;
+  FBody:='';FLock.Enter;try FDone:=True;finally FLock.Leave;end;
+end;
+function DailyTrainingForRider(Index:Integer):TDailyTraining;
+begin
+  if(Index<0)or(Index>7)then raise ERangeError.Create('Invalid rider');
+  if Index=0 then Exit(DailyTraining);
+  if Trainings[Index]=nil then begin
+    Trainings[Index]:=TDailyTraining.Create(Index);
+    ApplicationProperties.OnUpdate.Add(@Trainings[Index].Update);
+  end;
+  Result:=Trainings[Index];
+end;
+procedure FreeTrainings;
+var I:Integer;
+begin
+  for I:=1 to 7 do if Trainings[I]<>nil then begin
+    ApplicationProperties.OnUpdate.Remove(@Trainings[I].Update);FreeAndNil(Trainings[I]);
+  end;
 end;
 initialization
   DailyTraining:=TDailyTraining.Create;
   ApplicationProperties.OnUpdate.Add(@DailyTraining.Update);
 finalization
+  FreeTrainings;
   ApplicationProperties.OnUpdate.Remove(@DailyTraining.Update);
   FreeAndNil(DailyTraining);
 end.

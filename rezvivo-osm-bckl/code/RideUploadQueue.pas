@@ -8,7 +8,7 @@
     2. В фоновом потоке берёт первый ожидающий CSV, делает
        TSensorLog.LoadSession + TFitFileWriter.SaveToFile в соседний
        <name>.fit, выводит TVeloSiteRideUpload и POST через
-       VeloSite.UploadRide.
+       FApi.UploadRide.
     3. Idempotency-Key — детерминированный UUIDv5-подобный хеш от
        имени файла. Это значит: сервер вернёт уже существующий
        ride_id если CSV грузится повторно.
@@ -36,13 +36,14 @@ unit RideUploadQueue;
 interface
 
 uses
-  Classes, SysUtils, SyncObjs;
+  Classes, SysUtils, SyncObjs, VeloSiteAPI;
 
 type
   TUploadStatus = (usPending, usUploading, usDone, usFailedQuota,
                    usFailedClient, usFailedServer);
 
   TQueueItem = record
+    OwnerKey:String;
     CsvPath:   String;
     FitPath:   String;     { соседний *.fit, остаётся после загрузки }
     IdemKey:   String;
@@ -55,6 +56,10 @@ type
 
   TRideUploadThread = class(TThread)
   private
+    FApi:TVeloSiteAPI;
+    FRiderIndex:Integer;
+    FOwnerKey:String;
+    FUserId:Int64;
     FLock:        TCriticalSection;
     FItems:       TQueueItemArray;
     FRunning:     Boolean;
@@ -68,7 +73,7 @@ type
   protected
     procedure Execute; override;
   public
-    constructor Create;
+    constructor Create(ARiderIndex:Integer;Api:TVeloSiteAPI;const OwnerKey:String;UserId:Int64);
     destructor  Destroy; override;
 
     procedure RequestShutdown;
@@ -79,10 +84,12 @@ type
 
   TRideUploadQueue = class
   private
+    FRiderIndex:Integer;
+    FOwnerKey:String;
     FThread: TRideUploadThread;
     function ComputeIdempotencyKey(const ACsvPath: String): String;
   public
-    constructor Create;
+    constructor Create(ARiderIndex:Integer=0);
     destructor  Destroy; override;
 
     { Перечитать sessions/, обновить очередь, разбудить поток. Вызывать
@@ -100,6 +107,7 @@ type
     function Snapshot: TQueueItemArray;
   end;
 
+function RideUploadQueueForRider(Index:Integer=0):TRideUploadQueue;
 var
   UploadQueue: TRideUploadQueue;
 
@@ -107,23 +115,23 @@ implementation
 
 
 uses
-  Generics.Collections, md5, GameSensorLog, FitFile, VeloSiteAPI, DebugLog, GameThreadWatch,GameUserData;
+  Generics.Collections, md5, GameSensorLog, FitFile, DebugLog, GameThreadWatch,GameUserData,GameAccountChange;
 
 const
   UPLOAD_NAMESPACE = 'velosite.ride.v1:';
 
-function JournalMayUpload(const CsvPath:String):Boolean;
+function JournalMayUpload(const CsvPath,ExpectedOwner:String):Boolean;
 var Owner:TStringList;
 begin
   Result:=False;
   if FileExists(CsvPath+'.active')then Exit;
-  if not FileExists(CsvPath+'.owner')then Exit(True);
+  if not FileExists(CsvPath+'.owner')then Exit;
   Owner:=TStringList.Create;
   try
     try
       Owner.LoadFromFile(CsvPath+'.owner');
       Result:=ExcludeTrailingPathDelimiter(Trim(Owner.Text))=
-        ExcludeTrailingPathDelimiter(UserDataDir);
+        ExcludeTrailingPathDelimiter(ExpectedOwner);
     except Result:=False;end;
   finally Owner.Free;end;
 end;
@@ -165,10 +173,11 @@ end;
   TRideUploadThread
   ══════════════════════════════════════════════════════════════════ }
 
-constructor TRideUploadThread.Create;
+constructor TRideUploadThread.Create(ARiderIndex:Integer;Api:TVeloSiteAPI;const OwnerKey:String;UserId:Int64);
 begin
   inherited Create(True);      { initialize synchronization before starting }
   FreeOnTerminate := False;
+  FRiderIndex:=ARiderIndex;FApi:=Api;FOwnerKey:=OwnerKey;FUserId:=UserId;
   FLock := TCriticalSection.Create;
   FWakeEvent := TEvent.Create(nil, False, False, '');
   FShutdown := False;
@@ -255,14 +264,14 @@ begin
     бы дёргали сервер, получали 401, бесполезно прожигали retry-
     счётчик и засыпали отладчик breakpoint'ами на raise.
     После Login очередь сама подхватит работу через Wake. }
-  if not VeloSite.IsAuthorized then Exit;
+  if not FApi.IsAuthorized or (FApi.CachedProfile.Id<>FUserId)then Exit;
 
   N := Now;
   FLock.Enter;
   try
     for I := 0 to High(FItems) do
     begin
-      if not JournalMayUpload(FItems[I].CsvPath)then Continue;
+      if not JournalMayUpload(FItems[I].CsvPath,FOwnerKey)then Continue;
       if FItems[I].Status = usPending then
       begin
         if (FItems[I].NextTryAt = 0) or (FItems[I].NextTryAt <= N) then
@@ -323,8 +332,9 @@ var
   Meta: TVeloSiteRideUpload;
   Result: TVeloSiteRideUploadResult;
   I:Integer;
+  Lease:QWord;
 begin
-  if not VeloSite.IsAuthorized or not JournalMayUpload(AItem.CsvPath)then
+  if not FApi.IsAuthorized or (FApi.CachedProfile.Id<>FUserId) or not JournalMayUpload(AItem.CsvPath,FOwnerKey)then
   begin AItem.Status:=usPending;Exit;end;
   Logger.Info('[UploadQueue] ' + 'Processing ' + AItem.CsvPath);
 
@@ -363,9 +373,14 @@ begin
 
   try
     { The profile may change while the CSV is converted. }
-    if not VeloSite.IsAuthorized or not JournalMayUpload(AItem.CsvPath)then
+    if not FApi.IsAuthorized or (FApi.CachedProfile.Id<>FUserId) or not JournalMayUpload(AItem.CsvPath,FOwnerKey)then
     begin AItem.Status:=usPending;Exit;end;
-    Result := VeloSite.UploadRide(AItem.IdemKey, AItem.FitPath, Meta);
+    Lease:=0;
+    try
+      Lease:=BeginAccountChange(FRiderIndex);
+      if not FApi.IsAuthorized or(FApi.CachedProfile.Id<>FUserId)then begin AItem.Status:=usPending;Exit end;
+      Result := FApi.UploadRide(AItem.IdemKey, AItem.FitPath, Meta);
+    finally EndAccountChange(Lease);end;
 
     { Успех: удаляем CSV, оставляем рядом FIT. Для следующего
       Scan'а это значит «уже загружено» — pending выбираются только
@@ -400,7 +415,7 @@ begin
             состояние и заезд бы не залился даже после re-login).
             Оставляем Pending — после успешного входа и Wake очередь
             подхватит. PickNextPending всё равно не возьмёт его, пока
-            VeloSite.IsAuthorized=False. }
+            FApi.IsAuthorized=False. }
           AItem.Status := usPending;
         500, 502, 503, 0:
           AItem.Status := usFailedServer;
@@ -444,9 +459,10 @@ end;
   TRideUploadQueue
   ══════════════════════════════════════════════════════════════════ }
 
-constructor TRideUploadQueue.Create;
+constructor TRideUploadQueue.Create(ARiderIndex:Integer);
 begin
   inherited Create;
+  FRiderIndex:=ARiderIndex;
   { Start the worker on Scan, after platform storage and VeloSite are ready.
     Unit initialization must not launch a thread that reads the profile. }
 end;
@@ -474,7 +490,10 @@ begin
     sessions/ не сбило ключ) + namespace. На MD5 этого хватит для
     дедупа в пределах одного юзера; UUID-формат сделаем для совместимости
     с серверной валидацией Idempotency-Key. }
-  Source := UPLOAD_NAMESPACE + ChangeFileExt(ExtractFileName(ACsvPath), '');
+  Source := UPLOAD_NAMESPACE + LocalRider(FRiderIndex).Key+':'+FOwnerKey+':'+ChangeFileExt(ExtractFileName(ACsvPath), '');
+  { Keep the existing retry identity for explicitly owned primary legacy files. }
+  if(FRiderIndex=0)and SameFileName(ExcludeTrailingPathDelimiter(ExtractFilePath(ACsvPath)),ExcludeTrailingPathDelimiter(TSensorLog.SessionDir))then
+    Source:=UPLOAD_NAMESPACE+ChangeFileExt(ExtractFileName(ACsvPath),'');
   Hex := MD5Print(MD5String(Source));
   Result := FormatUuidLikeFromMd5(LowerCase(Hex));
 end;
@@ -487,26 +506,43 @@ var
   Items: TQueueItemArray;
   Item: TQueueItem;
   I: Integer;
+  Api:TVeloSiteAPI;
+  Owner,NewDir,LegacyDir:String;
+  Pass:Integer;
 begin
-  if VeloSite=nil then Exit;
-  Dir := IncludeTrailingPathDelimiter(TSensorLog.SessionDir);
+  Api:=RiderApi(FRiderIndex);
+  Owner:=RiderDataDir(FRiderIndex);
+  if (FThread<>nil)and(FOwnerKey<>Owner)then begin
+    FThread.RequestShutdown;FThread.WaitFor;FreeAndNil(FThread);
+  end;
+  FOwnerKey:=Owner;
+  if not Api.IsAuthorized or(Api.CachedProfile.Id<=0)then Exit;
+  Dir := IncludeTrailingPathDelimiter(RiderSessionDir(FRiderIndex));
   if (GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'') and
      (GetEnvironmentVariable('REZVIVO_TEST_NO_UPLOAD')='1') then Exit;
-  if not DirectoryExists(Dir) then Exit;
+  NewDir:=Dir;LegacyDir:=IncludeTrailingPathDelimiter(TSensorLog.SessionDir);
 
   Items := nil;
   { Сканируем только CSV-файлы. После успешной загрузки CSV удаляется
     и остаётся только .fit — такие сессии в очередь не попадают,
     потому что мы их уже загрузили. }
+  for Pass:=0 to 1 do begin
+    if Pass=0 then Dir:=NewDir
+    else begin
+      if(FRiderIndex<>0)or SameFileName(NewDir,LegacyDir)then Continue;
+      Dir:=LegacyDir;
+    end;
+    if not DirectoryExists(Dir)then Continue;
   if FindFirst(Dir + 'session_*.csv', faAnyFile, SR) = 0 then
   begin
     repeat
       if (SR.Attr and faDirectory) <> 0 then Continue;
       CsvPath := Dir + SR.Name;
       { A crashed ride remains resumable until its owner explicitly finishes it. }
-      if not JournalMayUpload(CsvPath)then Continue;
+      if not JournalMayUpload(CsvPath,FOwnerKey)then Continue;
 
       Item := Default(TQueueItem);
+      Item.OwnerKey:=FOwnerKey;
       Item.CsvPath := CsvPath;
       Item.FitPath := ChangeFileExt(CsvPath, '.fit');
       Item.IdemKey := ComputeIdempotencyKey(CsvPath);
@@ -519,10 +555,12 @@ begin
     SysUtils.FindClose(SR);
   end;
 
+  end;
+
   if FThread=nil then
   begin
     if Length(Items)=0 then Exit;
-    FThread:=TRideUploadThread.Create;
+    FThread:=TRideUploadThread.Create(FRiderIndex,Api,FOwnerKey,Api.CachedProfile.Id);
   end;
   FThread.ReplaceItems(Items);
   FThread.Wake;
@@ -562,10 +600,20 @@ begin
   Result := FThread.Snapshot;
 end;
 
+var Queues:array[1..7]of TRideUploadQueue;
+function RideUploadQueueForRider(Index:Integer):TRideUploadQueue;
+begin
+  if(Index<0)or(Index>7)then raise ERangeError.Create('Invalid rider');
+  if Index=0 then Exit(UploadQueue);
+  if Queues[Index]=nil then Queues[Index]:=TRideUploadQueue.Create(Index);
+  Result:=Queues[Index];
+end;
+procedure FreeQueues;
+var I:Integer;
+begin for I:=1 to 7 do FreeAndNil(Queues[I]);end;
 initialization
   UploadQueue := TRideUploadQueue.Create;
-
 finalization
+  FreeQueues;
   FreeAndNil(UploadQueue);
-
 end.

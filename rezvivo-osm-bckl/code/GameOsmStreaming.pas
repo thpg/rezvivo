@@ -55,6 +55,8 @@ type
   TGameOsmStreaming = class
   private
     FSession:    TOsm3dStreamingSession;
+    FLocalRiderPositions:array[0..7]of TVector3;
+    FLocalRiderCount:Integer;
     FViewport:   TCastleViewport;
     { Текущий родитель оверлея прогрева (вьюпорт сессии или вью игры
       после RaiseWarmupToFront) — для явного отцепления в Destroy. }
@@ -74,6 +76,9 @@ type
       выключенные маркеры маршрута). }
     function BuildSettings(const ACacheRoot: string): TStudioSettings;
   public
+    { Include every local participant, including stopped and hidden riders.
+      Refresh at 1 Hz; an empty snapshot clears additional residency. }
+    procedure SetLocalRiderPositions(const Positions:array of TVector3);
     constructor Create;
     destructor Destroy; override;
 
@@ -227,6 +232,20 @@ uses
   Math, CastleLog, DebugLog, GameFitLoadReference,
   Osm3dStreamingMap, Osm3dRouteBuildings, Osm3dFitHeightLayer;
 
+procedure TGameOsmStreaming.SetLocalRiderPositions(const Positions:array of TVector3);
+var I:Integer;
+begin
+  FLocalRiderCount:=0;
+  for I:=0 to Min(High(Positions),High(FLocalRiderPositions))do begin
+    if IsNan(Positions[I].X)or IsInfinite(Positions[I].X)or
+       IsNan(Positions[I].Y)or IsInfinite(Positions[I].Y)or
+       IsNan(Positions[I].Z)or IsInfinite(Positions[I].Z)then Continue;
+    FLocalRiderPositions[FLocalRiderCount]:=Positions[I];Inc(FLocalRiderCount);
+  end;
+  if(FSession<>nil)and(FSession.Map<>nil)then
+    FSession.Map.SetLocalRiderPositions(Slice(FLocalRiderPositions,FLocalRiderCount));
+end;
+
 constructor TGameOsmStreaming.Create;
 begin
   inherited Create;
@@ -371,6 +390,7 @@ begin
 
   { Карта — TCastleTransform; добавляем в тот же вьюпорт, где едет
     велосипедист. Стример сам перецентрируется по MainCamera вьюпорта. }
+  FSession.Map.SetLocalRiderPositions(Slice(FLocalRiderPositions,FLocalRiderCount));
   AViewport.Items.Add(FSession.Map);
   { Прогрев маршрута — общая фича стримера: на время сборки тайлов
     маршрута (до запуска притягивания) карта сама показывает поверх
@@ -415,6 +435,7 @@ begin
   Config:=BuildSettings('');Config.GenerateRouteOnly:=False;
   Config.FitHeightCorrection:=False;
   FSession:=TOsm3dStreamingSession.Create(Config,Geo,@HandleStreamLog);
+  FSession.Map.SetLocalRiderPositions(Slice(FLocalRiderPositions,FLocalRiderCount));
   AViewport.Items.Add(FSession.Map);
   FSession.Map.ShowFitPoints:=False;FSession.Map.ShowFitPointsSnapped:=False;
   { The common flat loading map waits only for the actual starting tile.

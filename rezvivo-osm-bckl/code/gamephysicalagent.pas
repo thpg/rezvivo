@@ -41,6 +41,7 @@ type
     FPhysicsMode: TPhysicsMode;
     FOwner: TComponent;
     FName: String;
+    FFrameSecondsOverride:Single;
 
     FController: IAgentController;
     FControlInput: TAgentControlInput;
@@ -97,6 +98,9 @@ type
     function CaptureReplay: TAgentReplayState;
     procedure RestoreReplay(const Saved: TAgentReplayState);
   public
+    { Negative: shared world clock. Local live participants may keep their
+      real clock while another participant pauses/seeks a FIT simulator. }
+    property FrameSecondsOverride:Single read FFrameSecondsOverride write FFrameSecondsOverride;
     constructor Create(AOwner: TComponent); virtual;
     destructor Destroy; override;
 
@@ -260,7 +264,7 @@ begin
   FDebug := TPhysicsDebug.Create;
   FControlInput.Reset;
   FHasPendingRemoteInput := false;
-  FName := 'Agent';
+  FName := 'Agent';FFrameSecondsOverride:=-1;
   FNetworkId := 0;
   FNetworkAuthority := naLocalOnly;
   FLastAppliedSequenceId := 0;

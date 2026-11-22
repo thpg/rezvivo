@@ -1,12 +1,13 @@
 unit GameRideRooms;
 {$mode objfpc}{$H+}{$codepage UTF8}
 interface
-uses Classes,SysUtils,GameHttpClient;
+uses Classes,SysUtils,GameHttpClient,VeloSiteAPI;
 type
   TRideRoomInfo=record
     Code,Kind,WorldId,Title,ContentHash,RelayUrl,RouteFile,Manifest,ErrorText:string;
     SessionToken:string; { scoped public-route capability, never a website token }
     RiderId,StartSlot,Members:Integer;
+    InviteSession:Boolean; { private invitation capability, distinct from catalogue }
   end;
   TRideRoomOperation=(roCreate,roJoin,roLeave,roCatalog);
   TRideRoomTask=class(TThread)
@@ -17,6 +18,8 @@ type
     FInput:TRideRoomInfo;
     FBase,FDirectory,FDreamDirectory:string;
     FAccountId:Int64;
+    FApi:TVeloSiteAPI;
+    FOwnerKey:string;
     FCleanupCode:string;
     function Request(const Method,Path,Body:string;Limit:Integer):string;
     procedure CleanupMembership;
@@ -26,25 +29,32 @@ type
   public
     ResultInfo:TRideRoomInfo;
     constructor Create(Operation:TRideRoomOperation;const Input:TRideRoomInfo;
-      const Base,Directory,DreamDirectory:string;AccountId:Int64);
+      const Base,Directory,DreamDirectory:string;AccountId:Int64;ProfileIndex:Integer=0);
     destructor Destroy;override;
     procedure Cancel;
     procedure Join;
   end;
   TRideRooms=class
   private
+    FProfileIndex:Integer;
+    FApi:TVeloSiteAPI;
+    FOwnerKey,FDirectory:string;
     FTask:TRideRoomTask;
     FInfo:TRideRoomInfo;
     FError:string;
     FOperation:TRideRoomOperation;
     FAccount:Int64;
     FAutoRetryAt:QWord;
+    FLeaveRequested:Boolean;
     procedure BeginTask(Operation:TRideRoomOperation;const Info:TRideRoomInfo);
   public
     RelayError:string;
+    constructor Create(ProfileIndex:Integer=0);
+    property ProfileIndex:Integer read FProfileIndex;
+    property OwnerKey:string read FOwnerKey;
     destructor Destroy;override;
     procedure CreateRoom(const Kind,SourceFile:string);
-    procedure Join(const Code:string);
+    procedure Join(const Code:string;const LocalRouteFile:string='');
     procedure AutoJoin(const RouteFile:string;Eligible:Boolean);
     procedure EndAutomatic;
     procedure Leave;
@@ -56,20 +66,20 @@ type
     property Info:TRideRoomInfo read FInfo;
     property ErrorText:string read FError;
   end;
-function RideRooms:TRideRooms;
+function RideRooms(ProfileIndex:Integer=0):TRideRooms;
 function NormalizeRoomCode(const Code:string):string;
 function ValidRoomHash(const Value:string):Boolean;
 function DreamRoomHash(const Manifest:string;Cancel:TGameHttpCancellation=nil):string;
 implementation
 uses Math,fpjson,jsonparser,base64,CastleURIUtils,UiTranslations,
-  VeloSiteAPI,GameUserData,GameUpdateDownload,GameReadyRoutes;
+  GameUserData,GameUpdateDownload,GameReadyRoutes;
 const MaxRouteBytes=4*1024*1024;
 type
   TLimitedResponse=class(TStringStream)
     Limit:Integer;
     function Write(const Buffer;Count:LongInt):LongInt;override;
   end;
-var RoomsInstance:TRideRooms;
+var RoomsInstances:array[0..MaxLocalRiders-1]of TRideRooms;RoomFinalIndex:Integer;
 function ValidRoomHash(const Value:string):Boolean;
 var C:Char;
 begin
@@ -81,8 +91,17 @@ begin
   if Position+Count>Limit then raise Exception.Create('Room response exceeds size limit');
   Result:=inherited Write(Buffer,Count);
 end;
-function RideRooms:TRideRooms;
-begin if RoomsInstance=nil then RoomsInstance:=TRideRooms.Create;Result:=RoomsInstance end;
+function RideRooms(ProfileIndex:Integer):TRideRooms;
+begin
+  if(ProfileIndex<0)or(ProfileIndex>=LocalRiderCount)then raise ERangeError.Create('Invalid local rider');
+  if RoomsInstances[ProfileIndex]=nil then RoomsInstances[ProfileIndex]:=TRideRooms.Create(ProfileIndex);
+  Result:=RoomsInstances[ProfileIndex];
+end;
+constructor TRideRooms.Create(ProfileIndex:Integer);
+begin
+  inherited Create;FProfileIndex:=ProfileIndex;FApi:=RiderApi(ProfileIndex);
+  FOwnerKey:=LocalRider(ProfileIndex).Key;FDirectory:=RiderDataDir(ProfileIndex)+'shared-routes';
+end;
 function NormalizeRoomCode(const Code:string):string;
 var C:Char;S:string;P:Integer;
 begin
@@ -139,11 +158,12 @@ begin
   finally if Tmp<>''then DeleteFile(Tmp);Lines.Free;Files.Free end;
 end;
 constructor TRideRoomTask.Create(Operation:TRideRoomOperation;const Input:TRideRoomInfo;
-  const Base,Directory,DreamDirectory:string;AccountId:Int64);
+  const Base,Directory,DreamDirectory:string;AccountId:Int64;ProfileIndex:Integer);
 begin
   inherited Create(True);FCancel:=TGameHttpCancellation.Create;
   FOperation:=Operation;FInput:=Input;FBase:=ExcludeTrailingPathDelimiter(Base);
-  FDirectory:=Directory;FDreamDirectory:=DreamDirectory;FAccountId:=AccountId;Start;
+  FDirectory:=Directory;FDreamDirectory:=DreamDirectory;FAccountId:=AccountId;
+  FApi:=RiderApi(ProfileIndex);FOwnerKey:=LocalRider(ProfileIndex).Key;Start;
 end;
 destructor TRideRoomTask.Destroy;
 begin Cancel;Join;FCancel.Free;inherited end;
@@ -161,9 +181,14 @@ begin
   FCancel.Check;
   Prefix:='/api/v1/relay/rooms';
   if FOperation=roCatalog then begin Token:='';Prefix:='/api/v1/ready-routes' end
-  else if FInput.SessionToken<>''then begin Token:=FInput.SessionToken;Prefix:='/api/v1/ready-routes/rooms' end
+  else if FInput.SessionToken<>''then begin
+    Token:=FInput.SessionToken;
+    if FInput.InviteSession then Prefix:='/api/v1/relay/invites'
+    else Prefix:='/api/v1/ready-routes/rooms';
+  end
+  else if(FOperation=roJoin)and not FApi.IsAuthorized then begin Token:='';Prefix:='/api/v1/relay/invites' end
   else begin
-    Token:=VeloSite.GetAccessTokenForUser(FAccountId);
+    Token:=FApi.GetAccessTokenForUser(FAccountId);
     if Token=''then raise Exception.Create('Sign in to ride with a friend.');
   end;
   H:=TStringList.Create;Input:=TStringStream.Create(Body);Output:=TLimitedResponse.Create('');Output.Limit:=Limit;
@@ -171,7 +196,10 @@ begin
     if Token<>''then H.Add('Authorization: Bearer '+Token);H.Add('Content-Type: application/json');
     GameHttpRequest(Method,FBase+Prefix+Path,H,Input,3000,6000,Output,Status,FCancel);
     if Status=404 then raise Exception.Create('Room not found, expired, or this server does not support rooms yet.');
-    if Status=401 then begin VeloSite.RefreshProfileAsync;raise Exception.Create('Sign in again to join a room.')end;
+    if Status=401 then begin
+      if(FInput.SessionToken='')and FApi.IsAuthorized then FApi.RefreshProfileAsync;
+      raise Exception.Create('Room session expired. Join the room again.');
+    end;
     if Status=403 then raise Exception.Create('You are not a member of this room.');
     if Status=409 then begin
       if FOperation=roCatalog then raise Exception.Create('This route was updated. Reopen it in Real World.');
@@ -187,7 +215,10 @@ var H:TStringList;Output:TLimitedResponse;Token,Prefix:string;Status:Integer;
 begin
   if FCleanupCode=''then Exit;
   Prefix:='/api/v1/relay/rooms/';Token:=ResultInfo.SessionToken;
-  if Token<>''then Prefix:='/api/v1/ready-routes/rooms/'else Token:=VeloSite.GetAccessTokenForUser(FAccountId);
+  if Token<>''then begin
+    if ResultInfo.InviteSession then Prefix:='/api/v1/relay/invites/'
+    else Prefix:='/api/v1/ready-routes/rooms/';
+  end else Token:=FApi.GetAccessTokenForUser(FAccountId);
   if Token=''then Exit;
   H:=TStringList.Create;Output:=TLimitedResponse.Create('');Output.Limit:=65536;
   try
@@ -228,35 +259,54 @@ begin
       Raw:=Request('POST','',Body.AsJSON,65536);
     end else begin
       Code:=NormalizeRoomCode(FInput.Code);if Code=''then raise Exception.Create('Enter a valid 10-character room code.');
-      Body.Add('code',Code);FCleanupCode:=Code;Raw:=Request('POST','/join',Body.AsJSON,65536);
+      Body.Add('code',Code);
+      if FApi.IsAuthorized then Body.Add('local_key',FOwnerKey);
+      FCleanupCode:=Code;Raw:=Request('POST','/join',Body.AsJSON,65536);
     end;
   finally Body.Free end;
   D:=GetJSON(Raw);
   try
     if not(D is TJSONObject)then raise Exception.Create('Invalid room response');J:=TJSONObject(D);
     ResultInfo.Code:=NormalizeRoomCode(J.Get('code',''));
-    if FOperation=roCatalog then ResultInfo.SessionToken:=J.Get('session_token','');
+    ResultInfo.SessionToken:=J.Get('session_token','');
+    ResultInfo.InviteSession:=(FOperation=roJoin)and(ResultInfo.SessionToken<>'');
     if ResultInfo.Code<>''then FCleanupCode:=ResultInfo.Code;
     if not(J.Find('world')is TJSONObject)then raise Exception.Create('Invalid room response');
     W:=J.Objects['world'];
     ResultInfo.Kind:=W.Get('kind','');ResultInfo.WorldId:=W.Get('id','');ResultInfo.Title:=W.Get('title','');
     ResultInfo.ContentHash:=LowerCase(W.Get('content_hash',''));ResultInfo.RiderId:=J.Get('rider_id',0);
     ResultInfo.StartSlot:=J.Get('start_slot',0);ResultInfo.Members:=J.Get('members',0);
-    if(ResultInfo.Code='')or((FOperation<>roCatalog)and(ResultInfo.RiderId<>FAccountId))or not ValidRoomHash(ResultInfo.ContentHash)or
+    if(ResultInfo.Code='')or((FOperation<>roCatalog)and(ResultInfo.SessionToken='')and(ResultInfo.RiderId<>FAccountId))or not ValidRoomHash(ResultInfo.ContentHash)or
       (ResultInfo.StartSlot<0)or(ResultInfo.StartSlot>7)then
       raise Exception.Create('Invalid room identity');
     { Ignore server-supplied relay URLs: bearer tokens stay on this API host. }
     ResultInfo.RelayUrl:=FBase+'/api/v1/relay/rooms/'+ResultInfo.Code;
+    if ResultInfo.InviteSession then begin
+      if not ValidRoomHash(ResultInfo.SessionToken)or(ResultInfo.RiderId=0)then
+        raise Exception.Create('Invalid invitation session');
+      ResultInfo.RelayUrl:=FBase+'/api/v1/relay/invites/'+ResultInfo.Code;
+    end;
     if FOperation=roCatalog then begin
       if not ValidRoomHash(ResultInfo.SessionToken)or(ResultInfo.RiderId<=0)or
         (ResultInfo.ContentHash<>Hash)or(ResultInfo.WorldId<>FInput.WorldId)then raise Exception.Create('Invalid ready route room');
       ResultInfo.RelayUrl:=FBase+'/api/v1/ready-routes/rooms/'+ResultInfo.Code;
     end;
+    FInput.SessionToken:=ResultInfo.SessionToken;FInput.InviteSession:=ResultInfo.InviteSession;
     if ResultInfo.Kind='real'then begin
       Ext:=J.Get('route_format','');
       if((Ext<>'fit')and(Ext<>'gpx'))or(J.Get('route_size',0)>MaxRouteBytes)or(J.Get('route_size',0)<1)then raise Exception.Create('Invalid shared route');
       if(FOperation=roCreate)and not SameText(Hash,ResultInfo.ContentHash)then raise Exception.Create('Shared route checksum does not match.');
       if FOperation=roJoin then begin
+        { The shared local ride keeps the primary route's canonical filename.
+          Validate in this worker before reusing it; no frame-thread hashing. }
+        Hash:='';Path:='';
+        if(FInput.RouteFile<>'')and FileExists(FInput.RouteFile)then begin
+          try Hash:=UpdateSHA256(FInput.RouteFile,FCancel);
+          except FCancel.Check;Hash:='' end;
+          if SameText(Hash,ResultInfo.ContentHash)then Path:=ExpandFileName(FInput.RouteFile);
+        end;
+        if Path<>''then ResultInfo.RouteFile:=Path
+        else begin
         Raw:=Request('GET','/'+ResultInfo.Code+'/route','',MaxRouteBytes);
         if Length(Raw)<>J.Get('route_size',0)then raise Exception.Create('Shared route download is incomplete.');
         ForceDirectories(FDirectory);Path:=IncludeTrailingPathDelimiter(FDirectory)+ResultInfo.ContentHash+'.'+Ext;
@@ -267,6 +317,7 @@ begin
           if not RenameFile(Path+'.part',Path)then raise Exception.Create('Could not save the shared route.');
         finally DeleteFile(Path+'.part')end;
         ResultInfo.RouteFile:=Path;
+        end;
       end;
     end else if ResultInfo.Kind='dream'then begin
       if(Pos('/',ResultInfo.WorldId)>0)or(Pos('\',ResultInfo.WorldId)>0)or(Pos('..',ResultInfo.WorldId)>0)or(Pos(':',ResultInfo.WorldId)>0)then
@@ -290,12 +341,12 @@ begin if FTask<>nil then begin FTask.Cancel;FTask.Join;FTask.Free end;inherited 
 procedure TRideRooms.BeginTask(Operation:TRideRoomOperation;const Info:TRideRoomInfo);
 begin
   Update;if Busy then Exit;FError:='';
-  if(Operation<>roCatalog)and(Info.SessionToken='')and(not VeloSite.IsAuthorized or(VeloSite.CachedProfile.Id=0))then begin FError:='Sign in to ride with a friend.';Exit end;
-  FAccount:=VeloSite.CachedProfile.Id;
+  if not(Operation in[roCatalog,roJoin])and(Info.SessionToken='')and(not FApi.IsAuthorized or(FApi.CachedProfile.Id=0))then begin FError:='Sign in to ride with a friend.';Exit end;
+  FAccount:=FApi.CachedProfile.Id;
   if(Operation=roLeave)and(Info.SessionToken='')and(Info.RiderId<>FAccount)then Exit;
-  FOperation:=Operation;
-  FTask:=TRideRoomTask.Create(Operation,Info,VeloSite.BaseUrl,UserDataDir+'shared-routes',
-    URIToFilenameSafe('castle-data:/dream-worlds/'),FAccount);
+  FOperation:=Operation;FDirectory:=RiderDataDir(FProfileIndex)+'shared-routes';
+  FTask:=TRideRoomTask.Create(Operation,Info,FApi.BaseUrl,FDirectory,
+    URIToFilenameSafe('castle-data:/dream-worlds/'),FAccount,FProfileIndex);
 end;
 procedure TRideRooms.CreateRoom(const Kind,SourceFile:string);
 var I:TRideRoomInfo;
@@ -306,16 +357,19 @@ begin
   if Kind='dream'then I.Manifest:=SourceFile else I.RouteFile:=SourceFile;
   BeginTask(roCreate,I);
 end;
-procedure TRideRooms.Join(const Code:string);
+procedure TRideRooms.Join(const Code:string;const LocalRouteFile:string);
 var I:TRideRoomInfo;
-begin if Busy or Active then Exit;I:=Default(TRideRoomInfo);I.Code:=Code;BeginTask(roJoin,I)end;
+begin
+  if Busy or Active then Exit;
+  I:=Default(TRideRoomInfo);I.Code:=Code;I.RouteFile:=LocalRouteFile;BeginTask(roJoin,I);
+end;
 procedure TRideRooms.AutoJoin(const RouteFile:string;Eligible:Boolean);
 var I:TRideRoomInfo;Id,SHA:string;
 begin
   if not Eligible then Exit;
   if Busy then Exit;
   if Active then begin
-    if FInfo.SessionToken=''then Exit; { explicit friend invitation }
+    if(FInfo.SessionToken='')or FInfo.InviteSession then Exit; { explicit friend invitation }
     if not MatchesRide(RouteFile,'')or(Pos('HTTP 403',RelayError)>0)or(Pos('HTTP 404',RelayError)>0)then Leave;
     Exit;
   end;
@@ -329,11 +383,18 @@ procedure TRideRooms.EndAutomatic;
 begin
   FAutoRetryAt:=0;
   if Busy then begin if FOperation=roCatalog then Cancel;Exit end;
-  if FInfo.SessionToken<>''then Leave;
+  if(FInfo.SessionToken<>'')and not FInfo.InviteSession then Leave;
 end;
 procedure TRideRooms.Leave;
 var I:TRideRoomInfo;
-begin if Busy then Exit;I:=FInfo;FInfo:=Default(TRideRoomInfo);RelayError:='';if I.Code<>''then BeginTask(roLeave,I)end;
+begin
+  if Busy then begin
+    if FOperation<>roLeave then begin FLeaveRequested:=True;FTask.Cancel end;
+    Exit;
+  end;
+  FLeaveRequested:=False;I:=FInfo;FInfo:=Default(TRideRoomInfo);RelayError:='';
+  if I.Code<>''then BeginTask(roLeave,I);
+end;
 procedure TRideRooms.Cancel;
 begin if FTask<>nil then FTask.Cancel end;
 procedure TRideRooms.Update;
@@ -346,13 +407,14 @@ begin
     CancelledInfo:=FTask.ResultInfo;
     if FTask.Terminated then FError:='Cancelled'
     else if FTask.ResultInfo.ErrorText<>''then FError:=FTask.ResultInfo.ErrorText
-    else if(FOperation=roCatalog)or(FOperation=roLeave)or(VeloSite.IsAuthorized and(VeloSite.CachedProfile.Id=FAccount))then FInfo:=FTask.ResultInfo;
+    else if(FTask.ResultInfo.SessionToken<>'')or(FOperation=roCatalog)or(FOperation=roLeave)or(FApi.IsAuthorized and(FApi.CachedProfile.Id=FAccount))then FInfo:=FTask.ResultInfo;
     FreeAndNil(FTask);
     { Cancel may arrive after Execute's final check or after Finished. Retire
       that membership in a new worker, never accept it into active UI state. }
     if Cleanup then BeginTask(roLeave,CancelledInfo);
   end;
-  if(FInfo.Code<>'')and(FInfo.SessionToken='')and(not VeloSite.IsAuthorized or(VeloSite.CachedProfile.Id<>FInfo.RiderId))then FInfo:=Default(TRideRoomInfo);
+  if(FInfo.Code<>'')and(FInfo.SessionToken='')and(not FApi.IsAuthorized or(FApi.CachedProfile.Id<>FInfo.RiderId))then FInfo:=Default(TRideRoomInfo);
+  if FLeaveRequested and not Busy then Leave;
 end;
 function TRideRooms.Busy:Boolean;
 begin Result:=FTask<>nil end;
@@ -365,5 +427,5 @@ begin
   else Result:=(WorldId='')and(FitFile<>'')and SameFileName(ExpandFileName(FitFile),ExpandFileName(FInfo.RouteFile));
 end;
 finalization
-  FreeAndNil(RoomsInstance);
+  for RoomFinalIndex:=Low(RoomsInstances)to High(RoomsInstances)do FreeAndNil(RoomsInstances[RoomFinalIndex]);
 end.

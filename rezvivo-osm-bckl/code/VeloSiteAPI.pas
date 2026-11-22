@@ -216,7 +216,7 @@ type
     { Worker-only, refreshes an expiring token under the existing refresh lock. }
     function GetOsmAccessToken: String;
 
-    constructor Create;
+    constructor Create(const AuthFile: String = '');
     destructor  Destroy; override;
 
     { Проверяет https://rezvivo.com/healthz; если не отвечает —
@@ -557,7 +557,7 @@ begin
   except Result.Free; raise end;
 end;
 
-constructor TVeloSiteAPI.Create;
+constructor TVeloSiteAPI.Create(const AuthFile: String);
 var
   ConfigUrl, TestBase, TestAuth: String;
 begin
@@ -585,6 +585,10 @@ begin
   begin FBaseUrl:=ExcludeTrailingPathDelimiter(TestBase);FHostChecked:=True;FAuthFile:=TestAuth;end
   else if (TestAuth<>'') and (GetEnvironmentVariable('REZVIVO_TEST_EMPTY_AUTH')='1') then
     FAuthFile:=TestAuth; { Exercise the real API as a fresh, signed-out installation. }
+
+  { Every local participant, including each guest, owns an independent
+    credential store. A test server may be shared, its token file may not. }
+  if AuthFile<>'' then FAuthFile:=AuthFile;
 
   LoadTokens;
 

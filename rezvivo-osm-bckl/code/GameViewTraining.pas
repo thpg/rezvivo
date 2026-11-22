@@ -86,7 +86,7 @@ function Btn(O:TComponent;P:TCastleUserInterface;const N,T:String;Click:TNotifyE
 begin Result:=TMenuButton.Create(O);Result.Name:=N;Result.AutoIcon:=False;BindUiText(Result,T);
   Result.FontSize:=16;Result.OnClick:=Click;P.InsertFront(Result);end;
 function Lbl(O:TComponent;P:TCastleUserInterface;const T:String;X,Y,Z:Single):TCastleLabel;
-begin Result:=TMenuLabel.Create(O);BindUiText(Result,T);Result.Color:=White;
+begin Result:=TMenuLabel.Create(O);BindUiText(Result,T);Result.Color:=MenuText;
   Result.FontSize:=Z;Result.Anchor(hpLeft,X);Result.Anchor(vpTop,-Y);P.InsertFront(Result);end;
 
 constructor TTrainingPage.Create(AOwner:TComponent);

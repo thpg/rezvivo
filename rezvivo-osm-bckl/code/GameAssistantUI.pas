@@ -184,7 +184,7 @@ begin
   FVoiceOutputStatus.Name := 'AssistantVoiceOutputStatus'; FVoiceOutputStatus.Html := False;
   FVoiceOutputStatus.Color := MenuMuted; FPanel.InsertFront(FVoiceOutputStatus);
   FVoiceMeter := TCastleRectangleControl.Create(Self);
-  FVoiceMeter.Name := 'AssistantMicrophoneLevel'; FVoiceMeter.Color := Vector4(0.12, 0.2, 0.24, 1);
+  FVoiceMeter.Name := 'AssistantMicrophoneLevel'; FVoiceMeter.Color := MenuInset;
   FVoiceMeter.Exists := False; FPanel.InsertFront(FVoiceMeter);
   FVoiceLevel := TCastleRectangleControl.Create(Self);
   FVoiceLevel.Color := MenuAccent; FVoiceLevel.Anchor(hpLeft); FVoiceLevel.Anchor(vpBottom);
@@ -308,7 +308,7 @@ var Messages: TJSONArray; Item: TJSONObject; Card: TMenuPanel;
   begin
     Card := TMenuPanel.Create(FMessages); Card.Width := W;
     Card.Anchor(hpLeft); Card.Anchor(vpTop, -Y);
-    if IsUser then Card.Color := Vector4(0.08, 0.19, 0.22, 1) else Card.Color := MenuSurface;
+    if IsUser then Card.Color := MenuSelected else Card.Color := MenuSurface;
     FScroll.ScrollArea.InsertFront(Card);
     RoleLabel := TMenuLabel.Create(FMessages);
     RoleLabel.Html := False;
@@ -561,7 +561,7 @@ begin
       CaptionText := 'Cancel'; InputText := UiText('Preparing the microphone...');
     end else if FVoiceState = 'listening' then begin
       CaptionText := 'Finish recording'; FMicrophone.Style := mbDanger;
-      FVoiceInputStatus.Color := Vector4(1, 0.68, 0.62, 1);
+      FVoiceInputStatus.Color := MenuError;
       InputText := UiText('Recording...') + ' ' +
         TimeText(Data.Get('recording_ms', Int64(0)) / 1000.0);
       Partial := Trim(Data.Get('input_partial', ''));

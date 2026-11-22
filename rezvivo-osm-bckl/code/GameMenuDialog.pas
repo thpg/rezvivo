@@ -34,7 +34,7 @@ uses Math,CastleVectors,UiTranslations;
 
 constructor TMenuDialog.Create(AOwner:TComponent);
 begin
-  inherited;FullSize:=True;Color:=Vector4(0.01,0.025,0.04,0.94);
+  inherited;FullSize:=True;Color:=Vector4(0.25,0.32,0.38,0.38);
   PreferredWidth:=650;PreferredHeight:=520;
   FPanel:=TMenuPanel.Create(Self);FPanel.Anchor(hpMiddle);FPanel.Anchor(vpMiddle);InsertFront(FPanel);
   FTitle:=TMenuLabel.Create(Self);FTitle.FontSize:=24;

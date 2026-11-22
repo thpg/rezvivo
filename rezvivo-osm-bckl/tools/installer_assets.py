@@ -127,6 +127,9 @@ def redundant_assets(root):
 
 def neural_rider_assets(root):
     """Ship the inference meshes/weights, never editor exports or diagnostics."""
+    release = Path(root)/'release.json'
+    if release.is_file() and json.loads(release.read_text(encoding='utf-8-sig')).get('neural_riders') is False:
+        return []
     folder = Path(root)/'data/neural-riders'
     manifest = folder/'manifest.json'
     if not manifest.is_file():

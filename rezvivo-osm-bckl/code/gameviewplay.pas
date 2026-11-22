@@ -26,7 +26,7 @@ uses Classes,fpjson,GameRideMap,GameRidePanel,GameRiderBadge,GameTravel,Osm3dGeo
   GameCinematicCamera, GameCameraEncounters, GameFreeCamera, GameWalkingCamera, GameScreenFX, GameSimClock, GameSimReplay, GameSimCameraTrack,
   GameOsmStreaming, FitFile, GpxFile, GamePath,
   Osm3dRoadMaterial, Osm3dStudioSettings, Osm3dWorldVisibility, GameTouchControls,
-  GameRiderPoseControl, VeloSiteAPI,
+  GameRiderPoseControl, GameLocalRiderRuntime, GameLocalRiderCamera, WorkoutFile, VeloSiteAPI,
   FreezeDiagLog, Osm3dRiderShadow, GameRideMetricsHud, Osm3dDreamWorld, GameDreamWorldScene;
 
 type
@@ -46,6 +46,7 @@ type
     procedure SetData(const AName: string; ARouteDist, ASpeed: Single;
       APower, ACadence, AHR: Integer; ASelf: Boolean);
     procedure SetAppearance(const Color:TVector4;Sex:Integer;Bot:Boolean;Zone,ZoneCount:Integer);
+    procedure SetLocalPalette(ProfileIndex:Integer);
   end;
 
   { Кольцо режимов камеры, переключаемое клавишей C:
@@ -116,6 +117,11 @@ type
     procedure ConfigureTravel;
     procedure UpdateTravelInput(Dt:Single;AllowInput:Boolean);
   private
+    FLocalRiders:array of TLocalRiderRuntime;
+    FLocalCamera:TLocalRiderCamera;
+    FLocalCameraAgents:array of TPhysicalAgent;
+    FLocalRiderPositions:array of TVector3;
+    FCameraLocalIndex:Integer;
     FOfflineWorld: TGameWorld;
     FOfflineAvatar: TPhysicalAgent;
     FOfflineController: TPlayerAgentController;
@@ -151,7 +157,8 @@ type
     FPoseManager: TRiderPoseManager;   { automatic rider-pose selection from telemetry }
 
     { Extracted managers }
-    FRemoteRiders: TRemoteRidersManager;
+    FRemoteRiders: TRemoteRidersManager; { borrowed active receiver }
+    FPrimaryPublisher: TRemoteRidersManager; { owned publisher for participant 0 }
     { perf-тумблеры для раздельных MCP-замеров стоимости компонентов
       (perf.set); True по умолчанию — поведение игры не меняется }
     FPerfAnim: Boolean;     { False — пропускать AnimateFrame аватара/ботов/remote }
@@ -420,6 +427,10 @@ type
     function AdminPanelsVisible: Boolean;
     procedure UpdateAdminPanels;
 
+    function LocalRiderSeconds(Index:Integer;SimSeconds,RealSeconds:Single):Single;
+    procedure SetupLocalParticipants;
+    procedure SyncLocalParticipantPaths;
+    procedure ConnectLocalParticipants;
     procedure SetupOfflineWorld;
     procedure ActivateOfflineMode;
 
@@ -607,6 +618,12 @@ type
 
     { True, когда play-сессия жива (ESC-пауза: view приостановлен под
       меню, стриминг/байк/мир НЕ разобраны). }
+    function RiderBike(Index:Integer):TBikeInstance;
+    function RiderAgent(Index:Integer):TPhysicalAgent;
+    function RiderCadence(Index:Integer):Single;
+    function RiderSpeed(Index:Integer):Single;
+    procedure LocalBikeFitChanged(Index:Integer);
+    procedure StartWorkoutForAll(Plan:TWorkoutFile;Reference:Double);
     function SessionAlive: Boolean;
     procedure ConnectRideRoom;
     function RoomDiagnostics:TJSONObject;
@@ -686,7 +703,7 @@ implementation
 uses AppRuntimePaths, RiderRuntimeAudit, UiTranslations, GameRiderTraffic,GameRideRooms,GameAccountChange,GameClientUpdate,GameActivitySource,
   GameRiderVisibility, CastleFrustum,
   SysUtils, Math, jsonparser, CastleSoundEngine, CastleBoxes, CastleURIUtils, GameAudio, Osm3dSoundscape, {$IFDEF MSWINDOWS} Windows, ShellApi, MMSystem, {$ENDIF}
-  GameVideoCapture, GameActivityAccounting, GameMenuTheme, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
+  GameVideoCapture, GameActivityAccounting, GameMenuTheme, GameRiderPalette, GameViewMenu, GameAssistantUI, GameDeviceService, BikeJSON, BikeParametric_Animation, GameSensorLog, DebugLog, RideUploadQueue, GameUserData, GameWorkoutPlayer, GameRideHistory, GameRideRecovery, GameDailyTraining,GameRideCommands,
   Osm3dProfiler, GameMcpServer, AppSettings, GameGraphicsOptions, GameCoastalSky, Osm3dVegetationBudget, Osm3dWind, Osm3dCompositeShader, RiderHair,
   Osm3dImpostorCache,Osm3dRtxMaterials,Osm3dSunSky,Osm3dStreamingMap,GameRideLayout,
   EliteSterzoProtocol,GameHudZones;
@@ -1018,6 +1035,14 @@ begin
   ZoneBack.Color:=TrainingZoneColor(Zone,ZoneCount);ZoneLabel.Caption:='Z'+IntToStr(Zone+1);
 end;
 
+procedure TRiderCard.SetLocalPalette(ProfileIndex:Integer);
+var P:TRiderPanelPalette;
+begin
+  if LocalRiderCount<=1 then Exit;
+  P:=RiderPanelPalette(ProfileIndex);Bg.Color:=P.DarkSurface;
+  LblTop.Color:=P.AccentTextColor;
+end;
+
 procedure TRiderCard.SetData(const AName: string; ARouteDist, ASpeed: Single;
   APower, ACadence, AHR: Integer; ASelf: Boolean);
 var DistStr: string;
@@ -1064,108 +1089,6 @@ end;
   холодный старт. Те же параметры уже сидят в компонентах загруженного
   TBikeInstance; nil/отсутствие компонента = дефолты, как при старом
   фолбэке по исключению.) }
-procedure ApplyBikePhysicsToAgent(ABike: TBikeInstance; AAgent: TPhysicalAgent;UseLocalRider:Boolean=False);
-var
-  Anim: TAnimationComponent;
-  Mass, Cd, Area, Crr: Single;
-begin
-  if not Assigned(AAgent) then Exit;
-  if not Assigned(AAgent.State) then Exit;
-  try
-    if ABike <> nil then
-      Anim := ABike.Component(TAnimationComponent) as TAnimationComponent
-    else
-      Anim := nil;
-
-    if (Anim <> nil) and (Anim.RiderWeight > 1.0) then
-      Mass := Anim.RiderWeight
-    else
-      Mass := DefaultMass;
-    if UseLocalRider and(EffectiveRiderProfile.WeightKg>0)then Mass:=EffectiveRiderProfile.WeightKg;
-    if (Anim <> nil) and (Anim.BikeWeight > 0.1) then
-      Mass := Mass + Anim.BikeWeight;
-
-    if (Anim <> nil) and (Anim.DragCoefficient > 0.01) then
-      Cd := Anim.DragCoefficient
-    else
-      Cd := DefaultDragCoefficient;
-
-    if (Anim <> nil) and (Anim.FrontalArea > 0.01) then
-      Area := Anim.FrontalArea
-    else
-      Area := DefaultFrontalArea;
-
-    if (Anim <> nil) and (Anim.RollingResistance > 0.0001) then
-      Crr := Anim.RollingResistance
-    else
-      Crr := DefaultRollingResistance;
-
-    AAgent.State.AvatarMass := Mass;
-    AAgent.State.DragCoefficient := Cd;
-    AAgent.State.FrontalArea := Area;
-    AAgent.State.RollingResistance := Crr;
-    if ABike<>nil then begin
-      AAgent.State.CollisionBodyHeight:=ABike.BodyParameters.HeightCm*0.01;
-      AAgent.State.CollisionHalfWidth:=0.36*
-        EnsureRange(AAgent.State.CollisionBodyHeight/1.78,0.85,1.2);
-    end;
-
-    Logger.Info('[Physics] ' + Format(
-      'Applied to "%s": mass=%.1fkg Cd=%.2f A=%.2fm² Crr=%.4f CdA=%.3f',
-      [AAgent.Name, Mass, Cd, Area, Crr, Cd * Area]));
-  except
-    on E: Exception do
-      Logger.Info('[Physics] ' + 'Failed to apply bike params to "' +
-        AAgent.Name + '": ' + E.Message);
-  end;
-end;
-
-{ Kinematic bicycle: tan(δ) ≈ L · κ. Positive curvature turns +X toward +Z;
-  the upward steerer axis therefore needs a negative SteerAngleDeg.
-  Positive local +X roll banks toward that same +Z direction.
-  At near-zero curvature falls
-  back to a small lean-proportional angle so slow turns still show bar input. }
-procedure ApplySteerFromPhysics(ABike: TBikeInstance; AAgent: TPhysicalAgent);
-const
-  MaxSteerDeg = 40.0;
-  LeanToSteerAtLowSpeed = 0.35;   { δ ≈ 0.35 · lean when path κ is tiny }
-var
-  WB, Steer, V, G: Single;
-  S: TPhysicsState;
-begin
-  if (ABike = nil) or (AAgent = nil) or (AAgent.State = nil) then Exit;
-  S := AAgent.State;
-  WB := ABike.AxleHalfSpanM * 2.0;
-  if WB < 0.3 then WB := DefaultWheelbase;
-  if Abs(S.CurrentCurvature) > 1e-5 then
-    Steer := -RadToDeg(ArcTan(WB * S.CurrentCurvature))
-  else if Assigned(AAgent.Actor)and AAgent.Actor.RiderOwnsLean then
-    { Body roll also contains pedal balance. It is not route curvature and
-      must not feed back into steering on a straight road. }
-    Steer:=0
-  else
-  begin
-    { Low-speed / straight: couple bars lightly to lean so they don't stay
-      glued straight while the bike is banked. }
-    V := S.CurrentSpeed;
-    if V < 0.5 then V := 0.5;
-    G := 9.81;
-    if Abs(S.CurrentTurnAngle) > 0.05 then
-      Steer := -RadToDeg(ArcTan(
-        (WB * G * Tan(DegToRad(S.CurrentTurnAngle))) / Sqr(V)))
-    else
-      Steer := 0;
-    { Soft blend toward lean-proportional when the kinematic estimate is
-      large at very low speed (unstable division). }
-    if V < 2.0 then
-      Steer := Steer * (V / 2.0) +
-        (-S.CurrentTurnAngle * LeanToSteerAtLowSpeed) * (1.0 - V / 2.0);
-  end;
-  if Steer > MaxSteerDeg then Steer := MaxSteerDeg
-  else if Steer < -MaxSteerDeg then Steer := -MaxSteerDeg;
-  ABike.SteerAngleDeg := Steer;
-end;
-
 constructor TViewPlay.Create(AOwner: TComponent);
 begin
   inherited;
@@ -1273,6 +1196,7 @@ begin
   end;
 end;
 procedure TViewPlay.ConfigureTravel;
+var I:Integer;R:TLocalRiderRuntime;
 begin
   if FRoadGuidance=nil then FRoadGuidance:=TRoadGuidance.Create;
   FRoadGuidance.Reset;FRoadRefresh:=0;FExplicitTurnTime:=0;FLastManualTurn:=0;
@@ -1335,6 +1259,26 @@ begin
   if FLocalBotLoading<>nil then FLocalBotLoading.Exists:=RidePreparationHeld;
   if (FTravelMode<>travelBicycle) and(FWorkoutHud<>nil) then begin
     FWorkoutHud.ReleaseTrainer;WorkoutPlayer.Stop;FWorkoutHud.Exists:=False;
+  end;
+  for I:=1 to High(FLocalRiders)do begin
+    R:=FLocalRiders[I];
+    R.Agent.State.FreeTravel:=FFreeExplore;
+    R.Agent.State.TravelOffRoad:=False;R.Agent.State.Walking:=FTravelMode=travelWalk;
+    R.Agent.State.TravelSteering:=0;R.Agent.State.TravelBrake:=0;
+    R.Agent.State.TravelTargetSpeed:=0;
+    R.Agent.State.GroundTurn:=Default(TGroundTurnState);
+    R.SyncBikeFit;
+    if FTravelMode=travelWalk then R.Agent.Physics.SetWheelProbeHalfSpan(0.18);
+    RegisterTrafficAgent(FLaneManager,R.Agent);
+    if FFreeExplore then R.Agent.State.SlopeQuery:=R.Agent.State.GroundQuery;
+    R.Bike.GroundTurn:=Default(TGroundTurnFrame);R.Bike.OnFoot:=FTravelMode=travelWalk;
+    R.Bike.Group.Exists:=FPerfRiders and(FTravelMode<>travelFlight);
+    R.Metrics.Exists:=FTravelMode=travelBicycle;
+    if FTravelMode<>travelBicycle then begin
+      R.Controller.SetDesiredPower(0);R.Controller.SetAutoMove(False);
+      R.WorkoutHud.ReleaseTrainer;R.Workout.Stop;R.WorkoutHud.Exists:=False;
+      if FTravelMode=travelWalk then R.Bike.AnimateOnFoot(0,0,Pi/2);
+    end;
   end;
 end;
 {$I GameTravelRoads.inc}
@@ -1518,6 +1462,160 @@ begin
     APath.LoadRoadPoints(FRoadPointsFileNameLocal);
 end;
 
+procedure TViewPlay.StartWorkoutForAll(Plan:TWorkoutFile;Reference:Double);
+var I:Integer;Watts:Double;
+begin
+  if Plan=nil then Exit;
+  for I:=0 to Max(0,Length(FLocalRiders)-1)do begin
+    Watts:=Reference;if(I>0)and(Watts>0)then Watts:=EffectiveRiderProfile(I).FtpW;
+    WorkoutPlayerForRider(I).Start(Plan,Watts,Watts>0,Watts>0);
+    RideHistoryForRider(I).SetWorkout(Plan.Name,Plan.Url);
+  end;
+end;
+
+function TViewPlay.RiderBike(Index:Integer):TBikeInstance;
+begin
+  Result:=nil;if(Index>=0)and(Index<Length(FLocalRiders))then Result:=FLocalRiders[Index].Bike
+  else if Index=0 then Result:=FBikeInstance;
+end;
+function TViewPlay.RiderAgent(Index:Integer):TPhysicalAgent;
+begin
+  Result:=nil;if(Index>=0)and(Index<Length(FLocalRiders))then Result:=FLocalRiders[Index].Agent
+  else if Index=0 then Result:=FActiveAvatarAgent;
+end;
+function TViewPlay.RiderCadence(Index:Integer):Single;
+begin
+  Result:=0;if(Index>=0)and(Index<Length(FLocalRiders))then Result:=FLocalRiders[Index].Hud.BLEData.InstantCadence
+  else if Index=0 then Result:=RideCadence;
+end;
+function TViewPlay.RiderSpeed(Index:Integer):Single;
+var A:TPhysicalAgent;
+begin A:=RiderAgent(Index);Result:=0;if A<>nil then Result:=A.State.CurrentSpeed end;
+procedure TViewPlay.LocalBikeFitChanged(Index:Integer);
+begin
+  if(Index>=0)and(Index<Length(FLocalRiders))then FLocalRiders[Index].SyncBikeFit
+  else if Index=0 then BikeFitChanged;
+  if(Index=0)and(FPrimaryPublisher<>nil)then FPrimaryPublisher.PublishBikeConfig(RiderBike(0))
+  else if(Index>0)and(Index<Length(FLocalRiders))and(FLocalRiders[Index].Publisher<>nil)then
+    FLocalRiders[Index].Publisher.PublishBikeConfig(RiderBike(Index));
+end;
+
+function TViewPlay.LocalRiderSeconds(Index:Integer;SimSeconds,RealSeconds:Single):Single;
+begin
+  if(Index>0)and DeviceService.IsSimulationActive then Result:=RealSeconds
+  else Result:=SimSeconds;
+end;
+
+procedure TViewPlay.SetupLocalParticipants;
+var I:Integer;Title,WorldId:String;
+begin
+  if Length(FLocalRiders)>0 then Exit;
+  SetLength(FLocalRiders,LocalRiderCount);SetLength(FLocalCameraAgents,LocalRiderCount);
+  SetLength(FLocalRiderPositions,LocalRiderCount);
+  FLocalRiders[0]:=TLocalRiderRuntime.Create(0);
+  FLocalRiders[0].Bind(FActiveAvatarAgent,FActivePlayerController,FBikeInstance,FPoseManager,
+    FBLEHud,FRideMetricsHud,FWorkoutHud);
+  FLocalRiders[0].Publisher:=FPrimaryPublisher;
+  FLocalCameraAgents[0]:=FActiveAvatarAgent;
+  FRideMetricsHud.SetGridSlot(0,LocalRiderCount);
+  Title:=ChangeFileExt(ExtractFileName(FCurrentFitPath),'');WorldId:='';
+  if FDreamWorld<>nil then begin Title:=FDreamWorld.DisplayTitle(UiLanguage);WorldId:=FDreamWorld.Id end;
+  if Title=''then Title:=UiText('Free ride');
+  for I:=1 to High(FLocalRiders)do begin
+    FLocalRiders[I]:=TLocalRiderRuntime.Create(I);
+    FLocalRiders[I].CreateParticipant(FreeAtStop,Self,MainViewport,SceneLevel,
+      FOfflineWorld,FActiveAvatarAgent,LocalRiderCount);
+    FLocalCameraAgents[I]:=FLocalRiders[I].Agent;
+    ApplyGroundQueryToAgent(FLocalRiders[I].Agent);
+    ApplyWorldSunToBikeShadow(FLocalRiders[I].Bike);
+    if UseSharedRiderShadows then FLocalRiders[I].Bike.ShadowMode:=bsmNone
+    else FLocalRiders[I].Bike.ShadowMode:=bsmCGE;
+    FLocalRiders[I].Bike.SetOnFoot(FTravelMode=travelWalk);
+    RegisterTrafficAgent(FLaneManager,FLocalRiders[I].Agent);
+    FLocalRiders[I].BeginRide(Title,FCurrentFitPath,WorldId,True);
+  end;
+end;
+
+procedure TViewPlay.SyncLocalParticipantPaths;
+var I:Integer;
+begin
+  if not HasActiveState then Exit;
+  for I:=1 to High(FLocalRiders)do begin
+    FActiveAvatarAgent.Path.CopyTo(FLocalRiders[I].Agent.Path);
+    ApplyGroundQueryToAgent(FLocalRiders[I].Agent);
+    if FLocalRiders[I].Publisher<>nil then FLocalRiders[I].Publisher.RefreshPreparedPath;
+  end;
+end;
+
+procedure TViewPlay.ConnectLocalParticipants;
+var I,N:Integer;Rooms:TRideRooms;Info,Primary:TRideRoomInfo;WorldId:String;
+  Ids:array of Integer;R:TLocalRiderRuntime;Receiver:TRemoteRidersManager;Sun:TVector3;
+begin
+  if Length(FLocalRiders)<2 then Exit;
+  for I:=1 to High(FLocalRiders)do RideRooms(I).Update;
+  if not ClientCanUseOnlineServices(False)then Exit;
+  WorldId:='';if FDreamWorld<>nil then WorldId:=FDreamWorld.Id;
+  Primary:=RideRooms(0).Info;
+  for I:=1 to High(FLocalRiders)do begin
+    R:=FLocalRiders[I];if R.Ended then Continue;
+    Rooms:=RideRooms(I);
+    if not Rooms.Busy and not Rooms.Active then begin
+      if RideRooms(0).MatchesRide(FCurrentFitPath,WorldId)then begin
+        if(Primary.SessionToken='')or Primary.InviteSession then begin
+          if GetTickCount64>=R.RoomRetryAt then begin
+            R.RoomRetryAt:=GetTickCount64+15000;
+            Rooms.Join(Primary.Code,FCurrentFitPath);
+          end;
+        end
+        else Rooms.AutoJoin(FCurrentFitPath,(FTravelMode=travelBicycle)and R.Devices.HasControlDevice);
+      end else if(WorldId='')and(FTravelMode=travelBicycle)then
+        Rooms.AutoJoin(FCurrentFitPath,R.Devices.HasControlDevice);
+    end;
+    if not Rooms.MatchesRide(FCurrentFitPath,WorldId)then begin
+      if R.Publisher<>nil then R.Publisher.StopRelay;Continue;
+    end;
+    Info:=Rooms.Info;
+    if R.Publisher=nil then begin
+      R.Publisher:=TRemoteRidersManager.Create(FreeAtStop,I);R.Publisher.ReceiveEnabled:=False;
+      R.Publisher.Setup(MainViewport,SceneLevel,R.Agent.Actor.Transform,R.Agent.Path);
+      R.Publisher.SetLaneManager(FLaneManager,FLaneManager.FindRider(R.Agent));
+      R.Publisher.SetRidersVisible(FPerfRiders and not FFreeExplore);
+      R.Publisher.SetAnimationEnabled(FPerfAnim);
+      if UseSharedRiderShadows then R.Publisher.SetShadowMode(bsmNone)
+      else R.Publisher.SetShadowMode(bsmCGE);
+      if CurrentSun(Sun)then R.Publisher.SetShadowSunWorld(Sun);
+    end;
+    if(R.Publisher.RideClient=nil)or(R.Publisher.RideClient.LocalRiderId<>Info.RiderId)or
+      (R.Publisher.RideClient.ServerUrl<>Info.RelayUrl)then
+      R.Publisher.StartRelay(Info.RelayUrl,ResolveActiveBikeJsonUrl(I),BikeJsonFileName2,
+        True,Info.RiderId,LocalRider(I).DisplayName,Info.SessionToken,R.Bike);
+    if R.Publisher.RideClient<>nil then Rooms.RelayError:=R.Publisher.RideClient.LastError;
+  end;
+  SetLength(Ids,Length(FLocalRiders));N:=0;
+  if(FPrimaryPublisher<>nil)and(FPrimaryPublisher.RideClient<>nil)then begin
+    Ids[N]:=FPrimaryPublisher.RideClient.LocalRiderId;Inc(N);
+  end;
+  for I:=1 to High(FLocalRiders)do if(FLocalRiders[I].Publisher<>nil)and
+    (FLocalRiders[I].Publisher.RideClient<>nil)then begin
+      Ids[N]:=FLocalRiders[I].Publisher.RideClient.LocalRiderId;Inc(N);
+    end;
+  SetLength(Ids,N);FPrimaryPublisher.SetLocalRiderIds(Ids);
+  for I:=1 to High(FLocalRiders)do if FLocalRiders[I].Publisher<>nil then
+    FLocalRiders[I].Publisher.SetLocalRiderIds(Ids);
+  Receiver:=FPrimaryPublisher;
+  if Receiver.RideClient=nil then
+    for I:=1 to High(FLocalRiders)do if(FLocalRiders[I].Publisher<>nil)and
+      (FLocalRiders[I].Publisher.RideClient<>nil)then begin Receiver:=FLocalRiders[I].Publisher;Break end;
+  { A guest primary may have no eligible trainer while another local rider
+    joins the public route. Receive that room once, without publishing the
+    primary rider under somebody else's identity. }
+  FRemoteRiders:=Receiver;
+  FPrimaryPublisher.ReceiveEnabled:=Receiver=FPrimaryPublisher;
+  for I:=1 to High(FLocalRiders)do if FLocalRiders[I].Publisher<>nil then
+    FLocalRiders[I].Publisher.ReceiveEnabled:=Receiver=FLocalRiders[I].Publisher;
+  if Receiver.RideClient<>nil then Receiver.RideClient.OnRiderCountChanged:=@RiderCountChanged;
+end;
+
 procedure TViewPlay.SetupOfflineWorld;
 begin
   Logger.Info('[ViewPlay] ' + '>>> SetupOfflineWorld START');
@@ -1681,6 +1779,7 @@ begin
 
   if Assigned(FRemoteRiders) then FRemoteRiders.RefreshPreparedPath;
   FOsmWidthsApplied := True;
+  SyncLocalParticipantPaths;
 end;
 
 procedure TViewPlay.ActivateOfflineMode;
@@ -2357,7 +2456,7 @@ var
   RayLength,Cone:Single;
   CameraValid,ShadowsActive:Boolean;
   I:Integer;
-  procedure Apply(Bike:TBikeInstance);
+  procedure Apply(Bike:TBikeInstance;LocalAgent:TPhysicalAgent=nil);
   var Needed,WasNeeded:Boolean;
   begin
     if Bike=nil then Exit;
@@ -2371,9 +2470,9 @@ var
       the current pose immediately, not a buffer from the last visible frame. }
     if Needed and not WasNeeded and (PhysicsDt<=0) then begin
       if Bike.OnFoot then begin
-        if (Bike=FBikeInstance) and HasActiveState then
-          Bike.AnimateOnFoot(0,FActiveAvatarAgent.State.CurrentSpeed,Pi/2,
-            Tan(DegToRad(EnsureRange(FActiveAvatarAgent.State.CurrentGroundPitch,-45,45))))
+        if LocalAgent<>nil then
+          Bike.AnimateOnFoot(0,LocalAgent.State.CurrentSpeed,Pi/2,
+            Tan(DegToRad(EnsureRange(LocalAgent.State.CurrentGroundPitch,-45,45))))
         else if FAmbientPeople<>nil then FAmbientPeople.RefreshPose(Bike);
       end
       else Bike.AnimateFrame(Single(0));
@@ -2399,7 +2498,8 @@ begin
     end else CurrentSun(Sun);
   end;
   Context:=PrepareRiderVisibility(Frustum,CameraValid,ShadowsActive,Sun,RayLength,Cone);
-  Apply(FBikeInstance);
+  Apply(FBikeInstance,FActiveAvatarAgent);
+  for I:=1 to High(FLocalRiders)do Apply(FLocalRiders[I].Bike,FLocalRiders[I].Agent);
   if FBotBikes<>nil then for I:=0 to FBotBikes.Count-1 do Apply(TBikeInstance(FBotBikes[I]));
   if FAmbientPeople<>nil then for I:=0 to AmbientModelCount-1 do Apply(FAmbientPeople.Bike(I));
   if FRemoteRiders<>nil then for I:=0 to FRemoteRiders.RemoteVisualCount-1 do
@@ -2811,6 +2911,9 @@ begin
       { Hiding actors must not disable the world's shadows and reflections. }
       if FPerfRiders then begin
         FShadowAtlas.Casters.Add(FBikeInstance.Group);
+        for I:=1 to High(FLocalRiders)do
+          if(FLocalRiders[I].Bike<>nil)and FLocalRiders[I].Bike.Group.Exists then
+            FShadowAtlas.Casters.Add(FLocalRiders[I].Bike.Group);
         if FLocalBots<>nil then FLocalBots.AppendShadowCasters(FShadowAtlas.Casters,
           FShadowAtlas.RtxRequested and not FShadowAtlas.RtxRasterComparison);
         if FAmbientPeople<>nil then FAmbientPeople.AppendShadowCasters(FShadowAtlas.Casters,
@@ -3013,7 +3116,7 @@ var
   Layer: TWorldRenderLayer;
   I: Integer;
 begin
-  if AccountChangePending then
+  for I:=0 to LocalRiderCount-1 do if AccountChangePending(I)then
     raise EInvalidOperation.Create(UiText('Account change in progress. Please wait.'));
   inherited;
   LocalizeDesignedUi(Self);
@@ -3253,7 +3356,7 @@ begin
   FBLEHud.SetLabels(Labels);
 
   { ── Rider list panel — scrollable card list ── }
-  FHasOtherRiders := False;
+  FHasOtherRiders := LocalRiderCount>1;
   FAdminLayoutValid := False;
   FRiderListCount:=0;
   FRidePanelCollapsed:=False;
@@ -3816,6 +3919,7 @@ begin
 
   { ── Remote riders manager ── }
   FRemoteRiders := TRemoteRidersManager.Create(FreeAtStop);
+  FPrimaryPublisher:=FRemoteRiders;
   FRemoteRiders.OnProfileLog := {$ifdef FPC}@{$endif} ProfileLogLine;
   FRemoteRiders.Setup(
     MainViewport,
@@ -3870,10 +3974,12 @@ begin
   FLocalLaneHandle := FLaneManager.RegisterRider(FActiveAvatarAgent);
   FRemoteRiders.SetLaneManager(FLaneManager, FLocalLaneHandle);
 
+  SetupLocalParticipants;
   ArrangeLocalRidersAtStart;
 
   { ── Cinematic camera ── }
   FCinematicCam := TCinematicCamera.Create;
+  FLocalCamera:=TLocalRiderCamera.Create;FCameraLocalIndex:=0;
   FCinematicCam.Setup(MainViewport, AvatarTransform, FOfflineAvatar.Path);
   FCinematicCam.Enabled := True;   { start in AUTO (cinematic) mode; C cycles the ring }
   if Assigned(FOsmStreaming) and FOsmStreaming.Active then
@@ -4045,38 +4151,32 @@ begin
   ProfileSaveAndShow;
   FreeAndNil(FProfileLog);
 
-  RideHistory.Finish;
-  if FWorkoutHud<>nil then FWorkoutHud.ReleaseTrainer;
+  if Length(FLocalRiders)>0 then begin
+    FRemoteRiders:=FPrimaryPublisher;
+    for I:=0 to High(FLocalRiders)do begin
+      if I>0 then begin
+        if RideRooms(I).Info.InviteSession then RideRooms(I).Leave else RideRooms(I).EndAutomatic;
+      end;
+      FreeAndNil(FLocalRiders[I]);
+    end;
+    SetLength(FLocalRiders,0);SetLength(FLocalCameraAgents,0);
+    FPoseManager:=nil;FBikeInstance:=nil;FBLEHud:=nil;
+  end else begin
+    RideHistory.Finish;
+    if FWorkoutHud<>nil then FWorkoutHud.ReleaseTrainer;
+    WorkoutPlayer.Stop;SensorLog.Close;
+    FreeAndNil(FPoseManager);FreeAndNil(FBikeInstance);FreeAndNil(FBLEHud);
+  end;
   FreeAndNil(FWorkoutGates);
-  if GameSound<>nil then GameSound.StopRide;
-  FAudioSampleTimer:=0;
-  WorkoutPlayer.Stop;
-  if Assigned(DeviceService) and DeviceService.HasControlDevice then
-    try DeviceService.StopTrainer;except on E:Exception do Logger.Warning('[Trainer] '+E.Message);end;
-  { Close sensor journal }
-  if SensorLog.IsOpen then
-    SensorLog.Close;
-
-  { Только что записанный CSV-сеанс попадёт в очередь загрузки.
-    Скан недорогой — просто пробег по sessions/. На завершении
-    приложения unit RideUploadQueue может finalize-нуться раньше
-    чем Castle освободит views — поэтому проверяем nil. }
-  if Assigned(UploadQueue) then
-    UploadQueue.Scan;
-
-  FRemoteRiders.StopRelay;
-  FreeAndNil(FRemoteRiders);
-  FreeAndNil(FPoseManager);
-  { Аватарный TBikeInstance — plain-class, владельца не имеет; явный Free
-    балансирует KeepExistingBegin rig-узлов (см. ботов выше). MCP-реестр
-    уже снят (McpUnregisterPlayObjects в начале Stop). }
-  ClearGroundRiderShadow;
-  FreeAndNil(FBikeInstance);
-  FreeAndNil(FBLEHud);
+  if GameSound<>nil then GameSound.StopRide;FAudioSampleTimer:=0;
+  FRemoteRiders:=nil;
+  if FPrimaryPublisher<>nil then FPrimaryPublisher.StopRelay;
+  FreeAndNil(FPrimaryPublisher);ClearGroundRiderShadow;
   FreeAndNil(FCamera);
   FreeAndNil(FTerrainPBR);
   FreeAndNil(FLaneManager);
   FreeAndNil(FCinematicCam);
+  FreeAndNil(FLocalCamera);
   FreeAndNil(FFreeCam);
   FreeAndNil(FWalkingCam);
   FreeAndNil(FScreenFX);
@@ -4138,7 +4238,7 @@ end;
 procedure TViewPlay.ConnectRideRoom;
 var WorldId:string;I:TRideRoomInfo;
 begin
-  if FRemoteRiders=nil then Exit;
+  if FPrimaryPublisher=nil then Exit;
   if not ClientCanUseOnlineServices(False) then Exit;
   WorldId:='';if FDreamWorld<>nil then WorldId:=FDreamWorld.Id;
   if(WorldId='')and(FTravelMode=travelBicycle)and not Settings.GetSimulationEnabled then begin
@@ -4146,20 +4246,20 @@ begin
       DeviceService.HasControlDevice or((DeviceService.ActivitySourceFlags and ActivitySourceSmartTrainer)<>0));
   end else RideRooms.EndAutomatic;
   if not RideRooms.MatchesRide(FCurrentFitPath,WorldId)then begin
-    if(FRemoteRiders.RideClient<>nil)and FRemoteRiders.RideClient.PrivateRoom then
-      FRemoteRiders.StopRelay;
+    if(FPrimaryPublisher.RideClient<>nil)and FPrimaryPublisher.RideClient.PrivateRoom then
+      FPrimaryPublisher.StopRelay;
     Exit;
   end;
   I:=RideRooms.Info;
-  if(FRemoteRiders.RideClient<>nil)and FRemoteRiders.RideClient.PrivateRoom and
-    (FRemoteRiders.RideClient.ServerUrl=I.RelayUrl)and
-    (FRemoteRiders.RideClient.LocalRiderId=I.RiderId)then begin
-    RideRooms.RelayError:=FRemoteRiders.RideClient.LastError;Exit;
+  if(FPrimaryPublisher.RideClient<>nil)and FPrimaryPublisher.RideClient.PrivateRoom and
+    (FPrimaryPublisher.RideClient.ServerUrl=I.RelayUrl)and
+    (FPrimaryPublisher.RideClient.LocalRiderId=I.RiderId)then begin
+    RideRooms.RelayError:=FPrimaryPublisher.RideClient.LastError;Exit;
   end;
   RideRooms.RelayError:='';
-  FRemoteRiders.StartRelay(I.RelayUrl,BikeJsonFileName,BikeJsonFileName2,True,I.RiderId,EffectiveRiderProfile.Nickname,I.SessionToken);
-  if FActiveAvatarAgent<>nil then FRemoteRiders.LocalDistance:=FActiveAvatarAgent.State.CumulativeDistance;
-  FRemoteRiders.RideClient.OnRiderCountChanged:=@RiderCountChanged;
+  FPrimaryPublisher.StartRelay(I.RelayUrl,BikeJsonFileName,BikeJsonFileName2,True,I.RiderId,EffectiveRiderProfile.Nickname,I.SessionToken,FBikeInstance);
+  if FActiveAvatarAgent<>nil then FPrimaryPublisher.LocalDistance:=FActiveAvatarAgent.State.CumulativeDistance;
+  FPrimaryPublisher.RideClient.OnRiderCountChanged:=@RiderCountChanged;
 end;
 
 function TViewPlay.TrafficDiagnosticsSnapshot:TLaneReplayState;
@@ -4168,7 +4268,8 @@ begin
 end;
 
 function TViewPlay.RoomDiagnostics:TJSONObject;
-var I:TRideRoomInfo;Rows:TRiderBroadcastArray;A:TJSONArray;N:Integer;
+var I:TRideRoomInfo;Rows:TRiderBroadcastArray;A,Locals:TJSONArray;N:Integer;
+  R:TLocalRiderRuntime;O:TJSONObject;J:TSensorLog;
 begin
   RideRooms.Update;I:=RideRooms.Info;
   Result:=TJSONObject.Create(['active',RideRooms.Active,'busy',RideRooms.Busy,
@@ -4176,6 +4277,25 @@ begin
     'content_hash',I.ContentHash,'start_slot',I.StartSlot,'account',I.RiderId]);
   Result.Add('relay_error',RideRooms.RelayError);
   if not SessionAlive then Exit;
+  Result.Add('camera_local_index',FCameraLocalIndex);
+  Result.Add('camera_group',Assigned(FLocalCamera)and FLocalCamera.GroupShot);
+  Locals:=TJSONArray.Create;Result.Add('local_participants',Locals);
+  for N:=0 to High(FLocalRiders)do begin
+    R:=FLocalRiders[N];if(R=nil)or(R.Agent=nil)or(R.Hud=nil)then Continue;
+    J:=SensorLogForRider(N);
+    O:=TJSONObject.Create(['index',N,'key',LocalRider(N).Key,
+      'name',LocalRider(N).DisplayName,'guest',not RiderApi(N).IsAuthorized,
+      'ended',R.Ended,'distance',R.Agent.State.CumulativeDistance,
+      'speed_mps',R.Agent.State.CurrentSpeed,'power',R.Agent.State.AppliedPowerWatts,
+      'measured_power',R.Hud.ReadMeasuredPower.Watts,
+      'measured_valid',R.Hud.ReadMeasuredPower.Valid,
+      'journal_open',J.IsOpen,'recording_enabled',J.RecordingEnabled,
+      'journal_elapsed',J.JournalElapsed,'workout_state',Ord(R.Workout.State),
+      'workout_elapsed',R.Workout.Elapsed]);
+    O.Add('position',TJSONArray.Create([R.Agent.State.WorldPosition.X,
+      R.Agent.State.WorldPosition.Y,R.Agent.State.WorldPosition.Z]));
+    Locals.Add(O);
+  end;
   if FActiveAvatarAgent<>nil then begin
     Result.Add('distance',FActiveAvatarAgent.State.CumulativeDistance);
     Result.Add('position',TJSONArray.Create([FActiveAvatarAgent.State.WorldPosition.X,
@@ -4199,11 +4319,19 @@ begin
     (FActiveAvatarAgent.Path.PointCount>1)then begin
     FRoomStartApplied:=True;Slot:=RideRooms.Info.StartSlot;
     PlaceTrafficStartSlot(FLaneManager,FActiveAvatarAgent,Slot);
-    if FRemoteRiders<>nil then FRemoteRiders.LocalDistance:=FActiveAvatarAgent.State.CumulativeDistance;
+    if FPrimaryPublisher<>nil then FPrimaryPublisher.LocalDistance:=FActiveAvatarAgent.State.CumulativeDistance;
   end;
   H:=RegisterTrafficAgent(FLaneManager,FActiveAvatarAgent);
   FLaneManager.InvalidateRiderPose(H);
   PlaceTrafficAgent(FLaneManager,FActiveAvatarAgent);
+  for I:=1 to High(FLocalRiders)do begin
+    A:=FLocalRiders[I].Agent;
+    FActiveAvatarAgent.Path.CopyTo(A.Path);ApplyGroundQueryToAgent(A);
+    A.InitializeAtStart;
+    if RideRooms(I).MatchesRide(FCurrentFitPath,WorldId)then Slot:=RideRooms(I).Info.StartSlot
+    else Slot:=I;
+    PlaceTrafficStartSlot(FLaneManager,A,Slot);
+  end;
   if FLocalBots<>nil then begin
     FLocalBots.ResetOnRoute(FLaneManager,FActiveAvatarAgent);
     if Assigned(FOsmStreaming)and Assigned(FOsmStreaming.Session)and Assigned(FOsmStreaming.Session.Map)then
@@ -4387,6 +4515,9 @@ begin
     Hide the ride widgets from the loading screen from the initial layout,
     and restore them when preparation ends even if the window size is unchanged. }
   if FRideMetricsHud<>nil then FRideMetricsHud.Exists:=not (FOsmPrepHold or FFocusMode);
+  for I:=1 to High(FLocalRiders)do
+    if(FLocalRiders[I]<>nil)and(FLocalRiders[I].Metrics<>nil)then
+      FLocalRiders[I].Metrics.Exists:=not(FOsmPrepHold or FFocusMode);
   if FAssistantButton<>nil then FAssistantButton.Exists:=not FOsmPrepHold;
   if FFocusButton<>nil then FFocusButton.Exists:=not FOsmPrepHold and (FTravelMode=travelBicycle);
   UpdateRiderListVisibility;
@@ -4406,6 +4537,10 @@ begin
   FAdminLayoutHeight := LayoutHeight;
   FAdminLayoutWidth:=LayoutWidth;FAdminLayoutScale:=UIScale;
   L:=RideHudLayout(LayoutWidth,LayoutHeight);
+  if(Length(FLocalRiders)>1)and(FRideMetricsHud<>nil)then begin
+    L.RidersTop:=Math.Max(L.RidersTop,FRideMetricsHud.GridBottom*UIScale+12);
+    L.RidersMaxHeight:=Math.Max(0.0,LayoutHeight-L.RidersTop-12);
+  end;
   if ShowPanels then begin
     L.RidersTop:=Math.Max(L.RidersTop,250);
     L.RidersMaxHeight:=Math.Max(RideRiderCardHeight,Math.Min(L.RidersMaxHeight,LayoutHeight-L.RidersTop-12));
@@ -4508,7 +4643,7 @@ procedure TViewPlay.RiderCountChanged(Sender: TObject);
 begin
   { The relay calls this when publishing a changed count, not every frame.
     FRiderCards is a reusable pool and cannot tell how many riders remain. }
-  FHasOtherRiders:=(FLocalBots<>nil)and(FLocalBots.VisibleCount>0);
+  FHasOtherRiders:=(Length(FLocalRiders)>1)or((FLocalBots<>nil)and(FLocalBots.VisibleCount>0));
   if(FRemoteRiders<>nil)and(FRemoteRiders.RideClient<>nil)then
     FHasOtherRiders:=FHasOtherRiders or(FRemoteRiders.RideClient.RemoteRiderCount>0);
   UpdateRiderListVisibility;
@@ -4517,14 +4652,19 @@ begin
 end;
 
 procedure TViewPlay.BeginActivityRecord;
-var Title,WorldName:String;
+var Title,WorldName:String;I:Integer;
 begin
   Title:=ChangeFileExt(ExtractFileName(FCurrentFitPath),'');WorldName:='';
   if FDreamWorld<>nil then begin Title:=FDreamWorld.DisplayTitle(UiLanguage);WorldName:=FDreamWorld.Id;end;
   if Title='' then Title:=UiText('Free ride');
   if WorldName<>'' then RememberRideMap(rmkDream,WorldName)
   else if not FPointExplore then RememberRideMap(rmkReal,FCurrentFitPath);
-  RideHistory.BeginRide(Title,FCurrentFitPath,WorldName);
+  if Length(FLocalRiders)>0 then begin
+    for I:=0 to High(FLocalRiders)do begin
+      FLocalRiders[I].Hud.Reset;
+      FLocalRiders[I].BeginRide(Title,FCurrentFitPath,WorldName,I>0);
+    end;
+  end else RideHistory.BeginRide(Title,FCurrentFitPath,WorldName);
   if HasActiveState then RideHistory.RebaseDistance(FActiveAvatarAgent.State.CumulativeDistance);
   if WorkoutPlayer.Plan<>nil then RideHistory.SetWorkout(WorkoutPlayer.Plan.Name,WorkoutPlayer.Plan.Url);
 end;
@@ -4670,7 +4810,7 @@ end;
 procedure TViewPlay.UpdateRideMap;
 var P:TGamePath;I,N,K,Sex:Integer;A,B,Pos:TVector3;Geo:TLatLon;C:TVector4;
   Snapped,HasGeo:Boolean;Routes,Lines,Points:TJSONArray;R:TJSONObject;
-  Station,Ftp:Single;Riders:TRiderBroadcastArray;RiderBike:TBikeInstance;
+  Station,Ftp:Single;Riders:TRiderBroadcastArray;ListedBike:TBikeInstance;
   Marks:TRideMapMarkers;
   procedure Marker(const V:TVector3;Inst:TBikeInstance;SelfMarker:Boolean);
   var M:Integer;
@@ -4703,13 +4843,15 @@ begin
     finally Routes.Free end;
   end;
   Marks:=nil;Marker(FActiveAvatarAgent.State.WorldPosition,FBikeInstance,True);
+  for I:=1 to High(FLocalRiders)do
+    Marker(FLocalRiders[I].Agent.State.WorldPosition,FLocalRiders[I].Bike,True);
   if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do
     if TLocalBotAgent(FBotAgents[I]).Visible then
       Marker(TLocalBotAgent(FBotAgents[I]).State.WorldPosition,TBikeInstance(FBotBikes[I]),False);
   if (FRemoteRiders<>nil)and(FRemoteRiders.RideClient<>nil)then begin
     Riders:=FRemoteRiders.RideClient.GetAllRemoteRiders;
     for I:=0 to High(Riders)do
-      if FRemoteRiders.HudRider(Riders[I].RiderId,RiderBike,Pos,Ftp)then Marker(Pos,RiderBike,False);
+      if FRemoteRiders.HudRider(Riders[I].RiderId,ListedBike,Pos,Ftp)then Marker(Pos,ListedBike,False);
   end;
   FRideMap.Canvas.Map.Markers:=Marks;
   FRideMap.Canvas.Follow(MapGeo(FActiveAvatarAgent.State.WorldPosition));
@@ -4734,7 +4876,7 @@ var
   LocalName: string;
   TmpCard: TRiderCard;
   SelfY, ScrollH, ContentH, Ftp: Single;
-  Color:TVector4;Sex:Integer;RiderBike:TBikeInstance;Pos:TVector3;
+  Color:TVector4;Sex:Integer;ListedBike:TBikeInstance;Pos:TVector3;
 begin
   CountRiderWork(rwRiderList);
   if not Assigned(FRiderInner) then Exit;
@@ -4742,12 +4884,12 @@ begin
   if HasActiveState then LocalDist:=FActiveAvatarAgent.State.CumulativeDistance;
   if Assigned(FRemoteRiders)and Assigned(FRemoteRiders.RideClient)then begin
     Riders:=FRemoteRiders.RideClient.GetAllRemoteRiders;
-    LocalName:=FRemoteRiders.RideClient.LocalRiderName;
+    LocalName:=LocalRider(0).DisplayName;
   end;
   LocalCount:=0;
   if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do
     if TLocalBotAgent(FBotAgents[I]).Visible then Inc(LocalCount);
-  Total:=Length(Riders)+1+LocalCount;
+  Total:=Length(Riders)+Max(1,Length(FLocalRiders))+LocalCount;
   if FRiderListCount<>Total then begin
     FRiderListCount:=Total;FAdminLayoutValid:=False;UpdateAdminPanels;
   end;
@@ -4784,10 +4926,12 @@ begin
   end;
 
   { Fill card 0 = self }
+  if Length(FLocalRiders)>1 then LocalName:='1. '+LocalRider(0).DisplayName;
   FRiderCards[0].SetData(LocalName, 0, LocalSpeed,
     LocalPower, LocalCadence, LocalHR, True);
   RiderBadgeAppearance(FBikeInstance,Color,Sex);
   FRiderCards[0].SetAppearance(Color,Sex,False,FBLEHud.PowerZone(LocalPower),FBLEHud.PowerZoneCount);
+  FRiderCards[0].SetLocalPalette(0);
 
   { Fill cards 1..N = remote riders (relative distance from self) }
   for I := 0 to High(Riders) do begin
@@ -4795,12 +4939,24 @@ begin
       Riders[I].Distance - LocalDist,
       Riders[I].Speed, Riders[I].Power,
       Riders[I].Cadence, Riders[I].HeartRate, False);
-    RiderBike:=nil;Ftp:=0;FRemoteRiders.HudRider(Riders[I].RiderId,RiderBike,Pos,Ftp);
-    RiderBadgeAppearance(RiderBike,Color,Sex);
+    ListedBike:=nil;Ftp:=0;FRemoteRiders.HudRider(Riders[I].RiderId,ListedBike,Pos,Ftp);
+    RiderBadgeAppearance(ListedBike,Color,Sex);
     FRiderCards[I+1].SetAppearance(Color,Sex,False,FBLEHud.PowerZone(Riders[I].Power,Ftp),FBLEHud.PowerZoneCount);
   end;
 
   J:=Length(Riders)+1;
+  for I:=1 to High(FLocalRiders)do begin
+    with FLocalRiders[I]do begin
+      LocalPower:=Round(Agent.State.AppliedPowerWatts);
+      FRiderCards[J].SetData(IntToStr(I+1)+'. '+LocalRider(I).DisplayName,
+        Agent.State.CumulativeDistance-LocalDist,Agent.State.CurrentSpeed,
+        LocalPower,Hud.BLEData.InstantCadence,Hud.BLEData.HeartRate,False);
+      RiderBadgeAppearance(Bike,Color,Sex);
+      FRiderCards[J].SetAppearance(Color,Sex,False,Hud.PowerZone(LocalPower),Hud.PowerZoneCount);
+      FRiderCards[J].SetLocalPalette(I);
+    end;
+    Inc(J);
+  end;
   if FBotAgents<>nil then for I:=0 to FBotAgents.Count-1 do begin
     Bot:=TLocalBotAgent(FBotAgents[I]);if not Bot.Visible then Continue;
     BotGap:=Bot.State.CumulativeDistance-LocalDist;
@@ -4935,6 +5091,10 @@ begin
     including the camera which survives this route reset. }
   if Assigned(FCinematicCam) then FCinematicCam.GroundQuery := nil;
   DetachGroundQuery(FActiveAvatarAgent);
+  for I:=1 to High(FLocalRiders)do begin
+    FLocalRiders[I].FinishRide;DetachGroundQuery(FLocalRiders[I].Agent);
+    if RideRooms(I).Busy then RideRooms(I).Cancel else RideRooms(I).Leave;
+  end;
   if Assigned(FBotAgents) then
     for I := 0 to FBotAgents.Count - 1 do
       DetachGroundQuery(TPhysicalAgent(FBotAgents[I]));
@@ -4985,8 +5145,12 @@ begin
   { Длины пути для lane-менеджера/удалённых райдеров — как в Start/снап-свапе. }
   if WorldChanged then begin
     if FAmbientPeople<>nil then FAmbientPeople.ResetOnRoute(nil,FActiveAvatarAgent);
-    FreeAndNil(FRemoteRiders);FreeAndNil(FLaneManager);
+    FRemoteRiders:=nil;
+    for I:=1 to High(FLocalRiders)do FreeAndNil(FLocalRiders[I].Publisher);
+    FreeAndNil(FPrimaryPublisher);FreeAndNil(FLaneManager);
     FRemoteRiders:=TRemoteRidersManager.Create(FreeAtStop);
+    FPrimaryPublisher:=FRemoteRiders;
+    if Length(FLocalRiders)>0 then FLocalRiders[0].Publisher:=FPrimaryPublisher;
     FRemoteRiders.OnProfileLog:=@ProfileLogLine;
     FRemoteRiders.Setup(MainViewport,SceneLevel,AvatarTransform,FActiveAvatarAgent.Path);
     FRemoteRiders.InitPathCumDist;
@@ -5006,7 +5170,9 @@ begin
       else FLaneManager.SetRoad(8.0, FRemoteRiders.PathTotalLength);
   end;
 
+  SyncLocalParticipantPaths;
   ArrangeLocalRidersAtStart;
+  if FLocalCamera<>nil then FLocalCamera.Reset;
 
   { HUD обнуляем; FIT-плеер — с начала и на паузе (как в Start). }
   if Assigned(FBLEHud) then FBLEHud.Reset;
@@ -5334,6 +5500,7 @@ begin
   if TStart>=FRoomCheckAt then begin
     FRoomCheckAt:=TStart+1000;RideRooms.Update;
     ConnectRideRoom;
+    ConnectLocalParticipants;
   end;
 
   { The watchdog uses an in-memory heartbeat. Log only a real stall;
@@ -5562,6 +5729,8 @@ begin
   end;
 
   RestoreActivityRecord;
+  if Length(FLocalRiders)>0 then FLocalRiders[0].SimAccountedUntil:=FSimAccountedUntil;
+  if not RidePreparationHeld then for I:=1 to High(FLocalRiders)do FLocalRiders[I].Restore;
 
   { 0b. Пост-релизная диагностика движения (~8 с после снятия холда,
        раз в секунду): если райдер «крутит педали на месте», эти строки
@@ -5599,25 +5768,21 @@ begin
     Физика читает DesiredPower+AutoMove контроллера, оверлей — сенсоры.
     Раньше push был только у симуляции и стоял ПОСЛЕ физики — аватар
     стоял, а мощность/каденс на HUD уже были. }
-  if Assigned(FBLEHud) and(FTravelMode=travelBicycle)and not FKeyboardPowerActive then
-    FBLEHud.UpdateBLETelemetry(FActiveAvatarAgent);
-  if Assigned(FActivePlayerController) and HasActiveState then
-  begin
-    if Assigned(FBLEHud) and(FTravelMode=travelBicycle) and
-      not FKeyboardPowerActive then
-      FActivePlayerController.SetDesiredPower(
-        FActiveAvatarAgent.State.AppliedPowerWatts);
-    if (FTravelMode=travelBicycle) and (not RidePreparationHeld) and Assigned(FBLEHud) and FBLEHud.ReadMeasuredPower.Valid and
-       (FActiveAvatarAgent.State.AppliedPowerWatts > 0) then
-      FActivePlayerController.SetAutoMove(True);
+  { Each participant consumes only their assigned sensors. Physics below
+    still advances the world once, irrespective of the number of HUDs. }
+  for I:=0 to High(FLocalRiders)do begin
+    if I=0 then begin
+      FLocalRiders[I].Agent:=FActiveAvatarAgent;FLocalRiders[I].Controller:=FActivePlayerController;
+    end;
+    FLocalRiders[I].Agent.FrameSecondsOverride:=LocalRiderSeconds(I,PhysDt,SecondsPassed);
+    if FLocalRiders[I].Ended then FLocalCameraAgents[I]:=nil
+    else FLocalCameraAgents[I]:=FLocalRiders[I].Agent;
+    if I>0 then FLocalRiders[I].UpdateSteering(SecondsPassed,
+      not RidePreparationHeld and(FTravelMode=travelBicycle)and(Container.FrontView=Self)and
+      Container.Focused and(Container.ForceCaptureInput=nil),FLaneManager);
+    FLocalRiders[I].BeforePhysics(not RidePreparationHeld,(I=0)and FKeyboardPowerActive,
+      FTravelMode,FPerfAnim and not((I=0)and FLeanTestActive));
   end;
-
-  { FIT, physical motion and animation share the same playback delta. }
-  { Exactly one roll owner. The physical trajectory still provides lateral
-    acceleration, but does not also rotate an animated parametric bicycle. }
-  if HasActiveState and Assigned(FActiveAvatarAgent.Actor)then
-    FActiveAvatarAgent.Actor.RiderOwnsLean:=Assigned(FBikeInstance)and
-      FPerfAnim and FBikeInstance.BodyDynamicsEnabled and FBikeInstance.HasTripoRider and not FLeanTestActive;
   if Assigned(FBotAgents)and Assigned(FBotBikes)then
     for I:=0 to Min(FBotAgents.Count,FBotBikes.Count)-1 do begin
       LeanAgent:=TPhysicalAgent(FBotAgents[I]);
@@ -5633,11 +5798,15 @@ begin
   if PhysSteps < 4  then PhysSteps := 4;
   if PhysSteps > 64 then PhysSteps := 64;   { верхний предохранитель от спайков }
   try
-    if (not RidePreparationHeld) and (PhysDt>0) then
+    if (not RidePreparationHeld) and ((PhysDt>0)or(Length(FLocalRiders)>1)) then
     begin
       if (not FFreeExplore or FRouteExcursion)and(FLocalBots<>nil)then FLocalBots.BeforePhysics(PhysDt,FBikeInstance);
-      UpdateRiderTraffic(FLaneManager,PhysDt);
-      if FFreeExplore and not FRouteExcursion then FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps)
+      if Length(FLocalRiders)>1 then UpdateRiderTraffic(FLaneManager,LocalRiderSeconds(1,PhysDt,SecondsPassed))
+      else UpdateRiderTraffic(FLaneManager,PhysDt);
+      if FFreeExplore and not FRouteExcursion then begin
+        FActiveAvatarAgent.UpdateOffline(PhysDt,FixedTimeStep,PhysSteps);
+        for I:=1 to High(FLocalRiders)do FLocalRiders[I].Agent.UpdateOffline(LocalRiderSeconds(I,PhysDt,SecondsPassed),FixedTimeStep,PhysSteps);
+      end
       else begin
       if Assigned(FLoopbackSession) then
         FLoopbackSession.Update(PhysDt, FixedTimeStep, PhysSteps)
@@ -5675,10 +5844,7 @@ begin
     тренажёра / запись скорости FIT не учитывает дорогу этой игры.
     Подмешивание её после шага физики гасило ускорение от мощности
     и спуска, а на подъёме могло двигать байк даже без педалирования. }
-    if (FTravelMode=travelBicycle) and (not Assigned(FWorkoutHud) or not FWorkoutHud.ControlsTrainer) then
-      FBLEHud.UpdateBLETrainerControl(FActiveAvatarAgent, SecondsPassed)
-    else FBLEHud.SuspendTrainerControl;
-
+  for I:=0 to High(FLocalRiders)do FLocalRiders[I].TrainerStep(SecondsPassed,FTravelMode);
 
   T3 := Timer;
 
@@ -5689,7 +5855,7 @@ begin
     rider init is killing the process, this catch will show it. }
   FreezeDiagSetLocation('TViewPlay.Update: Relay UpdateRelayClient');
   try
-    if not FFreeExplore then FRemoteRiders.UpdateRelayClient(PhysDt,
+    if not FFreeExplore then FPrimaryPublisher.UpdateRelayClient(PhysDt,
       FActiveAvatarAgent,
       FBLEHud.BLEDataValid,
       FBLEHud.BLEData, FOsmPrepHold);
@@ -5703,12 +5869,16 @@ begin
   end;
   FreezeDiagMainBeat;
   FreezeDiagSetLocation('TViewPlay.Update: after Relay');
+  for I:=1 to High(FLocalRiders)do
+    if FLocalRiders[I].Publisher<>nil then with FLocalRiders[I]do
+      Publisher.UpdateRelayClient(LocalRiderSeconds(I,PhysDt,SecondsPassed),Agent,Hud.BLEDataValid,Hud.BLEData,RidePreparationHeld);
 
 
   T4 := Timer;
   if HasActiveState then FActiveAvatarAgent.TracePosition(mtRelay);
 
   CameraDt:=PhysDt;
+  if Length(FLocalRiders)>1 then CameraDt:=SecondsPassed;
   if FFocusMode and HasActiveState then begin
     CamPosV:=FActiveAvatarAgent.State.WorldPosition+Vector3(0,4,-8);
     MainViewport.Camera.SetView(CamPosV,Vector3(0,-0.25,1),Vector3(0,1,0));
@@ -5755,7 +5925,12 @@ begin
       FCinematicCam.ClearPathQuery:=nil;
       if(FOsmStreaming<>nil)and FOsmStreaming.Active then
         FCinematicCam.ClearPathQuery:=@CameraShotClearPath;
+      FCameraLocalIndex:=FLocalCamera.Update(CameraDt,FCinematicCam,MainViewport,FLocalCameraAgents);
       FCinematicCam.ClearNearby;
+      for I:=0 to High(FLocalRiders)do
+        if(I<>FCameraLocalIndex)or FLocalCamera.GroupShot then with FLocalRiders[I]do
+          FCinematicCam.AddNearbyRider(-2000000-I,Agent.State.WorldPosition,Agent.State.ForwardDir,
+            Agent.State.CurrentSpeed,Agent.State.CurrentModelPitch);
       if Assigned(AvatarTransform) then
       begin
         FRemoteRiders.GetNearbyCameraRiders(
@@ -5769,17 +5944,24 @@ begin
         if FPerfRiders and(FAmbientPeople<>nil)then
           FeedCinematicBot(-1000000-FAmbientPeople.Serial,FAmbientPeople.ActiveAgent);
         if FPerfRiders and(FLocalBots<>nil)and
-          FLocalBots.CameraContact(ContactHelper,ContactRecipient,ContactSerial)then
+          FLocalBots.CameraContact(ContactHelper,ContactRecipient,ContactSerial)then begin
+          { Id zero denotes the camera subject, which need not be rider 1
+            in a local group. Address the actual primary participant. }
+          if(FCameraLocalIndex<>0)or FLocalCamera.GroupShot then begin
+            if ContactHelper=0 then ContactHelper:=2000000;
+            if ContactRecipient=0 then ContactRecipient:=2000000;
+          end;
           FCinematicCam.OfferInteraction(ContactSerial,-ContactHelper,-ContactRecipient);
+        end;
       end;
       { Скорость райдера (м/с) — питает сценарий "райдер стоит": ниже ~0.3 м/с
         дольше ~1.5 с камера переключается на медленный облёт (cmOrbit) вместо
         трансляционных ракурсов, которые предполагают движение; поехал — вернётся
         к мото-камере. }
-      if Assigned(FActiveAvatarAgent) and Assigned(FActiveAvatarAgent.State) then
+      if RiderAgent(FCameraLocalIndex)<>nil then
       begin
-        FCinematicCam.TargetSpeed := FActiveAvatarAgent.State.CurrentSpeed;
-        FCinematicCam.TargetPitchDeg := FActiveAvatarAgent.State.CurrentModelPitch;
+        FCinematicCam.TargetSpeed := RiderAgent(FCameraLocalIndex).State.CurrentSpeed;
+        FCinematicCam.TargetPitchDeg := RiderAgent(FCameraLocalIndex).State.CurrentModelPitch;
       end;
       FCinematicCam.PuddleReflections:=(FShadowAtlas<>nil) and FShadowAtlas.RtxReflections
         and RtxReflectionsAvailable;
@@ -5826,6 +6008,10 @@ begin
   { HUD and cached map are bounded by wall time, including unlimited FPS. }
   if GetTickCount64>=FNextRideHud then begin
     FNextRideHud:=GetTickCount64+1000;UpdateRiderList;UpdateRideMap;
+    if(FOsmStreaming<>nil)and(Length(FLocalRiders)>1)then begin
+      for I:=0 to High(FLocalRiders)do FLocalRiderPositions[I]:=FLocalRiders[I].Agent.State.WorldPosition;
+      FOsmStreaming.SetLocalRiderPositions(FLocalRiderPositions);
+    end;
   end;
 
   T4b := Timer;   { TEMP-DIAG: конец culling/riderlist }
@@ -5839,30 +6025,8 @@ begin
     FPerfAnim=False (MCP perf.set) — весь блок пропускается. }
   if not FFocusMode and (FTravelMode=travelBicycle) and (PhysDt>0) and FPerfAnim and Assigned(FBikeInstance) then
   begin
-    if HasActiveState then FBikeInstance.GroundTurn:=FActiveAvatarAgent.State.GroundTurn.Frame;
-    { Каденс → шатун, скорость → колёса: покадрово и без гейта RideClient —
-      иначе в соло-заезде UpdateRiderList не бежит и аватар не педалирует.
-      Источник каденса — тот же, что у HUD (DeviceService.Cadence, FIT-сим
-      его кормит). БЕЗ гейта BLEDataValid: HasAnySensor может быть ложным
-      при живом симе, а BLEData сама даёт 0 при отсутствии данных. }
-    LocalCadence := FBLEHud.BLEData.InstantCadence;
-    if FKeyboardPowerActive then
-      if FKeyboardPower>0 then LocalCadence:=Round(EnsureRange(55+FKeyboardPower*0.1,55,115))
-      else LocalCadence:=0;
-    if HasActiveState then
-      LocalCadence := FBikeInstance.VisualCadence(LocalCadence,
-        FActiveAvatarAgent.State.CurrentSpeed);
-    if LocalCadence > 0 then
-      CrankInt := 60.0 / LocalCadence
-    else
-      CrankInt := 9999;  { effectively stopped }
-    { BISECT-TEST: сеттеры выключены — проверка, ломают ли они GPU-spin }
-    if not CliFlag('nospinset') then
-    begin
-      FBikeInstance.SetAnimationSpeed(CrankInt, CrankInt);
-      if HasActiveState then
-        FBikeInstance.SetWheelSpeedMps(FActiveAvatarAgent.State.CurrentSpeed);
-    end;
+    RiderSit:=FLocalRiders[0].Situation(FKeyboardPowerActive,FKeyboardPower);
+    LocalCadence:=RiderSit.CadenceRpm;
     ApplyTerrainSlopeToBikeShadow;   { tilt contact shadow to the ground under the avatar }
     { Steering angle from path curvature / lean — drives SteerRot + hand IK
       inside AnimateFrame/UpdateTripoRider. Stationary lean-test overrides. }
@@ -5874,16 +6038,6 @@ begin
       cadence as the drivetrain: simulation may have data without BLEDataValid. }
     if Assigned(FPoseManager) and HasActiveState then
     begin
-      RiderSit:=Default(TRiderSituation);
-      RiderSit.SpeedKmh := FActiveAvatarAgent.State.CurrentSpeed * 3.6;
-      RiderSit.PowerW := FActiveAvatarAgent.State.AppliedPowerWatts;
-      RiderSit.CadenceRpm := LocalCadence;
-      if not FActiveAvatarAgent.State.AutoMove and(LocalCadence<4)then RiderSit.PowerW:=0;
-      RiderSit.GradePct := SlopeDegToGradePct(FActiveAvatarAgent.State.CurrentSlopeAngle);
-      { Use continuous speed and yaw rate. A positional correction of the
-        route must not turn a world-coordinate difference into a body shove. }
-      RiderSit.LateralAccel := FActiveAvatarAgent.State.CurrentSpeed*
-        FActiveAvatarAgent.State.CurrentYawRateRad;
       if FLeanTestActive then
         RiderSit.LateralAccel:=9.80665*Tan(DegToRad(FLeanTestLastLean));
       RiderSit.FtpW := EffectiveRiderProfile.FtpW;
@@ -5904,18 +6058,24 @@ begin
           end;
         end;
       end;
-      if FActiveAvatarAgent.Actor.RiderOwnsLean then
-        FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,0,
-          FActiveAvatarAgent.State.CurrentModelPitch)
-      else FBikeInstance.SetRiderDynamicsSituation(RiderSit.PowerW,RiderSit.LateralAccel,
-        FActiveAvatarAgent.State.CurrentTurnAngle,FActiveAvatarAgent.State.CurrentModelPitch);
       if FLocalBots<>nil then FLocalBots.ApplySocialLook(0,RiderSit);
-      FPoseManager.Update(PhysDt, RiderSit);
     end;
-    FBikeInstance.AnimateFrame(PhysDt);
-    if HasActiveState and Assigned(FActiveAvatarAgent.Actor)and FActiveAvatarAgent.Actor.RiderOwnsLean then begin
-      FActiveAvatarAgent.State.CurrentTurnAngle:=FBikeInstance.RiderTotalLeanDeg;
-      FActiveAvatarAgent.State.TargetTurnAngle:=FActiveAvatarAgent.State.CurrentTurnAngle;
+    FLocalRiders[0].Animate(PhysDt,RiderSit,not CliFlag('nospinset'));
+  end;
+  for I:=1 to High(FLocalRiders)do begin
+    with FLocalRiders[I]do begin
+      Bike.Group.Exists:=FPerfRiders and not FFocusMode and(FTravelMode<>travelFlight)and
+        ((Agent.State.WorldPosition-MainViewport.Camera.WorldTranslation).LengthSqr<250000);
+      if Bike.Group.Exists and FPerfAnim and(LocalRiderSeconds(I,PhysDt,SecondsPassed)>0)then begin
+        if FTravelMode=travelWalk then Bike.AnimateOnFoot(LocalRiderSeconds(I,PhysDt,SecondsPassed),Agent.State.CurrentSpeed,Pi/2,
+          Tan(DegToRad(EnsureRange(Agent.State.CurrentGroundPitch,-45,45))))
+        else begin
+          RiderSit:=Situation(False,0);
+          SetRiderLookTarget(RiderSit,Agent.State.WorldPosition,Agent.State.ForwardDir,
+            FActiveAvatarAgent.State.WorldPosition+Vector3(0,1.45,0));
+          ApplySteerFromPhysics(Bike,Agent);Animate(LocalRiderSeconds(I,PhysDt,SecondsPassed),RiderSit);
+        end;
+      end;
     end;
   end;
 
@@ -5958,62 +6118,30 @@ begin
 
   T4e := Timer;   { TEMP-DIAG: конец FPoseManager.Update (+ bots) }
 
-  if not FFocusMode and (PhysDt>0) then
-    FRemoteRiders.AnimateAllRiders(PhysDt);
+  if not FFocusMode and (CameraDt>0) then
+    FRemoteRiders.AnimateAllRiders(CameraDt);
 
   if HasActiveState and FActiveAvatarAgent.State.AutoMove then
     HandleInput := False;
 
-  MetricsDt:=PhysDt;
-  if DeviceService.IsSimulationActive then begin
-    MetricsDt:=Math.Min(PhysDt,Math.Max(0.0,DeviceService.SimPositionSec-FSimAccountedUntil));
-    FSimAccountedUntil:=Math.Max(FSimAccountedUntil,DeviceService.SimPositionSec);
-  end;
-  SensorLog.RecordingEnabled:=(FTravelMode=travelBicycle) and not FKeyboardPowerActive and
-    (not DeviceService.IsSimulationActive or (DeviceService.SimPositionSec>=FSimAccountedUntil));
-  SensorLog.UseActivityClock;
-  if Assigned(FWorkoutHud) and(FTravelMode=travelBicycle) then
-    FWorkoutHud.Step(MetricsDt,not RidePreparationHeld and not FKeyboardPowerActive,Container.FrontView=Self);
-  Accounting:=Default(TActivityAccounting);
-  AccountingPaused:=False;
-  if DeviceService.IsSimulationActive then
-    DeviceService.SimPlayerInfo(AccountingPaused,AccountingCurSec,AccountingTotalSec);
-  if HasActiveState then begin
-    { One measured-power snapshot feeds the journal, activity and daily totals.
-      A traffic stop does not stop pedalling; cadence is an independent sensor. }
-    Accounting:=ActivityAccounting((FTravelMode=travelBicycle) and not FKeyboardPowerActive and
-      not RidePreparationHeld and not RideHistory.RestoreNeeded,
-      AccountingPaused,WorkoutPlayer.State in[wsReady,wsRunning,wsPaused],
-      WorkoutPlayer.State=wsRunning,FActiveAvatarAgent.State.CurrentSpeed,FBLEHud.ReadMeasuredPower);
-    SensorLog.SetSessionState(Accounting.Running,WorkoutPlayer.JournalLap,
-      EnsureRange(Round(WorkoutPlayer.TargetWatts),0,65535));
-    if (FTravelMode=travelBicycle) and not RidePreparationHeld and not RideHistory.RestoreNeeded then begin
-      LogRec:=FBLEHud.BLEData;
-      LogRec.InstantPower:=JournalPower(Accounting.Power);
-      LogRec.InstantSpeed:=FActiveAvatarAgent.State.CurrentSpeed*3.6;
-      LogRec.Distance:=Round(FActiveAvatarAgent.State.CumulativeDistance);
-      SensorLog.LogFrame(LogRec,SlopeDegToGradePct(FActiveAvatarAgent.State.CurrentSlopeAngle),MetricsDt,DeviceService.ActivitySourceFlags);
-    end;
-  end;
+  for I:=0 to High(FLocalRiders)do
+    FLocalRiders[I].FinishFrame(LocalRiderSeconds(I,PhysDt,SecondsPassed),SecondsPassed,not RidePreparationHeld,
+      (I=0)and FKeyboardPowerActive,(Container.FrontView=Self)and(I=FCameraLocalIndex),
+      FTravelMode,not GCliNoLabels);
+  if Length(FLocalRiders)>0 then FSimAccountedUntil:=FLocalRiders[0].SimAccountedUntil;
   UpdateRideAudio(SecondsPassed,PhysDt>0);
   if not FFreeExplore and (FWorkoutGates=nil) and (WorkoutPlayer.Plan<>nil) and HasActiveState then
     FWorkoutGates:=TWorkoutGates.Create(FreeAtStop,MainViewport.Items);
   if(FWorkoutGates<>nil)and not FFocusMode and not FFreeExplore then
     FWorkoutGates.Step(WorkoutPlayer,FActiveAvatarAgent,PhysDt,not RidePreparationHeld);
-  if HasActiveState then
-    RideHistory.Step(MetricsDt,FActiveAvatarAgent.State.CumulativeDistance,
-      FActiveAvatarAgent.State.WorldPosition.Y,Accounting.Power.Watts,
-      EffectiveRiderProfile.FtpW,Accounting.Running,Accounting.Power.Valid);
-  // Integrate once per ride frame even when label rendering is disabled.
-  // PhysDt follows FIT playback speed; live trainer time uses speed 1.
-  FBLEHud.UpdatePowerMetrics(MetricsDt,Accounting,SecondsPassed);
   SaveActivityCheckpoint;
+  for I:=1 to High(FLocalRiders)do
+    FLocalRiders[I].Checkpoint(not RidePreparationHeld,False,False);
   CaptureSimCheckpoint;
   FinishMotionTrace;
   { 4. Labels }
   T5a := Timer;
-  if not GCliNoLabels then
-    FBLEHud.UpdateInfoLabels(FActiveAvatarAgent, FLoopbackSession);
+  { Labels are updated by each participant with its accounting. }
   T5 := Timer;
 
   { Compute times in ms }

@@ -157,8 +157,11 @@ begin
   Result.X := (0.0005 + 0.001 * Power + 0.004 * Stand + 0.002 * Sprint) * A * Sin(2 * Theta - 0.4);
   Result.Yaw := (0.30 + 0.25 * Power + 0.65 * Stand + 0.25 * Sprint) * A * Cos(Theta - 0.35);
   Result.Pitch := (0.16 + 0.14 * Power + 0.45 * Stand + 0.25 * Sprint) * A * Sin(2 * Theta - 0.35);
-  Result.BikeLean := (0.28 + 0.20 * Power + 3.82 * Stand + 1.20 * Sprint) * A * Stroke;
-  Result.BikeSteer := -Result.BikeLean * 0.18;
+  { The kinematic fallback uses the same quieter pedal-reaction character
+    as RiderDynamics. Preserve body counter-roll below and solve contacts
+    afterward; never attenuate the finished hand/foot targets separately. }
+  Result.BikeLean := (0.22 + 0.16 * Power + 2.60 * Stand + 0.80 * Sprint) * A * Stroke;
+  Result.BikeSteer := -Result.BikeLean * 0.12;
   WorldRoll := (0.32 + 0.20 * Power + 0.85 * Stand + 0.25 * Sprint) * A * Cos(Theta - 0.55);
   ThoraxRoll := (0.20 + 0.18 * Power + 0.60 * Stand + 0.25 * Sprint) * A * Cos(Theta - 1.10);
   Result.Roll := WorldRoll - Result.BikeLean;

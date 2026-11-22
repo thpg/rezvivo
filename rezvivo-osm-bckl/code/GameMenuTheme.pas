@@ -4,12 +4,17 @@ interface
 uses UiTranslations, Classes, SysUtils, CastleUIControls, CastleControls, CastleColors, CastleFonts, CastleVectors, CastleRectangles;
 
 const
-  MenuBackground: TCastleColor = (X:0.043; Y:0.063; Z:0.078; W:1);
-  MenuSurface: TCastleColor = (X:0.075; Y:0.114; Z:0.145; W:1);
-  MenuBorder: TCastleColor = (X:0.149; Y:0.212; Z:0.255; W:1);
-  MenuText: TCastleColor = (X:0.929; Y:0.953; Z:0.965; W:1);
-  MenuMuted: TCastleColor = (X:0.604; Y:0.682; Z:0.733; W:1);
-  MenuAccent: TCastleColor = (X:0.333; Y:0.851; Z:0.918; W:1);
+  MenuBackground: TCastleColor = (X:0.941; Y:0.957; Z:0.973; W:1);
+  MenuSurface: TCastleColor = (X:0.992; Y:0.996; Z:1.000; W:1);
+  MenuBorder: TCastleColor = (X:0.765; Y:0.816; Z:0.855; W:1);
+  MenuText: TCastleColor = (X:0.086; Y:0.169; Z:0.239; W:1);
+  MenuMuted: TCastleColor = (X:0.306; Y:0.384; Z:0.451; W:1);
+  MenuAccent: TCastleColor = (X:0.000; Y:0.431; Z:0.510; W:1);
+  MenuInset: TCastleColor = (X:0.902; Y:0.937; Z:0.957; W:1);
+  MenuSelected: TCastleColor = (X:0.816; Y:0.914; Z:0.937; W:1);
+  MenuSuccess: TCastleColor = (X:0.000; Y:0.427; Z:0.263; W:1);
+  MenuWarning: TCastleColor = (X:0.529; Y:0.329; Z:0.000; W:1);
+  MenuError: TCastleColor = (X:0.686; Y:0.133; Z:0.192; W:1);
 
 type
   TMenuButtonStyle = (mbSecondary, mbPrimary, mbDanger, mbGhost);
@@ -33,7 +38,9 @@ type
     constructor Create(AOwner:TComponent); override;
     procedure Render; override;
   end;
-  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,mgArrow,mgBicycle,mgCalendar,mgAssistant);
+  TMenuGlyphKind=(mgHome,mgWorld,mgMountain,mgTraining,mgHistory,mgSettings,
+    mgArrow,mgBicycle,mgCalendar,mgAssistant,mgTrainer,mgPower,mgCadence,
+    mgHeart,mgSteering);
   TMenuGlyph=class(TCastleUserInterface)
   public
     Kind:TMenuGlyphKind;
@@ -46,6 +53,7 @@ type
   TMenuButton = class(TCastleButton)
   private
     FLastCaption: String;
+    FGeneratedIconUrl: String;
     FAutoIcon: Boolean;
     FStyle:TMenuButtonStyle;
     procedure SetStyle(const Value:TMenuButtonStyle);
@@ -171,9 +179,9 @@ var Img:TRGBAlphaImage;
 begin
   inherited;ScrollBarWidth:=6;
   Img:=TRGBAlphaImage.Create(1,1);Img.Clear(Vector4Byte(255,255,255,255));ScrollbarFrame.Image:=Img;
-  ScrollbarFrame.Color:=Vector4(0.075,0.114,0.145,1);
+  ScrollbarFrame.Color:=MenuInset;
   Img:=TRGBAlphaImage.Create(1,1);Img.Clear(Vector4Byte(255,255,255,255));ScrollbarSlider.Image:=Img;
-  ScrollbarSlider.Color:=Vector4(0.24,0.34,0.40,1);
+  ScrollbarSlider.Color:=MenuMuted;
 end;
 
 constructor TMenuPanel.Create(AOwner:TComponent);
@@ -231,6 +239,30 @@ begin
       Line([4,3,20,3,22,5,22,15,20,17,10,17,4,22,4,17,2,15,2,5,4,3]);
       Line([6,8,18,8]);Line([6,12,14,12]);
     end;
+    mgTrainer:begin
+      DrawCircleOutline(Vector2(R.Left+R.Width*0.38,R.Bottom+R.Height*0.52),
+        R.Width*0.23,R.Height*0.23,Color,1.6*UIScale);
+      Line([9,12,15,5,20,21]);Line([9,12,5,21]);
+      Line([2,21,8,21]);Line([17,21,23,21]);Line([15,5,20,5]);
+    end;
+    mgPower:Line([14,2,5,13,11,13,9,22,20,9,13,9,14,2]);
+    mgCadence:begin
+      DrawCircleOutline(Vector2(R.Left+R.Width/2,R.Bottom+R.Height/2),
+        R.Width*0.27,R.Height*0.27,Color,1.6*UIScale);
+      DrawCircleOutline(Vector2(R.Left+R.Width/2,R.Bottom+R.Height/2),
+        R.Width*0.07,R.Height*0.07,Color,1.6*UIScale);
+      Line([12,12,18,4,22,4]);Line([12,12,6,20,2,20]);
+    end;
+    mgHeart:begin
+      Line([12,21,4,14,2,9,3,5,6,3,9,3,12,6,15,3,18,3,21,5,
+        22,9,20,14,12,21]);
+      Line([4,11,8,11,10,8,13,15,15,11,20,11]);
+    end;
+    mgSteering:begin
+      Line([3,4,3,9,8,9,12,12,16,9,21,9,21,4]);
+      Line([12,12,12,21]);Line([9,21,15,21]);
+      Line([1,4,5,4]);Line([19,4,23,4]);
+    end;
   end;
 end;
 
@@ -238,12 +270,12 @@ procedure StyleMenuButton(const B:TCastleButton);
 begin
   B.CustomBackground:=True;
   B.CustomFont:=MenuFont;
-  B.CustomColorNormal:=Vector4(0.105,0.157,0.192,1);
-  B.CustomColorFocused:=Vector4(0.15,0.23,0.28,1);
-  B.CustomColorPressed:=Vector4(0.13,0.30,0.34,1);
-  B.CustomColorDisabled:=Vector4(0.085,0.105,0.12,1);
+  B.CustomColorNormal:=MenuInset;
+  B.CustomColorFocused:=Vector4(0.843,0.902,0.937,1);
+  B.CustomColorPressed:=MenuSelected;
+  B.CustomColorDisabled:=Vector4(0.929,0.945,0.957,1);
   B.CustomTextColorUse:=True;B.CustomTextColor:=MenuText;
-  B.TintDisabled:=Vector4(0.55,0.60,0.65,1);
+  B.TintDisabled:=Vector4(0.72,0.76,0.80,1);
   B.PaddingHorizontal:=16;B.PaddingVertical:=10;B.Border.AllSides:=0;
 end;
 
@@ -252,16 +284,16 @@ begin
   FStyle:=Value;StyleMenuButton(Self);
   case Value of
     mbPrimary:begin
-      CustomColorNormal:=MenuAccent;CustomColorFocused:=Vector4(0.46,0.92,0.97,1);
-      CustomColorPressed:=Vector4(0.25,0.72,0.79,1);CustomTextColor:=MenuBackground;
+      CustomColorNormal:=MenuAccent;CustomColorFocused:=Vector4(0.0,0.49,0.57,1);
+      CustomColorPressed:=Vector4(0.0,0.35,0.43,1);CustomTextColor:=White;
     end;
     mbDanger:begin
-      CustomColorNormal:=Vector4(0.25,0.14,0.16,1);CustomColorFocused:=Vector4(0.36,0.18,0.20,1);
-      CustomColorPressed:=Vector4(0.43,0.19,0.21,1);CustomTextColor:=Vector4(1,0.72,0.73,1);
+      CustomColorNormal:=Vector4(1,0.929,0.937,1);CustomColorFocused:=Vector4(0.98,0.86,0.88,1);
+      CustomColorPressed:=Vector4(0.95,0.79,0.82,1);CustomTextColor:=MenuError;
     end;
     mbGhost:begin
-      CustomColorNormal:=Vector4(0,0,0,0);CustomColorFocused:=Vector4(0.12,0.19,0.23,1);
-      CustomColorPressed:=Vector4(0.13,0.30,0.34,1);CustomTextColor:=MenuMuted;
+      CustomColorNormal:=Vector4(0,0,0,0);CustomColorFocused:=MenuInset;
+      CustomColorPressed:=MenuSelected;CustomTextColor:=MenuMuted;
     end;
   end;
 end;
@@ -416,7 +448,8 @@ begin
   { A fixed-size selector must not grow or push its caption outside the cell. }
   if (not AutoSize) and (Font <> nil) and
     (Font.TextWidth(Caption) / Max(0.01, UIScale) + 54 > Width) then Exit;
-  Image.Url := 'castle-data:/menu/icons/actions/' + IconName + '.png';
+  FGeneratedIconUrl:='castle-data:/menu/icons/actions/' + IconName + '.png';
+  Image.Url := FGeneratedIconUrl;
   ImageScale := 20 / 128;
   ImageMargin := 8;
 end;
@@ -444,6 +477,9 @@ begin
   end;
   SavedText:=CustomTextColor;
   if not Enabled then CustomTextColor:=MenuMuted;
+  { Only our monochrome action icons follow the button ink. Images provided
+    by a caller (thumbnails, appearance samples) retain their own colors. }
+  if(FGeneratedIconUrl<>'')and(Image.Url=FGeneratedIconUrl)then Image.Color:=CustomTextColor;
   try inherited;finally if not Enabled then CustomTextColor:=SavedText;end;
 end;
 

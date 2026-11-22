@@ -233,7 +233,7 @@ end;
 
 function TLaneManager.TrafficLimit(AHandle: TLaneRiderHandle): Single;
 var J: Integer; Delta,Right,PairForward,PairRight: TVector3; Gap,Across,LeaderSpeed,LeadLimit: Single;
-    PeerWins,Exclusive:Boolean;
+    PeerWins,Exclusive:Boolean;SideRequest:Single;
 begin
   Result:=MaxSpeed;
   if (AHandle<0) or (AHandle>=FCount) or not FRiders[AHandle].PoseValid then Exit;
@@ -286,7 +286,7 @@ begin
       authoritative. Min with Result preserves a zero corridor reservation. }
     if(LeadLimit<0.8)and
       (Abs(TargetOffset(AHandle)-FRiders[AHandle].ActualOffset)>
-        IfThen(FRiders[AHandle].PassingTime>0,0.03,0.15))and
+        IfThen((FRiders[AHandle].PassingTime>0)or(FRiders[J].Speed<0.1),0.005,0.15))and
       LaneClear(AHandle,FRiders[AHandle].Lane,6)then LeadLimit:=0.8;
     { When already nose-to-nose, first turn into the agreed free side.
       Crawling straight ahead during the lane blend consumes the remaining
@@ -296,17 +296,48 @@ begin
       (OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset>0.2)and
       (TVector3.DotProduct(FRiders[AHandle].CollisionDir,Right)<Min(0.55,
        (OffsetForWidth(FRiders[AHandle].Lane,FRiders[AHandle].RoadWidth)-FRiders[AHandle].ActualOffset)*0.8))then LeadLimit:=0;
+    { Departing beside a stationary wheel needs turning space too. Rotate
+      toward the clear lane before the crawl consumes the rear clearance;
+      the heading sweep still rejects rotations into an adjacent bicycle. }
+    SideRequest:=TargetOffset(AHandle)-FRiders[AHandle].ActualOffset;
+    if not FRiders[AHandle].Pedestrian and(FRiders[J].Speed<0.1)and
+      (Gap<4)and(Across<0.65)and(Abs(SideRequest)>0.2)and
+      LaneClear(AHandle,FRiders[AHandle].Lane,6)and
+      (TVector3.DotProduct(FRiders[AHandle].CollisionDir,Right)*Sign(SideRequest)<
+        Min(0.55,Abs(SideRequest)*0.8))then LeadLimit:=0;
     Result:=Min(Result,LeadLimit);
   end;
 end;
 
 function TLaneManager.TrafficLookAhead(AHandle:TLaneRiderHandle):Single;
+var J:Integer;Delta,Right:TVector3;Gap:Single;
 begin
   Result:=0;
+  if(AHandle<0)or(AHandle>=FCount)then Exit;
   if(AHandle>=0)and(AHandle<FCount)and FRiders[AHandle].Pedestrian then
     Exit(Max(0.8,FRiders[AHandle].Speed*0.45));
   if(AHandle>=0)and(AHandle<FCount)and(FRiders[AHandle].PassingTime>0)then
-    Result:=Max(0.7,FRiders[AHandle].Speed*0.65);
+    Exit(Max(0.7,FRiders[AHandle].Speed*0.65));
+  { A nearby stopped wheel needs the same tight steering horizon as an
+    oncoming pass. The normal five-metre route carrot otherwise drives us
+    into its rear before reaching the already selected free lane. Preserve
+    ordinary route smoothing as soon as there is lateral clearance. }
+  if not FRiders[AHandle].PoseValid then Exit;
+  Right:=Vector3(-FRiders[AHandle].ForwardDir.Z,0,FRiders[AHandle].ForwardDir.X);
+  if(Abs(TargetOffset(AHandle)-FRiders[AHandle].ActualOffset)<0.005)and
+    (Abs(TVector3.DotProduct(FRiders[AHandle].CollisionDir,Right))<0.03)then Exit;
+  for J:=0 to FCount-1 do begin
+    if(J=AHandle)or not FRiders[J].Active or not FRiders[J].PoseValid or
+      (FRiders[J].Speed>0.5)then Continue;
+    Delta:=FRiders[J].WorldPosition-FRiders[AHandle].WorldPosition;
+    if(Abs(Delta.Y)>2)or(Delta.LengthSqr>100)then Continue;
+    Gap:=TVector3.DotProduct(Delta,FRiders[AHandle].ForwardDir);
+    { Keep the short horizon while straightening alongside the obstacle.
+      Restoring the distant carrot at the first clear centimetre otherwise
+      lets the bicycle's remaining yaw carry it over a narrow road edge. }
+    if(Gap> -2.4)and(Gap<8)and(Abs(TVector3.DotProduct(Delta,Right))<1.6)then
+      Exit(Min(Max(0.7,FRiders[AHandle].Speed*0.65),Max(0.25,(Gap-2.4)*0.5)));
+  end;
 end;
 
 procedure TLaneManager.PlanOncoming(const Dt:Single);

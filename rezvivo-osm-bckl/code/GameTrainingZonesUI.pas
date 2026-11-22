@@ -84,7 +84,7 @@ var
   begin
     L := TMenuLabel.Create(FRowsOwner);
     BindUiText(L, Text);
-    L.Color := White;
+    L.Color := MenuText;
     L.FontScale := Scale;
     L.Anchor(hpLeft,AX);
     L.Anchor(vpTop,-AY);

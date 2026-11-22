@@ -350,6 +350,8 @@ begin
   for O in GraphicsDisplayOrder do
   begin
     if O = goUpscaleSmoothing then Continue;
+    FRows[O].Exists := GraphicsOptionAvailable(O);
+    if not FRows[O].Exists then Continue;
     FRows[O].Width := W;
     FRows[O].Anchor(hpLeft); FRows[O].Anchor(vpTop, -Y);
     if W >= 680 then begin X := 240; Top := 0 end
@@ -379,8 +381,10 @@ begin
     Refresh;
   end;
   if FRevision <> Settings.GraphicsRevision then Refresh;
-  FHints[goNeuralRiders].Caption:=UiText(GraphicsHints[goNeuralRiders]);
-  if NeuralRiderStatus<>''then FHints[goNeuralRiders].Caption:=FHints[goNeuralRiders].Caption+#10+NeuralRiderStatus;
+  if GraphicsOptionAvailable(goNeuralRiders) then begin
+    FHints[goNeuralRiders].Caption:=UiText(GraphicsHints[goNeuralRiders]);
+    if NeuralRiderStatus<>''then FHints[goNeuralRiders].Caption:=FHints[goNeuralRiders].Caption+#10+NeuralRiderStatus;
+  end;
   Arrange;
 end;
 

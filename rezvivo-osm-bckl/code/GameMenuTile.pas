@@ -56,6 +56,7 @@ type
     FOverlay:     TCastleRectangleControl;
     FAccent:      TCastleRectangleControl;
     FIcon:        TCastleImageControl;
+    FIconIsMask:  Boolean;
     FGlyph:TMenuGlyph;
     FTitleLabel:  TCastleLabel;
     FButton:      TCastleButton;
@@ -278,6 +279,17 @@ begin
 
   try
     FIcon.Url := AUrl;
+    { Only bundled monochrome action symbols follow the menu ink.
+      Photos and caller-supplied coloured icons retain their own colours. }
+    FIconIsMask := (Pos('castle-data:/menu/icons/routes/', AUrl)=1) or
+      (Pos('castle-data:/menu/icons/actions/', AUrl)=1) or
+      (AUrl='castle-data:/menu/icons/profile.png') or
+      (AUrl='castle-data:/menu/icons/devices.png') or
+      (AUrl='castle-data:/menu/icons/bikefit.png') or
+      (AUrl='castle-data:/menu/icons/events.png');
+    if FIconIsMask then begin
+      if FSelected then FIcon.Color:=MenuAccent else FIcon.Color:=MenuMuted;
+    end else FIcon.Color:=White;
     FIcon.Exists := True;
     Logger.Info('[MenuTile] ' + 'Иконка загружена: ' + AUrl);
   except
@@ -369,11 +381,13 @@ procedure TMenuTile.SetSelected(AValue:Boolean);
 begin
   FSelected:=AValue;Border.AllSides:=0;FAccent.Exists:=AValue;
   if AValue then begin
-    FBaseColor.Color:=Vector4(0.08,0.18,0.21,1);FTitleLabel.Color:=MenuText;
-    FGlyph.Color:=MenuAccent;FIcon.Color:=MenuAccent;
+    FBaseColor.Color:=MenuSelected;FTitleLabel.Color:=MenuText;
+    FGlyph.Color:=MenuAccent;
+    if FIconIsMask then FIcon.Color:=MenuAccent;
   end else begin
     FBaseColor.Color:=Vector4(0,0,0,0);FTitleLabel.Color:=MenuMuted;
-    FGlyph.Color:=MenuMuted;FIcon.Color:=MenuMuted;
+    FGlyph.Color:=MenuMuted;
+    if FIconIsMask then FIcon.Color:=MenuMuted;
   end;
 end;
 

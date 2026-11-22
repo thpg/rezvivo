@@ -38,6 +38,7 @@ type
   {$M-}
 
 implementation
+uses Math;
 
 constructor TGameWorld.Create;
 begin
@@ -91,12 +92,18 @@ procedure TGameWorld.Update(const SecondsPassed, FixedDelta: Single; const MaxSt
 var
   I: Integer;
   Agent: TPhysicalAgent;
+  Dt:Single;
 begin
   case FNetwork.Mode of
     nmOffline:
       begin
-        for I := 0 to FAgents.Count - 1 do
-          FAgents[I].UpdateOffline(SecondsPassed, FixedDelta, MaxSteps);
+        for I := 0 to FAgents.Count - 1 do begin
+          Agent:=FAgents[I];Dt:=SecondsPassed;
+          if Agent.FrameSecondsOverride>=0 then begin
+            Dt:=Agent.FrameSecondsOverride;
+            if Dt>0 then Agent.UpdateOffline(Dt,FixedDelta,Max(MaxSteps,Min(64,Ceil(Dt/FixedDelta)+2)));
+          end else if Dt>0 then Agent.UpdateOffline(Dt,FixedDelta,MaxSteps);
+        end;
       end;
 
     nmServer:

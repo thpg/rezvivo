@@ -3601,46 +3601,6 @@
     "evidence": "project-created assets / procedural output"
   },
   {
-    "path": "rezvivo-osm-bckl/data/neural-riders/dense/suit.mesh",
-    "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "Project-created runtime asset or procedural output",
-    "bytes": 27442226,
-    "sha256": "b32cb1e70b537a6442b26dd95b6a183d2a341dea7d384490c8bb6203c1684df8"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/neural-riders/dense/suit.nn",
-    "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "Project-created runtime asset or procedural output",
-    "bytes": 116631943,
-    "sha256": "206bfcba5836b1f3642f45061ee8084e1830ef8467223ada79c90000cf04dd2d"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/neural-riders/manifest.json",
-    "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "Project-created runtime asset or procedural output",
-    "bytes": 1266,
-    "sha256": "004fcf136f5bfe9bab72d44c52a9fb04defd6b2573540d946313ad986bad7f66"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/neural-riders/reduced/suit.mesh",
-    "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "Project-created runtime asset or procedural output",
-    "bytes": 6950642,
-    "sha256": "c1c0d8ed6f2846751097c619fbe0e6dc37bb656d58692c781380f44cbfd75ad5"
-  },
-  {
-    "path": "rezvivo-osm-bckl/data/neural-riders/reduced/suit.nn",
-    "license": "GPL-3.0-or-later",
-    "source": "REZVIVO",
-    "evidence": "Project-created runtime asset or procedural output",
-    "bytes": 29699383,
-    "sha256": "d8458eadfc4ddebe68246df12b12adbff9a2c24e13ba813584b8c6058d485abc"
-  },
-  {
     "path": "rezvivo-osm-bckl/data/procedural-trees/bark/bark_willow-Diffuse.jpg",
     "license": "CC0-1.0",
     "source": "rezvivo-osm-bckl/data/procedural-trees/bark/sources.json",
@@ -5060,8 +5020,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/en.json",
-    "bytes": 97833,
-    "sha256": "59802833e03ee1ee6a77f40387d7abf46d9ed542ee470e734655c7343819e647",
+    "bytes": 98723,
+    "sha256": "c6d3de182287890c656fcb172659da60bb24a59a5afede5c308b1cc53f695b5c",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"
@@ -5116,8 +5076,8 @@
   },
   {
     "path": "rezvivo-osm-bckl/data/translations/ru.json",
-    "bytes": 152890,
-    "sha256": "93c66ad6752874211f98571749038395e63c99704d69ef6af555e86dc6ba53f0",
+    "bytes": 154256,
+    "sha256": "592f12aed027d4cf2c2d0377578d832361406a6e907d8b3453bbaff9b7b6fae3",
     "license": "GPL-3.0-or-later",
     "source": "REZVIVO",
     "evidence": "project-created assets / procedural output"

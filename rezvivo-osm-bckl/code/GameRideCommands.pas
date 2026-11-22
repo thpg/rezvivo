@@ -8,7 +8,7 @@ const RideCommandTitles:array[TRideCommand]of String=
 function RideCommandKey(Command:TRideCommand):TKey;
 function SetRideCommandKey(Command:TRideCommand;Key:TKey):Boolean;
 function MatchRideCommand(const Event:TInputPressRelease;out Command:TRideCommand):Boolean;
-function ExecuteRideCommand(Command:TRideCommand):Boolean;
+function ExecuteRideCommand(Command:TRideCommand;ProfileIndex:Integer=0):Boolean;
 procedure ResetRideCommandKeys;
 function UserInterfaceScale:Single;
 procedure ApplyUserInterfaceScale(Container:TCastleContainer);
@@ -43,15 +43,15 @@ begin
   for C:=Low(C)to High(C)do if Event.IsKey(RideCommandKey(C),[])then begin Command:=C;Exit(True);end;
 end;
 
-function ExecuteRideCommand(Command:TRideCommand):Boolean;
+function ExecuteRideCommand(Command:TRideCommand;ProfileIndex:Integer):Boolean;
 begin
   Result:=False;
-  if WorkoutPlayer.State in[wsIdle,wsFinished]then Exit;
+  if WorkoutPlayerForRider(ProfileIndex).State in[wsIdle,wsFinished]then Exit;
   case Command of
-    rcPause:if WorkoutPlayer.State=wsPaused then WorkoutPlayer.Resume else WorkoutPlayer.Pause;
-    rcSkip:WorkoutPlayer.Skip;
-    rcPowerDown:WorkoutPlayer.ChangeReferenceWatts(-5);
-    rcPowerUp:WorkoutPlayer.ChangeReferenceWatts(5);
+    rcPause:if WorkoutPlayerForRider(ProfileIndex).State=wsPaused then WorkoutPlayerForRider(ProfileIndex).Resume else WorkoutPlayerForRider(ProfileIndex).Pause;
+    rcSkip:WorkoutPlayerForRider(ProfileIndex).Skip;
+    rcPowerDown:WorkoutPlayerForRider(ProfileIndex).ChangeReferenceWatts(-5);
+    rcPowerUp:WorkoutPlayerForRider(ProfileIndex).ChangeReferenceWatts(5);
     else Exit;
   end;
   Result:=True;

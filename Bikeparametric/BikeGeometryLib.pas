@@ -693,7 +693,7 @@ begin
   end;
   if WheelComp<>nil then begin
     WheelComp.WheelRadius:=DEF_WHEEL_RADIUS;WheelComp.TireWidth:=DEF_TIRE_WIDTH;
-    WheelComp.FrontRimHeight:=30;WheelComp.RearRimHeight:=30;WheelComp.SpokeCount:=16;
+    WheelComp.FrontRimHeight:=DEF_RIM_HEIGHT;WheelComp.RearRimHeight:=DEF_RIM_HEIGHT;WheelComp.SpokeCount:=16;
     if WantFlat then begin
       WheelComp.WheelRadius:=368;WheelComp.TireWidth:=29;
       WheelComp.FrontRimHeight:=20;WheelComp.RearRimHeight:=20;WheelComp.SpokeCount:=28;

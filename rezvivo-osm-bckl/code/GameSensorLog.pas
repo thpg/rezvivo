@@ -41,6 +41,7 @@ type
 
   TSensorLog = class
   private
+    FRiderIndex:Integer;
     FWriter: TJournalWriter;
     FOpened: Boolean;
     FFileName: string;
@@ -84,7 +85,7 @@ type
     procedure FlushFrame;
     class function ReadSession(const AFileName:string;TailOnly:Boolean):TSensorSessionRecordArray;
   public
-    constructor Create(const ASessionDir: string = 'sessions');
+    constructor Create(const ASessionDir: string = 'sessions'; ARiderIndex:Integer=0);
     destructor Destroy; override;
 
     { Log one sensor data record. Opens file on first call.
@@ -136,33 +137,40 @@ type
 
 { Global instance — created lazily, flushed+closed on exit }
 function SensorLog: TSensorLog;
+function SensorLogForRider(Index:Integer=0):TSensorLog;
+function RiderSessionDir(Index:Integer=0):String;
 
 implementation
 
 
 uses
-  AppRuntimePaths, SysUtils, Classes, DateUtils, Math, DebugLog;
+  GameUserData, AppRuntimePaths, SysUtils, Classes, DateUtils, Math, DebugLog;
 
 const
   CSVSep = ',';
 
 var
   GSensorLog: TSensorLog = nil;
+  RiderLogs:array[1..7]of TSensorLog;
   GOldExitProc: Pointer = nil;
 
 { ── Exit handler: flush and close on crash ── }
+procedure CloseAllRiderLogs;
+var I:Integer;
+  procedure CloseLog(var Log:TSensorLog);
+  begin
+    if Log=nil then Exit;
+    try Log.Close(False);except end;
+    try FreeAndNil(Log);except Log:=nil;end;
+  end;
+begin
+  for I:=1 to 7 do CloseLog(RiderLogs[I]);
+  CloseLog(GSensorLog);
+end;
+
 procedure SensorLogExitProc;
 begin
-  if Assigned(GSensorLog) then
-  begin
-    try
-      GSensorLog.Flush;
-      GSensorLog.Close(False);
-    except
-      { swallow — we're crashing }
-    end;
-    FreeAndNil(GSensorLog);
-  end;
+  CloseAllRiderLogs;
   ExitProc := GOldExitProc;
 end;
 
@@ -170,18 +178,37 @@ function SensorLog: TSensorLog;
 begin
   if not Assigned(GSensorLog) then
   begin
-    GSensorLog := TSensorLog.Create;
+    GSensorLog := TSensorLog.Create('');
     GOldExitProc := ExitProc;
     ExitProc := @SensorLogExitProc;
   end;
   Result := GSensorLog;
+  if not Result.IsOpen then Result.OwnerKey:=RiderDataDir(0);
 end;
 
 { ══════════════════════════════════════════════════════════════════ }
 
-constructor TSensorLog.Create(const ASessionDir: string);
+function RiderSessionDir(Index:Integer):String;
+begin
+  Result:=IncludeTrailingPathDelimiter(RiderDataDir(Index))+'sessions';
+  if(Index=0)and(GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'')and
+    (GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR')<>'')then Result:=GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR');
+end;
+function SensorLogForRider(Index:Integer):TSensorLog;
+begin
+  if(Index<0)or(Index>7)then raise ERangeError.Create('Invalid rider');
+  if Index=0 then Exit(SensorLog);
+  { Install the single crash handler even if the first recording is secondary. }
+  SensorLog;
+  if RiderLogs[Index]=nil then RiderLogs[Index]:=TSensorLog.Create('',Index);
+  Result:=RiderLogs[Index];
+  if not Result.IsOpen then Result.OwnerKey:=RiderDataDir(Index);
+end;
+
+constructor TSensorLog.Create(const ASessionDir: string; ARiderIndex:Integer);
 begin
   inherited Create;
+  FRiderIndex:=ARiderIndex;
   FOpened := False;
   FRecordingEnabled:=True;
   FLinesSinceFlush := 0;
@@ -211,11 +238,13 @@ begin
   FStartTick:=GetTickCount64;FResumeElapsed:=0;FLastElapsed:=0;FClockElapsed:=0;
   FHasFrameData:=False;FSourceFlags:=0;FLastSourceFlags:=0;
   FHasLast:=False;FLastWasZero:=False;FLastWriteTime:=0;FTotalLines:=0;FLinesSinceFlush:=0;
-  Dir := AppDirectory + FSessionDir;
+  if FOwnerKey='' then FOwnerKey:=RiderDataDir(FRiderIndex);
+  Dir := IncludeTrailingPathDelimiter(FOwnerKey)+'sessions';
+  if FSessionDir<>'' then Dir := AppDirectory + FSessionDir;
   if ExtractFileDrive(FSessionDir)<>''then Dir:=FSessionDir;
   if GetEnvironmentVariable('REZVIVO_TEST_AUTH_FILE')<>'' then
     if GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR')<>'' then
-      Dir:=GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR');
+      if FRiderIndex=0 then Dir:=GetEnvironmentVariable('REZVIVO_TEST_SESSION_DIR');
 
   if not DirectoryExists(Dir) then
   begin
@@ -769,5 +798,8 @@ begin
     Lines.Free;
   end;
 end;
+
+finalization
+  CloseAllRiderLogs;
 
 end.

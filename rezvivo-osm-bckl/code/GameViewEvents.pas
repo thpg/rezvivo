@@ -75,6 +75,7 @@ begin
   FDesign.FullSize := True;
   FDesign.Url := 'castle-data:/gameviewevents.castle-user-interface';
   LocalizeDesignedUi(FDesign);
+  TCastleRectangleControl(FDesign.DesignedComponent('Background')).Color:=MenuBackground;
   InsertFront(FDesign);
 
   FLabelTitle := FDesign.DesignedComponent('LabelTitle') as TCastleLabel;
@@ -102,7 +103,7 @@ begin
 
   FStatusLabel := TMenuLabel.Create(Self);
   FStatusLabel.FontScale := 1.0;
-  FStatusLabel.Color := Vector4(0.85, 0.85, 0.9, 1);
+  FStatusLabel.Color := MenuMuted;
   FStatusLabel.Anchor(hpLeft, 20);
   FStatusLabel.MaxWidth := 900;
   FStatusLabel.Anchor(vpTop, -16);

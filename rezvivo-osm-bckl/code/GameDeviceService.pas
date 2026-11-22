@@ -54,6 +54,18 @@ type
 
   TGameDeviceService = class
   private
+    { One physical transport hub; a context per local participant owns only
+      bindings, control state and filtering. No duplicate BLE scans/feeds. }
+    FLoadingRoster:Boolean;
+    FHub: TGameDeviceService;
+    FContexts: TList;
+    FRiderIndex: Integer;
+    function CanUseDevice(Entry:TGameDeviceEntry):Boolean;
+    procedure ClaimDevice(Entry:TGameDeviceEntry);
+    procedure ReconcileClaims;
+    procedure ClearDeviceEverywhere(Entry:TGameDeviceEntry);
+    procedure RefreshOtherRiders(Entry:TGameDeviceEntry; Connection:Boolean);
+  private
     FSteeringInput, FCompanionInput, FGamepadInput: TSteeringInput;
     FAndroidGamepad: TAndroidControllerInput;
     FGamepadPendingTurn: Integer;
@@ -148,8 +160,17 @@ type
     procedure Log(const S: String);
     function MapState(const S: TConnectionState): TGameDeviceConnectionState;
   public
-    constructor Create;
+    constructor Create(Hub:TGameDeviceService=nil; RiderIndex:Integer=0);
     destructor Destroy; override;
+    function ForRider(Index:Integer):TGameDeviceService;
+    function DeviceOwner(Entry:TGameDeviceEntry):Integer;
+    procedure TogglePowerMeter(Entry:TGameDeviceEntry);
+    procedure ClearPowerMeters;
+    procedure ClearSteeringControllers;
+    function IsPowerMeterSelected(Entry:TGameDeviceEntry):Boolean;
+    function ComparisonPowerText:String;
+    function ComparisonPowerLineCount:Integer;
+    property RiderIndex:Integer read FRiderIndex;
 
     { ── Провайдеры ── }
     procedure RegisterProvider(AProvider: TTransportProvider);
@@ -340,19 +361,238 @@ uses Math, CastleGameControllers, CastleKeysMouse, EliteSterzoProtocol, ZwiftCon
   TGameDeviceService
   ═══════════════════════════════════════════════════════════════════ }
 
-constructor TGameDeviceService.Create;
+function TGameDeviceService.ForRider(Index:Integer):TGameDeviceService;
+var Context:TGameDeviceService;
+begin
+  if FHub<>nil then Exit(FHub.ForRider(Index));
+  if(Index<0)or(Index>=MaxLocalRiders)then raise ERangeError.Create('Device rider index');
+  while FContexts.Count<=Index do begin
+    Context:=TGameDeviceService.Create(Self,FContexts.Count);
+    FContexts.Add(Context);Context.RefreshAssignmentsProfile;
+  end;
+  Result:=TGameDeviceService(FContexts[Index]);
+end;
+
+function TGameDeviceService.DeviceOwner(Entry:TGameDeviceEntry):Integer;
+var I:Integer; C:TGameDeviceService;
+begin
+  if FHub<>nil then Exit(FHub.DeviceOwner(Entry));
+  Result:=-1;if Entry=nil then Exit;
+  for I:=0 to FContexts.Count-1 do begin
+    C:=TGameDeviceService(FContexts[I]);
+    if C.FPendingDevice=Entry then Exit(C.FRiderIndex);
+    if C.FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],
+      Entry.DeviceInfo.Address)then Exit(C.FRiderIndex);
+    if(Entry.DeviceInfo.TransportType=ttSim)and(C.FRiderIndex=0)and C.FSimulationEnabled then Exit(0);
+  end;
+end;
+
+function TGameDeviceService.CanUseDevice(Entry:TGameDeviceEntry):Boolean;
+var Owner:Integer;
+begin
+  Owner:=DeviceOwner(Entry);Result:=(Owner<0)or(Owner=FRiderIndex);
+end;
+
+procedure TGameDeviceService.ReconcileClaims;
+var Seen:TStringList;Owners:array of Integer;I,J:Integer;R:TDeviceRole;
+  C:TGameDeviceService;Changed:Boolean;Sel:TDeviceSelection;
+  procedure Check(const Selection:TDeviceSelection);
+  var Key:String;At,K:Integer;E:TGameDeviceEntry;
+  begin
+    if Selection.Mode<>dsmDevice then Exit;
+    Key:=LowerCase(Trim(Selection.Transport))+'|'+LowerCase(Trim(Selection.Address));
+    At:=Seen.IndexOf(Key);
+    if At<0 then begin
+      At:=Seen.Add(Key);SetLength(Owners,Seen.Count);Owners[At]:=C.FRiderIndex;
+    end else if Owners[At]<>C.FRiderIndex then begin
+      Changed:=C.FAssignments.RemoveDevice(Selection.Transport,Selection.Address)or Changed;
+      for K:=0 to FDevices.Count-1 do begin
+        E:=FDevices[K];
+        if SameText(TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType],Selection.Transport)and SameText(E.DeviceInfo.Address,Selection.Address)then begin
+          C.ClearSensorsOfDevice(E);
+          if C.FControlDevice=E then begin FManager.CancelControl(E.DeviceInfo.Address);C.FControlDevice:=nil end;
+          if C.FPendingDevice=E then C.FPendingDevice:=nil;
+        end;
+      end;
+    end;
+  end;
+begin
+  if FHub<>nil then begin FHub.ReconcileClaims;Exit end;
+  if FLoadingRoster then Exit;
+  Seen:=TStringList.Create;
+  try
+    { A corrupt/copied profile file cannot make two riders share hardware.
+      Existing explicit selections use ClaimDevice to move ownership; only
+      conflicting restored state needs this deterministic first-rider rule. }
+    for I:=0 to FContexts.Count-1 do begin
+      C:=TGameDeviceService(FContexts[I]);Changed:=False;
+      for R:=Low(TDeviceRole)to High(TDeviceRole)do Check(C.FAssignments.Selection[R]);
+      for J:=C.FAssignments.PowerMeterCount-1 downto 0 do begin Sel:=C.FAssignments.PowerMeter(J);Check(Sel)end;
+      if Changed then begin C.SaveAssignments;C.RefreshSteeringCompanion;end;
+    end;
+  finally Seen.Free;end;
+end;
+
+procedure TGameDeviceService.ClaimDevice(Entry:TGameDeviceEntry);
+var Hub,C:TGameDeviceService;I:Integer;
+begin
+  if Entry=nil then Exit;
+  Hub:=FHub;if Hub=nil then Hub:=Self;
+  { Load remembered choices even for temporarily hidden local participants.
+    An explicit reassignment removes their offline claim as well. }
+  for I:=0 to MaxLocalRiders-1 do Hub.ForRider(I);
+  for I:=0 to Hub.FContexts.Count-1 do begin
+    C:=TGameDeviceService(Hub.FContexts[I]);if C=Self then Continue;
+    if C.FPendingDevice=Entry then C.FPendingDevice:=nil;
+    if C.FAssignments.RemoveDevice(TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],
+      Entry.DeviceInfo.Address)then begin
+      if C.FControlDevice=Entry then begin
+        C.FManager.CancelControl(Entry.DeviceInfo.Address);
+        C.FControlDevice:=nil;C.FTrainerErgActive:=False;
+      end;
+      if C.FPendingDevice=Entry then C.FPendingDevice:=nil;
+      C.ClearSensorsOfDevice(Entry);C.RefreshSteeringCompanion;C.SaveAssignments;
+      if Assigned(C.FOnDevicesChanged)then C.FOnDevicesChanged;
+    end;
+  end;
+end;
+
+procedure TGameDeviceService.ClearDeviceEverywhere(Entry:TGameDeviceEntry);
+var I:Integer;C:TGameDeviceService;
+begin
+  if FHub<>nil then begin FHub.ClearDeviceEverywhere(Entry);Exit end;
+  for I:=0 to FContexts.Count-1 do begin
+    C:=TGameDeviceService(FContexts[I]);C.ClearSensorsOfDevice(Entry);
+    if C.FControlDevice=Entry then begin C.FControlDevice:=nil;C.FTrainerErgActive:=False end;
+  end;
+end;
+
+procedure TGameDeviceService.RefreshOtherRiders(Entry:TGameDeviceEntry;Connection:Boolean);
+var I:Integer;K:TSensorKind;C:TGameDeviceService;
+begin
+  if FHub<>nil then Exit;
+  for I:=1 to Min(LocalRiderCount,FContexts.Count)-1 do begin
+    C:=TGameDeviceService(FContexts[I]);C.DoAutoAssign;C.RefreshSteeringCompanion;
+    if Connection and Assigned(C.FOnConnectionChanged)then C.FOnConnectionChanged(Entry);
+    if Connection and Assigned(C.FOnDevicesChanged)then C.FOnDevicesChanged;
+    if Assigned(C.FOnSensorDataChanged)and Assigned(Entry.Sensors)then
+      for K:=Low(TSensorKind)to High(TSensorKind)do
+        if(C.FActiveSensors[K]<>nil)and(Entry.Sensors.IndexOf(C.FActiveSensors[K])>=0)then
+          C.FOnSensorDataChanged(K);
+  end;
+end;
+
+function TGameDeviceService.IsPowerMeterSelected(Entry:TGameDeviceEntry):Boolean;
+begin
+  Result:=(Entry<>nil)and(IsSensorSelected(skPower,Entry)or
+    FAssignments.HasPowerMeter(TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType],Entry.DeviceInfo.Address));
+end;
+
+procedure TGameDeviceService.TogglePowerMeter(Entry:TGameDeviceEntry);
+var Transport:String;Next:TDeviceSelection;
+begin
+  if(Entry=nil)or(FDevices.IndexOf(Entry)<0)or not(Entry.DeviceInfo.SupportsPower or(Entry.FindSensor(skPower)<>nil))then Exit;
+  RefreshAssignmentsProfile;
+  Transport:=TRANSPORT_TYPE_NAMES[Entry.DeviceInfo.TransportType];
+  if not FAssignmentsReady or not AcceptSimulationDevice(Entry.DeviceInfo)or
+    (FSimulationEnabled<>(Entry.DeviceInfo.TransportType=ttSim))then Exit;
+  if IsSensorSelected(skPower,Entry)then begin
+    ClearSensor(skPower);
+    if FAssignments.PowerMeterCount>0 then begin
+      Next:=FAssignments.PowerMeter(0);
+      FAssignments.Select(drPower,Next.Transport,Next.Address,Next.Name);
+      DoAutoAssign;SaveAssignments;
+    end;
+  end
+  else if FAssignments.RemovePowerMeter(Transport,Entry.DeviceInfo.Address)then SaveAssignments
+  else begin
+    if(FAssignments.Selection[drPower].Mode=dsmDevice)and(FAssignments.PowerMeterCount>=16)then Exit;
+    ClaimDevice(Entry);
+    if FAssignments.Selection[drPower].Mode<>dsmDevice then begin
+      FAssignments.Select(drPower,Transport,Entry.DeviceInfo.Address,Entry.DisplayName);
+      if Entry.ConnectionState=gdcsConnected then FActiveSensors[skPower]:=Entry.FindSensor(skPower);
+    end else FAssignments.AddPowerMeter(Transport,Entry.DeviceInfo.Address,Entry.DisplayName);
+    SaveAssignments;
+    if Entry.ConnectionState<>gdcsConnected then ConnectDevice(Entry,False);
+  end;
+  if Assigned(FOnDevicesChanged)then FOnDevicesChanged;
+end;
+
+procedure TGameDeviceService.ClearPowerMeters;
+begin
+  RefreshAssignmentsProfile;if not FAssignmentsReady then Exit;
+  FAssignments.ClearPowerMeters;FAssignments.Disable(drPower);FActiveSensors[skPower]:=nil;
+  SaveAssignments;if Assigned(FOnDevicesChanged)then FOnDevicesChanged;
+end;
+procedure TGameDeviceService.ClearSteeringControllers;
+begin
+  RefreshAssignmentsProfile;if not FAssignmentsReady then Exit;
+  FAssignments.Disable(drSteering);FAssignments.Disable(drSteeringCompanion);
+  FAssignments.Disable(drShifting);FAssignments.Disable(drShiftingCompanion);
+  FActiveSensors[skSteering]:=nil;FSteeringInputSensor:=nil;FSteeringCompanion:=nil;
+  FSteeringInput.ForgetBLE;FCompanionInput.ForgetBLE;
+  FGearPrimary:='';FGearCompanion:='';FGearCursor:=Default(TControllerGearCursor);FGearCompanionCursor:=Default(TControllerGearCursor);
+  SaveAssignments;if Assigned(FOnDevicesChanged)then FOnDevicesChanged;
+end;
+
+function TGameDeviceService.ComparisonPowerLineCount:Integer;
+begin Result:=FAssignments.PowerMeterCount end;
+
+function TGameDeviceService.ComparisonPowerText:String;
+var I,J:Integer;Sel:TDeviceSelection;E:TGameDeviceEntry;S,P:TDeviceSensor;D:Single;
+  function CompactName(const Name:String):String;
+  var K,Glyphs:Integer;
+  begin
+    K:=1;Glyphs:=0;
+    while(K<=Length(Name))and(Glyphs<16)do begin
+      Inc(K);while(K<=Length(Name))and((Ord(Name[K])and $C0)=$80)do Inc(K);
+      Inc(Glyphs);
+    end;
+    Result:=Copy(Name,1,K-1);
+  end;
+begin
+  Result:='';P:=Sensor(skPower);
+  for I:=0 to FAssignments.PowerMeterCount-1 do begin
+    Sel:=FAssignments.PowerMeter(I);E:=nil;
+    for J:=0 to FDevices.Count-1 do
+      if SameText(TRANSPORT_TYPE_NAMES[FDevices[J].DeviceInfo.TransportType],Sel.Transport)and
+        SameText(FDevices[J].DeviceInfo.Address,Sel.Address)then begin E:=FDevices[J];Break end;
+    if(E<>nil)and not CanUseDevice(E)then E:=nil;
+    S:=nil;if(E<>nil)and(E.ConnectionState=gdcsConnected)then S:=E.FindSensor(skPower);
+    if Result<>'' then Result:=Result+LineEnding;
+    Result:=Result+CompactName(Sel.Name)+': ';
+    if(S=nil)or not S.HasData or(S.DataAgeSec>=3)then begin Result:=Result+'--';Continue end;
+    Result:=Result+IntToStr(Round(S.Instant))+' W';
+    if(P<>nil)and P.HasData and(P.DataAgeSec<3)then begin
+      D:=S.Instant-P.Instant;
+      if D>=0 then Result:=Result+' (+' else Result:=Result+' (';
+      Result:=Result+IntToStr(Round(D))+' W';
+      if Abs(P.Instant)>=1 then Result:=Result+', '+FormatFloat('0.0',100*D/P.Instant)+'%';
+      Result:=Result+')';
+    end;
+  end;
+end;
+
+constructor TGameDeviceService.Create(Hub:TGameDeviceService; RiderIndex:Integer);
 var
   K: TSensorKind;
   IsolatedHardware: Boolean;
 begin
   inherited Create;
-
+  FHub:=Hub;FRiderIndex:=RiderIndex;
   FAssignments := TDeviceRoleAssignments.Create;
   FSteeringInput := TSteeringInput.Create;
   FCompanionInput := TSteeringInput.Create;
   FGamepadInput := TSteeringInput.Create;
-  {$ifdef ANDROID}FAndroidGamepad:=TAndroidControllerInput.Create;{$endif}
+  {$ifdef ANDROID}if FHub=nil then FAndroidGamepad:=TAndroidControllerInput.Create;{$endif}
   FAssignmentProfileId := Low(Int64);
+  FVirtualGear:=DefaultVirtualGear;FAutoAssign:=True;FAutoConnect:=True;
+  if FHub<>nil then begin
+    FManager:=FHub.FManager;FDevices:=FHub.FDevices;
+    FSkipGamepadInput:=True;FANTStickPresent:=FHub.FANTStickPresent;
+    Exit;
+  end;
+  FContexts:=TList.Create;FContexts.Add(Self);
   FDevices := TGameDeviceList.Create(True);
   FControlDevice := nil;
   FVirtualGear:=DefaultVirtualGear;
@@ -410,14 +650,27 @@ begin
   FManager.OnDeviceDataReceived := @HandleDeviceDataReceived;
   FManager.OnDeviceConnectionChanged := @HandleDeviceConnectionChanged;
   Settings.OnSimulationChanged := @SimulationChanged;
-  RefreshAssignmentsProfile;
+  FLoadingRoster:=True;
+  try
+    RefreshAssignmentsProfile;
+    ForRider(MaxLocalRiders-1);
+  finally FLoadingRoster:=False;end;
+  ReconcileClaims;
   SimulationChanged(nil);
+  DoAutoAssign;
+
 end;
 
 destructor TGameDeviceService.Destroy;
 var
   K: TSensorKind;
+  I:Integer;
 begin
+  if FHub=nil then begin
+  if FContexts<>nil then begin
+    for I:=FContexts.Count-1 downto 1 do TObject(FContexts[I]).Free;
+    FreeAndNil(FContexts);
+  end;
   Settings.OnSimulationChanged := nil;
   { Снимаем подписку на OnUpdate ДО уничтожения менеджера —
     иначе тик после освобождения FManager упадёт с AV. }
@@ -430,13 +683,13 @@ begin
     FManager.OnDeviceConnectionChanged := nil;
     FManager.DisconnectAll;
   end;
+  end;
 
   for K := Low(TSensorKind) to High(TSensorKind) do
     FActiveSensors[K] := nil;
   FControlDevice := nil;
 
-  FreeAndNil(FManager);
-  FreeAndNil(FDevices);
+  if FHub=nil then begin FreeAndNil(FManager);FreeAndNil(FDevices) end;
   FreeAndNil(FAssignments);
   FreeAndNil(FSteeringInput);
   FreeAndNil(FCompanionInput);
@@ -574,7 +827,7 @@ begin
     но в игру не идут (требование dev-режима). Симметрично: вне
     симуляции sim-устройство не появится в списке, потому что
     провайдер ничего не эмитит без Settings.SimulationEnabled. }
-  if Settings.GetSimulationEnabled and
+  if FSimulationEnabled and (DeviceOwner(Entry)<=0) and
      (Entry.DeviceInfo.TransportType <> ttSim) and not Entry.DeviceInfo.SupportsSteering then
   begin
     Log(Format('Skip auto-connect %s — simulation mode active',
@@ -585,7 +838,8 @@ begin
   { Auto-connect new devices, or reconnect known fitness devices }
   if FAutoConnect and
      ShouldAutoConnect(Entry) and
-     IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) and
+     (IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) or
+       ((DeviceOwner(Entry)>0)and(DeviceOwner(Entry)<LocalRiderCount))) and
      (not Entry.TestedNotFitness) and
      (Entry.ConnectionState in [gdcsDisconnected, gdcsError]) then
   begin
@@ -627,6 +881,7 @@ begin
       if Assigned(FOnDevicesChanged) then FOnDevicesChanged;
     end;
     Entry.FeedData(Data);
+    RefreshOtherRiders(Entry,False);
 
     if Assigned(FOnSensorDataChanged) and Assigned(Entry.Sensors) then
       for K := Low(TSensorKind) to High(TSensorKind) do
@@ -655,7 +910,7 @@ begin
     Entry := FindDeviceByAddress(Device.Address);
     if Entry <> nil then
     begin
-      ClearSensorsOfDevice(Entry);
+      ClearDeviceEverywhere(Entry);
       Entry.ConnectionState := gdcsDisconnected;
     end;
     Exit;
@@ -680,9 +935,9 @@ begin
 
   if (State=csConnected) and Device.SupportsShifting and
     not Entry.ControllerPairingRequested and (Entry<>FPendingDevice) and
-    not FAssignments.UsesDevice(TRANSPORT_TYPE_NAMES[Device.TransportType],Device.Address) then
+    (DeviceOwner(Entry)<0) then
   begin
-    ClearSensorsOfDevice(Entry);
+    ClearDeviceEverywhere(Entry);
     Entry.ConnectionState:=gdcsDisconnected;
     Entry.LastMessage:='Select this controller to use it';
     FManager.Disconnect(Device.Address);
@@ -705,7 +960,7 @@ begin
     begin
       Log(TRANSPORT_TYPE_NAMES[Device.TransportType] +
         ' connected: ' + Entry.DisplayName);
-      ClearSensorsOfDevice(Entry);
+      ClearDeviceEverywhere(Entry);
       Entry.RebuildSensors;
       Exclude(Entry.LastData.ValidMetrics,tmController);
       Entry.LastData.ControllerGeneration:=0;Entry.LastData.ControllerSerial:=0;
@@ -741,7 +996,7 @@ begin
         FSimSession := nil;
       Log(TRANSPORT_TYPE_NAMES[Device.TransportType] +
         ' disconnected: ' + Entry.DisplayName);
-      ClearSensorsOfDevice(Entry);
+      ClearDeviceEverywhere(Entry);
       if FControlDevice = Entry then
         FControlDevice := nil;
       { Mark devices that were tested and found to be non-fitness }
@@ -750,7 +1005,7 @@ begin
     end;
     gdcsError:
     begin
-      ClearSensorsOfDevice(Entry);
+      ClearDeviceEverywhere(Entry);
       if FControlDevice=Entry then FControlDevice:=nil;
       Log(TRANSPORT_TYPE_NAMES[Device.TransportType] +
         ' error: ' + Entry.DisplayName + ' / ' + Message);
@@ -758,6 +1013,7 @@ begin
   end;
 
   RefreshSteeringCompanion;
+  RefreshOtherRiders(Entry,True);
   Log(Format('  Firing callbacks: OnConnChanged=%s OnDevicesChanged=%s',
     [BoolToStr(Assigned(FOnConnectionChanged), True),
      BoolToStr(Assigned(FOnDevicesChanged), True)]));
@@ -772,13 +1028,14 @@ end;
 { ── Внутренние хелперы ── }
 
 procedure TGameDeviceService.RefreshAssignmentsProfile;
-var Id: Int64; O: TJSONObject; I: Integer; E: TGameDeviceEntry;
+var Id: Int64; O: TJSONObject; I: Integer; E: TGameDeviceEntry; Api:TVeloSiteAPI;
 begin
   if FAssignmentsRefreshing then Exit;
+  Api:=RiderApi(FRiderIndex);
   Id := 0;
-  if VeloSite.IsAuthorized then
+  if Api.IsAuthorized then
   begin
-    Id := VeloSite.CachedProfile.Id;
+    Id := Api.CachedProfile.Id;
     { Authentication can precede loading the account. Do not borrow local roles. }
     if Id <= 0 then Id := -1;
   end;
@@ -790,12 +1047,12 @@ begin
     FAssignmentProfileId := Id;
     FAssignmentsReady := Id >= 0;
     FAssignmentFile := '';
-    FAssignments.Reset(not FAssignmentsReady);
+    FAssignments.Reset(not FAssignmentsReady or (FRiderIndex>0));
     if FAssignmentsReady then
     begin
       { The path is bound to this identity, not whichever account happens to
         be current later when a background connection finishes. }
-      FAssignmentFile := RouteAccountDir(Id) + 'device-roles.json';
+      FAssignmentFile := RiderDataDir(FRiderIndex) + 'device-roles.json';
       if FileExists(FAssignmentFile) then
       begin
         O := nil;
@@ -815,8 +1072,10 @@ begin
       end;
     end;
   finally FAssignmentsRefreshing := False; end;
+  if ((FHub=nil)and FLoadingRoster)or((FHub<>nil)and FHub.FLoadingRoster)then Exit;
+  ReconcileClaims;
   DoAutoAssign;
-  if FAutoConnect and FAssignmentsReady then
+  if FAutoConnect and FAssignmentsReady and(FRiderIndex<LocalRiderCount)then
     for I := 0 to FDevices.Count - 1 do
     begin
       E := FDevices[I];
@@ -844,6 +1103,8 @@ begin
   Result := False;
   if not FAssignmentsReady or (AEntry = nil) then Exit;
   D := AEntry.DeviceInfo;
+  if (FHub=nil) and (DeviceOwner(AEntry)>0) then Exit(DeviceOwner(AEntry)<LocalRiderCount);
+  if not CanUseDevice(AEntry) then Exit;
   if FSimulationEnabled and not D.SupportsSteering then Exit(D.TransportType = ttSim);
   if D.TransportType = ttSim then Exit;
   if AEntry = FPendingDevice then Exit(True);
@@ -865,10 +1126,11 @@ end;
 procedure TGameDeviceService.SelectDeviceForRoles(AEntry: TGameDeviceEntry);
 begin
   RefreshAssignmentsProfile;
-  if (AEntry = nil) or not FAssignmentsReady or
+  if (AEntry = nil)or(FDevices.IndexOf(AEntry)<0)or not FAssignmentsReady or
     ((FSimulationEnabled <> (AEntry.DeviceInfo.TransportType = ttSim)) and not AEntry.DeviceInfo.SupportsSteering) or
     not AcceptSimulationDevice(AEntry.DeviceInfo) then Exit;
   FPendingDevice := AEntry;
+  ClaimDevice(AEntry);
   if AEntry.ConnectionState = gdcsConnected then
   begin
     FPendingDevice := nil;
@@ -920,6 +1182,7 @@ begin
   if AEntry=nil then FAssignments.Disable(drSteeringCompanion)
   else begin
     if (FDevices.IndexOf(AEntry)<0) or not CanPairSteering(AEntry) then Exit;
+    ClaimDevice(AEntry);
     FAssignments.Select(drSteeringCompanion,
       TRANSPORT_TYPE_NAMES[AEntry.DeviceInfo.TransportType],
       AEntry.DeviceInfo.Address,AEntry.DeviceInfo.Name);
@@ -939,7 +1202,7 @@ begin
     (FAssignments.Selection[drSteeringCompanion].Mode=dsmDevice) then
     for I:=0 to FDevices.Count-1 do begin
       E:=FDevices[I];
-      if IsSteeringCompanion(E) and CanPairSteering(E) and
+      if CanUseDevice(E)and IsSteeringCompanion(E) and CanPairSteering(E) and
         (E.ConnectionState=gdcsConnected) and (E.FindSensor(skSteering)<>nil) then
       begin Selected:=E; Break end;
     end;
@@ -1018,7 +1281,10 @@ procedure TGameDeviceService.ClearSensorsOfDevice(AEntry: TGameDeviceEntry);
 var
   K: TSensorKind;
 begin
-  if (AEntry<>nil) and (FControlDevice=AEntry) then FTrainerErgActive:=False;
+  if AEntry=nil then Exit;
+  if FGearPrimary=AEntry.DeviceInfo.Address then begin FGearPrimary:='';FGearCursor:=Default(TControllerGearCursor);end;
+  if FGearCompanion=AEntry.DeviceInfo.Address then begin FGearCompanion:='';FGearCompanionCursor:=Default(TControllerGearCursor);end;
+  if FControlDevice=AEntry then FTrainerErgActive:=False;
   if not Assigned(AEntry) or not Assigned(AEntry.Sensors) then Exit;
   if FSteeringCompanion=AEntry then begin
     FSteeringCompanion:=nil; FCompanionInput.ForgetBLE;
@@ -1041,7 +1307,8 @@ var
   S: TDeviceSensor;
   Changed: Boolean;
 begin
-  if FAssignmentsRefreshing or not FAssignmentsReady then Exit;
+  if FAssignmentsRefreshing or not FAssignmentsReady or(FRiderIndex>=LocalRiderCount)then Exit;
+  if ((FHub=nil)and FLoadingRoster)or((FHub<>nil)and FHub.FLoadingRoster)then Exit;
   if (FPendingDevice <> nil) and (FPendingDevice.ConnectionState = gdcsConnected) then
   begin
     Entry := FPendingDevice;
@@ -1056,6 +1323,7 @@ begin
     for I := 0 to FDevices.Count - 1 do
     begin
       Entry := FDevices[I];
+      if not CanUseDevice(Entry) then Continue;
       if Entry.ConnectionState <> gdcsConnected then Continue;
       if not IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) then Continue;
       if not AcceptSimulationDevice(Entry.DeviceInfo) then Continue;
@@ -1082,6 +1350,7 @@ begin
     for I := 0 to FDevices.Count - 1 do
     begin
       Entry := FDevices[I];
+      if not CanUseDevice(Entry) then Continue;
       if (Entry.ConnectionState = gdcsConnected) and
          IsTransportEnabledInGame(Entry.DeviceInfo.TransportType, Entry.DeviceInfo.SupportsSteering) and
          AcceptSimulationDevice(Entry.DeviceInfo) and
@@ -1106,6 +1375,7 @@ begin
     if FAssignments.Selection[Role].Mode=dsmAutomatic then
       for I:=0 to FDevices.Count-1 do begin
         Entry:=FDevices[I];
+        if not CanUseDevice(Entry) then Continue;
         if(Entry.ConnectionState=gdcsConnected)and
           (IsZwiftControllerName(Entry.DeviceInfo.Name)or Entry.DeviceInfo.SupportsShifting)and
           not IsGearController(Entry)then begin
@@ -1121,12 +1391,14 @@ end;
 
 procedure TGameDeviceService.StartScan;
 begin
+  if FHub<>nil then begin FHub.StartScan;Exit end;
   Log('Scan started');
   FManager.StartScan;
 end;
 
 procedure TGameDeviceService.StopScan;
 begin
+  if FHub<>nil then Exit;
   Log('Scan stopped');
   FManager.StopScan;
 end;
@@ -1134,12 +1406,23 @@ end;
 { ── Автосканирование ── }
 
 procedure TGameDeviceService.OnApplicationUpdate(Sender: TObject);
+var I:Integer; Context:TGameDeviceService;
 begin
+  if FHub<>nil then Exit;
   RefreshAssignmentsProfile;
+  for I:=1 to LocalRiderCount-1 do ForRider(I).RefreshAssignmentsProfile;
+  for I:=LocalRiderCount to FContexts.Count-1 do begin
+    Context:=TGameDeviceService(FContexts[I]);
+    if Context.FControlDevice<>nil then FManager.CancelControl(Context.FControlDevice.DeviceInfo.Address);
+    Context.FTrainerErgActive:=False;Context.FPendingDevice:=nil;Context.ClearAllSensors;
+  end;
   if Assigned(FManager) then
   begin
     FManager.Tick;
     ReadControllerGears;
+    for I:=1 to LocalRiderCount-1 do begin
+      Context:=ForRider(I);Context.ReadControllerGears;
+    end;
     if GetTickCount64-FLastHealthCheck>=1000 then
     begin FLastHealthCheck:=GetTickCount64; CheckStaleConnections end;
   end;
@@ -1147,6 +1430,7 @@ end;
 
 procedure TGameDeviceService.EnableContinuousScan;
 begin
+  if FHub<>nil then begin FHub.EnableContinuousScan;Exit end;
   if FAutoScanStarted then Exit;
   FAutoScanStarted := True;
   ApplicationProperties.OnUpdate.Add(@OnApplicationUpdate);
@@ -1155,6 +1439,7 @@ end;
 
 procedure TGameDeviceService.DisableContinuousScan;
 begin
+  if FHub<>nil then Exit;
   if not FAutoScanStarted then Exit;
   FAutoScanStarted := False;
   ApplicationProperties.OnUpdate.Remove(@OnApplicationUpdate);
@@ -1180,14 +1465,16 @@ var
     Entry.ConnectionState := gdcsDisconnected;
     Entry.LastStateChange := Now;
     Entry.LastMessage := AReason;
-    ClearSensorsOfDevice(Entry);
+    ClearDeviceEverywhere(Entry);
     FManager.Disconnect(Entry.DeviceInfo.Address);
+    RefreshOtherRiders(Entry,True);
     Changed := True;
     if Assigned(FOnConnectionChanged) then
       FOnConnectionChanged(Entry);
   end;
 
 begin
+  if FHub<>nil then Exit;
   Changed := False;
   for I := 0 to FDevices.Count - 1 do
   begin
@@ -1218,6 +1505,9 @@ end;
 procedure TGameDeviceService.ConnectDevice(AEntry: TGameDeviceEntry; ExplicitRequest: Boolean);
 begin
   if not Assigned(AEntry) then Exit;
+  if(FHub=nil)and(DeviceOwner(AEntry)>0)then begin
+    ForRider(DeviceOwner(AEntry)).ConnectDevice(AEntry,ExplicitRequest);Exit;
+  end;
   if not AcceptSimulationDevice(AEntry.DeviceInfo) then Exit;
 
   { Симуляция: к игре подключаем только sim-устройство. Реальные BLE/ANT
@@ -1225,7 +1515,7 @@ begin
     может проверить что они доступны), но к сенсорам игры не привязываются.
     Это требование из task-описания: "при симуляции не подключать
     найденные датчики к игре". }
-  if Settings.GetSimulationEnabled
+  if FSimulationEnabled
      and (AEntry.DeviceInfo.TransportType <> ttSim) and not AEntry.DeviceInfo.SupportsSteering then
   begin
     Log(Format('Skip connect %s — simulation mode active',
@@ -1241,6 +1531,7 @@ end;
 
 procedure TGameDeviceService.DisconnectDevice(AEntry: TGameDeviceEntry);
 begin
+  if(AEntry=nil)or not CanUseDevice(AEntry)then Exit;
   if not Assigned(AEntry) then Exit;
   FManager.Disconnect(AEntry.DeviceInfo.Address);
 end;
@@ -1427,7 +1718,7 @@ end;
 
 procedure TGameDeviceService.AssignSensor(AKind: TSensorKind;
   ASensor: TDeviceSensor);
-var E: TGameDeviceEntry; Changed: Boolean;
+var E:TGameDeviceEntry;Changed,PromotingComparison:Boolean;DeviceIndex:Integer;OldPower:TDeviceSelection;
 begin
   RefreshAssignmentsProfile;
   if not FAssignmentsReady then Exit;
@@ -1437,10 +1728,16 @@ begin
     if ASensor.SensorKind <> AKind then Exit;
     if (AKind<>skSteering) and (FSimulationEnabled <> (Pos('sim:', ASensor.DeviceAddress) = 1)) then Exit;
     if FSimulationEnabled and (AKind<>skSteering) and not SameFileName(ASensor.DeviceAddress,FSimAddress) then Exit;
-    E := FindDeviceByAddress(ASensor.DeviceAddress);
-    if (E = nil) or (E.FindSensor(AKind) <> ASensor) then Exit;
+    E:=nil;
+    for DeviceIndex:=0 to FDevices.Count-1 do
+      if FDevices[DeviceIndex].FindSensor(AKind)=ASensor then begin E:=FDevices[DeviceIndex];Break end;
+    if E=nil then Exit;
+    ClaimDevice(E);
   end;
   Changed := False;
+  OldPower:=FAssignments.Selection[drPower];
+  PromotingComparison:=(AKind=skPower)and(E<>nil)and
+    FAssignments.HasPowerMeter(TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType],E.DeviceInfo.Address);
   { A replacement primary, or None, ends the old logical pair. Re-selecting
     the same primary leaves its companion intact. }
   if (AKind=skSteering) and ((E=nil) or not IsSensorSelected(skSteering,E)) then
@@ -1449,6 +1746,8 @@ begin
     if E = nil then Changed := FAssignments.Disable(TDeviceRole(Ord(AKind))) or Changed
     else Changed := FAssignments.Select(TDeviceRole(Ord(AKind)),
       TRANSPORT_TYPE_NAMES[E.DeviceInfo.TransportType], E.DeviceInfo.Address, E.DeviceInfo.Name) or Changed;
+  if PromotingComparison and(OldPower.Mode=dsmDevice)then
+    Changed:=FAssignments.AddPowerMeter(OldPower.Transport,OldPower.Address,OldPower.Name)or Changed;
   if (E <> nil) and (E.ConnectionState = gdcsConnected) then
     FActiveSensors[AKind] := ASensor
   else FActiveSensors[AKind] := nil;
@@ -1625,6 +1924,7 @@ var E,Other:TGameDeviceEntry;I:Integer;
 begin
   E:=nil;Other:=nil;
   for I:=0 to FDevices.Count-1 do begin
+    if not CanUseDevice(FDevices[I])then Continue;
     if FAssignments.Matches(drShifting,TRANSPORT_TYPE_NAMES[FDevices[I].DeviceInfo.TransportType],
       FDevices[I].DeviceInfo.Address)then E:=FDevices[I];
     if FAssignments.Matches(drShiftingCompanion,TRANSPORT_TYPE_NAMES[FDevices[I].DeviceInfo.TransportType],
@@ -1654,6 +1954,7 @@ begin
     for Role in[drShifting,drShiftingCompanion]do
       if FAssignments.Selection[Role].Mode=dsmAutomatic then FAssignments.Disable(Role);
   end else begin
+    ClaimDevice(Entry);
     Role:=drShifting;
     if FAssignments.Selection[Role].Mode=dsmDevice then Role:=drShiftingCompanion;
     FAssignments.Select(Role,Transport,Entry.DeviceInfo.Address,Entry.DeviceInfo.Name);
@@ -1764,7 +2065,8 @@ begin
   if not FAssignmentsReady then Exit;
   if Assigned(AEntry) and ((FSimulationEnabled <> (AEntry.DeviceInfo.TransportType=ttSim)) or
     not AcceptSimulationDevice(AEntry.DeviceInfo)) then Exit;
-  if (AEntry <> nil) and not AEntry.IsControllable then Exit;
+  if (AEntry <> nil) and ((FDevices.IndexOf(AEntry)<0)or not AEntry.IsControllable) then Exit;
+  ClaimDevice(AEntry);
   if (FControlDevice <> nil) and (FControlDevice <> AEntry) then
     FManager.CancelControl(FControlDevice.DeviceInfo.Address);
   Changed := False;
@@ -1799,8 +2101,8 @@ end;
 
 function TGameDeviceService.HasControlDevice: Boolean;
 begin
-  Result := Assigned(FControlDevice) and
-            (FControlDevice.ConnectionState = gdcsConnected) and
+  Result := (FRiderIndex<LocalRiderCount)and Assigned(FControlDevice) and
+            CanUseDevice(FControlDevice)and(FControlDevice.ConnectionState = gdcsConnected) and
             FControlDevice.IsControllable;
 end;
 
@@ -1871,7 +2173,7 @@ procedure TGameDeviceService.ResetSession;
 var I: Integer;
 begin
   for I := 0 to FDevices.Count - 1 do
-    FDevices[I].ResetAllSensors;
+    if DeviceOwner(FDevices[I])=FRiderIndex then FDevices[I].ResetAllSensors;
   Log('Session reset');
 end;
 

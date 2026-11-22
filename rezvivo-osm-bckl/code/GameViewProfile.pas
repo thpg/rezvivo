@@ -37,6 +37,8 @@ type
 
   TProfileThread = class(TThread)
   private
+    FApi: TVeloSiteAPI;
+    FProfileIndex: Integer;
     FAction:       TProfileAsyncAction;
     FPatch:        TProfilePatchData;
     FLock:         TCriticalSection;
@@ -49,7 +51,7 @@ type
     property State:  TProfileAsyncState  read FState;
     property Action: TProfileAsyncAction read FAction;
 
-    constructor Create(AAction: TProfileAsyncAction);
+    constructor Create(AAction: TProfileAsyncAction; AProfileIndex: Integer = 0);
     destructor  Destroy; override;
     procedure Start;reintroduce;
 
@@ -59,6 +61,7 @@ type
 
   TProfilePage = class(TMenuEmbeddedPage)
   private
+    FProfileIndex: Integer;
     FDesign:       TCastleDesign;
     FLabelTitle:   TCastleLabel;
     FPageHeading:TCastleLabel;
@@ -153,7 +156,9 @@ type
     procedure RefreshFromCache;
     procedure SetHint(const AText: String; AIsError: Boolean);
     procedure HandleAsyncCompletion;
+    procedure SetProfileIndex(Value: Integer);
   public
+    property ProfileIndex: Integer read FProfileIndex write SetProfileIndex;
     constructor Create(AOwner: TComponent); override;
     destructor Destroy;override;
     procedure ShowConnections;
@@ -177,7 +182,7 @@ implementation
 uses UiTranslations, Math,
   CastleLog,
   GameViewMenu, GameViewLogin,
-  AppSettings, GameLocalization, GameUserData,GameRouteLibraryData,GameAccountChange;
+  AppSettings, GameLocalization, GameUserData,GameRouteLibraryData,GameAccountChange,GameRideHistory;
 
 function LanguageMenuName(const Index: Integer): String;
 begin
@@ -198,10 +203,12 @@ end;
   TProfileThread
   ══════════════════════════════════════════════════════════════════ }
 
-constructor TProfileThread.Create(AAction: TProfileAsyncAction);
+constructor TProfileThread.Create(AAction: TProfileAsyncAction; AProfileIndex: Integer);
 begin
   inherited Create(True);
   FreeOnTerminate := False;
+  FProfileIndex := AProfileIndex;
+  FApi := RiderApi(AProfileIndex);
   FAction := AAction;
   FLock := TCriticalSection.Create;
   FState := pasIdle;
@@ -223,7 +230,7 @@ end;
 procedure TProfileThread.Start;
 begin
   try
-    if FAction=paaLogout then FAccountToken:=BeginAccountChange;
+    if FAction=paaLogout then FAccountToken:=BeginAccountChange(FProfileIndex);
     inherited Start;
     if Suspended then raise EThread.Create('Could not start account request');
   except on E:Exception do begin
@@ -243,18 +250,18 @@ begin
     case FAction of
       paaPatch:
         begin
-          VeloSite.PatchProfile(FPatch.Nickname, FPatch.Weight, FPatch.FtpW, FPatch.ZonesJSON);
-          VeloSite.RefreshProfile;
+          FApi.PatchProfile(FPatch.Nickname, FPatch.Weight, FPatch.FtpW, FPatch.ZonesJSON);
+          FApi.RefreshProfile;
         end;
       paaImportZones:
         begin
-          VeloSite.ImportTrainingZones;
-          VeloSite.RefreshProfile;
+          FApi.ImportTrainingZones;
+          FApi.RefreshProfile;
         end;
       paaLogout:
-        VeloSite.Logout;
+        FApi.Logout;
       paaRefresh:
-        VeloSite.RefreshProfile;
+        FApi.RefreshProfile;
     end;
     FLock.Enter;
     try FState := pasSucceeded;
@@ -282,6 +289,19 @@ end;
 { ══════════════════════════════════════════════════════════════════
   TProfilePage
   ══════════════════════════════════════════════════════════════════ }
+
+procedure TProfilePage.SetProfileIndex(Value: Integer);
+begin
+  if (Value < 0) or (Value >= LocalRiderCount) then raise ERangeError.Create('Invalid rider');
+  if Value = FProfileIndex then Exit;
+  if Assigned(FBackground) then raise EInvalidOperation.Create('Finish the profile request before selecting another rider');
+  if FProfileDirty then begin
+    ClickSave(nil);
+    if FProfileDirty or Assigned(FBackground) then raise EInvalidOperation.Create('Finish saving this rider before selecting another rider');
+  end;
+  FProfileIndex := Value;
+  if FDesign <> nil then RefreshFromCache;
+end;
 
 constructor TProfilePage.Create(AOwner: TComponent);
 var
@@ -318,6 +338,7 @@ begin
   InsertFront(FDesign);
 
   FLabelTitle   := FDesign.DesignedComponent('LabelTitle') as TCastleLabel;
+  FLabelTitle.Color:=MenuText;
   FButtonBack   := FDesign.DesignedComponent('ButtonBack') as TCastleButton;
   FSettingsHost := FDesign.DesignedComponent('SettingsHost') as TCastleUserInterface;
   FSettingsHost.Parent.RemoveControl(FSettingsHost);
@@ -470,10 +491,10 @@ begin
   FActiveTab := ptMain;
   if FContentOwner=nil then BuildAll else HandleAsyncCompletion;
 
-  if VeloSite.IsAuthorized and not Assigned(FBackground) then
+  if RiderApi(FProfileIndex).IsAuthorized and not Assigned(FBackground) then
   begin
     SetHint(T('Loading profile...'), False);
-    FBackground := TProfileThread.Create(paaRefresh);
+    FBackground := TProfileThread.Create(paaRefresh, FProfileIndex);
     FBackground.Start;
   end;
 end;
@@ -615,7 +636,7 @@ begin
   Title := TMenuLabel.Create(FAccountOwner);
   BindUiText(Title, 'Account');
   Title.FontScale := 1.4;
-  Title.Color := Vector4(1, 1, 1, 1);
+  Title.Color := MenuText;
   Title.Anchor(hpLeft, 0);
   Title.Anchor(vpTop, -4);
   FProfileSection.InsertFront(Title);
@@ -623,18 +644,18 @@ begin
   Title := TMenuLabel.Create(FAccountOwner);
   BindUiText(Title, 'Rider settings');
   Title.FontScale := 1.4;
-  Title.Color := White;
+  Title.Color := MenuText;
   Title.Anchor(hpLeft, 0);
   Title.Anchor(vpTop, -4);
   FRiderSection.InsertFront(Title);
 
-  P := EffectiveRiderProfile;
-  E := VeloSite.CachedEntitlements;
+  P := EffectiveRiderProfile(FProfileIndex);
+  E := RiderApi(FProfileIndex).CachedEntitlements;
 
   FLabelStatus := TMenuLabel.Create(FAccountOwner);
   FLabelStatus.FontScale := 1.0;
-  FLabelStatus.Color := Vector4(0.7, 0.95, 0.75, 1);
-  if not VeloSite.IsAuthorized then
+  FLabelStatus.Color := MenuSuccess;
+  if not RiderApi(FProfileIndex).IsAuthorized then
     BindUiText(FLabelStatus, 'Local profile — no account required')
   else if P.Email <> '' then
     FLabelStatus.Caption := T('Signed in as ') + P.Email
@@ -655,7 +676,7 @@ begin
   end
   else
     BindUiText(FLabelPlan, 'Free plan');
-  FLabelPlan.Color := Vector4(0.7, 0.85, 1.0, 1);
+  FLabelPlan.Color := MenuAccent;
   FLabelPlan.Anchor(hpLeft, 0);
   FLabelPlan.Anchor(vpTop, -78);
   FProfileSection.InsertFront(FLabelPlan);
@@ -663,7 +684,7 @@ begin
   LabelN := TMenuLabel.Create(FAccountOwner);
   BindUiText(LabelN, 'Nickname:');
   LabelN.FontScale := 1.0;
-  LabelN.Color := Vector4(0.85, 0.85, 0.9, 1);
+  LabelN.Color := MenuText;
   LabelN.Anchor(hpLeft, 0);
   LabelN.Anchor(vpTop, -126);
   FProfileSection.InsertFront(LabelN);
@@ -680,7 +701,7 @@ begin
   LabelW := TMenuLabel.Create(FAccountOwner);
   BindUiText(LabelW, 'Weight (kg):');
   LabelW.FontScale := 1.0;
-  LabelW.Color := Vector4(0.85, 0.85, 0.9, 1);
+  LabelW.Color := MenuText;
   LabelW.Anchor(hpLeft, 0);
   LabelW.Anchor(vpTop, -64);
   FRiderSection.InsertFront(LabelW);
@@ -699,7 +720,7 @@ begin
   LabelF := TMenuLabel.Create(FAccountOwner);
   BindUiText(LabelF, 'FTP (W):');
   LabelF.FontScale := 1.0;
-  LabelF.Color := Vector4(0.85, 0.85, 0.9, 1);
+  LabelF.Color := MenuText;
   LabelF.Anchor(hpLeft, 0);
   LabelF.Anchor(vpTop, -114);
   FRiderSection.InsertFront(LabelF);
@@ -741,8 +762,8 @@ begin
   FButtonLogout.PaddingVertical := 10;
   FButtonLogout.OnClick := @ClickLogout;
   RowButtons.InsertFront(FButtonLogout);
-  FButtonLogout.Exists:=VeloSite.IsAuthorized;
-  if not VeloSite.IsAuthorized then begin
+  FButtonLogout.Exists:=RiderApi(FProfileIndex).IsAuthorized;
+  if not RiderApi(FProfileIndex).IsAuthorized then begin
     FButtonGotoLogin:=TMenuButton.Create(FAccountOwner);
     BindUiText(FButtonGotoLogin,'Sign in to sync');FButtonGotoLogin.OnClick:=@ClickGotoLogin;
     FButtonGotoLogin.Name:='ProfileSignIn';RowButtons.InsertFront(FButtonGotoLogin);
@@ -755,7 +776,7 @@ begin
   FLabelHint := TMenuLabel.Create(FAccountOwner);
   FLabelHint.Caption := '';
   FLabelHint.FontScale := 0.95;
-  FLabelHint.Color := Vector4(0.6, 0.95, 0.7, 1);
+  FLabelHint.Color := MenuSuccess;
   FLabelHint.Anchor(hpLeft, 0);
   FLabelHint.Anchor(vpTop, -240);
   FProfileSection.InsertFront(FLabelHint);
@@ -792,12 +813,12 @@ begin
   FButtonImportZones.PaddingVertical := 10;
   FButtonImportZones.OnClick := @ClickImportZones;
   RowButtons.InsertFront(FButtonImportZones);
-  FButtonImportZones.Exists:=VeloSite.IsAuthorized;
+  FButtonImportZones.Exists:=RiderApi(FProfileIndex).IsAuthorized;
   FLabelRiderHint := TMenuLabel.Create(FAccountOwner);
   FLabelRiderHint.FontScale := 0.8;
   FLabelRiderHint.MaxWidth := FSettingsHost.EffectiveWidth;
   BindUiText(FLabelRiderHint, 'Changes are saved automatically on this computer.');
-  FLabelRiderHint.Color := White;
+  FLabelRiderHint.Color := MenuText;
   FLabelRiderHint.Anchor(hpLeft, 0);
   FLabelRiderHint.Anchor(vpTop, -608);
   FRiderSection.InsertFront(FLabelRiderHint);
@@ -809,8 +830,8 @@ procedure TProfilePage.SetHint(const AText: String; AIsError: Boolean);
   begin
     if ALabel = nil then Exit;
     ALabel.Caption := AText;
-    if AIsError then ALabel.Color := Vector4(1.0, 0.55, 0.45, 1)
-    else ALabel.Color := Vector4(0.6, 0.95, 0.7, 1);
+    if AIsError then ALabel.Color := MenuError
+    else ALabel.Color := MenuSuccess;
   end;
 begin
   ApplyTo(FLabelHint);
@@ -823,10 +844,12 @@ begin ViewMenu.OpenTab('events');end;
 procedure TProfilePage.ClickGotoLogin(Sender: TObject);
 var Blocked:String;
 begin
-  Blocked:=ViewMenu.AccountChangeError;
-  if Blocked<>''then begin SetHint(Blocked,True);Exit;end;
+  Blocked:=RideHistoryForRider(FProfileIndex).AccountChangeError(False);
+  if Blocked=''then Blocked:=RiderAccountChangeError(FProfileIndex);
+  if Blocked<>''then begin SetHint(UiText(Blocked),True);Exit;end;
   { Логин остаётся полноэкранным вью; после успешного входа он сам
     возвращается на ViewMenu. }
+  ViewLogin.ProfileIndex := FProfileIndex;
   ViewMenu.OpenChildView(ViewLogin);
 end;
 
@@ -890,42 +913,43 @@ begin
     Patch.FtpW := FtpV;
   end;
 
-  try SaveLocalRider(Patch.Nickname,Patch.Weight,Patch.FtpW,Patch.ZonesJSON);
+  try SaveLocalRider(Patch.Nickname,Patch.Weight,Patch.FtpW,Patch.ZonesJSON,FProfileIndex);
   except on E:Exception do begin SetHint(E.Message,True);Exit;end;end;
   FInitialNickname:=FEditNickname.Text;FInitialWeight:=FEditWeight.Text;FInitialFtp:=FEditFtp.Text;
   FProfileDirty:=Assigned(FBackground);
   SetHint(T('Saved locally'), False);
-  if not VeloSite.IsAuthorized or Assigned(FBackground)then Exit;
+  if not RiderApi(FProfileIndex).IsAuthorized or Assigned(FBackground)then Exit;
   FButtonSave.Enabled := False;
   FButtonRiderSave.Enabled := False;
   FButtonImportZones.Enabled := False;
-  FBackground := TProfileThread.Create(paaPatch);
+  FBackground := TProfileThread.Create(paaPatch, FProfileIndex);
   FBackground.SetPatchData(Patch);
   FBackground.Start;
 end;
 
 procedure TProfilePage.ClickImportZones(Sender: TObject);
 begin
-  if Assigned(FBackground) or not VeloSite.IsAuthorized then Exit;
+  if Assigned(FBackground) or not RiderApi(FProfileIndex).IsAuthorized then Exit;
   SetHint(UiText('Loading zones and FTP from Intervals.icu…'),False);
   FImportNickname := FEditNickname.Text;
   FImportWeight := FEditWeight.Text;
   FButtonSave.Enabled := False;
   FButtonRiderSave.Enabled := False;
   FButtonImportZones.Enabled := False;
-  FBackground := TProfileThread.Create(paaImportZones);
+  FBackground := TProfileThread.Create(paaImportZones, FProfileIndex);
   FBackground.Start;
 end;
 
 procedure TProfilePage.ClickLogout(Sender: TObject);
 var Blocked:String;
 begin
-  Blocked:=ViewMenu.AccountChangeError;
-  if Blocked<>''then begin SetHint(Blocked,True);Exit;end;
+  Blocked:=RideHistoryForRider(FProfileIndex).AccountChangeError(False);
+  if Blocked=''then Blocked:=RiderAccountChangeError(FProfileIndex);
+  if Blocked<>''then begin SetHint(UiText(Blocked),True);Exit;end;
   if Assigned(FBackground) then Exit;
   SetHint(T('Signing out...'), False);
   FButtonLogout.Enabled := False;
-  FBackground := TProfileThread.Create(paaLogout);
+  FBackground := TProfileThread.Create(paaLogout, FProfileIndex);
   FBackground.Start;
 end;
 
@@ -973,7 +997,7 @@ begin
     paaPatch, paaImportZones:
       begin
         if(Action=paaPatch)and FProfileDirty then Exit;
-        if Action=paaImportZones then AcceptServerRider;
+        if Action=paaImportZones then AcceptServerRider(FProfileIndex);
         RefreshFromCache;
         if Action=paaImportZones then begin
           FEditNickname.Text := FImportNickname;
@@ -1074,7 +1098,7 @@ begin
   Title := TMenuLabel.Create(FContentOwner);
   BindUiText(Title, 'Gender');
   Title.FontScale := 1.4;
-  Title.Color := Vector4(1, 1, 1, 1);
+  Title.Color := MenuText;
   Title.Anchor(hpLeft, 0);
   Title.Anchor(vpTop, -4);
   Section.InsertFront(Title);
@@ -1082,7 +1106,7 @@ begin
   FGenderSectionLabel := TMenuLabel.Create(FContentOwner);
   BindUiText(FGenderSectionLabel, 'Rider:');
   FGenderSectionLabel.FontScale := 1.0;
-  FGenderSectionLabel.Color := Vector4(0.85, 0.85, 0.9, 1);
+  FGenderSectionLabel.Color := MenuText;
   FGenderSectionLabel.Anchor(hpLeft, 0);
   FGenderSectionLabel.Anchor(vpTop, -50);
   Section.InsertFront(FGenderSectionLabel);
@@ -1114,7 +1138,7 @@ begin
   Hint := TMenuLabel.Create(FContentOwner);
   BindUiText(Hint, 'Used for the rider model in Bike fit and races. Saved locally.');
   Hint.FontScale := 0.85;
-  Hint.Color := Vector4(0.6, 0.6, 0.65, 1);
+  Hint.Color := MenuMuted;
   Hint.Anchor(hpLeft, 0);
   Hint.Anchor(vpTop, -98);
   Section.InsertFront(Hint);
@@ -1127,9 +1151,10 @@ end;
 procedure TProfilePage.ClickGender(Sender: TObject);
 begin
   if (Sender as TCastleButton).Tag = 1 then
-    Settings.SetGender('female')
+    RiderSettings(FProfileIndex).SetGender('female')
   else
-    Settings.SetGender('male');
+    RiderSettings(FProfileIndex).SetGender('male');
+  SelectAvatarBodySex(Ord(RiderSettings(FProfileIndex).GetGender='female'),FProfileIndex);
   UpdateGenderButtons;
 end;
 
@@ -1143,7 +1168,7 @@ procedure TProfilePage.UpdateGenderButtons;
 var
   Female: Boolean;
 begin
-  Female := SameText(Settings.GetGender, 'female');
+  Female := SameText(RiderSettings(FProfileIndex).GetGender, 'female');
   StyleSelected(FBtnGenderMale, not Female);
   StyleSelected(FBtnGenderFemale, Female);
 end;
@@ -1163,7 +1188,7 @@ begin
   Title := TMenuLabel.Create(FContentOwner);
   BindUiText(Title, 'Language');
   Title.FontScale := 1.4;
-  Title.Color := Vector4(1, 1, 1, 1);
+  Title.Color := MenuText;
   Title.Anchor(hpLeft, 0);
   Title.Anchor(vpTop, -4);
   Section.InsertFront(Title);
@@ -1171,7 +1196,7 @@ begin
   FLangSectionLabel := TMenuLabel.Create(FContentOwner);
   BindUiText(FLangSectionLabel, 'Interface language:');
   FLangSectionLabel.FontScale := 1.0;
-  FLangSectionLabel.Color := Vector4(0.85, 0.85, 0.9, 1);
+  FLangSectionLabel.Color := MenuText;
   FLangSectionLabel.Anchor(hpLeft, 0);
   FLangSectionLabel.Anchor(vpTop, -50);
   Section.InsertFront(FLangSectionLabel);
@@ -1201,7 +1226,7 @@ begin
     + ' This choice is saved locally and does not change your Rezvivo profile.');
   Hint.MaxWidth := FSettingsHost.EffectiveWidth;
   Hint.FontScale := 0.85;
-  Hint.Color := Vector4(0.6, 0.6, 0.65, 1);
+  Hint.Color := MenuMuted;
   Hint.Anchor(hpLeft, 0);
   Hint.Anchor(vpTop, -98);
   Section.InsertFront(Hint);

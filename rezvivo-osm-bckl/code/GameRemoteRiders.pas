@@ -58,6 +58,9 @@ type
 
   TRemoteRidersManager = class
   private
+    FProfileIndex:Integer;
+    FReceiveEnabled:Boolean;
+    FLocalRiderIds:array of Integer;
     FOwnerForComponents: TComponent;
     FViewport: TCastleViewport;
     { Общее мировое солнце для контактных теней райдеров (см.
@@ -102,6 +105,8 @@ type
 
     FOnProfileLog: TProfileLogEvent;
 
+    procedure SetReceiveEnabled(Value:Boolean);
+    procedure ClearRemoteVisuals;
     function FindOrCreateRemoteVisual(ARiderId: Integer): Integer;
     procedure EnqueueBuild(AVisualIdx: Integer; const AJson: string);
     procedure ProcessBuildQueue;
@@ -109,7 +114,7 @@ type
 
     procedure PushGuestStates;
   public
-    constructor Create(AOwner: TComponent);
+    constructor Create(AOwner: TComponent;ProfileIndex:Integer=0);
     destructor Destroy; override;
 
     procedure Setup(
@@ -140,8 +145,11 @@ type
 
     procedure StartRelay(const AServerUrl: string;
       const ABikeJsonFileName, AFallbackBikeJsonFileName: string;
-      APrivateRoom:Boolean=False;AAccountId:Integer=0;const AName:string='Player';const ARoomToken:string='');
+      APrivateRoom:Boolean=False;AAccountId:Integer=0;const AName:string='Player';const ARoomToken:string='';ALocalBike:TBikeInstance=nil);
+    procedure PublishBikeConfig(ALocalBike:TBikeInstance=nil);
     procedure StopRelay;
+    procedure SetLocalRiderIds(const Ids:array of Integer);
+    property ReceiveEnabled:Boolean read FReceiveEnabled write SetReceiveEnabled;
 
     procedure UpdateRelayClient(const SecondsPassed: Single;
       AActiveAgent: TPhysicalAgent;
@@ -184,7 +192,7 @@ implementation
 
 
 uses
-  BikeJSON, fpjson, jsonparser, GameUserData, GameMath, DebugLog, GameRiderTraffic, GameRemoteBikeConfig;
+  BikeJSON, fpjson, jsonparser, GameUserData, GameMath, DebugLog, GameRiderTraffic, GameRemoteBikeConfig, GameRiderWardrobe, AppSettings, RiderTripo, RiderHair, RiderHeadAppearance;
 
 const
   GuestSyncInterval = 5.0;
@@ -197,8 +205,9 @@ const
   ShadowLODOffDistSq = 55.0 * 55.0;  { гистерезис shadow LOD: выключить > 55 м }
   { > 250m → hidden }
 
-constructor TRemoteRidersManager.Create(AOwner: TComponent);
+constructor TRemoteRidersManager.Create(AOwner: TComponent;ProfileIndex:Integer);
 begin
+  FProfileIndex:=ProfileIndex;FReceiveEnabled:=True;
   FShadowSunWorld := Vector3(0, -1, 0);
   FShadowSunWorldSet := False;
   FShadowMode := bsmCGE;
@@ -309,6 +318,11 @@ begin
   end;
 end;
 
+function RiderComponentSuffix(Id:Integer):string;
+begin
+  if Id<0 then Result:='N'+IntToStr(-Int64(Id)) else Result:=IntToStr(Id);
+end;
+
 function TRemoteRidersManager.FindOrCreateRemoteVisual(ARiderId: Integer): Integer;
 var
   I: Integer;
@@ -332,13 +346,13 @@ begin
 
   { Create Transform + empty Scene for the agent }
   Tr := TCastleTransform.Create(FOwnerForComponents);
-  Tr.Name := 'RemoteRider_' + IntToStr(ARiderId);
+  Tr.Name := 'RemoteRider_' + RiderComponentSuffix(ARiderId);
   Tr.Pickable := False;
   Tr.Collides := False;
   FViewport.Items.Add(Tr);
 
   Sc := TCastleScene.Create(FOwnerForComponents);
-  Sc.Name := 'RemoteRiderScene_' + IntToStr(ARiderId);
+  Sc.Name := 'RemoteRiderScene_' + RiderComponentSuffix(ARiderId);
   Sc.Pickable := False;
   Sc.Collides := False;
   Tr.Add(Sc);
@@ -352,7 +366,7 @@ begin
   { Create full TPhysicalAgent via factory — same physics as avatar }
   Ag := TPhysicalAgent.SpawnOnPath(
     FOwnerForComponents,
-    'RemoteAgent_' + IntToStr(ARiderId),
+    'RemoteAgent_' + RiderComponentSuffix(ARiderId),
     Tr, Sc, nil,
     FViewport, nil,
     FLevelScene,
@@ -402,6 +416,41 @@ begin
   Inc(FPendingBuildCount);
 end;
 
+function BuildRemoteBike(const SafeJson:string;Owner:TComponent):TBikeInstance;
+var D:TJSONData;Root,Look,Wardrobe,Rider:TJSONObject;Dyes:TJSONArray;
+  Presets:array[0..4]of string;I,Color:Integer;Headwear:TRiderHeadwear;Path:string;
+begin
+  Result:=nil;D:=GetJSON(SafeJson);
+  try
+    Root:=TJSONObject(D);Look:=nil;Wardrobe:=nil;
+    if Root.Find('appearance')is TJSONObject then Look:=TJSONObject(Root.Find('appearance'));
+    if(Look<>nil)and(Look.Find('wardrobe')is TJSONObject)then Wardrobe:=TJSONObject(Look.Find('wardrobe'));
+    for I:=0 to High(Presets)do begin
+      Presets[I]:='';if Wardrobe<>nil then Presets[I]:=Wardrobe.Get(WardrobeSlots[I],'');
+    end;
+    if Root.Find('tripoRider')is TJSONObject then begin
+      Rider:=TJSONObject(Root.Find('tripoRider'));
+      Path:=ResolveRiderGlbPath('castle-data:/avatars/RIDER.glb');
+      Rider.Strings['path']:=WardrobeRiderPathFor(Path,Presets);
+    end;
+    Result:=LoadBikeInstanceFromJSONString(Root.AsJSON,Owner,15,40,80,False);
+    try
+      if Result=nil then Exit;
+      if(Look<>nil)and(Look.Find('dyes')is TJSONArray)then begin
+        Dyes:=TJSONArray(Look.Find('dyes'));
+        for I:=0 to Min(6,Dyes.Count-1)do if(Length(Dyes.Strings[I])=6)and TryStrToInt('$'+Dyes.Strings[I],Color)then
+          Result.StageRiderClothColor(TClothSlot(I),Vector3(((Color shr 16)and 255)/255.0,((Color shr 8)and 255)/255.0,(Color and 255)/255.0));
+      end;
+      AttachTripoRiderFromJSON(Result,Root.AsJSON);
+      if(Look<>nil)and(Result.TripoRider<>nil)then begin
+        Result.TripoRider.HairStyle:=ParseRiderHairStyle(Look.Get('hair','short'));
+        Headwear:=ParseHeadwear(Look.Get('headwear','helmet'));if Presets[4]<>''then Headwear:=rhwNone;
+        Result.TripoRider.SetHeadAppearance(Headwear,ParseBeard(Look.Get('beard','none')),ParseMustache(Look.Get('mustache','none')));
+      end;
+    except Result.Free;Result:=nil;raise end;
+  finally D.Free end;
+end;
+
 procedure TRemoteRidersManager.ProcessBuildQueue;
 var Idx, I: Integer; Inst: TBikeInstance; Ms: QWord; Json,SafeJson,ConfigError: string;
   Config:TJSONData;Hud:TJSONData;
@@ -436,7 +485,8 @@ begin
           FRemoteVisuals[Idx].BikeInst.Group);
       FreeAndNil(FRemoteVisuals[Idx].BikeInst);
     end;
-    Inst := LoadBikeInstanceFromJSONString(SafeJson, FOwnerForComponents);
+    Inst := BuildRemoteBike(SafeJson, FOwnerForComponents);
+    if Inst=nil then Exit;
 
     { Add to Scene (FActor.Scene), NOT to Transform directly.
       This way ApplyModelRotation (which sets Scene.Rotation)
@@ -625,6 +675,7 @@ begin
 
   FRideClient.PushLocalState(FLocalDistance, AActiveAgent.State.CurrentSpeed,
     Power, Cadence, HR);
+  if not FReceiveEnabled then Exit;
 
   { ── NETWORK ── }
   TRNet := Timer;
@@ -864,8 +915,8 @@ end;
 
 procedure TRemoteRidersManager.StartRelay(const AServerUrl: string;
   const ABikeJsonFileName, AFallbackBikeJsonFileName: string;
-  APrivateRoom:Boolean;AAccountId:Integer;const AName,ARoomToken:string);
-var SL: TStringList;Config:TJSONData;
+  APrivateRoom:Boolean;AAccountId:Integer;const AName,ARoomToken:string;ALocalBike:TBikeInstance);
+var SL: TStringList;
 begin
   StopRelay;
   FLocalDistance := 0; FLocalTime := 0;
@@ -878,7 +929,12 @@ begin
     finally SL.Free; end;
   except on E: Exception do begin FFallbackBikeJson := ''; end; end;
 
-  FRideClient := TRideRelayClient.Create;
+  if not APrivateRoom and(LocalRiderCount>1)then begin
+    Logger.Warning('[Relay] Multiple local riders require a scoped ride room.');Exit;
+  end;
+  FRideClient := TRideRelayClient.Create(FProfileIndex);
+  FRideClient.ReceiveEnabled:=FReceiveEnabled;
+  FRideClient.SetLocalRiderIds(FLocalRiderIds);
   FRideClient.ServerUrl := AServerUrl;
   FRideClient.PrivateRoom:=APrivateRoom;
   FRideClient.RoomToken:=ARoomToken;
@@ -888,28 +944,113 @@ begin
   FRideClient.Start;
   Logger.Info('[Relay] ' + 'Started, ID=' + IntToStr(FRideClient.LocalRiderId));
 
-  try
-    SL := TStringList.Create;
-    try SL.LoadFromFile(URIToFilenameSafe(ABikeJsonFileName));
-        Config:=GetJSON(SL.Text);
-        try
-          if Config is TJSONObject then begin
-            TJSONObject(Config).Delete('hud');
-            TJSONObject(Config).Add('hud',TJSONObject.Create(['ftp',EffectiveRiderProfile.FtpW]));
-          end;
-          FRideClient.PushBikeConfig(Config.AsJSON);
-        finally Config.Free end;
-    finally SL.Free; end;
-  except on E: Exception do
-    Logger.Info('[Relay] ' + 'Config push failed: ' + E.Message);
-  end;
+  PublishBikeConfig(ALocalBike);
 end;
 
-procedure TRemoteRidersManager.StopRelay;
+function RemoteBikeColors(const C:TBikeColors):TJSONObject;
+  procedure Put(const Key:string;const V:TVector3);
+  begin Result.Add(Key,TJSONArray.Create([V.X,V.Y,V.Z])) end;
+begin
+  Result:=TJSONObject.Create;
+  Put('Frame',C.Frame);Put('FrameSpec',C.FrameSpec);Put('Chrome',C.Chrome);Put('ChromeSpec',C.ChromeSpec);
+  Put('Dark',C.Dark);Put('Tire',C.Tire);Put('Seat',C.Seat);Put('Tape',C.Tape);
+  Put('Spoke',C.Spoke);Put('Rim',C.Rim);Put('RimSpec',C.RimSpec);Put('TireSpec',C.TireSpec);
+end;
+
+procedure TRemoteRidersManager.PublishBikeConfig(ALocalBike:TBikeInstance);
+var SL:TStringList;D:TJSONData;Root,Components,Obj,Rider,Colors,Look,Wardrobe:TJSONObject;Dyes:TJSONArray;
+  Json,RiderPath:string;I,ColorValue:Integer;Appearance:TAppSettings;
+  function Section(const Key:string):TJSONObject;
+  begin
+    if Root.Find(Key)is TJSONObject then Exit(TJSONObject(Root.Find(Key)));
+    Root.Delete(Key);Result:=TJSONObject.Create;Root.Add(Key,Result);
+  end;
+  procedure ColorAt(Index:Integer;const Key:string);
+  var Hex:string;
+  begin
+    if Index>=SL.Count then Exit;Hex:=SL[Index];
+    if(Length(Hex)<>6)or not TryStrToInt('$'+Hex,ColorValue)then Exit;
+    Colors.Delete(Key);Colors.Add(Key,TJSONArray.Create([
+      ((ColorValue shr 16)and 255)/255.0,((ColorValue shr 8)and 255)/255.0,(ColorValue and 255)/255.0]));
+  end;
+begin
+  if(FRideClient=nil)or not FRideClient.Started then Exit;
+  D:=nil;SL:=TStringList.Create;
+  try
+    try
+      Appearance:=RiderSettings(FProfileIndex);
+      SL.LoadFromFile(BikeJsonUrlToFilename(ResolveActiveBikeBuildUrl(FProfileIndex)));
+      RiderPath:=WardrobeRiderPath(ResolveRiderGlbPath(Appearance.SelectedRiderGlb),FProfileIndex);
+      if RiderPath=''then RiderPath:=RiderGlbUrlForGender(Appearance.GetGender);
+      Json:=InjectRiderPath(SL.Text,RiderPath,True,FProfileIndex);
+      D:=GetJSON(Json);if not(D is TJSONObject)then Exit;Root:=TJSONObject(D);
+      if ALocalBike<>nil then begin
+        Root.Delete('components');Components:=TJSONObject.Create;Root.Add('components',Components);
+        for I:=0 to ALocalBike.ComponentCount-1 do begin
+          Obj:=TJSONObject.Create;
+          ALocalBike.Component(I).ParamsToJSON(Obj);
+          Components.Add(ALocalBike.Component(I).ComponentName,Obj);
+        end;
+        Root.Delete('colors');Root.Add('colors',RemoteBikeColors(ALocalBike.LastBuildColors));
+      end else if Appearance.FitParamsValid then begin
+        Components:=Section('components');
+        if not(Components.Find('Seat')is TJSONObject)then Components.Add('Seat',TJSONObject.Create);
+        Obj:=TJSONObject(Components.Find('Seat'));
+        Obj.Floats['SeatpostExtension']:=Appearance.FitSeatpostExt;
+        Obj.Floats['SaddleOffset']:=Appearance.FitSaddleOffset;
+        if not(Components.Find('Fork')is TJSONObject)then Components.Add('Fork',TJSONObject.Create);
+        Obj:=TJSONObject(Components.Find('Fork'));
+        Obj.Floats['HeadsetSpacer']:=Appearance.FitHeadsetSpacer;
+        Obj.Floats['StemLength']:=Appearance.FitStemLength;
+      end;
+      Colors:=Section('colors');SL.StrictDelimiter:=True;SL.Delimiter:=',';
+      SL.DelimitedText:=Appearance.BikeFitColors;ColorAt(7,'Frame');ColorAt(8,'Rim');
+      Rider:=Section('tripoRider');
+      if(SL.Count>9)and(Length(SL[9])=6)then Rider.Strings['helmetColor']:=SL[9];
+      Root.Delete('appearance');Look:=TJSONObject.Create;Root.Add('appearance',Look);
+      Wardrobe:=TJSONObject.Create;Look.Add('wardrobe',Wardrobe);
+      for I:=0 to High(WardrobeSlots)do Wardrobe.Add(WardrobeSlots[I],WardrobeSelection(I,FProfileIndex));
+      Look.Add('hair',RiderPreference('rider_hair_style','short',FProfileIndex));
+      Look.Add('headwear',RiderPreference('rider_headwear','helmet',FProfileIndex));
+      Look.Add('beard',RiderPreference('rider_beard','none',FProfileIndex));
+      Look.Add('mustache',RiderPreference('rider_mustache','none',FProfileIndex));
+      Dyes:=TJSONArray.Create;Look.Add('dyes',Dyes);
+      for I:=0 to 6 do if(I<SL.Count)and(Length(SL[I])=6)and TryStrToInt('$'+SL[I],ColorValue)then Dyes.Add(SL[I])else Dyes.Add('');
+      Root.Delete('hud');Root.Add('hud',TJSONObject.Create(['ftp',EffectiveRiderProfile(FProfileIndex).FtpW]));
+      FRideClient.PushBikeConfig(Root.AsJSON);
+    except on E:Exception do Logger.Info('[Relay] Config push failed: '+E.Message)end;
+  finally D.Free;SL.Free end;
+end;
+
+procedure TRemoteRidersManager.SetLocalRiderIds(const Ids:array of Integer);
+var I,J,K:Integer;Scene:TCastleScene;
+begin
+  SetLength(FLocalRiderIds,Length(Ids));
+  for I:=0 to High(Ids)do FLocalRiderIds[I]:=Ids[I];
+  if FRideClient<>nil then FRideClient.SetLocalRiderIds(Ids);
+  for I:=0 to FRemoteVisualCount-1 do
+    for J:=0 to High(Ids)do if FRemoteVisuals[I].RiderId=Ids[J]then begin
+      if(FLaneManager<>nil)and(I<Length(FRemoteLaneHandles))and(FRemoteLaneHandles[I]>=0)then begin
+        FLaneManager.UnregisterRider(FRemoteLaneHandles[I]);FRemoteLaneHandles[I]:=-1;
+      end;
+      Scene:=nil;if FRemoteVisuals[I].Agent<>nil then Scene:=FRemoteVisuals[I].Agent.Actor.Scene;
+      FreeAndNil(FRemoteVisuals[I].BikeInst);FreeAndNil(FRemoteVisuals[I].Agent);
+      Scene.Free;FreeAndNil(FRemoteVisuals[I].Transform);
+      FRemoteVisuals[I]:=Default(TRemoteRiderVisual);
+      K:=0;while K<FPendingBuildCount do begin
+        if FPendingBuilds[K].VisualIdx=I then begin
+          Dec(FPendingBuildCount);FPendingBuilds[K]:=FPendingBuilds[FPendingBuildCount];
+          FPendingBuilds[FPendingBuildCount].JsonText:='';
+        end else Inc(K);
+      end;
+      Break;
+    end;
+end;
+
+procedure TRemoteRidersManager.ClearRemoteVisuals;
 var I:Integer;Scene:TCastleScene;
 begin
   FPendingBuildCount := 0;
-  FreeAndNil(FRideClient);
   for I:=0 to FRemoteVisualCount-1 do begin
     if(FLaneManager<>nil)and(I<Length(FRemoteLaneHandles))then
       FLaneManager.UnregisterRider(FRemoteLaneHandles[I]);
@@ -921,6 +1062,20 @@ begin
     FRemoteVisuals[I]:=Default(TRemoteRiderVisual);
   end;
   FRemoteVisualCount:=0;FVisibleRiders:=0;
+  FRemoteVisuals:=nil;FRemoteLaneHandles:=nil;FPendingBuilds:=nil;FGuestSyncTimer:=0;
+  FProf_RelayNet:=0;FProf_RelayBuild:=0;FProf_RelayConfig:=0;FProf_RelayPos:=0;
+end;
+
+procedure TRemoteRidersManager.StopRelay;
+begin
+  FreeAndNil(FRideClient);ClearRemoteVisuals;
+end;
+procedure TRemoteRidersManager.SetReceiveEnabled(Value:Boolean);
+begin
+  if FReceiveEnabled=Value then Exit;
+  FReceiveEnabled:=Value;
+  if FRideClient<>nil then FRideClient.ReceiveEnabled:=Value;
+  if not Value then ClearRemoteVisuals;
 end;
 
 { ── Profiling ── }

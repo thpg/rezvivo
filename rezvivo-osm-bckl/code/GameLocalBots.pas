@@ -264,7 +264,7 @@ end;
 procedure TLocalBots.PrepareNext;
 var I:Integer;B:TBikeInstance;A:TLocalBotAgent;Slot:TClothSlot;Tick:QWord;
   Advance:Boolean;
-  Config, Rider:TJSONObject;
+  Config, Rider,Wheels:TJSONObject;
   Garment:TRiderGarmentParameters;
   Pose:TObject;
 begin
@@ -281,6 +281,12 @@ begin
           FGlbWorker:=TTripoGlbWorker.Create(ResolveRiderGlbPath('castle-data:/avatars/RIDER.glb'));
           Config:=TJSONObject(GetJSON(FJson));
           try
+            Wheels:=Config.Objects['components'].Objects['Wheels'];
+            { Authored identities keep their wheel choice across sessions.
+              Road defaults centre on 50 mm; no rider's fit is inherited. }
+            Wheels.Integers['FrontRimHeight']:=40+5*(FProfiles[I].CatalogIndex mod 5);
+            Wheels.Integers['RearRimHeight']:=Wheels.Integers['FrontRimHeight']+
+              5*((FProfiles[I].CatalogIndex div 5)mod 2);
             Rider:=Config.Objects['tripoRider'];
             Rider.Delete('body');Rider.Add('body',WriteRiderBody(FProfiles[I].Body));
             Garment:=DefaultRiderGarment(FProfiles[I].EffortSeed);
@@ -748,6 +754,8 @@ begin
     EffortInput.Gap:=RouteGap(I);EffortInput.Speed:=A.State.CurrentSpeed;
     EffortInput.RiderSpeed:=FAvatar.State.CurrentSpeed;
     EffortInput.Racing:=not FExcursion.Active and not A.Oncoming and (EffortInput.RiderSpeed>0.5);
+    EffortInput.JoiningGroup:=(I in[1,2])and(A.Effort.Overtakes=0)and
+      (EffortInput.Gap< -18)and EffortInput.Racing;
     EffortInput.UnderPressure:=(EffortInput.Gap>0)and(EffortInput.Gap<30)and
       (EffortInput.RiderSpeed>EffortInput.Speed+0.4);
     EffortInput.CompanyControl:=FSocial.Riders[I+1].Control and RiderMoving and
@@ -831,13 +839,9 @@ begin
   if not FExcursion.Active and not FAvatar.State.FreeTravel and RiderMoving then TryOncoming;
   if FElapsed<FNextAppearance then Exit;
   CompanionLimit:=RenderCapacity;
-  { Keep an overdue encounter's slot available while a bend delays its safe
-    distant entry. Otherwise a third companion can starve oncoming traffic
-    indefinitely. Close/watched riders are never evicted for this. }
-  if not FExcursion.Active and not FAvatar.State.FreeTravel and
-     not GetAgent(LocalBotOncomingIndex).Spawned and (FElapsed>=FNextOncoming) and
-     (FAvatar.Path.RoadWidthAt(FAvatar.Path.Position)>=3) then
-    CompanionLimit:=Max(1,RenderCapacity-1);
+  { ReserveTrafficSlot releases an unwatched distant companion when an
+    encounter can actually start. A postponed encounter must not leave a
+    permanently empty seat in the riding group. }
   if (FVisibleCount>=CompanionLimit)or(FVisibleCount>=RenderCapacity)or not FRenderEnabled then Exit;
   for I:=0 to LocalBotCount-1 do begin
     if(FCrossAgent<>nil)and(I=FCrossVisual)then Continue;
@@ -867,7 +871,7 @@ begin
 end;
 
 function TLocalBots.RenderCapacity:Integer;
-begin Result:=Max(0,FRenderLimit-FExternalVisible) end;
+begin Result:=Max(0,FRenderLimit) end;
 function TLocalBots.ReserveAmbientSlot:Boolean;
 begin Result:=ReserveTrafficSlot end;
 procedure TLocalBots.SetExternalVisible(Value:Integer);

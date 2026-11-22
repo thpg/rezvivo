@@ -153,12 +153,12 @@ begin
   Bg:=TCastleRectangleControl.Create(Self);Bg.FullSize:=True;Bg.Color:=MenuBackground;InsertBack(Bg);
   FPreview:=TDreamPreview.Create(Self);FPreview.FullSize:=True;FPreview.Border.Left:=12;
   FPreview.Border.Top:=340;FPreview.Border.Bottom:=65;FPreview.Border.Right:=12;InsertFront(FPreview);
-  FTitle:=TMenuLabel.Create(Self);BindUiText(FTitle, 'Dream World');FTitle.FontSize:=30;FTitle.Color:=White;
+  FTitle:=TMenuLabel.Create(Self);BindUiText(FTitle, 'Dream World');FTitle.FontSize:=30;FTitle.Color:=MenuText;
   FTitle.Anchor(hpLeft,20);FTitle.Anchor(vpTop,-20);InsertFront(FTitle);
-  FInfo:=TMenuLabel.Create(Self);FInfo.FontSize:=22;FInfo.Color:=White;FInfo.Anchor(hpLeft,16);FInfo.Anchor(vpTop,-266);InsertFront(FInfo);
-  FDescription:=TMenuLabel.Create(Self);FDescription.FontSize:=16;FDescription.Color:=Vector4(0.78,0.85,0.9,1);
+  FInfo:=TMenuLabel.Create(Self);FInfo.FontSize:=22;FInfo.Color:=MenuText;FInfo.Anchor(hpLeft,16);FInfo.Anchor(vpTop,-266);InsertFront(FInfo);
+  FDescription:=TMenuLabel.Create(Self);FDescription.FontSize:=16;FDescription.Color:=MenuMuted;
   FDescription.Anchor(hpLeft,16);FDescription.Anchor(vpTop,-302);InsertFront(FDescription);
-  FStatus:=TMenuLabel.Create(Self);FStatus.FontSize:=15;FStatus.Color:=White;FStatus.Anchor(hpLeft,16);FStatus.Anchor(vpBottom,22);InsertFront(FStatus);
+  FStatus:=TMenuLabel.Create(Self);FStatus.FontSize:=15;FStatus.Color:=MenuText;FStatus.Anchor(hpLeft,16);FStatus.Anchor(vpBottom,22);InsertFront(FStatus);
   FTitle.Exists:=False;FInfo.Exists:=False;
   FHeader:=TRideMenuHeader.Create(Self);FHeader.Anchor(vpTop);InsertFront(FHeader);
   FHeader.SetSelection(UiText('Choose a world'),UiText('Click a card to select a world'),False);
@@ -166,8 +166,8 @@ begin
   FSearch:=TMenuEdit.Create(Self);FSearch.Name:='DreamWorldSearch';
   FSearch.Text:='';BindUiText(FSearch,'Search worlds','Placeholder');FSearch.OnChange:=@FilterChanged;InsertFront(FSearch);
   FLoading:=TCastleRectangleControl.Create(Self);FLoading.FullSize:=True;
-  FLoading.Color:=Vector4(0.055,0.078,0.105,1);FPreview.InsertFront(FLoading);
-  FLoadingLabel:=TMenuLabel.Create(Self);FLoadingLabel.Color:=White;
+  FLoading.Color:=MenuSurface;FPreview.InsertFront(FLoading);
+  FLoadingLabel:=TMenuLabel.Create(Self);FLoadingLabel.Color:=MenuText;
   FLoadingLabel.FontSize:=18;FLoadingLabel.Anchor(hpMiddle);FLoadingLabel.Anchor(vpMiddle);
   FLoading.InsertFront(FLoadingLabel);
   FCancel:=TMenuButton.Create(Self);FCancel.Name:='CancelWorldPreparation';BindUiText(FCancel,'Cancel preparation');

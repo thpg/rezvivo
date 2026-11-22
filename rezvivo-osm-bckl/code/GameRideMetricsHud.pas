@@ -5,7 +5,7 @@ unit GameRideMetricsHud;
 interface
 
 uses Classes, CastleUIControls, CastleControls, CastleFonts, CastleColors,
-  GameBLEHud, GameZoneWheel;
+  GameBLEHud, GameZoneWheel, GameDeviceService;
 
 type
   { A fixed-width number cell. Only unusually long readings reduce the font;
@@ -32,31 +32,42 @@ type
   TRideMetricsHud = class(TCastleUserInterface)
   private
     FLabels: THudLabels;
+    FProfileIndex,FGridIndex,FGridCount:Integer;
+    FGridBottom:Single;
+    FComparisonRows:Integer;
+    FRiderNumber:TCastleLabel;
     FRegularFont, FBoldFont: TCastleFont;
     FMetrics: array[0..2] of TRideHudMetric;
     FSpeedIcon, FWorkIcon, FGradeIcon: TCastleImageControl;
     FSpeedTitle, FSpeedUnits, FWorkTitle, FWorkUnits, FTSSTitle,
       FGradeTitle: TCastleLabel;
     FGearDown,FGearUp:TCastleButton;
-    FReady, FArranging, FCompactLayout: Boolean;
+    FReady, FArranging, FCompactLayout, FDenseLayout: Boolean;
     FLayoutScale: Single;
     FParentWidth,FParentHeight,FParentScale:Single;
     function NewLabel(const AName, Source: String; const Bold: Boolean): TCastleLabel;
     function NewValue(const AName: String): TRideHudValue;
     procedure LanguageChanged(Sender: TObject);
     procedure ShiftGear(Sender:TObject);
+    procedure SetProfileIndex(Value:Integer);
+    function RiderDevices:TGameDeviceService;
+    function ComparisonRows:Integer;
   public
     constructor Create(AOwner: TComponent); override;
     procedure Resize; override;
     procedure Update(const SecondsPassed:Single;var HandleInput:Boolean); override;
     procedure Render; override;
+    procedure SetGridSlot(Index,Count:Integer);
+    property ProfileIndex:Integer read FProfileIndex write SetProfileIndex;
+    { Logical distance from the parent top to the bottom of all HUD rows. }
+    property GridBottom:Single read FGridBottom;
     property Labels: THudLabels read FLabels;
   end;
 
 implementation
 
 uses SysUtils, Math, CastleVectors, CastleRectangles, CastleImages,
-  CastleGLUtils, GameMenuTheme, GameRideLayout, UiTranslations,GameDeviceService,GameVirtualGearing;
+  CastleGLUtils, GameMenuTheme, GameRideLayout, UiTranslations,GameVirtualGearing,GameUserData,GameRiderPalette;
 
 const
   HudWidth = 1000;
@@ -233,6 +244,7 @@ const
 var I: Integer; IconColor: TCastleColor;
 begin
   inherited;
+  FGridCount:=1;
   Name:='RideMetricsBackground'; Width:=HudWidth; Height:=HudHeight;
   Anchor(hpMiddle); Anchor(vpTop,-12); FLayoutScale:=1;
   FRegularFont:=LoadHudFont(Self,False); FBoldFont:=LoadHudFont(Self,True);
@@ -246,7 +258,7 @@ begin
     FMetrics[I].Value:=NewValue(ValueNames[I]);
     FMetrics[I].Value.Parent.RemoveControl(FMetrics[I].Value);
     FMetrics[I].Root.InsertFront(FMetrics[I].Value);
-    FMetrics[I].Value.Caption:='—';
+    FMetrics[I].Value.Caption:='--';
     BindUiText(FMetrics[I].Value,MetricNames[I],'Tooltip');
     FMetrics[I].Units:=NewLabel(ValueNames[I]+'Units',UnitNames[I],False);
     FMetrics[I].Units.Parent.RemoveControl(FMetrics[I].Units);
@@ -258,6 +270,13 @@ begin
     FMetrics[I].Wheel.FrameBackground:=HudSurface;
     FMetrics[I].Root.InsertFront(FMetrics[I].Wheel);
   end;
+  FLabels.LabelRiderName:=NewValue('LabelRiderName');
+  FLabels.LabelRiderName.CustomFont:=FRegularFont;FLabels.LabelRiderName.Alignment:=hpLeft;
+  FLabels.LabelRiderName.Exists:=False;
+  FRiderNumber:=NewLabel('LocalRiderNumber','',False);FRiderNumber.Exists:=False;
+  FLabels.LabelPowerComparison:=NewLabel('LabelPowerComparison','',False);
+  FLabels.LabelPowerComparison.CustomFont:=FRegularFont;FLabels.LabelPowerComparison.Alignment:=hpLeft;
+  FLabels.LabelPowerComparison.Caption:='';FLabels.LabelPowerComparison.Exists:=False;
   FLabels.LabelPower:=FMetrics[0].Value; FLabels.WheelPower:=FMetrics[0].Wheel;
   FLabels.LabelHeart:=FMetrics[1].Value; FLabels.WheelHeart:=FMetrics[1].Wheel;
   FLabels.LabelCadence:=FMetrics[2].Value; FLabels.WheelCadence:=FMetrics[2].Wheel;
@@ -267,9 +286,9 @@ begin
   FLabels.LabelSlope:=NewValue('LabelSlope');
   FLabels.LabelTransmission:=NewValue('LabelTransmission');
   FLabels.LabelTransmission.Alignment:=hpMiddle;
-  FLabels.LabelTransmission.Caption:='—';
+  FLabels.LabelTransmission.Caption:='--';
   BindUiText(FLabels.LabelTransmission,'Gear','Tooltip');
-  FGearDown:=TMenuButton.Create(Self);FGearDown.Name:='GearDown';FGearDown.Caption:='−';
+  FGearDown:=TMenuButton.Create(Self);FGearDown.Name:='GearDown';FGearDown.Caption:='-';
   TMenuButton(FGearDown).AutoIcon:=False;FGearDown.Tag:=-1;FGearDown.OnClick:=@ShiftGear;
   FGearDown.AutoSize:=False;InsertFront(FGearDown);
   FGearUp:=TMenuButton.Create(Self);FGearUp.Name:='GearUp';FGearUp.Caption:='+';
@@ -278,7 +297,7 @@ begin
   BindUiText(FGearDown,'Easier gear (Page Down)','Tooltip');
   BindUiText(FGearUp,'Harder gear (Page Up)','Tooltip');
   FLabels.LabelSlope.Caption:='0.0%';
-  FLabels.LabelCorr:=NewLabel('LabelCorr','',False); FLabels.LabelCorr.Caption:='—';
+  FLabels.LabelCorr:=NewLabel('LabelCorr','',False); FLabels.LabelCorr.Caption:='--';
   FLabels.LabelCorr.Alignment:=hpRight;
   FSpeedTitle:=NewLabel('LabelSpeedName','Speed',False);
   FSpeedUnits:=NewLabel('LabelSpeedUnits','km/h',False);
@@ -290,6 +309,7 @@ begin
   FWorkIcon:=AddIcon(Self,Self,hiWork,HudBlue);
   FGradeIcon:=AddIcon(Self,Self,hiGrade,HudInk);
   BindUiText(FLabels.LabelWork,'Work today. Resets at 00:00 local time.','Tooltip');
+  SetProfileIndex(0);
   FReady:=True;
   ObserveUiLanguage(Self,@LanguageChanged);
   Resize;
@@ -299,26 +319,60 @@ procedure TRideMetricsHud.LanguageChanged(Sender: TObject);
 begin
   Resize;
 end;
+function TRideMetricsHud.RiderDevices:TGameDeviceService;
+begin
+  if DeviceService=nil then Exit(nil);
+  Result:=DeviceService.ForRider(FProfileIndex);
+end;
+
+procedure TRideMetricsHud.SetProfileIndex(Value:Integer);
+begin
+  if (Value<0)or(Value>=MaxLocalRiders)then raise ERangeError.Create('Local rider index');
+  FProfileIndex:=Value;
+  FLabels.LabelRiderName.Caption:=LocalRider(Value).DisplayName;
+  FRiderNumber.Caption:=IntToStr(Value+1)+'.';
+end;
+
+procedure TRideMetricsHud.SetGridSlot(Index,Count:Integer);
+begin
+  FGridCount:=EnsureRange(Count,1,MaxLocalRiders);
+  FGridIndex:=EnsureRange(Index,0,FGridCount-1);
+  Resize;
+end;
+
 procedure TRideMetricsHud.ShiftGear(Sender:TObject);
 begin
-  if(DeviceService<>nil)and not DeviceService.TrainerErgActive then
-    DeviceService.ShiftVirtualGear(TCastleButton(Sender).Tag);
+  if(RiderDevices<>nil)and not RiderDevices.TrainerErgActive then
+    RiderDevices.ShiftVirtualGear(TCastleButton(Sender).Tag);
+end;
+
+function TRideMetricsHud.ComparisonRows:Integer;
+var I:Integer;
+begin
+  Result:=0;if DeviceService=nil then Exit;
+  if FGridCount>1 then begin
+    for I:=0 to LocalRiderCount-1 do
+      Result:=Max(Result,DeviceService.ForRider(I).ComparisonPowerLineCount);
+  end else Result:=RiderDevices.ComparisonPowerLineCount;
 end;
 
 procedure TRideMetricsHud.Update(const SecondsPassed:Single;var HandleInput:Boolean);
 begin
   inherited;
-  if (Parent<>nil) and ((Abs(Parent.EffectiveWidth-FParentWidth)>0.1) or
+  if (ComparisonRows<>FComparisonRows)or((Parent<>nil) and ((Abs(Parent.EffectiveWidth-FParentWidth)>0.1) or
     (Abs(Parent.EffectiveHeight-FParentHeight)>0.1) or
-    (Abs(UIScale-FParentScale)>0.001)) then Resize;
+    (Abs(UIScale-FParentScale)>0.001))) then Resize;
 end;
 
 procedure TRideMetricsHud.Resize;
 var Available, AvailableHeight, S, NumberWidth, UnitWidth, RowX: Single;
-  I: Integer; L:TRideHudLayout;
+  Usable,GridLeft,GridWidth,GridTop,GridGap,GridHeader,TileWidth,TileHeight,FooterHeight,BaseHeight:Single;
+  I,Columns,Rows: Integer; L:TRideHudLayout;
   procedure Place(const C: TCastleUserInterface; const X, Y, W, H: Single);
   begin
-    C.Width:=W*S; C.Height:=H*S; C.Anchor(hpLeft,X*S); C.Anchor(vpTop,-Y*S);
+    C.Width:=W*S; C.Height:=H*S; C.Anchor(hpLeft,X*S);
+    if C.Parent=Self then C.Anchor(vpTop,-(Y+GridHeader)*S)
+    else C.Anchor(vpTop,-Y*S);
   end;
   procedure Text(const C: TCastleLabel; const X,Y,W,H,Size: Single);
   begin
@@ -333,13 +387,86 @@ begin
     Available:=HudWidth+400;AvailableHeight:=900;
     if Parent<>nil then begin Available:=Parent.EffectiveWidth;AvailableHeight:=Parent.EffectiveHeight end;
     FParentWidth:=Available;FParentHeight:=AvailableHeight;FParentScale:=UIScale;
+    GridHeader:=0;FDenseLayout:=False;FComparisonRows:=ComparisonRows;
+    FooterHeight:=0;if FComparisonRows>0 then FooterHeight:=8+FComparisonRows*17;
     L:=RideHudLayout(Available,AvailableHeight);FCompactLayout:=L.CompactMetrics;
-    if FCompactLayout then S:=L.MetricsWidth/360 else S:=L.MetricsWidth/HudWidth;
+    if FGridCount>1 then begin
+      GridGap:=8;GridLeft:=L.Margin;GridTop:=L.MetricsTop;
+      if Available>=640 then GridLeft:=L.ButtonWidth+3*L.Margin;
+      Usable:=Max(1,Available-GridLeft-L.Margin);
+      { Effective dimensions already account for DPI/accessibility scaling.
+        Keep at least 280 logical units per column before selecting another. }
+      Columns:=Min(FGridCount,Min(3,Max(1,Floor((Usable+GridGap)/(280+GridGap)))));
+      Rows:=(FGridCount+Columns-1)div Columns;
+      TileWidth:=Min(360,(Usable-(Columns-1)*GridGap)/Columns);
+      BaseHeight:=188+FooterHeight;
+      S:=Min(TileWidth/360,Max(0.01,(AvailableHeight*0.50-(Rows-1)*GridGap)/(Rows*BaseHeight)));
+      TileWidth:=360*S;TileHeight:=BaseHeight*S;
+      { Eight full dashboards cannot be made readable by shrinking every
+        glyph to fit half a small screen. Reflow the essential live values
+        into short cards, retaining the three wheels and gear controls. }
+      if S<0.72 then begin
+        FDenseLayout:=True;
+        Columns:=Min(FGridCount,Min(3,Max(1,Floor((Usable+GridGap)/(164+GridGap)))));
+        Rows:=(FGridCount+Columns-1)div Columns;
+        TileWidth:=Min(230,(Usable-(Columns-1)*GridGap)/Columns);
+        S:=TileWidth/180;BaseHeight:=96+FooterHeight;
+        TileHeight:=BaseHeight*S;
+      end;
+      GridWidth:=Columns*TileWidth+(Columns-1)*GridGap;
+      GridLeft:=GridLeft+Max(0,(Usable-GridWidth)/2);
+      L.CompactMetrics:=True;FCompactLayout:=True;
+      L.MetricsWidth:=TileWidth;L.MetricsHeight:=TileHeight;
+      L.MetricsLeft:=GridLeft+(FGridIndex mod Columns)*(TileWidth+GridGap);
+      L.MetricsTop:=GridTop+(FGridIndex div Columns)*(TileHeight+GridGap);
+      FGridBottom:=GridTop+Rows*TileHeight+(Rows-1)*GridGap;
+      if FDenseLayout then GridHeader:=22 else GridHeader:=32;
+    end else begin
+      if FCompactLayout then S:=L.MetricsWidth/360 else S:=L.MetricsWidth/HudWidth;
+      L.MetricsHeight:=L.MetricsHeight+FooterHeight*S;
+      FGridBottom:=L.MetricsTop+L.MetricsHeight;
+    end;
+    if FDenseLayout then S:=L.MetricsWidth/180
+    else if FCompactLayout then S:=L.MetricsWidth/360 else S:=L.MetricsWidth/HudWidth;
     FLayoutScale:=S;
     Width:=L.MetricsWidth; Height:=L.MetricsHeight;
     Anchor(hpLeft,L.MetricsLeft);Anchor(vpTop,-L.MetricsTop);
+    FLabels.LabelRiderName.Exists:=FGridCount>1;FRiderNumber.Exists:=FGridCount>1;
+    FLabels.LabelPowerComparison.Exists:=FLabels.LabelPowerComparison.Caption<>'';
+    if FGridCount>1 then begin
+      Text(FRiderNumber,8,-28,26,24,14);
+      Text(FLabels.LabelRiderName,34,-28,318,24,14);
+      Text(FLabels.LabelPowerComparison,8,158,344,FooterHeight,11);
+    end else begin
+      if FCompactLayout then BaseHeight:=156 else BaseHeight:=HudHeight;
+      Place(FLabels.LabelPowerComparison,8,BaseHeight+3,
+        Width/S-16,FooterHeight);
+      FLabels.LabelPowerComparison.FontSize:=12*S;
+    end;
     FSpeedTitle.Exists:=not FCompactLayout;FWorkTitle.Exists:=not FCompactLayout;
     FGradeTitle.Exists:=not FCompactLayout;
+    FWorkIcon.Exists:=not FDenseLayout;FLabels.LabelWork.Exists:=not FDenseLayout;
+    FWorkUnits.Exists:=not FDenseLayout;FTSSTitle.Exists:=not FDenseLayout;
+    FLabels.LabelWorkTSS.Exists:=not FDenseLayout;FLabels.LabelCorr.Exists:=not FDenseLayout;
+    if FDenseLayout then begin
+      Text(FRiderNumber,5,-21,18,20,12);
+      Text(FLabels.LabelRiderName,23,-21,152,20,12);
+      Place(FSpeedIcon,4,5,11,11);Text(FLabels.LabelSpeed,17,0,34,22,14);
+      Text(FSpeedUnits,52,1,21,20,9);
+      Place(FGradeIcon,76,5,10,11);Text(FLabels.LabelSlope,87,0,35,22,12);
+      Place(FGearDown,124,2,14,18);FGearDown.FontSize:=12*S;
+      Text(FLabels.LabelTransmission,139,1,24,20,12);
+      Place(FGearUp,164,2,14,18);FGearUp.FontSize:=12*S;
+      for I:=0 to 2 do begin
+        Place(FMetrics[I].Root,I*60,22,60,52);
+        Place(FMetrics[I].Icon,4,7,11,13);
+        Text(FMetrics[I].Value,17,0,39,28,23);
+        Text(FMetrics[I].Units,28,25,28,14,10);
+        Place(FMetrics[I].Wheel,4,41,52,10);FMetrics[I].Wheel.FontSize:=10*S;
+      end;
+      Text(FLabels.LabelPowerComparison,5,76,170,FooterHeight,11);
+      Exit;
+    end;
     if FCompactLayout then begin
       { Reflow at a readable physical size instead of shrinking the desktop
         strip. The three original wheels and telemetry bindings are retained. }
@@ -400,28 +527,45 @@ end;
 
 procedure TRideMetricsHud.Render;
 var R: TFloatRectangle; S, LineWidth: Single; I: Integer;
+  Surface,Edge:TCastleColor;P:TRiderPanelPalette;
 const HeaderDividers: array[0..3] of Single = (210,430,554,750);
 begin
   inherited;
-  FGearUp.Enabled:=(DeviceService<>nil)and not DeviceService.TrainerErgActive and
-    (DeviceService.GearingBackend in[gbNative,gbFTMSPower]);
+  FLabels.LabelRiderName.Exists:=FGridCount>1;FRiderNumber.Exists:=FGridCount>1;
+  FLabels.LabelPowerComparison.Exists:=FLabels.LabelPowerComparison.Caption<>'';
+  FGearUp.Enabled:=(RiderDevices<>nil)and not RiderDevices.TrainerErgActive and
+    (RiderDevices.GearingBackend in[gbNative,gbFTMSPower]);
   FGearDown.Enabled:=FGearUp.Enabled;
+  Surface:=HudSurface;Edge:=HudEdge;
+  if FGridCount>1 then begin
+    P:=RiderPanelPalette(FProfileIndex);Surface:=P.Surface;Edge:=P.Border;
+    FLabels.LabelRiderName.Color:=P.Accent;FRiderNumber.Color:=P.Accent;
+    for I:=0 to 2 do FMetrics[I].Wheel.FrameBackground:=Surface;
+    ApplyRiderButtonPalette(FGearDown,FProfileIndex);
+    ApplyRiderButtonPalette(FGearUp,FProfileIndex);
+  end;
   R:=RenderRect; S:=FLayoutScale*UIScale; LineWidth:=Max(1,S);
-  DrawMenuPanel(R,12*S,HudEdge);
-  DrawMenuPanel(R.Grow(-LineWidth),Max(0,12*S-LineWidth),HudSurface);
-  if FCompactLayout then begin
-    DrawRectangle(FloatRectangle(R.Left+1,R.Top-72*S,R.Width-2,LineWidth),HudEdge);
+  DrawMenuPanel(R,12*S,Edge);
+  DrawMenuPanel(R.Grow(-LineWidth),Max(0,12*S-LineWidth),Surface);
+  if FDenseLayout then begin
+    DrawRectangle(FloatRectangle(R.Left+1,R.Top-44*S,R.Width-2,LineWidth),Edge);
     for I:=1 to 2 do
-      DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Bottom+8*S,LineWidth,68*S),HudEdge);
+      DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Top-94*S,LineWidth,50*S),Edge);
     Exit;
   end;
-  DrawRectangle(FloatRectangle(R.Left+1,R.Top-HudHeaderHeight*S,R.Width-2,LineWidth),HudEdge);
+  if FCompactLayout then begin
+    DrawRectangle(FloatRectangle(R.Left+1,R.Top-(72+Ord(FGridCount>1)*32)*S,R.Width-2,LineWidth),Edge);
+    for I:=1 to 2 do
+      DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Top-(148+Ord(FGridCount>1)*32)*S,LineWidth,68*S),Edge);
+    Exit;
+  end;
+  DrawRectangle(FloatRectangle(R.Left+1,R.Top-HudHeaderHeight*S,R.Width-2,LineWidth),Edge);
   for I:=0 to High(HeaderDividers) do
     DrawRectangle(FloatRectangle(R.Left+HeaderDividers[I]*S,R.Top-33*S,
-      LineWidth,24*S),HudEdge);
+      LineWidth,24*S),Edge);
   for I:=1 to 2 do
-    DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Bottom+12*S,
-      LineWidth,80*S),HudEdge);
+    DrawRectangle(FloatRectangle(R.Left+I*R.Width/3,R.Top-(HudHeight-12)*S,
+      LineWidth,80*S),Edge);
 end;
 
 end.

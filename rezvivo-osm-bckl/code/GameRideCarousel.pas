@@ -163,20 +163,20 @@ var Root:TX3DRootNode;Shape:TShapeNode;Box:TBoxNode;App:TAppearanceNode;
     T.AddChildren(Sh);Root.AddChildren(T);
   end;
 begin
-  Root:=TX3DRootNode.Create;Slot.Border:=Material(Vector3(0.26,0.39,0.46));
+  Root:=TX3DRootNode.Create;Slot.Border:=Material(MenuBorder.XYZ);
   Root.AddChildren(Quad(-CardWidth/2,-CardHeight/2,CardWidth,CardHeight,CardFront,Slot.Border));
   Root.AddChildren(Quad(-CardWidth/2+0.04,-CardHeight/2+0.04,CardWidth-0.08,CardHeight-0.08,
-    CardFront+0.004,Material(Vector3(0.055,0.085,0.12))));
+    CardFront+0.004,Material(MenuSurface.XYZ)));
   Box:=TBoxNode.Create;Box.Size:=Vector3(CardWidth,CardHeight,0.055);
-  App:=TAppearanceNode.Create;App.Material:=Material(Vector3(0.025,0.043,0.060));
+  App:=TAppearanceNode.Create;App.Material:=Material(MenuBorder.XYZ);
   Shape:=TShapeNode.Create;Shape.Geometry:=Box;Shape.Appearance:=App;Root.AddChildren(Shape);
-  Root.AddChildren(Quad(-CardWidth/2+0.14,-0.24,CardWidth-0.28,0.99,CardFront+0.008,Material(Vector3(0.15,0.22,0.29))));
+  Root.AddChildren(Quad(-CardWidth/2+0.14,-0.24,CardWidth-0.28,0.99,CardFront+0.008,Material(MenuInset.XYZ)));
   Slot.Texture:=TImageTextureNode.Create;Slot.Texture.RepeatS:=False;Slot.Texture.RepeatT:=False;
   FilterCardTexture(Slot.Texture);
   Slot.Picture:=TSwitchNode.Create;Slot.Picture.WhichChoice:=-1;
   Slot.Picture.AddChildren(Quad(-CardWidth/2+0.14,-0.24,CardWidth-0.28,0.99,CardFront+0.010,
     Material(Vector3(1,1,1)),Slot.Texture));Root.AddChildren(Slot.Picture);
-  Slot.Title:=LabelNode(-0.48,0.18,Vector3(0.94,0.97,1));Slot.Info:=LabelNode(-0.72,0.13,Vector3(0.61,0.74,0.83));
+  Slot.Title:=LabelNode(-0.48,0.18,MenuText.XYZ);Slot.Info:=LabelNode(-0.72,0.13,MenuMuted.XYZ);
   Slot.Scene:=TCastleScene.Create(Self);Slot.Scene.Load(Root,True);
   Slot.Scene.ProcessEvents:=False;Slot.Scene.Collides:=False;Slot.Scene.Pickable:=False;
   Slot.Scene.Exists:=False;FViewport.Items.Add(Slot.Scene);
@@ -435,8 +435,9 @@ begin
       H:=Ord(Index=FSelected)+2*Ord(Index=FHovered);
       if H<>Slot.Highlight then begin
         case H of
-          1:Color:=Vector3(0.333,0.851,0.918);2:Color:=Vector3(0.46,0.92,0.97);3:Color:=Vector3(0.64,0.97,1);
-          else Color:=Vector3(0.26,0.39,0.46);
+          1,3:Color:=MenuAccent.XYZ;
+          2:Color:=(MenuAccent.XYZ+MenuBorder.XYZ)*0.5;
+          else Color:=MenuBorder.XYZ;
         end;
         Slot.Border.EmissiveColor:=Color;Slot.Highlight:=H;
       end;

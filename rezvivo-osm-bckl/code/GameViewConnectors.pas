@@ -34,7 +34,7 @@ constructor TConnectorsPage.Create(AOwner:TComponent);
 var Col:TCastleVerticalGroup;Row:TCastleHorizontalGroup;L:TCastleLabel;B:TCastleButton;Background:TCastleRectangleControl;
   function LabelText(const S:String;Size:Single):TCastleLabel;
   begin Result:=TMenuLabel.Create(Self);BindUiText(Result, S);Result.FontSize:=Size;
-    Result.Color:=Vector4(0.88,0.92,0.97,1);Result.MaxWidth:=740;Col.InsertFront(Result);end;
+    Result.Color:=MenuText;Result.MaxWidth:=740;Col.InsertFront(Result);end;
   function ButtonText(const S:String;Click:TNotifyEvent):TCastleButton;
   begin Result:=TMenuButton.Create(Self);BindUiText(Result, S);Result.FontSize:=16;
     Result.OnClick:=Click;Row.InsertFront(Result);end;
@@ -53,7 +53,7 @@ begin
   FDisconnect:=ButtonText(UiText('Disconnect'),@ClickDisconnect);
   B:=ButtonText(UiText('Where to get the key'),@ClickSettings);
   FUpload:=LabelText('',16);FUpload.Name:='IntervalsUploadStatus';
-  FProgress:=LabelText('',16);FError:=LabelText('',16);FError.Color:=Vector4(1,0.48,0.48,1);
+  FProgress:=LabelText('',16);FError:=LabelText('',16);FError.Color:=MenuError;
   L:=LabelText(UiText('Import starts with your latest rides and continues in the background.')+LineEnding+
     UiText('Files without GPS are skipped. Disconnecting does not remove imported routes.'),16);
   FSync.Exists:=False;FDisconnect.Exists:=False;

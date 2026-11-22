@@ -1721,5 +1721,19 @@
   "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.": "MSAA smooths edges after restarting. Render scale reduces 3D width and height immediately; 50% uses one quarter of the pixels. Interface stays sharp. Restart to change the previous MSAA sample count.",
   "Smooth upscaling": "Smooth upscaling",
   "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.": "In reduced resolution: off shows large sharp pixels; on smooths edges in the finished image.",
-  "RTX screen shadows (experimental)": "RTX screen shadows (experimental)"
+  "RTX screen shadows (experimental)": "RTX screen shadows (experimental)",
+  "Each rider has their own avatar, bicycle and account.": "Each rider has their own avatar, bicycle and account.",
+  "Finish the ride to change local riders.": "Finish the ride to change local riders.",
+  "Local riders": "Local riders",
+  "No devices yet. Search again or open the device list.": "No devices yet. Search again or open the device list.",
+  "Not compatible": "Not compatible",
+  "Primary": "Primary",
+  "Rider %d": "Rider %d",
+  "Selected": "Selected",
+  "Use as primary power": "Use as primary power",
+  "Power meters": "Power meters",
+  "Steering / buttons": "Steering / buttons",
+  "Select devices for each rider. A device belongs to one rider.": "Select devices for each rider. A device belongs to one rider.",
+  "Repeat for everyone": "Repeat for everyone",
+  "Finish this rider's ride before switching accounts.": "Finish this rider's ride before switching accounts."
 }

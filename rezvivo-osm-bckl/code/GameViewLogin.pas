@@ -39,6 +39,8 @@ type
 
   TLoginThread = class(TThread)
   private
+    FApi: TVeloSiteAPI;
+    FProfileIndex: Integer;
     FAction:        TLoginAction;
     FEmail:         String;
     FPassword:      String;
@@ -55,7 +57,7 @@ type
     property State:  TLoginAsyncState read FState;
     property Action: TLoginAction     read FAction;
 
-    constructor Create(AAction: TLoginAction);
+    constructor Create(AAction: TLoginAction; AProfileIndex: Integer = 0);
     destructor  Destroy; override;
     procedure Start;reintroduce;
 
@@ -74,6 +76,7 @@ type
     FormHost:    TCastleUserInterface;
     LabelStatus: TCastleLabel;
   private
+    FProfileIndex: Integer;
     FMode: TLoginMode;
     FScroll:TMenuScrollView;
     FTabs:TMenuFlow;
@@ -123,7 +126,9 @@ type
     procedure HandleAsyncCompletion;
     procedure FinishLoginSuccess;
     procedure KeepInputAboveKeyboard;
+    procedure SetProfileIndex(Value: Integer);
   public
+    property ProfileIndex: Integer read FProfileIndex write SetProfileIndex;
     constructor Create(AOwner: TComponent); override;
     procedure Start; override;
     procedure Resize;override;
@@ -141,16 +146,18 @@ implementation
 uses UiTranslations,Math,
   CastleLog, CastleApplicationProperties, CastleOpenDocument, CastleRectangles,
   {$ifdef ANDROID}GameAndroidPlatform,{$endif}
-  GameViewMenu, GameLocalization,GameAccountChange;
+  GameViewMenu, GameLocalization,GameAccountChange,GameUserData,GameRideHistory;
 
 { ══════════════════════════════════════════════════════════════════
   TLoginThread
   ══════════════════════════════════════════════════════════════════ }
 
-constructor TLoginThread.Create(AAction: TLoginAction);
+constructor TLoginThread.Create(AAction: TLoginAction; AProfileIndex: Integer);
 begin
   inherited Create(True);   { suspended }
   FreeOnTerminate := False;
+  FProfileIndex := AProfileIndex;
+  FApi := RiderApi(AProfileIndex);
   FAction := AAction;
   FLock := TCriticalSection.Create;
   FState := lasIdle;
@@ -178,7 +185,7 @@ end;
 procedure TLoginThread.Start;
 begin
   try
-    if FAction in[laLoginPassword,laDevicePoll]then FAccountToken:=BeginAccountChange;
+    if FAction in[laLoginPassword,laDevicePoll]then FAccountToken:=BeginAccountChange(FProfileIndex);
     inherited Start;
     if Suspended then raise EThread.Create('Could not start account request');
   except on E:Exception do begin
@@ -200,11 +207,11 @@ begin
   try
     case FAction of
       laLoginPassword:
-        VeloSite.Login(FEmail, FPassword);
+        FApi.Login(FEmail, FPassword);
       laDeviceStart:
-        FResultDevice := VeloSite.DeviceStart;
+        FResultDevice := FApi.DeviceStart;
       laDevicePoll:
-        FResultPolled := VeloSite.DevicePoll(FDeviceCode);
+        FResultPolled := FApi.DevicePoll(FDeviceCode);
     end;
     FLock.Enter;
     try
@@ -251,6 +258,15 @@ end;
   TViewLogin
   ══════════════════════════════════════════════════════════════════ }
 
+procedure TViewLogin.SetProfileIndex(Value: Integer);
+begin
+  if (Value < 0) or (Value >= LocalRiderCount) then raise ERangeError.Create('Invalid rider');
+  if Value = FProfileIndex then Exit;
+  if Assigned(FBackground) or FPolling then raise EInvalidOperation.Create('Finish signing in before selecting another rider');
+  FProfileIndex := Value;
+  FCurrentDevice := Default(TVeloSiteDeviceCode);
+end;
+
 constructor TViewLogin.Create(AOwner: TComponent);
 begin
   inherited;
@@ -265,6 +281,7 @@ begin
   LocalizeDesignedUi(Self);
   TCastleRectangleControl(DesignedComponent('Background')).Color:=MenuBackground;
   LabelTitle.CustomFont:=MenuFont(True);LabelTitle.FontScale:=1;LabelTitle.FontSize:=32;
+  LabelTitle.Color:=MenuText;
   LabelStatus.CustomFont:=MenuFont;LabelStatus.FontScale:=1;LabelStatus.FontSize:=16;
   if Assigned(LabelTitle) then BindUiText(LabelTitle, 'Sign in to Rezvivo');
   if Assigned(ButtonBack) then BindUiText(ButtonBack, 'Back');
@@ -459,7 +476,7 @@ begin
     T('Log in on the website in your default browser first. Then click the button — the game will open a confirmation page and sign you in.');
   Hint.FontScale := 1.0;
   Hint.MaxWidth := 720;
-  Hint.Color := Vector4(0.85, 0.85, 0.9, 1);
+  Hint.Color := MenuText;
   Hint.Anchor(hpMiddle);
   Hint.Anchor(vpTop, 0);
   FFormContent.InsertFront(Hint);
@@ -480,7 +497,7 @@ begin
   FLabelUserCode := TMenuLabel.Create(FFormOwner);
   FLabelUserCode.Caption := '';
   FLabelUserCode.FontScale := 1.1;
-  FLabelUserCode.Color := Vector4(0.75, 0.8, 0.85, 1);
+  FLabelUserCode.Color := MenuAccent;
   FLabelUserCode.Anchor(hpMiddle);
   FLabelUserCode.Anchor(vpTop, -190);
   FFormContent.InsertFront(FLabelUserCode);
@@ -488,7 +505,7 @@ begin
   FLabelHint := TMenuLabel.Create(FFormOwner);
   FLabelHint.Caption := '';
   FLabelHint.FontScale := 1.0;
-  FLabelHint.Color := Vector4(0.7, 0.85, 0.95, 1);
+  FLabelHint.Color := MenuMuted;
   FLabelHint.Anchor(hpMiddle);
   FLabelHint.Anchor(vpTop, -240);
   FFormContent.InsertFront(FLabelHint);
@@ -509,7 +526,7 @@ begin
   FEmailLabel:=LabelEmail;
   BindUiText(LabelEmail, 'Email:');
   LabelEmail.FontScale := 1.1;
-  LabelEmail.Color := Vector4(0.85, 0.85, 0.9, 1);
+  LabelEmail.Color := MenuText;
   LabelEmail.Anchor(hpLeft, 80);
   LabelEmail.Anchor(vpTop, -10);
   FFormContent.InsertFront(LabelEmail);
@@ -527,7 +544,7 @@ begin
   FPasswordLabel:=LabelPass;
   BindUiText(LabelPass, 'Password:');
   LabelPass.FontScale := 1.1;
-  LabelPass.Color := Vector4(0.85, 0.85, 0.9, 1);
+  LabelPass.Color := MenuText;
   LabelPass.Anchor(hpLeft, 80);
   LabelPass.Anchor(vpTop, -70);
   FFormContent.InsertFront(LabelPass);
@@ -561,9 +578,9 @@ begin
   if not Assigned(LabelStatus) then Exit;
   LabelStatus.Caption := AText;
   if AIsError then
-    LabelStatus.Color := Vector4(1.0, 0.5, 0.45, 1)
+    LabelStatus.Color := MenuError
   else
-    LabelStatus.Color := Vector4(0.6, 0.95, 0.7, 1);
+    LabelStatus.Color := MenuSuccess;
   Resize;
 end;
 
@@ -573,7 +590,7 @@ begin
   if (Pos('code=', LowerCase(Result)) = 0) and (FCurrentDevice.UserCode <> '') then
   begin
     if Result = '' then
-      Result := Trim(VeloSite.BaseUrl) + '/link';
+      Result := Trim(RiderApi(FProfileIndex).BaseUrl) + '/link';
     if Pos('?', Result) > 0 then
       Result := Result + '&code=' + FCurrentDevice.UserCode
     else
@@ -609,8 +626,9 @@ end;
 procedure TViewLogin.ClickGetCode(Sender: TObject);
 var Blocked:String;
 begin
-  Blocked:=ViewMenu.AccountChangeError;
-  if Blocked<>''then begin SetStatus(Blocked,True);Exit;end;
+  Blocked:=RideHistoryForRider(FProfileIndex).AccountChangeError(False);
+  if Blocked=''then Blocked:=RiderAccountChangeError(FProfileIndex);
+  if Blocked<>''then begin SetStatus(T(Blocked),True);Exit;end;
   { Повторное нажатие во время ожидания — снова открыть браузер. }
   if FPolling and (DeviceVerificationUrl <> '') then
   begin
@@ -624,7 +642,7 @@ begin
   if Assigned(FLabelUserCode) then FLabelUserCode.Caption := '';
   if Assigned(FLabelHint) then FLabelHint.Caption := '';
 
-  FBackground := TLoginThread.Create(laDeviceStart);
+  FBackground := TLoginThread.Create(laDeviceStart, FProfileIndex);
   FBackground.Start;
 end;
 
@@ -632,8 +650,9 @@ procedure TViewLogin.ClickLogin(Sender: TObject);
 var Blocked:String;
 begin
   if Assigned(FBackground) then Exit;
-  Blocked:=ViewMenu.AccountChangeError;
-  if Blocked<>''then begin SetStatus(Blocked,True);Exit;end;
+  Blocked:=RideHistoryForRider(FProfileIndex).AccountChangeError(False);
+  if Blocked=''then Blocked:=RiderAccountChangeError(FProfileIndex);
+  if Blocked<>''then begin SetStatus(T(Blocked),True);Exit;end;
   if (FEditEmail.Text = '') or (FEditPassword.Text = '') then
   begin
     SetStatus(T('Fill in email and password'), True);
@@ -643,7 +662,7 @@ begin
   SetStatus(T('Signing in...'), False);
   FButtonLogin.Enabled := False;
 
-  FBackground := TLoginThread.Create(laLoginPassword);
+  FBackground := TLoginThread.Create(laLoginPassword, FProfileIndex);
   FBackground.SetCredentials(FEditEmail.Text, FEditPassword.Text);
   FBackground.Start;
 end;
@@ -731,7 +750,7 @@ procedure TViewLogin.FinishLoginSuccess;
 begin
   SetStatus(T('Success! Loading profile...'), False);
   try
-    VeloSite.RefreshProfile;
+    RiderApi(FProfileIndex).RefreshProfile;
   except
     on E: Exception do
       WritelnLog('Login', 'RefreshProfile failed (non-fatal): ' + E.Message);
@@ -778,8 +797,9 @@ begin
   { Polling tick (только в device-режиме) }
   if FPolling and (FMode = lmDevice) and not Assigned(FBackground) then
   begin
-    Blocked:=ViewMenu.AccountChangeError;
-    if Blocked<>''then begin FPolling:=False;SetStatus(Blocked,True);Exit;end;
+    Blocked:=RideHistoryForRider(FProfileIndex).AccountChangeError(False);
+  if Blocked=''then Blocked:=RiderAccountChangeError(FProfileIndex);
+    if Blocked<>''then begin FPolling:=False;SetStatus(T(Blocked),True);Exit;end;
     if Now > FPollExpiresAt then
     begin
       FPolling := False;
@@ -797,7 +817,7 @@ begin
     if FPollTimer <= 0 then
     begin
       FPollTimer := FCurrentDevice.Interval;
-      FBackground := TLoginThread.Create(laDevicePoll);
+      FBackground := TLoginThread.Create(laDevicePoll, FProfileIndex);
       FBackground.SetDeviceCode(FCurrentDevice.DeviceCode);
       FBackground.Start;
     end;

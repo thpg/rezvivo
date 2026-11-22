@@ -26,7 +26,7 @@ begin
   inherited;
   WidthFraction:=1; Height:=86; Color:=MenuSurface;
   FTitle:=TMenuLabel.Create(Self);FTitle.Color:=MenuText;FTitle.CustomFont:=MenuFont(True);FTitle.Name:='SelectedRideTitle';InsertFront(FTitle);
-  FInfo:=TMenuLabel.Create(Self);FInfo.Color:=Vector4(0.69,0.78,0.84,1);InsertFront(FInfo);
+  FInfo:=TMenuLabel.Create(Self);FInfo.Color:=MenuMuted;InsertFront(FInfo);
   FStart:=TMenuButton.Create(Self);FStart.Name:='StartSelectedRide';FStart.AutoSize:=False;
   FStart.AutoIcon:=False;FStart.Enabled:=False;InsertFront(FStart);
   SetRideState(False,False);Layout;

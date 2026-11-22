@@ -129,6 +129,10 @@ type
     FTileRoutes:   TMenuTile;
     FTileDevices:  TMenuTile;
     FTileBikeFit:  TMenuTile;
+    FLocalRiderTiles:array[0..7]of TMenuTile;
+    FLocalRiderNavSignature:String;
+    procedure RefreshLocalRiderNavigation;
+  private
     FTileTraining: TMenuTile;
     FTileProfile:  TMenuTile;
     FTileEvents:   TMenuTile;
@@ -189,6 +193,10 @@ type
 
     procedure ClickProfilePane(Sender: TObject);
   public
+    function LocalRidersEditable:Boolean;
+    procedure LocalRidersChanged;
+    procedure OpenLocalRiderProfile(Index:Integer);
+    procedure OpenLocalRiderLogin(Index:Integer);
     constructor Create(AOwner: TComponent); override;
     procedure Start; override;
     function PreviewPress(const Event:TInputPressRelease):Boolean;override;
@@ -199,7 +207,7 @@ type
     procedure QuickRide;
     procedure SelectTravelMode(Mode:TTravelMode);
     procedure StartExploration(Lat,Lon:Double);
-    procedure ResumeActivity(Activity:TJSONObject);
+    procedure ResumeActivity(Activity:TJSONObject;ProfileIndex:Integer=0);
     procedure StartWorkout(Plan:TWorkoutFile;ReferenceWatts:Double;TrainingOnly:Boolean=False);
     procedure StartEditorWorkout(Plan:TWorkoutFile;ReferenceWatts:Double);
     procedure RepeatWorkout;
@@ -334,6 +342,7 @@ begin
   if not SessionUnderneath then
   begin
     FGlobe := TGlobeMap.Create(FreeAtStop);
+    FGlobe.BackgroundColor := MenuBackground;
     FGlobe.Name := 'MenuGlobe';
     FGlobe.FullSize := True;
     InsertBack(FGlobe);
@@ -352,7 +361,7 @@ begin
 
   if Assigned(LabelTitle) then begin
     LabelTitle.Exists:=True;LabelTitle.Caption:='REZVIVO';LabelTitle.FontSize:=24;
-    LabelTitle.Color:=White;
+    LabelTitle.Color:=MenuText;
     LabelTitle.Anchor(hpLeft,20);LabelTitle.Anchor(vpTop,-16);
   end;
   FVersionButton:=TMenuButton.Create(FreeAtStop);FVersionButton.Name:='ClientVersion';
@@ -360,7 +369,7 @@ begin
   FVersionButton.OnClick:=@ClickVersion;InsertFront(FVersionButton);
   FNavBackground:=TCastleRectangleControl.Create(FreeAtStop);
   FNavBackground.FullSize:=False;FNavBackground.HeightFraction:=1;
-  FNavBackground.Color:=Vector4(0.058,0.082,0.103,1);
+  FNavBackground.Color:=MenuSurface;
   FNavBackground.Anchor(hpLeft);FNavBackground.Anchor(vpTop);InsertBack(FNavBackground);
   FTopBar:=TCastleRectangleControl.Create(FreeAtStop);FTopBar.WidthFraction:=1;
   FTopBar.Color:=MenuBackground;FTopBar.Anchor(vpTop);InsertBack(FTopBar);
@@ -385,7 +394,7 @@ begin
   FEndRideButton.AutoSize:=False;FEndRideButton.AutoIcon:=False;
   BindTravelText(FEndRideButton, 'Finish ride');FEndRideButton.OnClick:=@StopSelectedRide;
   FEndRideButton.Style:=mbDanger;InsertFront(FEndRideButton);
-  FSessionLabel:=TMenuLabel.Create(FreeAtStop);FSessionLabel.Color:=Vector4(0.68,0.78,0.82,1);
+  FSessionLabel:=TMenuLabel.Create(FreeAtStop);FSessionLabel.Color:=MenuMuted;
   BindTravelText(FSessionLabel, 'Ride continues while this menu is open');InsertFront(FSessionLabel);
   RefreshRideControls;
 
@@ -430,9 +439,11 @@ begin
 	FRouteLibraryPage := nil;
     FRouteCreatorPage := nil;
 
+  FillChar(FLocalRiderTiles,SizeOf(FLocalRiderTiles),0);FLocalRiderNavSignature:='';
   BuildTiles;
   BuildNavigation;
   BindTravelText(FTileBikeFit.TitleLabel,'Rider and bicycle');
+  RefreshLocalRiderNavigation;
   BindTravelText(FTileHistory.TitleLabel,'My rides');
 
   { Первая подгонка плашек под окно; дальше Update следит сам. }
@@ -490,6 +501,7 @@ end;
 procedure TViewMenu.BuildTiles;
 var
   Col: TCastleVerticalGroup;
+  RiderIndex:Integer;
 
   function MakeTile(const ATitle: String; const ABaseColor: TCastleColor;
     AClick: TNotifyEvent; const AIconUrl: String): TMenuTile;
@@ -531,13 +543,6 @@ begin
     'castle-data:/menu/icons/devices.png');
   FTileDevices.Exists:=False;
 
-  FTileBikeFit := MakeTile(
-    T('Rider and bicycle'),
-    Vector4(0.38, 0.62, 0.44, 0.85),  { травяной }
-    @ClickBikeFit,
-    'native:bicycle');
-
-
   FTileTraining := MakeTile(
     T('Training'),
     Vector4(0.76, 0.42, 0.40, 0.85),  { терракотовый }
@@ -546,7 +551,15 @@ begin
   Col.InsertFront(FTileTraining);
   FTileSchedule:=MakeTile(T('Schedule'),MenuAccent,@ClickSchedule,'native:calendar');
   Col.InsertFront(FTileSchedule);
-  Col.InsertFront(FTileBikeFit);
+  for RiderIndex:=0 to High(FLocalRiderTiles)do begin
+    FLocalRiderTiles[RiderIndex]:=MakeTile(T('Rider and bicycle'),
+      Vector4(0.38,0.62,0.44,0.85),@ClickBikeFit,'native:bicycle');
+    FLocalRiderTiles[RiderIndex].Tag:=RiderIndex;
+    FLocalRiderTiles[RiderIndex].Name:='LocalRiderBike'+IntToStr(RiderIndex+1);
+    FLocalRiderTiles[RiderIndex].Exists:=RiderIndex<LocalRiderCount;
+    Col.InsertFront(FLocalRiderTiles[RiderIndex]);
+  end;
+  FTileBikeFit:=FLocalRiderTiles[0];
 
   FTileProfile := MakeTile(
     T('Settings'),
@@ -600,7 +613,7 @@ begin
 end;
 
 procedure TViewMenu.LayoutTiles;
-var S,TileW,TileH,BottomInset,PageLeft,H:Single; L:TMenuLayout;
+var S,TileW,TileH,BottomInset,PageLeft,H:Single; L:TMenuLayout;I:Integer;
   procedure SizeTile(Tile:TMenuTile);
   begin
     if Tile=nil then Exit;Tile.SetTileSize(TileW,TileH,S);
@@ -615,7 +628,8 @@ begin
   TileH:=Min(52/S,(EffectiveHeight-BottomInset-240/S-7*TILE_GAP)/8);
   TileH:=Max(44/S,TileH);PageLeft:=L.PageLeft;
   SizeTile(FTileHome);SizeTile(FTileHistory);SizeTile(FTileAssistant);SizeTile(FTileRoutes);SizeTile(FTileDream);SizeTile(FTileDevices);
-  SizeTile(FTileSchedule);SizeTile(FTileBikeFit);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
+  for I:=0 to High(FLocalRiderTiles)do SizeTile(FLocalRiderTiles[I]);
+  SizeTile(FTileSchedule);SizeTile(FTileTraining);SizeTile(FTileProfile);SizeTile(FTileEvents);
   if FTileCol<>nil then begin FTileCol.Anchor(vpTop,-100/S);FTileCol.Anchor(hpLeft,12/S);end;
   if FTileProfile<>nil then begin FTileProfile.Anchor(hpLeft,12/S);FTileProfile.Anchor(vpBottom,BottomInset+58/S);end;
   if FNavBackground<>nil then FNavBackground.Width:=TileW+24/S;
@@ -729,6 +743,7 @@ begin
       clips the globe and moves the pick coordinates outside the visible page. }
     if (FExplorePage<>nil) and FExplorePage.Exists then FPageScroll.Scroll:=0;
     if (FBikeFitPage<>nil) and FBikeFitPage.Exists and (EffectiveWidth<760) then H:=Max(H,1040);
+    if(FStartPage<>nil)and FStartPage.Exists then H:=Max(H,FStartPage.RequiredHeight);
     FPageHost.Height:=H;FPageScroll.ScrollArea.Height:=H;
     if FWorldModeBar<>nil then begin
       FWorldTrack.AutoSize:=False;FWorldExplore.AutoSize:=False;
@@ -770,7 +785,7 @@ begin
   Container.PushView(FRoomView);
 end;
 procedure TViewMenu.RoomSignIn(Sender:TObject);
-begin OpenTab('profile');end;
+begin OpenLocalRiderProfile(0);end;
 procedure TViewMenu.RoomChanged(Sender:TObject);
 begin if RideUnderneath then ViewPlay.ConnectRideRoom;end;
 procedure TViewMenu.LaunchRoom(Sender:TObject);
@@ -870,6 +885,7 @@ begin
     if Assigned(FRoutesPage) and FRoutesPage.Exists and FRoutesPage.CloseDetails then Exit(True);
     if Assigned(FBikeFitPage) and FBikeFitPage.Exists and FBikeFitPage.HandleBack then Exit(True);
     if Assigned(FProfilePage) and FProfilePage.Exists and FProfilePage.HandleBack then Exit(True);
+    if Assigned(FDevicesPage) and FDevicesPage.Exists and FDevicesPage.HandleBack then Exit(True);
     if Assigned(FTrainingPage) and FTrainingPage.Exists and FTrainingPage.HandleBack then Exit(True);
     if (Assigned(FRouteCreatorPage) and FRouteCreatorPage.Exists)or
        (Assigned(FRouteLibraryPage) and FRouteLibraryPage.Exists)then begin ShowRoutesPage;Exit(True);end;
@@ -909,8 +925,72 @@ begin
 end;
 
 procedure TViewMenu.ClickBikeFit(Sender: TObject);
+var Index:Integer;
 begin
-  TogglePage(FBikeFitPage, TBikeFitPage, FTileBikeFit);
+  Index:=0;
+  if Sender is TMenuTile then Index:=TMenuTile(Sender).Tag
+  else if FBikeFitPage<>nil then Index:=FBikeFitPage.ProfileIndex;
+  Index:=EnsureRange(Index,0,LocalRiderCount-1);
+  if FBikeFitPage=nil then begin
+    FBikeFitPage:=TBikeFitPage.Create(FreeAtStop);FBikeFitPage.Exists:=False;
+    FPageHost.InsertFront(FBikeFitPage);
+  end;
+  if(FBikeFitPage.ProfileIndex<>Index)and FBikeFitPage.Exists then HideEmbeddedPage;
+  FBikeFitPage.ProfileIndex:=Index;
+  TogglePage(FBikeFitPage,TBikeFitPage,FLocalRiderTiles[Index]);
+end;
+
+function TViewMenu.LocalRidersEditable:Boolean;
+begin
+  Result:=not ((ViewPlay<>nil)and ViewPlay.SessionAlive)and
+    not ((ViewTrainingOnly<>nil)and ViewTrainingOnly.SessionAlive);
+end;
+
+procedure TViewMenu.RefreshLocalRiderNavigation;
+var I,Count:Integer;Sig,Caption:String;
+begin
+  if FLocalRiderTiles[0]=nil then Exit;
+  Count:=LocalRiderCount;Sig:=IntToStr(Count)+'|'+UiLanguage;
+  for I:=0 to Count-1 do Sig:=Sig+'|'+LocalRider(I).DisplayName;
+  if Sig=FLocalRiderNavSignature then Exit;
+  FLocalRiderNavSignature:=Sig;
+  for I:=0 to High(FLocalRiderTiles)do begin
+    FLocalRiderTiles[I].Exists:=I<Count;
+    if I>=Count then Continue;
+    if Count=1 then BindTravelText(FLocalRiderTiles[I].TitleLabel,'Rider and bicycle')
+    else begin
+      Caption:=IntToStr(I+1)+'. '+LocalRider(I).DisplayName;
+      FLocalRiderTiles[I].SetTitle(Caption);
+      BindTravelText(FLocalRiderTiles[I],'Rider and bicycle','Tooltip');
+    end;
+  end;
+  FLastLayoutW:=-1;
+end;
+
+procedure TViewMenu.LocalRidersChanged;
+begin
+  RefreshLocalRiderNavigation;
+  if FStartPage<>nil then FStartPage.RefreshLocalRiders;
+  LayoutTiles;
+end;
+
+procedure TViewMenu.OpenLocalRiderProfile(Index:Integer);
+begin
+  Index:=EnsureRange(Index,0,LocalRiderCount-1);
+  if FProfilePage=nil then begin
+    FProfilePage:=TProfilePage.Create(FreeAtStop);FProfilePage.Exists:=False;
+    FPageHost.InsertFront(FProfilePage);
+  end;
+  if(FProfilePage.ProfileIndex<>Index)and FProfilePage.Exists then HideEmbeddedPage;
+  FProfilePage.ProfileIndex:=Index;
+  TogglePage(FProfilePage,TProfilePage,nil);FProfilePage.ShowAccount;
+  if FTileProfile<>nil then FTileProfile.Selected:=False;
+end;
+
+procedure TViewMenu.OpenLocalRiderLogin(Index:Integer);
+begin
+  ViewLogin.ProfileIndex:=EnsureRange(Index,0,LocalRiderCount-1);
+  OpenChildView(ViewLogin);
 end;
 
 procedure TViewMenu.ClickDream(Sender:TObject);
@@ -1017,14 +1097,14 @@ end;
 
 procedure TViewMenu.ClickProfile(Sender: TObject);
 begin
-  TogglePage(FProfilePage, TProfilePage, nil);
-  FProfilePage.ShowAccount;
-  if FTileProfile<>nil then FTileProfile.Selected:=False;
+  if FProfilePage<>nil then OpenLocalRiderProfile(FProfilePage.ProfileIndex)
+  else OpenLocalRiderProfile(0);
 end;
 
 procedure TViewMenu.ClickSettings(Sender:TObject);
 begin
-  TogglePage(FProfilePage,TProfilePage,FTileProfile);FProfilePage.ShowSettings;
+  OpenLocalRiderProfile(0);FProfilePage.ShowSettings;
+  if FTileProfile<>nil then FTileProfile.Selected:=True;
 end;
 
 procedure TViewMenu.ClickEvents(Sender: TObject);
@@ -1034,7 +1114,7 @@ end;
 
 procedure TViewMenu.ClickConnectors(Sender:TObject);
 begin
-  if (FProfilePage = nil) or not FProfilePage.Exists then ClickProfile(nil);
+  OpenLocalRiderProfile(0);
   FProfilePage.ShowConnections;
 end;
 
@@ -1061,6 +1141,7 @@ begin
 end;
 
 procedure TViewMenu.HideEmbeddedPage;
+var I:Integer;
 
   procedure HidePage(const APage: TMenuEmbeddedPage);
   begin
@@ -1104,7 +1185,8 @@ begin
   if Assigned(FTileDream) then FTileDream.Selected:=False;
   if Assigned(FTileRoutes)   then FTileRoutes.Selected := False;
   if Assigned(FTileDevices)  then FTileDevices.Selected := False;
-  if Assigned(FTileBikeFit)  then FTileBikeFit.Selected := False;
+  for I:=0 to High(FLocalRiderTiles)do
+    if FLocalRiderTiles[I]<>nil then FLocalRiderTiles[I].Selected:=False;
   if Assigned(FTileEvents)   then FTileEvents.Selected := False;
   if Assigned(FTileTraining) then FTileTraining.Selected := False;
   if Assigned(FTileProfile)  then FTileProfile.Selected := False;
@@ -1262,7 +1344,7 @@ begin
   if N='schedule' then begin ClickSchedule(nil);Exit;end;
   if N='history' then begin ClickHistory(nil);Exit;end;
   if N='result' then begin ClickHistory(nil);FHistoryPage.ShowResult;Exit;end;
-  if N='rider' then begin TogglePage(FProfilePage,TProfilePage,FTileBikeFit);FProfilePage.ShowRider;Exit;end;
+  if N='rider' then begin OpenLocalRiderProfile(0);FProfilePage.ShowRider;Exit;end;
   if N='intervals' then begin ClickTraining(nil);FTrainingPage.ShowIntervals;Exit;end;
   if N='settings' then begin ClickSettings(nil);Exit;end;
   if N='route-library' then begin if(FRouteLibraryPage=nil)or(not FRouteLibraryPage.Exists)then ClickRouteLibrary(nil);Exit;end;
@@ -1341,20 +1423,22 @@ begin
   RideHistory.CancelResume;
   FreeAndNil(FPendingWorkout);LoadLastMap;
 end;
-procedure TViewMenu.ResumeActivity(Activity:TJSONObject);
+procedure TViewMenu.ResumeActivity(Activity:TJSONObject;ProfileIndex:Integer);
 var World,Route:String;
 begin
+  if(ProfileIndex<0)or(ProfileIndex>=LocalRiderCount)then raise ERangeError.Create('Invalid rider');
   if not CanLaunchRide then Exit;
   if SessionUnderneath then Exit;
+  if Activity=nil then Exit;
   World:=Activity.Get('world','');Route:=Activity.Get('route','');
   if(World='')and not FileExists(Route)then raise Exception.Create(UiText('File not found: ')+Route);
-  RideHistory.RequestResume(Activity);FreeAndNil(FPendingWorkout);
+  RideHistoryForRider(ProfileIndex).RequestResume(Activity);FreeAndNil(FPendingWorkout);
   if World=TrainingOnlyWorld then begin
     if ViewTrainingOnly=nil then ViewTrainingOnly:=TViewTrainingOnly.Create(Application);
     ViewTrainingOnly.Prepare(nil,0);Container.View:=ViewTrainingOnly;Exit;
   end;
   if World<>''then RememberRideMap(rmkDream,World)else RememberRideMap(rmkReal,Route);
-  try LoadLastMap;except RideHistory.CancelResume;raise;end;
+  try LoadLastMap;except RideHistoryForRider(ProfileIndex).CancelResume;raise;end;
 end;
 procedure TViewMenu.StartEditorWorkout(Plan:TWorkoutFile;ReferenceWatts:Double);
 begin
@@ -1390,7 +1474,11 @@ end;
 procedure TViewMenu.ApplyPendingWorkout;
 begin
   if FPendingWorkout=nil then Exit;
-  WorkoutPlayer.Start(FPendingWorkout,FPendingReference,FPendingReference>0,FPendingReference>0);
+  if Assigned(ViewTrainingOnly)and ViewTrainingOnly.SessionAlive then
+    ViewTrainingOnly.StartWorkoutForAll(FPendingWorkout,FPendingReference)
+  else if Assigned(ViewPlay)and ViewPlay.SessionAlive then
+    ViewPlay.StartWorkoutForAll(FPendingWorkout,FPendingReference)
+  else WorkoutPlayer.Start(FPendingWorkout,FPendingReference,FPendingReference>0,FPendingReference>0);
   RememberWorkout(FPendingWorkout.Url);
   RideHistory.SetWorkout(FPendingWorkout.Name,FPendingWorkout.Url);
   FreeAndNil(FPendingWorkout);
@@ -1443,9 +1531,9 @@ var L:TCastleLabel;B:TMenuButton;
 begin
   CloseDevicePrompt;FWaitingPower:=True;
   FLaunchPane:=TCastleRectangleControl.Create(FreeAtStop);FLaunchPane.FullSize:=True;
-  FLaunchPane.Color:=Vector4(0.035,0.055,0.08,1);InsertFront(FLaunchPane);
+  FLaunchPane.Color:=MenuBackground;InsertFront(FLaunchPane);
   L:=TMenuLabel.Create(FLaunchPane);BindUiText(L,'Choose your trainer and start pedaling');
-  L.Color:=White;L.FontSize:=24;L.Anchor(hpLeft,24);L.Anchor(vpTop,-22);FLaunchPane.InsertFront(L);
+  L.Color:=MenuText;L.FontSize:=24;L.Anchor(hpLeft,24);L.Anchor(vpTop,-22);FLaunchPane.InsertFront(L);
   FLaunchDevices:=TDevicesPage.Create(FLaunchPane);FLaunchDevices.Border.Top:=80;FLaunchDevices.Border.Bottom:=90;
   FLaunchPane.InsertFront(FLaunchDevices);FLaunchDevices.PageShown;
   B:=TMenuButton.Create(FLaunchPane);B.Name:='CancelWorkoutLaunch';BindUiText(B,'Back');B.OnClick:=@CancelLaunch;
@@ -1502,7 +1590,8 @@ begin
   ApplyUserInterfaceScale(Container);
   if (EffectiveWidth <> FLastLayoutW) or
      (EffectiveHeight <> FLastLayoutH) or
-     (Abs(FPageScroll.ScrollArea.Width-Max(1,EffectiveWidth-FPageScroll.Border.TotalWidth))>0.1) then
+     (Abs(FPageScroll.ScrollArea.Width-Max(1,EffectiveWidth-FPageScroll.Border.TotalWidth))>0.1) or
+    ((FStartPage<>nil)and FStartPage.Exists and(FStartPage.RequiredHeight>FPageHost.Height+0.1)) then
     LayoutTiles;
 
   { Прокручиваем очередь TThread.Queue. Без этого queued-вызовы
@@ -1527,6 +1616,7 @@ begin
   begin
     FProfilePollAccum := 0;
     BuildProfilePane;
+    RefreshLocalRiderNavigation;
     RefreshRideControls;
   end;
 end;
@@ -1534,6 +1624,7 @@ end;
 procedure TViewMenu.LanguageChanged(Sender: TObject);
 begin
   if FTravelSelector<>nil then FTravelSelector.Refresh;
+  FLocalRiderNavSignature:='';RefreshLocalRiderNavigation;
   BuildProfilePane;
 end;
 
@@ -1599,7 +1690,7 @@ begin
     FProfileLabelName := TMenuLabel.Create(FProfilePane);
     BindUiText(FProfileLabelName, 'Guest');
     FProfileLabelName.FontSize := 16/S;
-    FProfileLabelName.Color := Vector4(0.85, 0.85, 0.85, 1.0);
+    FProfileLabelName.Color := MenuText;
     FProfileLabelName.Anchor(hpLeft, 12);
     FProfileLabelName.Anchor(vpMiddle, 0);
     FProfilePane.InsertFront(FProfileLabelName);
@@ -1629,7 +1720,7 @@ begin
     FProfileLabelName := TMenuLabel.Create(FProfilePane);
     FProfileLabelName.Caption := NameStr;
     FProfileLabelName.FontSize := 16/S;
-    FProfileLabelName.Color := Vector4(1.0, 1.0, 1.0, 1.0);
+    FProfileLabelName.Color := MenuText;
     FProfileLabelName.Anchor(hpLeft, 12);
     FProfileLabelName.Anchor(vpTop, -6);
     FProfilePane.InsertFront(FProfileLabelName);
@@ -1637,7 +1728,7 @@ begin
     FProfileLabelDetail := TMenuLabel.Create(FProfilePane);
     FProfileLabelDetail.Caption := Detail;
     FProfileLabelDetail.FontSize := 12/S;
-    FProfileLabelDetail.Color := Vector4(0.75, 0.80, 0.85, 1.0);
+    FProfileLabelDetail.Color := MenuMuted;
     FProfileLabelDetail.Anchor(hpLeft, 12);
     FProfileLabelDetail.Anchor(vpBottom, 6);
     FProfilePane.InsertFront(FProfileLabelDetail);
@@ -1659,9 +1750,9 @@ end;
 procedure TViewMenu.ClickProfilePane(Sender: TObject);
 begin
   if VeloSite.IsAuthorized then
-    OpenTab('profile')   { вкладка «Профиль» встроена в меню }
+    OpenLocalRiderProfile(0)   { вкладка «Профиль» встроена в меню }
   else
-    OpenChildView(ViewLogin);
+    OpenLocalRiderLogin(0);
 end;
 
 end.

@@ -2,8 +2,8 @@
   trainer slope control, and HUD label updates.
   Extracted from TViewPlay to reduce god-object complexity.
 
-  Uses sensor-based API: reads data from DeviceService.Power,
-  DeviceService.Speed, DeviceService.HR, DeviceService.Cadence. }
+  Uses the selected local rider device context for power, speed, heart rate,
+  cadence, trainer control, recording status, and training totals. }
 unit GameBLEHud;
 
 interface
@@ -17,6 +17,8 @@ uses
 type
   { Labels structure to avoid passing many individual references }
   THudLabels = record
+    LabelRiderName: TCastleLabel;
+    LabelPowerComparison: TCastleLabel;
     LabelSpeed: TCastleLabel;
     LabelPower: TCastleLabel;
     LabelWork: TCastleLabel;
@@ -34,6 +36,7 @@ type
 
   TBLEHudUpdater = class
   private
+    FProfileIndex:Integer;
     FBLESlopeUpdateTime: Single;
     FLastSentBLESlope: Single;
     FSimulationActive: Boolean;     { True после первой отправки SetSimulation }
@@ -51,6 +54,8 @@ type
     FPowerMetrics: TPowerAccumulator;
     FPowerAvailable: Boolean;
     FNumberFormat: TFormatSettings;
+    function RiderDevices:TGameDeviceService;
+    procedure UpdateRiderLabels;
     procedure ConfigureWheels;
 
     { Цель из физики → FTrainerGrade с запаздыванием (тренажёр сам
@@ -71,7 +76,7 @@ type
     UserWeight: Single;   { кг, по умолчанию 75 }
     BikeWeight: Single;   { кг, по умолчанию 10 }
 
-    constructor Create;
+    constructor Create(AProfileIndex:Integer=0);
     destructor Destroy; override;
     function ReadMeasuredPower: TMeasuredPower;
     function ReadSensorPower: TMeasuredPower;
@@ -100,6 +105,7 @@ type
     function LastSentBLESlope: Single;
     function PowerZone(Watts:Single;Ftp:Single=-1):Integer;
     function PowerZoneCount:Integer;
+    property ProfileIndex:Integer read FProfileIndex;
     property TrainerTargetGrade:Single read FTrainerTargetGrade;
     property TrainerFilteredGrade:Single read FTrainerGrade;
 
@@ -117,6 +123,25 @@ implementation
 uses UiTranslations, VeloSiteAPI, CastleColors, CastleVectors, GameDailyTraining, GameUserData,GameSensorLog,
   AppSettings,GameTrainerGrade,GameVirtualGearing;
 
+function TBLEHudUpdater.RiderDevices:TGameDeviceService;
+begin
+  if DeviceService=nil then Exit(nil);
+  Result:=DeviceService.ForRider(FProfileIndex);
+end;
+
+procedure TBLEHudUpdater.UpdateRiderLabels;
+var Comparison:String;
+begin
+  if FLabels.LabelRiderName<>nil then
+    FLabels.LabelRiderName.Caption:=LocalRider(FProfileIndex).DisplayName;
+  if FLabels.LabelPowerComparison<>nil then begin
+    Comparison:='';
+    if RiderDevices<>nil then Comparison:=RiderDevices.ComparisonPowerText;
+    FLabels.LabelPowerComparison.Caption:=Comparison;
+    FLabels.LabelPowerComparison.Exists:=Comparison<>'';
+  end;
+end;
+
 function TBLEHudUpdater.PowerZone(Watts,Ftp:Single):Integer;
 begin
   if Ftp<0 then Ftp:=FFtp;
@@ -126,9 +151,12 @@ end;
 function TBLEHudUpdater.PowerZoneCount:Integer;
 begin Result:=Length(FPowerBounds) end;
 
-constructor TBLEHudUpdater.Create;
+constructor TBLEHudUpdater.Create(AProfileIndex:Integer);
 begin
-  inherited;
+  inherited Create;
+  if (AProfileIndex<0)or(AProfileIndex>=MaxLocalRiders)then
+    raise ERangeError.Create('Local rider index');
+  FProfileIndex:=AProfileIndex;
   FPowerMetrics:=TPowerAccumulator.Create;
   FNumberFormat:=DefaultFormatSettings;
   // The platform's one-byte NBSP is not valid UTF-8 for CGE labels.
@@ -139,7 +167,7 @@ end;
 
 destructor TBLEHudUpdater.Destroy;
 begin
-  DailyTraining.EndRide;
+  if FPowerMetrics<>nil then DailyTrainingForRider(FProfileIndex).EndRide;
   FPowerMetrics.Free;
   inherited;
 end;
@@ -149,14 +177,14 @@ procedure TBLEHudUpdater.UpdatePowerMetrics(const SecondsPassed: Single;
 var RecordingError:String;
 begin
   if FLabels.LabelRecordingStatus<>nil then begin
-    RecordingError:=SensorLog.ErrorText;
+    RecordingError:=SensorLogForRider(FProfileIndex).ErrorText;
     FLabels.LabelRecordingStatus.Exists:=RecordingError<>'';
     if RecordingError<>''then FLabels.LabelRecordingStatus.Caption:=UiText('Recording needs attention: ')+RecordingError;
   end;
   FPowerAvailable:=Accounting.Running and Accounting.Power.Valid;
   FPowerMetrics.Step(Accounting.Power.Watts,SecondsPassed,Accounting.Running,Accounting.Power.Valid);
-  FFtp:=EffectiveRiderProfile.FtpW;
-  DailyTraining.Step(Accounting.Power.Watts,SecondsPassed,WallSeconds,FFtp,
+  FFtp:=EffectiveRiderProfile(FProfileIndex).FtpW;
+  DailyTrainingForRider(FProfileIndex).Step(Accounting.Power.Watts,SecondsPassed,WallSeconds,FFtp,
     Accounting.Running,Accounting.Power.Valid,Now);
 end;
 
@@ -165,8 +193,8 @@ begin
   ManualPower:=-1;ManualCadence:=0;
   FPowerMetrics.Reset; FPowerAvailable:=False;
   if FLabels.LabelWork<>nil then begin
-    DailyTraining.EndRide;DailyTraining.BeginRide;
-    FLabels.LabelWork.Caption:=FormatFloat('#,##0.0',DailyTraining.WorkJoules/1000.0,FNumberFormat);
+    DailyTrainingForRider(FProfileIndex).EndRide;DailyTrainingForRider(FProfileIndex).BeginRide;
+    FLabels.LabelWork.Caption:=FormatFloat('#,##0.0',DailyTrainingForRider(FProfileIndex).WorkJoules/1000.0,FNumberFormat);
   end;
   if FLabels.WheelPower<>nil then FLabels.WheelPower.Selected:=-1;
   if FLabels.WheelHeart<>nil then FLabels.WheelHeart.Selected:=-1;
@@ -187,7 +215,8 @@ end;
 procedure TBLEHudUpdater.SetLabels(const ALabels: THudLabels);
 begin
   FLabels := ALabels;
-  DailyTraining.BeginRide;
+  UpdateRiderLabels;
+  DailyTrainingForRider(FProfileIndex).BeginRide;
   ConfigureWheels;
 end;
 
@@ -203,7 +232,7 @@ var P: TVeloSiteProfile; Colors: array of TCastleColor; I,N: Integer;
   end;
 begin
   // Read the existing profile cache once per ride. No network calls in HUD.
-  P:=EffectiveRiderProfile; FFtp:=P.FtpW;
+  P:=EffectiveRiderProfile(FProfileIndex); FFtp:=P.FtpW;
   if P.WeightKg>0 then UserWeight:=P.WeightKg;
   FPowerBounds:=ReadZoneBounds(P.TrainingZonesJSON,'power');
   FHeartBounds:=ReadZoneBounds(P.TrainingZonesJSON,'heart_rate');
@@ -250,9 +279,9 @@ end;
 
 function TBLEHudUpdater.ReadSensorPower: TMeasuredPower;
 begin
-  if Assigned(DeviceService) and Assigned(DeviceService.Power) and
-     DeviceService.Power.HasData then
-    Result:=MeasuredPower(True,DeviceService.Power.DataAgeSec,DeviceService.Power.Instant)
+  if (RiderDevices<>nil) and Assigned(RiderDevices.Power) and
+     RiderDevices.Power.HasData then
+    Result:=MeasuredPower(True,RiderDevices.Power.DataAgeSec,RiderDevices.Power.Instant)
   else Result:=Default(TMeasuredPower);
 end;
 
@@ -263,27 +292,27 @@ end;
 
 function TBLEHudUpdater.GetCadence: Double;
 begin
-  if Assigned(DeviceService) and Assigned(DeviceService.Cadence) and
-     DeviceService.Cadence.HasData and (DeviceService.Cadence.DataAgeSec<=3) then
-    Result := DeviceService.Cadence.Instant
+  if (RiderDevices<>nil) and Assigned(RiderDevices.Cadence) and
+     RiderDevices.Cadence.HasData and (RiderDevices.Cadence.DataAgeSec<=3) then
+    Result := RiderDevices.Cadence.Instant
   else
     Result := 0;
 end;
 
 function TBLEHudUpdater.GetSpeedKmh: Double;
 begin
-  if Assigned(DeviceService) and Assigned(DeviceService.Speed) and
-     DeviceService.Speed.HasData and (DeviceService.Speed.DataAgeSec<=3) then
-    Result := DeviceService.Speed.Instant
+  if (RiderDevices<>nil) and Assigned(RiderDevices.Speed) and
+     RiderDevices.Speed.HasData and (RiderDevices.Speed.DataAgeSec<=3) then
+    Result := RiderDevices.Speed.Instant
   else
     Result := 0;
 end;
 
 function TBLEHudUpdater.GetHeartRate: Double;
 begin
-  if Assigned(DeviceService) and Assigned(DeviceService.HR) and
-     DeviceService.HR.HasData and (DeviceService.HR.DataAgeSec<=3) then
-    Result := DeviceService.HR.Instant
+  if (RiderDevices<>nil) and Assigned(RiderDevices.HR) and
+     RiderDevices.HR.HasData and (RiderDevices.HR.DataAgeSec<=3) then
+    Result := RiderDevices.HR.Instant
   else
     Result := 0;
 end;
@@ -291,9 +320,9 @@ end;
 function TBLEHudUpdater.HasAnyData: Boolean;
 begin
   { A steering input alone is not exercise telemetry. }
-  Result := Assigned(DeviceService) and
-    (DeviceService.HasSensor(skHeartRate) or DeviceService.HasSensor(skPower) or
-     DeviceService.HasSensor(skCadence) or DeviceService.HasSensor(skSpeed));
+  Result := (RiderDevices<>nil) and
+    (RiderDevices.HasSensor(skHeartRate) or RiderDevices.HasSensor(skPower) or
+     RiderDevices.HasSensor(skCadence) or RiderDevices.HasSensor(skSpeed));
 end;
 
 function TBLEHudUpdater.LastSentBLESlope: Single;
@@ -317,17 +346,17 @@ begin
   Result.InstantCadence := Round(GetCadence);
   Result.InstantSpeed := GetSpeedKmh;
   Result.HeartRate := Round(GetHeartRate);
-  if Assigned(DeviceService) then
+  if (RiderDevices<>nil) then
   begin
-    if Assigned(DeviceService.Power) and DeviceService.Power.HasData then
-      Result.AveragePower := Round(DeviceService.Power.DeviceAverage);
-    if Assigned(DeviceService.Cadence) and DeviceService.Cadence.HasData then
-      Result.AverageCadence := Round(DeviceService.Cadence.DeviceAverage);
-    if Assigned(DeviceService.Speed) and DeviceService.Speed.HasData then
-      Result.AverageSpeed := DeviceService.Speed.DeviceAverage;
+    if Assigned(RiderDevices.Power) and RiderDevices.Power.HasData then
+      Result.AveragePower := Round(RiderDevices.Power.DeviceAverage);
+    if Assigned(RiderDevices.Cadence) and RiderDevices.Cadence.HasData then
+      Result.AverageCadence := Round(RiderDevices.Cadence.DeviceAverage);
+    if Assigned(RiderDevices.Speed) and RiderDevices.Speed.HasData then
+      Result.AverageSpeed := RiderDevices.Speed.DeviceAverage;
     { Distance / ElapsedTime / Incline живут в сыром пакете устройства,
       не в слотах. И sim, и живой FTMS кладут их в LastData. }
-    Raw := DeviceService.LastTrainerData;
+    Raw := RiderDevices.LastTrainerData;
     Result.Distance := Raw.Distance;
     Result.ElapsedTime := Raw.ElapsedTime;
     Result.Incline := Raw.Incline;
@@ -388,10 +417,10 @@ begin
   FTrainerTargetGrade:=TargetGrade;
   StepTrainerInertia(TargetGrade, AActiveAgent.State.CurrentSpeed, SecondsPassed);
 
-  HasDevice := Assigned(DeviceService) and DeviceService.HasControlDevice;
+  HasDevice := (RiderDevices<>nil) and RiderDevices.HasControlDevice;
   if not HasDevice then begin FSimulationActive:=False;FLastControlDevice:=nil;Exit end;
-  if FLastControlDevice<>Pointer(DeviceService.ControlDevice)then begin
-    FLastControlDevice:=Pointer(DeviceService.ControlDevice);FSimulationActive:=False;
+  if FLastControlDevice<>Pointer(RiderDevices.ControlDevice)then begin
+    FLastControlDevice:=Pointer(RiderDevices.ControlDevice);FSimulationActive:=False;
   end;
 
   { При первом вызове — переводим тренажёр в режим симуляции (grade=0).
@@ -406,8 +435,8 @@ begin
     FTrainerGrade := 0;
     FTrainerGradeInited := True;
     try
-      DeviceService.RequestControl;
-      DeviceService.SetRideSimulation(0, 0, UserWeight, BikeWeight);
+      RiderDevices.RequestControl;
+      RiderDevices.SetRideSimulation(0, 0, UserWeight, BikeWeight);
     except
       on E: Exception do
         Logger.Warning('[BLEHud] first SetSimulation: ' + E.ClassName + ': ' + E.Message);
@@ -418,16 +447,16 @@ begin
   FBLESlopeUpdateTime := FBLESlopeUpdateTime + SecondsPassed;
   if FBLESlopeUpdateTime < MinSlopeSendInterval then Exit;
   if (Abs(FTrainerGrade-FLastSentBLESlope)<MinSlopeDeltaToSend) and
-     (FLastGear=DeviceService.VirtualGear) and
+     (FLastGear=RiderDevices.VirtualGear) and
      (FLastGearing=Settings.GetVirtualGearingEnabled) and
-     (DeviceService.GearingBackend<>gbFTMSPower) and
+     (RiderDevices.GearingBackend<>gbFTMSPower) and
      not ((FTrainerAdjustmentPending or (TargetGrade=0))and
        (FTrainerGrade=TargetGrade)and(Abs(TargetGrade-FLastSentBLESlope)>0.001)) then Exit;
 
   { В тренажёр — уже инерционный уклон, не сырой из физики. }
   try
-    DeviceService.SetRideSimulation(FTrainerGrade, 0, UserWeight, BikeWeight);
-    FLastGear:=DeviceService.VirtualGear;FLastGearing:=Settings.GetVirtualGearingEnabled;
+    RiderDevices.SetRideSimulation(FTrainerGrade, 0, UserWeight, BikeWeight);
+    FLastGear:=RiderDevices.VirtualGear;FLastGearing:=Settings.GetVirtualGearingEnabled;
     FLastSentBLESlope := FTrainerGrade;
     if FTrainerGrade=TargetGrade then FTrainerAdjustmentPending:=False;
   except
@@ -448,16 +477,17 @@ var
   Pwr, Cad, Spd, HRVal: Double;
   DataValid: Boolean;
 begin
+  UpdateRiderLabels;
   if not Assigned(AActiveAgent) then Exit;
   if not Assigned(AActiveAgent.State) then Exit;
 
   S := AActiveAgent.State;
   if FLabels.LabelTransmission<>nil then begin
-    if(DeviceService<>nil)and DeviceService.HasControlDevice and DeviceService.TrainerErgActive then
+    if(RiderDevices<>nil)and RiderDevices.HasControlDevice and RiderDevices.TrainerErgActive then
       FLabels.LabelTransmission.Caption:='ERG'
-    else if(DeviceService<>nil)and(DeviceService.GearingBackend in[gbNative,gbFTMSPower])then
-      FLabels.LabelTransmission.Caption:=IntToStr(DeviceService.VirtualGear)
-    else FLabels.LabelTransmission.Caption:='—';
+    else if(RiderDevices<>nil)and(RiderDevices.GearingBackend in[gbNative,gbFTMSPower])then
+      FLabels.LabelTransmission.Caption:=IntToStr(RiderDevices.VirtualGear)
+    else FLabels.LabelTransmission.Caption:='--';
   end;
   NL := LineEnding;
   DeltaPos := 0;
@@ -486,15 +516,15 @@ begin
       FLabels.WheelPower.TargetPosition:=ZonePosition(FPowerMetrics.AveragePower*100.0/FFtp,FPowerBounds)
     else FLabels.WheelPower.Selected:=-1;
   if FLabels.WheelHeart<>nil then
-    if (HRVal>0) and Assigned(DeviceService) and Assigned(DeviceService.HR) and
-       DeviceService.HR.HasData and (DeviceService.HR.DataAgeSec<=3) then
+    if (HRVal>0) and (RiderDevices<>nil) and Assigned(RiderDevices.HR) and
+       RiderDevices.HR.HasData and (RiderDevices.HR.DataAgeSec<=3) then
       FLabels.WheelHeart.TargetPosition:=ZonePosition(HRVal,FHeartBounds)
     else FLabels.WheelHeart.Selected:=-1;
   if FLabels.WheelCadence<>nil then
     if (ManualPower>=0)and(Cad>0)then
       FLabels.WheelCadence.TargetPosition:=ZonePosition(Cad,FCadenceBounds)
-    else if (Cad>0) and Assigned(DeviceService) and Assigned(DeviceService.Cadence) and
-       DeviceService.Cadence.HasData and (DeviceService.Cadence.DataAgeSec<=3) then
+    else if (Cad>0) and (RiderDevices<>nil) and Assigned(RiderDevices.Cadence) and
+       RiderDevices.Cadence.HasData and (RiderDevices.Cadence.DataAgeSec<=3) then
       FLabels.WheelCadence.TargetPosition:=ZonePosition(Cad,FCadenceBounds)
     else FLabels.WheelCadence.Selected:=-1;
 
@@ -514,15 +544,15 @@ begin
 
   if Assigned(FLabels.LabelPower) then
     if ManualPower>=0 then FLabels.LabelPower.Caption:=IntToStr(Round(ManualPower))
-    else if Assigned(DeviceService.Power) and DeviceService.Power.HasData and
-       (DeviceService.Power.DataAgeSec<3) then FLabels.LabelPower.Caption:=IntToStr(Round(Pwr))
-    else FLabels.LabelPower.Caption:='—';
+    else if (RiderDevices<>nil) and Assigned(RiderDevices.Power) and RiderDevices.Power.HasData and
+       (RiderDevices.Power.DataAgeSec<3) then FLabels.LabelPower.Caption:=IntToStr(Round(Pwr))
+    else FLabels.LabelPower.Caption:='--';
   if Assigned(FLabels.LabelWork) then
-    FLabels.LabelWork.Caption:=FormatFloat('#,##0.0',DailyTraining.WorkJoules/1000.0,FNumberFormat);
+    FLabels.LabelWork.Caption:=FormatFloat('#,##0.0',DailyTrainingForRider(FProfileIndex).WorkJoules/1000.0,FNumberFormat);
   if Assigned(FLabels.LabelWorkTSS)then
-    if (FFtp>0)or(DailyTraining.TSS>0)then
-      FLabels.LabelWorkTSS.Caption:=FormatFloat('0.0',DailyTraining.TSS,FNumberFormat)
-    else FLabels.LabelWorkTSS.Caption:='—';
+    if (FFtp>0)or(DailyTrainingForRider(FProfileIndex).TSS>0)then
+      FLabels.LabelWorkTSS.Caption:=FormatFloat('0.0',DailyTrainingForRider(FProfileIndex).TSS,FNumberFormat)
+    else FLabels.LabelWorkTSS.Caption:='--';
 
   if Assigned(FLabels.LabelCadence) then
   begin
@@ -546,11 +576,11 @@ begin
         FLabels.LabelCorr.Caption := '+' +
           FloatToStrF(CorrGrade, ffFixed, 7, 1, FNumberFormat) + '%'
       else
-        FLabels.LabelCorr.Caption := '−' +
+        FLabels.LabelCorr.Caption := '-' +
           FloatToStrF(Abs(CorrGrade), ffFixed, 7, 1, FNumberFormat) + '%';
     end
     else
-      FLabels.LabelCorr.Caption := '—';
+      FLabels.LabelCorr.Caption := '--';
   end;
 
   if Assigned(FLabels.LabelHeart) then

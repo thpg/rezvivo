@@ -724,7 +724,7 @@ begin
 
   FStatus := TMenuLabel.Create(Self);
   FStatus.FontSize := 16;
-  FStatus.Color := White;
+  FStatus.Color := MenuText;
   FStatus.Anchor(hpLeft, 8);
   FStatus.Anchor(vpTop, -CONTENT_TOP);
   InsertFront(FStatus);
@@ -747,7 +747,7 @@ begin
   FDetailsPanel.Width := PANEL_W + 32;
   FDetailsPanel.HeightFraction := 1;
   FDetailsPanel.Anchor(hpMiddle);
-  FDetailsPanel.Color := Vector4(0.07, 0.10, 0.15, 0.97);
+  FDetailsPanel.Color := MenuSurface;
   FDetails.InsertFront(FDetailsPanel);
 
   Row := TMenuFlow.Create(Self);FDetailsToolbar:=Row;
@@ -820,14 +820,14 @@ begin
 
   FLabelEstimate := TMenuLabel.Create(Self);
   FLabelEstimate.Caption  := '';
-  FLabelEstimate.Color    := Vector4(0.80, 0.86, 0.92, 1);
+  FLabelEstimate.Color    := MenuMuted;
   FLabelEstimate.FontSize := 15;
   FLabelEstimate.MaxWidth := PANEL_W - 2 * PANEL_PAD - 24;
   FInnerAnalysis.InsertFront(FLabelEstimate);
 
   FLabelProgress := TMenuLabel.Create(Self);
   FLabelProgress.Caption  := '';
-  FLabelProgress.Color    := Vector4(1.0, 0.85, 0.3, 1);
+  FLabelProgress.Color    := MenuWarning;
   FLabelProgress.FontSize := 17;
   FInnerAnalysis.InsertFront(FLabelProgress);
   FitPanel(FPnlAnalysis, FInnerAnalysis);
@@ -955,7 +955,7 @@ var
   Hdr: TCastleLabel;
 begin
   Result := TCastleRectangleControl.Create(Self);
-  Result.Color := Vector4(0.17, 0.21, 0.28, 0.80);
+  Result.Color := MenuInset;
   Result.AutoSizeToChildren := False;
   Result.Width := PANEL_W;
   Result.Height := 40;   { FitPanel пересчитает под контент }
@@ -968,7 +968,7 @@ begin
 
   Hdr := TMenuLabel.Create(Self);
   BindUiText(Hdr, ACaption);
-  Hdr.Color    := Vector4(0.55, 0.60, 0.66, 1);
+  Hdr.Color    := MenuMuted;
   Hdr.FontSize := 15;
   AInner.InsertFront(Hdr);
 end;
@@ -1107,7 +1107,7 @@ var
   begin
     Result := TMenuLabel.Create(Self);
     BindUiText(Result, S);
-    Result.Color    := Vector4(0.72, 0.78, 0.84, 1);
+    Result.Color    := MenuText;
     Result.FontSize := 15;
   end;
 
@@ -1115,7 +1115,7 @@ var
   begin
     Result := TMenuLabel.Create(Self);
     Result.Caption  := '';
-    Result.Color    := White;
+    Result.Color    := MenuText;
     Result.FontSize := 15;
   end;
 
@@ -1134,8 +1134,8 @@ var
     Result := TCastleCheckbox.Create(Self);
     BindUiText(Result, 'auto');
     Result.Checked  := True;
-    Result.CheckboxColor := White;   { рамка + галочка — белые }
-    Result.TextColor     := White;   { подпись «авто» — белая }
+    Result.CheckboxColor := MenuAccent;   { рамка + галочка — белые }
+    Result.TextColor     := MenuText;   { подпись «авто» — белая }
     Result.OnChange := {$ifdef FPC}@{$endif} ParamsChanged;
   end;
 
@@ -1146,7 +1146,7 @@ begin
 
   Hdr := TMenuLabel.Create(Self);
   BindUiText(Hdr, 'Clear “auto” to enter a value manually');
-  Hdr.Color    := Vector4(0.55, 0.60, 0.66, 1);
+  Hdr.Color    := MenuMuted;
   Hdr.FontSize := 14;
   FParamsHost.InsertFront(Hdr);
 
@@ -1285,9 +1285,9 @@ procedure TRoutesPage.SyncParamEnable;
   begin
     if not Assigned(ALbl) then Exit;
     if AAuto then
-      ALbl.Color := Vector4(0.72, 0.75, 0.79, 1)
+      ALbl.Color := MenuMuted
     else
-      ALbl.Color := White;
+      ALbl.Color := MenuText;
   end;
 
 begin
@@ -1694,7 +1694,7 @@ var
 begin
   L := TMenuLabel.Create(FStatsHost);
   BindUiText(L, ACaption);
-  L.Color    := White;
+  L.Color    := MenuText;
   L.FontSize := 19;
   FStatsHost.InsertFront(L);
   FitPanel(FPnlRoute, FInnerRoute);
@@ -1711,7 +1711,7 @@ begin
 
   K := TMenuLabel.Create(Row);
   K.Caption  := AKey;
-  K.Color    := Vector4(0.55, 0.60, 0.66, 1);
+  K.Color    := MenuMuted;
   K.FontSize := 16;
   K.AutoSize := False;
   K.Width    := 130;
@@ -1720,7 +1720,7 @@ begin
 
   V := TMenuLabel.Create(Row);
   V.Caption  := AValue;
-  V.Color    := Vector4(0.92, 0.95, 1.0, 1);
+  V.Color    := MenuText;
   V.FontSize := 16;
   Row.InsertFront(V);
   FitPanel(FPnlRoute, FInnerRoute);

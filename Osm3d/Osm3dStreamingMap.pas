@@ -285,6 +285,9 @@ type
     FSunShadowsAllowed: Boolean;
     FCache:     TGeoTileCache;
     FStreamer:  TTileStreamer;
+    FLocalRiderTiles:array[0..71]of TGeoTileId;
+    FLocalRiderTileCount:Integer;
+    FWarmupTilePins,FCombinedTilePins:TGeoTileIdArray;
     FBlockGen:  TOsm3dBlockGenerator;
     FEdge:      Double;
     { Широта метрики КАДРА сессии (EffectiveWorldScaleLat: ручная фиксация
@@ -624,6 +627,11 @@ type
     FWaterDiagAccum: Single;   { аккумулятор для периодического WATER DIAG }
     FActiveTiles:   Integer;
 
+    function LocalRiderTile(const Id:TGeoTileId):Boolean;
+    function LocalRiderBatch(B:TCacheBatch):Boolean;
+    procedure SetWarmupTilePins(const Ids:array of TGeoTileId);
+    procedure RefreshPinnedUnion;
+    procedure WantLocalRiderTiles;
     procedure BuildWorldGraph;
     procedure LogMain(const AMsg: string);
     { Как LogMain, но дополнительно прокидывает строку в callback хоста
@@ -841,6 +849,9 @@ type
     procedure Update(const SecondsPassed: Single;
       var RemoveMe: TRemoveType); override;
 
+    { Main-thread snapshot, normally refreshed at 1 Hz by the host. Pins a
+      small ground neighbourhood even for stopped or off-camera riders. }
+    procedure SetLocalRiderPositions(const Positions:array of TVector3);
     procedure RenderGpuGround;
     function GpuGroundInfo:string;
     function GrassDiagnostics:string;
@@ -3926,6 +3937,10 @@ begin
     end;
     Exit(False);
   end;
+
+  if LocalRiderTile(TileId)and(CT.GpuGround<>nil)then
+    Exit(CT.GpuGround.SampleGeometry(WorldX-CT.CenterX,WorldZ-CT.CenterZ,
+      ReferenceY,CurbContactsEnabled,AY));
 
   if (FGpuGround<>nil) and (CT.GpuGround<>nil) then begin
     GHit:=FGpuGround.Sample(CT.GpuGround,WorldX-CT.CenterX,WorldZ-CT.CenterZ,
@@ -7157,6 +7172,72 @@ end;
 { Evict batches that have drifted far behind and hold no active tile.
   A batch with ActiveCount > 0 has visible tiles and is NEVER evicted —
   the resident window is protected. }
+function TOsm3dStreamingMap.LocalRiderTile(const Id:TGeoTileId):Boolean;
+var I:Integer;
+begin
+  for I:=0 to FLocalRiderTileCount-1 do
+    if FLocalRiderTiles[I].ToKey=Id.ToKey then Exit(True);
+  Result:=False;
+end;
+
+function TOsm3dStreamingMap.LocalRiderBatch(B:TCacheBatch):Boolean;
+var I:Integer;
+begin
+  for I:=0 to B.Tiles.Count-1 do if LocalRiderTile(B.Tiles[I].Tile)then Exit(True);
+  Result:=False;
+end;
+
+procedure TOsm3dStreamingMap.RefreshPinnedUnion;
+var I,N:Integer;
+begin
+  if FStreamer=nil then Exit;
+  N:=Length(FWarmupTilePins);
+  SetLength(FCombinedTilePins,N+FLocalRiderTileCount);
+  for I:=0 to N-1 do FCombinedTilePins[I]:=FWarmupTilePins[I];
+  for I:=0 to FLocalRiderTileCount-1 do FCombinedTilePins[N+I]:=FLocalRiderTiles[I];
+  FStreamer.SetPinnedTiles(FCombinedTilePins);
+end;
+
+procedure TOsm3dStreamingMap.SetWarmupTilePins(const Ids:array of TGeoTileId);
+var I:Integer;
+begin
+  SetLength(FWarmupTilePins,Length(Ids));
+  for I:=0 to High(Ids)do FWarmupTilePins[I]:=Ids[I];
+  RefreshPinnedUnion;
+end;
+
+procedure TOsm3dStreamingMap.SetLocalRiderPositions(const Positions:array of TVector3);
+var I,DX,DZ:Integer;TX,TY:Int64;RiderTile,Id:TGeoTileId;
+begin
+  FLocalRiderTileCount:=0;
+  if(FProj<>nil)and(FCache<>nil)and(FCache.Grid<>nil)then
+    for I:=0 to Min(High(Positions),7)do begin
+      if IsNan(Positions[I].X)or IsInfinite(Positions[I].X)or
+         IsNan(Positions[I].Z)or IsInfinite(Positions[I].Z)then Continue;
+      RiderTile:=FCache.Grid.TileAt(FProj.Unproject(Positions[I].X,Positions[I].Z));
+      { A one-tile halo covers wheel probes, seams and the next camera cut.
+        It is deliberately independent of the global visible-world radius. }
+      for DZ:=-1 to 1 do for DX:=-1 to 1 do begin
+        TX:=Int64(RiderTile.TX)+DX;TY:=Int64(RiderTile.TY)+DZ;
+        if(TX<0)or(TY<0)or(TX>High(Cardinal))or(TY>High(Cardinal))then Continue;
+        Id:=TGeoTileId.Make(RiderTile.Zone,RiderTile.North,Cardinal(TX),Cardinal(TY));
+        if LocalRiderTile(Id)then Continue;
+        FLocalRiderTiles[FLocalRiderTileCount]:=Id;Inc(FLocalRiderTileCount);
+      end;
+    end;
+  RefreshPinnedUnion;
+end;
+
+procedure TOsm3dStreamingMap.WantLocalRiderTiles;
+var I:Integer;
+begin
+  if FStreamer=nil then Exit;
+  { Reuse the fixed snapshot every frame. No extra world Update, keyhole scan
+    or render pass: just keep bounded requests current and use normal uploads. }
+  for I:=0 to FLocalRiderTileCount-1 do
+    FStreamer.WantTile(FLocalRiderTiles[I],1.0+I*0.001,True);
+end;
+
 procedure TOsm3dStreamingMap.PurgeFarBatches(const ACamPos: TVector3);
 var
   I, J: Integer;
@@ -7173,7 +7254,7 @@ begin
     begin
       B := FBatchList[I];
       { Has a visible tile -> protected, never a purge candidate. }
-      if B.ActiveCount > 0 then Continue;
+      if(B.ActiveCount>0)or LocalRiderBatch(B)then Continue;
       Dist := Hypot(ACamPos.X - B.CX, ACamPos.Z - B.CZ);
       if Dist > FStreamer.SceneUnloadRadius then
         Far.Add(B);
@@ -7188,7 +7269,7 @@ begin
         B := nil; D1 := -1;
         for I := 0 to FBatchList.Count - 1 do
         begin
-          if FBatchList[I].ActiveCount > 0 then Continue;
+          if(FBatchList[I].ActiveCount>0)or LocalRiderBatch(FBatchList[I])then Continue;
           if Far.IndexOf(FBatchList[I]) >= 0 then Continue;
           D2 := Hypot(ACamPos.X - FBatchList[I].CX,
                       ACamPos.Z - FBatchList[I].CZ);
@@ -7624,7 +7705,7 @@ begin
             FStreamer.WantTile(FSnapForceTiles[I], SNAP_FORCE_PRIORITY, False);
           end;
         SetLength(WuPending, WuPendN);
-        FStreamer.SetPinnedTiles(WuPending);
+        SetWarmupTilePins(WuPending);
         { оверлей: состояния клеток + заголовок. Текст стадий — из того
           же LoadPhaseInfo, что у 3D-плейсхолдеров. }
         if (FWarmup <> nil) and (not FDestroying) then
@@ -7671,7 +7752,7 @@ begin
       end
       else
       begin
-        FStreamer.SetPinnedTiles([]);   { no pins held — clear (cheap) }
+        SetWarmupTilePins([]);   { no pins held — clear (cheap) }
         { Холд снят — тайлы в кэше, но сам расчёт фит-пути (TRouteSnapper
           в воркере) ещё может идти. Держим экран прогрева до конца
           расчёта: прячем его по готовности снапа или по завершению
@@ -7754,6 +7835,7 @@ begin
       { Background work — disk loads + block generation on workers. }
       TPump0 := GetTickCount64;
       FStreamer.Pump(StreamLL, SecondsPassed);
+      WantLocalRiderTiles;
       { Route-only: печём ВЕСЬ коридор пути на диск (порция за кадр). Камерный
         keyhole (ограниченный коридором WantFilter'ом) монтирует ближние тайлы. }
       if FRouteOnlyGeom then PumpRouteCorridorPregen;
@@ -8074,7 +8156,7 @@ begin
   if FWarmupRiderPlaced then
   begin
     FPointWarmup:=False;FWarmupShown:=False;
-    FStreamer.SetPinnedTiles([]);
+    SetWarmupTilePins([]);
     FWarmup.HideWarmup;
     Exit;
   end;
@@ -8083,7 +8165,7 @@ begin
   if GetTickCount64<FPointWarmupNextUpdate then Exit;
   FPointWarmupNextUpdate:=GetTickCount64+200;
   FStreamer.WantTile(FPointWarmupTile,SNAP_FORCE_PRIORITY,True);
-  FStreamer.SetPinnedTiles([FPointWarmupTile]);
+  SetWarmupTilePins([FPointWarmupTile]);
   P:=FProj.Project(FPointWarmupGeo,0);
   GroundLoadStatusAt(P.X,P.Z,ErrorText);
   Ready:=TileSceneReady(FPointWarmupTile);

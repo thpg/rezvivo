@@ -44,6 +44,10 @@ procedure TViewFreeRide.Start;
 begin
   inherited;
   LocalizeDesignedUi(Self);
+  TCastleRectangleControl(DesignedComponent('Background')).Color:=MenuBackground;
+  if Assigned(LabelTitle)then begin LabelTitle.CustomFont:=MenuFont(True);LabelTitle.Color:=MenuText;end;
+  if Assigned(LabelHint)then begin LabelHint.CustomFont:=MenuFont;LabelHint.Color:=MenuMuted;end;
+  StyleMenuButtons(Self);
   if Assigned(ButtonBack)  then ButtonBack.OnClick  := @ClickBack;
   if Assigned(ButtonStart) then ButtonStart.OnClick := @ClickStart;
 end;

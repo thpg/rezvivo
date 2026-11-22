@@ -38,7 +38,7 @@ const
     (frame geometry, shadow/wheel-speed fallbacks) read them cross-unit. }
   DEF_WHEEL_RADIUS     = 339;   { mm, 700c }
   DEF_TIRE_WIDTH       = 14;    { mm }
-  DEF_RIM_HEIGHT       = 30;    { mm }
+  DEF_RIM_HEIGHT       = 50;    { mm }
   DEF_SPOKE_COUNT      = 16;
   DEF_HUB_WIDTH        = 60;    { mm }
 

@@ -491,13 +491,13 @@ var Lat,Fwd,Up,Center,A,B,V,Target,Pole: TTripoVec3;
     Hand:=R.JointIndexByName(Sides[Index]+'_Hand');
     if (Shoulder<0) or (Elbow<0) or (Hand<0) then Exit;
     ArmSide:=1-2*Index;P:=Frac(Phase+Index*0.5);
-    Swing:=-Cos(2*Pi*P)*Blend(23,Blend(25,39,RunPace),Run)*Move;
-    Flex:=Blend(12+Move*(12+9*Sin(2*Pi*P)),
+    Swing:=-Cos(2*Pi*P)*Blend(Blend(14,21,Pace),Blend(25,39,RunPace),Run)*Move;
+    Flex:=Blend(7+Move*(7+5*Sin(2*Pi*P-0.18)),
       Blend(78,88,RunPace)+Blend(9,15,RunPace)*Sin(2*Pi*P-0.2),Run);
     { The shoulder girdle follows the same swing as the arm. Its excursion
       is relative to the thorax, not a second world-space arm controller. }
     Frame.ShoulderProtraction[Index]:=Blend(5.5,Blend(6,10,RunPace),Run)*Move*(-Cos(2*Pi*P-0.12));
-    Elevation:=Move*(0.6+Blend(0.8,1.7,Run)*Sin(2*Pi*P-0.3));
+    Elevation:=Blend(-0.8,0.6,Run)+Move*Blend(0.6,1.7,Run)*Sin(2*Pi*P-0.3);
     Clavicle:=R.JointIndexByName(Sides[Index]+'_Clavicle');
     if Clavicle>=0 then begin
       CQ:=QuatMul(QuatFromAxisAngle(Up.X,Up.Y,Up.Z,
@@ -647,7 +647,7 @@ begin
   Frame.ShoulderYaw:=-Blend(Blend(3.0,7.0,Pace),Blend(4.5,8,RunPace),Run)*Move*Cos(Cycle-PhaseLag);
   Roll:=Blend(2.5,Blend(2.5,3.2,RunPace),Run)*Move*Sin(Cycle);
   ChestRoll:=-Roll*0.45;
-  ChestLean:=Move*Blend(2,Blend(3.5,7,RunPace),Run)+Move*Blend(0.3,0.7,Run)*Sin(2*Cycle-0.4);
+  ChestLean:=Move*Blend(1.2,Blend(3.5,7,RunPace),Run)+Move*Blend(0.3,0.7,Run)*Sin(2*Cycle-0.4);
   OrientBody('Pelvis',Frame.PelvisYaw,Roll,Run*Blend(2,4,RunPace));
   OrientBody('Waist',Blend(Frame.PelvisYaw,Frame.ShoulderYaw,0.35),Roll*0.35,ChestLean*0.45);
   OrientBody('Spine01',Blend(Frame.PelvisYaw,Frame.ShoulderYaw,0.72),ChestRoll*0.5,ChestLean*0.78);
@@ -665,6 +665,11 @@ begin
     SetWorldRotation(R,Foot[I],Orient[I]);
     if Toe[I]>=0 then begin
       Pitch:=-Max(0,Frame.Feet[I].Pitch)*0.72;
+      { Toe extension belongs to the loaded forefoot rocker. After toe-off
+        the toes release, and the whole shoe follows the ankle in swing.
+        Keeping this compensation airborne made the forefoot look level. }
+      if not Frame.Feet[I].Stance then
+        Pitch:=Pitch*(1-Ease((Frame.Feet[I].Phase-Duty)/Max(0.001,(1-Duty)*0.16)));
       R.ApplyWorldPitchByIndex(Toe[I],Lat.X,Lat.Y,Lat.Z,DegToRad(Pitch));
     end;
     A:=V3Norm(V3Sub(R.JointWorldPos(Upper[I]),R.JointWorldPos(Mid[I])));

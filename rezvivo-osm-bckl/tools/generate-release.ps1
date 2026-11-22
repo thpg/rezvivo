@@ -25,6 +25,15 @@ function Write-IfChanged([string]$Path, [string]$Content) {
     }
 }
 
+$features = '{ Generated from release.json. }' + "`n"
+if ($null -ne $release.neural_riders) {
+    if ($release.neural_riders -isnot [bool]) { throw 'neural_riders must be a boolean.' }
+    if (-not $release.neural_riders) {
+        $features += '{$ifdef MSWINDOWS}' + "`n" + '{$define REZVIVO_NO_NEURAL_RIDERS}' + "`n" + '{$endif}' + "`n"
+    }
+}
+Write-IfChanged (Join-Path $projectRoot 'code/GameBuildFeatures.inc') $features
+
 $unitTemplate = @'
 unit GameBuildInfo;
 {$mode objfpc}{$H+}{$codepage UTF8}

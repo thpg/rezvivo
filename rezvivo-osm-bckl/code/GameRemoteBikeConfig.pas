@@ -48,7 +48,7 @@ begin
     Require(D.Count<=128);
     for I:=0 to D.Count-1 do CheckTree(D.Items[I]);
   end else if D.JSONType=jtNumber then begin
-    V:=D.AsFloat;Require(not IsNan(V)and not IsInfinite(V)and(Abs(V)<=1.0e9));
+    V:=D.AsFloat;Require(not IsNan(V)and not IsInfinite(V)and(Abs(V)<=4294967295.0));
   end;
 end;
 
@@ -162,10 +162,45 @@ begin
   end;
 end;
 
+procedure Choice(Source,Dest:TJSONObject;const Key,Allowed,DefaultValue:string);
+var Value:string;D:TJSONData;
+begin
+  Value:=DefaultValue;D:=Source.Find(Key);
+  if D<>nil then begin Require(D.JSONType=jtString);Value:=D.AsString end;
+  Require((Length(Value)<=32)and(Pos('|',Value)=0)and(Pos('|'+Value+'|',Allowed)>0));
+  Dest.Add(Key,Value);
+end;
+procedure AppearanceConfig(Root,Safe:TJSONObject);
+const Slots:array[0..4]of string=('top','bottom','outer','feet','head');
+  Options:array[0..4]of string=('||tshirt|sweatshirt|','||trousers|jeans|',
+    '||jacket|coat|loose_jacket|raincoat|','||sneakers|boots|loafers|','||beanie|cap|bucket|');
+var S,O,W,T:TJSONObject;D:TJSONData;A,B:TJSONArray;I:Integer;Hex:string;Ch:Char;
+begin
+  S:=ObjectAt(Root,'appearance');if S=nil then Exit;
+  O:=TJSONObject.Create;Safe.Add('appearance',O);
+  W:=ObjectAt(S,'wardrobe');if W<>nil then begin
+    T:=TJSONObject.Create;O.Add('wardrobe',T);
+    for I:=0 to High(Slots)do Choice(W,T,Slots[I],Options[I],'');
+  end;
+  Choice(S,O,'hair','|bald|short|swept|curly|ponytail|buzz|parted|coils|medium|braid|long_braid|double_braids|dreadlocks|','short');
+  Choice(S,O,'headwear','|none|helmet|bandana|cap|','helmet');
+  Choice(S,O,'beard','|none|stubble|short|full|goatee|','none');
+  Choice(S,O,'mustache','|none|pencil|classic|handlebar|','none');
+  D:=S.Find('dyes');if D<>nil then begin
+    Require((D is TJSONArray)and(D.Count<=7));A:=TJSONArray(D);B:=TJSONArray.Create;O.Add('dyes',B);
+    for I:=0 to A.Count-1 do begin
+      Require(A.Items[I].JSONType=jtString);Hex:=A.Strings[I];
+      Require((Hex='')or(Length(Hex)=6));
+      for Ch in Hex do Require(Ch in['0'..'9','a'..'f','A'..'F']);
+      B.Add(Hex);
+    end;
+  end;
+end;
+
 function SanitizeRemoteBikeConfig(const Input:string;out Output,ErrorText:string):Boolean;
 const CompNames:array[0..8]of string=('Frame','Fork','DropBar','FlatBar','Seat','Wheels','Crankset','Drivetrain','Animation');
   ColorNames:array[0..11]of string=('Frame','FrameSpec','Chrome','ChromeSpec','Dark','Tire','Seat','Tape','Spoke','Rim','RimSpec','TireSpec');
-var Data:TJSONData;Root,Safe,S,O,C:TJSONObject;Name,Preset,Path,Color:string;Ch:Char;
+var Data:TJSONData;Root,Safe,S,O,C:TJSONObject;Name,Preset,Path,Color:string;Ch:Char;Garment:TJSONObject;
 begin
   Output:='';ErrorText:='';Result:=False;Data:=nil;Safe:=nil;
   try
@@ -199,6 +234,11 @@ begin
         O.Add('path','castle-data:/avatars/RIDER.glb');
         O.Add('body',WriteRiderBody(ReadRiderBody(ObjectAt(S,'body'),
           DefaultRiderBody(Ord(SameText(Path,'FEM.glb'))))));
+        Garment:=ObjectAt(S,'garment');if Garment<>nil then begin
+          C:=TJSONObject.Create;O.Add('garment',C);
+          Numbers(Garment,C,'seed,revision',0,4294967295.0,True);
+          Numbers(Garment,C,'ease,length_ease',-1,1);Booleans(Garment,C,'adjusted');
+        end;
         Numbers(S,O,'scale',0.5,1.5);Numbers(S,O,'yaw',-180,180);Numbers(S,O,'pedalDir',-1,1,True);
         Booleans(S,O,'showRider');Numbers(S,O,'ankleOffX,ankleOffY,ankleOffZ',-100,100);
         Numbers(S,O,'stanceHalf',0,250);Numbers(S,O,'footYawDeg',-45,45);
@@ -211,6 +251,7 @@ begin
           O.Add('helmetColor',Color);
         end;
       end;
+      AppearanceConfig(Root,Safe);
       S:=ObjectAt(Root,'hud');
       if S<>nil then begin O:=TJSONObject.Create;Safe.Add('hud',O);Numbers(S,O,'ftp',0,2000) end;
       Output:=Safe.AsJSON;Result:=True;

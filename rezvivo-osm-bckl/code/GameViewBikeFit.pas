@@ -13,7 +13,7 @@ unit GameViewBikeFit;
 interface
 
 uses GameRiderGarment, RiderGarmentState, GameRiderWardrobe, GameTravel, RiderBodyParameters, GameMenuTheme, GameMenuDialog, Osm3dRiderShadow, RiderHair, RiderHeadAppearance,
-  Classes, SysUtils, Math, fpjson,
+  Classes, SysUtils, Math, fpjson, AppSettings,
   CastleComponentSerialize, CastleUIControls, CastleControls,
   CastleVectors, CastleColors, CastleURIUtils, CastleFilesUtils,
   CastleViewport, CastleScene, CastleCameras, CastleTransform,
@@ -23,6 +23,13 @@ uses GameRiderGarment, RiderGarmentState, GameRiderWardrobe, GameTravel, RiderBo
 type
   TBikeFitPage = class(TMenuEmbeddedPage)
   private
+    FProfileIndex: Integer;
+    FPendingProfileIndex: Integer;
+    FProfileRebindPending: Boolean;
+    FRiderSettings: TAppSettings;
+    FNameEdit: TMenuEdit;
+    FNameCaption: TCastleLabel;
+    FNameSave: TMenuButton;
     FOnFootPreview,FOnFootFramed:Boolean;
     FPreviewAnimationPaused:Boolean;
     FWalkPreviewSpeed:Single;
@@ -180,6 +187,7 @@ type
     FPoseBlendSec: Single;
     FDirtyResult: Boolean;
     FLoadingPreview, FReleasePreviewPending: Boolean;
+    FBuildingLayout: Boolean;
     FUiOwner: TComponent;
     FCachedBikeUrl: string;
     FCachedBikeJson: string;
@@ -225,6 +233,8 @@ type
     procedure ApplyKneeAnkleToPreview;
     procedure SeedRiderShapeFromBike;
     procedure BuildLayout;
+    procedure FreeLayout;
+    procedure ClearLayoutReferences;
     function  MakeNavBtn(const Cap: string; AClick: TNotifyEvent;
       AWidth: Single = 44; AHeight: Single = 32): TCastleButton;
     function  MakeParamBlock(AParent: TCastleUserInterface; const ACaption: string;
@@ -285,8 +295,11 @@ type
     procedure SaveBikeFitColors;
     procedure LoadBikeFitColors;
   public
+    procedure SetProfileIndex(Value: Integer);
+    procedure SaveGameName(Sender: TObject);
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+    property ProfileIndex: Integer read FProfileIndex write SetProfileIndex;
     procedure PageShown; override;
     procedure PageHidden; override;
     procedure Resize; override;
@@ -324,7 +337,7 @@ implementation
 
 uses GameTravelUI, CastleApplicationProperties,UiTranslations,GameUserData,
   jsonparser, CastleKeysMouse,CastleImages,CastleRectangles,
-  GameViewMenu, GameViewPlay, AppSettings, DebugLog, GameBikeAutoFit, GameGraphicsOptions;
+  GameViewMenu, GameViewPlay, VeloSiteAPI, DebugLog, GameBikeAutoFit, GameGraphicsOptions;
 
 const
   DefaultCamPos: TVector3 = (X: 1.6; Y: 0.95; Z: 2.1);
@@ -379,6 +392,7 @@ end;
 constructor TBikeFitPage.Create(AOwner: TComponent);
 begin
   inherited;
+  FRiderSettings:=RiderSettings(0);
   FullSize := True;
   FSelBike := -1;
   FSelSize := -1;
@@ -423,6 +437,7 @@ begin
   FDesign.FullSize := True;
   FDesign.Url := 'castle-data:/gameviewbikefit.castle-user-interface';
   LocalizeDesignedUi(FDesign);
+  TCastleRectangleControl(FDesign.DesignedComponent('Background')).Color:=MenuBackground;
   InsertFront(FDesign);
 
   FLabelTitle  := FDesign.DesignedComponent('LabelTitle') as TCastleLabel;
@@ -442,6 +457,7 @@ begin
   end;
   FLabelStatus.Anchor(vpBottom, 72);
   FLabelStatus.FontSize := 14;
+  FLabelStatus.Color := MenuMuted;
 
   FButtonApply.OnClick := @ClickApply;
 
@@ -451,13 +467,14 @@ end;
 
 destructor TBikeFitPage.Destroy;
 begin
+  FBuildingLayout := True;
   FWantRiderPath := '';
   if FGlbWorker <> nil then
   begin
     FGlbWorker.WaitFor;
     FreeAndNil(FGlbWorker);
   end;
-  FreePreviewBikes;
+  FreeLayout;
   FreeAndNil(FBikePaths);
   FreeAndNil(FBikeNames);
   FreeAndNil(FSizeNames);
@@ -476,9 +493,9 @@ begin
   Result.Height := AHeight;
   Result.FontScale := 1.1;
   Result.CustomBackground := True;
-  Result.CustomColorNormal := Vector4(0.105,0.157,0.192,1);
-  Result.CustomColorFocused := Vector4(0.15,0.23,0.28,1);
-  Result.CustomColorPressed := Vector4(0.13,0.30,0.34,1);
+  Result.CustomColorNormal := MenuInset;
+  Result.CustomColorFocused := MenuInset;
+  Result.CustomColorPressed := MenuSelected;
   Result.OnClick := AClick;
 end;
 
@@ -612,6 +629,70 @@ begin
   AVp.Camera.SetView(DefaultCamPos, DefaultCamDir.Normalize, DefaultCamUp);
 end;
 
+procedure TBikeFitPage.ClearLayoutReferences;
+begin
+  { Every borrowed reference into FUiOwner is invalidated together, before
+    its controls are destroyed. Keep design-owned controls and rider data. }
+  FNameEdit:=nil;FNameCaption:=nil;FNameSave:=nil;
+  FBottomRow:=nil;FColParams:=nil;FColResult:=nil;
+  FillChar(FSectionButtons,SizeOf(FSectionButtons),0);
+  FBikeControls:=nil;FCadenceControls:=nil;FEffortControls:=nil;
+  FBodyRows:=nil;FAppearanceRows:=nil;FFitOverlay:=nil;
+  FWardrobePanel:=nil;FillChar(FGarmentButtons,SizeOf(FGarmentButtons),0);
+  FHairBox:=nil;FHairSelect:=nil;FHairPreview:=nil;FHairTitle:=nil;
+  FHairPopupTitle:=nil;FHairOverlay:=nil;FHairCard:=nil;FHairClose:=nil;FHairScroll:=nil;
+  FillChar(FHeadRows,SizeOf(FHeadRows),0);
+  FillChar(FHeadPreviews,SizeOf(FHeadPreviews),0);
+  FillChar(FHeadRearPreviews,SizeOf(FHeadRearPreviews),0);
+  FillChar(FHeadChecks,SizeOf(FHeadChecks),0);
+  FillChar(FHeadTabs,SizeOf(FHeadTabs),0);
+  FillChar(FHeadViews,SizeOf(FHeadViews),0);
+  FillChar(FHeadSwatches,SizeOf(FHeadSwatches),0);
+  FHeadColorTitle:=nil;FHeadHint:=nil;
+  FValuePopup:=nil;FValueEdit:=nil;
+  FillChar(FValueButtons,SizeOf(FValueButtons),0);
+  FillChar(FValueLabels,SizeOf(FValueLabels),0);
+  FPosePrev:=nil;FPoseNext:=nil;FPoseToggle:=nil;FRiderParams:=nil;
+  FCadenceCaption:=nil;FEffortCaption:=nil;
+  FLblPose:=nil;FLblCadence:=nil;FLblEffort:=nil;FLblResultInfo:=nil;
+  FLblStack:=nil;FLblReach:=nil;
+  FBtnBikePick:=nil;FBtnSizePick:=nil;FBtnAutoFit:=nil;
+  FBtnCadenceDown:=nil;FBtnCadenceUp:=nil;FBtnEffortDown:=nil;FBtnEffortUp:=nil;
+  FBtnSeatHDown:=nil;FBtnSeatHUp:=nil;FBtnSeatODown:=nil;FBtnSeatOUp:=nil;
+  FBtnSpacersDown:=nil;FBtnSpacersUp:=nil;FBtnStemDown:=nil;FBtnStemUp:=nil;
+  FBtnHeightDown:=nil;FBtnHeightUp:=nil;FBtnInseamDown:=nil;FBtnInseamUp:=nil;
+  FBtnBulkDown:=nil;FBtnBulkUp:=nil;FBtnBellyDown:=nil;FBtnBellyUp:=nil;
+  FBtnKneeDown:=nil;FBtnKneeUp:=nil;FBtnAnkleDown:=nil;FBtnAnkleUp:=nil;
+  FBtnSexDown:=nil;FBtnSexUp:=nil;FBtnArmDown:=nil;FBtnArmUp:=nil;
+  FBtnHeadDown:=nil;FBtnHeadUp:=nil;
+  FLblSeatH:=nil;FLblSeatO:=nil;FLblSpacers:=nil;FLblStem:=nil;
+  FLblHeight:=nil;FLblInseam:=nil;FLblBulk:=nil;FLblBelly:=nil;
+  FLblKnee:=nil;FLblAnkle:=nil;FLblSex:=nil;FLblArm:=nil;FLblHead:=nil;
+  FillChar(FDimensionDown,SizeOf(FDimensionDown),0);
+  FillChar(FDimensionUp,SizeOf(FDimensionUp),0);
+  FillChar(FDimensionLabels,SizeOf(FDimensionLabels),0);
+  FVpResult:=nil;FPreviewItems:=nil;FNavResult:=nil;FPrevKey:=nil;FPrevFill:=nil;
+  FPopupOverlay:=nil;FPopupTitle:=nil;FPopupScroll:=nil;FPopupList:=nil;FBikeFilter:=nil;
+  FDyeStrip:=nil;FDyePop:=nil;FDyeTitle:=nil;
+  FillChar(FDyeBtns,SizeOf(FDyeBtns),0);
+  FillChar(FDyePopSw,SizeOf(FDyePopSw),0);
+end;
+
+procedure TBikeFitPage.FreeLayout;
+begin
+  FreePreviewBikes;
+  if FPopupOverlay <> nil then
+  begin
+    if FPopupOverlay.Parent <> nil then
+      FPopupOverlay.Parent.RemoveControl(FPopupOverlay);
+  end;
+  ClearLayoutReferences;
+  FreeAndNil(FUiOwner);
+  FPopupKind := PopupNone;
+  FValueRow := 0;
+  FDyePopSlot := -1;
+end;
+
 procedure TBikeFitPage.BuildLayout;
 var
   S:string;
@@ -621,27 +702,10 @@ var
   Cap: TCastleLabel;
   I: Integer;
 begin
-  FreePreviewBikes;
-  if FPopupOverlay <> nil then
-  begin
-    if FPopupOverlay.Parent <> nil then
-      FPopupOverlay.Parent.RemoveControl(FPopupOverlay);
-    FPopupOverlay := nil;
-  end;
-  FPopupTitle := nil;
-  FBikeFilter := nil;
-  FPopupScroll := nil;
-  FPopupList := nil;
-  FPopupKind := PopupNone;
-  FreeAndNil(FUiOwner);FValuePopup:=nil;FValueEdit:=nil;FValueRow:=0;
-  FHairOverlay:=nil;FHairCard:=nil;FHairSelect:=nil;
-  FillChar(FHeadRows,SizeOf(FHeadRows),0);FillChar(FHeadChecks,SizeOf(FHeadChecks),0);
-  FillChar(FValueButtons,SizeOf(FValueButtons),0);FillChar(FValueLabels,SizeOf(FValueLabels),0);
-  FDyeStrip := nil;
-  FDyePop := nil;
-  FDyePopSlot := -1;
-  FillChar(FDyeBtns, SizeOf(FDyeBtns), 0);
-  FillChar(FDyePopSw, SizeOf(FDyePopSw), 0);
+  FBuildingLayout := True;
+  try
+  FreeLayout;
+  try
   FUiOwner := TComponent.Create(Self);
   FMainHost.ClearControls;
 
@@ -876,7 +940,7 @@ begin
   FPreviewItems := FVpResult.Items;
 
   FFitOverlay := TCastleRectangleControl.Create(FUiOwner);
-  FFitOverlay.Color := Vector4(0.04, 0.07, 0.06, 0.72);
+  FFitOverlay.Color := MenuSurface;
   FFitOverlay.Width := 158;
   FFitOverlay.Height := 56;
   FFitOverlay.Anchor(hpLeft, 10);
@@ -932,7 +996,14 @@ begin
   FAppearanceRows.FullSize:=True;FColParams.InsertFront(FAppearanceRows);
   BuildColorStrip;
   BuildHairSelector;
-  LayoutSections;
+  except
+    FreeLayout;
+    raise;
+  end;
+  finally
+    FBuildingLayout := False;
+  end;
+  Resize;
 end;
 
 procedure TBikeFitPage.FitCameraToItems(AVp: TCastleViewport);
@@ -980,6 +1051,7 @@ begin
     begin
       FVpResult.Items.Remove(FVpResult.Camera);
       FVpResult.Background := nil;
+      FVpResult.BackgroundColor := MenuSurface;
       FVpResult.Items := FPreviewItems;
       FPreviewItems.Add(FVpResult.Camera);
     end;
@@ -997,7 +1069,7 @@ end;
 procedure TBikeFitPage.AttachLiveRide;
 begin
   FreePreviewBikes;
-  FResultBike := ViewPlay.Bike;
+  FResultBike := ViewPlay.RiderBike(FProfileIndex);
   FLiveRide := FResultBike <> nil;
   if not FLiveRide then Exit;
   FPreviewItems.Remove(FVpResult.Camera);
@@ -1013,7 +1085,7 @@ begin
   FFitInited := True;
   FOrigFrameC := FResultBike.LastBuildColors.Frame;
   FOrigRimC := FResultBike.LastBuildColors.Rim;
-  FCadenceRpm := ViewPlay.RideCadence;
+  FCadenceRpm := ViewPlay.RiderCadence(FProfileIndex);
   FLastLiveEffortPct := CurrentEffortPct;
   BindUiText(FButtonApply, 'Save');
   UpdateLiveCamera(True);
@@ -1032,7 +1104,9 @@ begin
   FNavResult.ModelBox := Box3D(RiderCenter - Extent, RiderCenter + Extent);
   if Reset then
   begin
-    ForwardDir := ViewPlay.AvatarTransform.Direction;
+    ForwardDir := FResultBike.Group.Direction;
+    if ViewPlay.RiderAgent(FProfileIndex)<>nil then
+      ForwardDir:=ViewPlay.RiderAgent(FProfileIndex).State.ForwardDir;
     ForwardDir.Y := 0;
     if ForwardDir.Length < 0.001 then ForwardDir := Vector3(0, 0, 1)
     else ForwardDir := ForwardDir.Normalize;
@@ -1050,15 +1124,39 @@ end;
 procedure TBikeFitPage.LiveFitChanged;
 begin
   if not FLoadingPreview then begin FLiveSettingsDirty:=True;FFitSaveDelay:=1.2;end;
-  if FLiveRide then ViewPlay.BikeFitChanged;
+  if FLiveRide then ViewPlay.LocalBikeFitChanged(FProfileIndex);
 end;
 
 procedure TBikeFitPage.BeforeRender;
 begin
+  if FBuildingLayout or (FUiOwner=nil) then Exit;
   inherited;
   { Follow after the ride update so both views see the same rider position. }
   if (FHairOverlay<>nil)and FHairOverlay.Exists then UpdateHeadCamera(False)
   else UpdateLiveCamera(False);
+end;
+
+procedure TBikeFitPage.SetProfileIndex(Value: Integer);
+begin
+  Value:=EnsureRange(Value,0,LocalRiderCount-1);
+  if Value=FProfileIndex then Exit;
+  if FLoadingPreview then begin
+    FPendingProfileIndex:=Value;FProfileRebindPending:=True;Exit;
+  end;
+  FProfileRebindPending:=False;
+  PageHidden; { Detach borrowed live scene before changing profile ownership. }
+  FProfileIndex:=Value;FRiderSettings:=RiderSettings(Value);
+  BuildLayout;
+  if Exists then PageShown;
+end;
+
+procedure TBikeFitPage.SaveGameName(Sender: TObject);
+var P:TVeloSiteProfile;N:string;
+begin
+  N:=Trim(FNameEdit.Text);if N='' then Exit;
+  P:=EffectiveRiderProfile(FProfileIndex);
+  SaveLocalRider(N,P.WeightKg,P.FtpW,P.TrainingZonesJSON,FProfileIndex);
+  FNameEdit.Text:=N;
 end;
 
 procedure TBikeFitPage.PageShown;
@@ -1066,6 +1164,7 @@ var
   I: Integer;
   Want: string;
 begin
+  FRiderSettings:=RiderSettings(FProfileIndex);
   if FLoadingPreview then
   begin
     FReleasePreviewPending := False;
@@ -1074,6 +1173,7 @@ begin
   FOnFootPreview:=Settings.TravelMode<>travelBicycle;FOnFootFramed:=False;
   FWalkPreviewSpeed:=0;
   if FOnFootPreview and(FSection=0)then FSection:=1;
+  if FUiOwner = nil then BuildLayout;
   if FLabelTitle <> nil then
     FLabelTitle.Exists := False;
   if FButtonBack <> nil then
@@ -1085,18 +1185,18 @@ begin
   FPoseTimer := 0;
   FPoseCycleSec := DefaultPoseCycleSec;
   FPoseBlendSec := DefaultPoseBlendSec;
-  if Settings.FitParamsValid then
+  if FRiderSettings.FitParamsValid then
   begin
-    FFitSeatExt := Settings.FitSeatpostExt;
-    FFitSaddleOff := Settings.FitSaddleOffset;
-    FFitSpacers := Settings.FitHeadsetSpacer;
-    FFitStem := Settings.FitStemLength;
-    FFitHeightCm := Settings.FitHeightCm;
-    FFitInseamCm := Settings.FitInseamCm;
+    FFitSeatExt := FRiderSettings.FitSeatpostExt;
+    FFitSaddleOff := FRiderSettings.FitSaddleOffset;
+    FFitSpacers := FRiderSettings.FitHeadsetSpacer;
+    FFitStem := FRiderSettings.FitStemLength;
+    FFitHeightCm := FRiderSettings.FitHeightCm;
+    FFitInseamCm := FRiderSettings.FitInseamCm;
 
 
-    FFitKneeFlare := Settings.FitKneeFlare;
-    FFitAnkleFlex := Settings.FitAnkleFlex;
+    FFitKneeFlare := FRiderSettings.FitKneeFlare;
+    FFitAnkleFlex := FRiderSettings.FitAnkleFlex;
     FFitInited := True;
     { 100 cm is the 1 m Tripo file mesh, not a real standing height. }
     if (FFitHeightCm >= 130) and (FFitHeightCm <= 230) then
@@ -1111,8 +1211,7 @@ begin
   end;
 
   LoadBodyFields;
-  if FUiOwner = nil then
-    BuildLayout;
+  FNameEdit.Text:=EffectiveRiderProfile(FProfileIndex).Nickname;
   LayoutSections;
   ApplyHairStyle;
   FWardrobePanel.Refresh;
@@ -1121,7 +1220,7 @@ begin
   ScanLibraries;
 
   FSelBike := -1;
-  Want := Settings.SelectedBikeJson;
+  Want := FRiderSettings.SelectedBikeJson;
   if Want <> '' then
     for I := 0 to FBikePaths.Count - 1 do
       if SameText(FBikePaths[I], Want) or
@@ -1132,7 +1231,7 @@ begin
       end;
   if (FSelBike < 0) and (FBikePaths.Count > 0) then FSelBike := 0;
   LoadSelectedInsights;
-  Want := Settings.SelectedBikeSize;
+  Want := FRiderSettings.SelectedBikeSize;
   FSelSize := -1;
   if Want <> '' then
     for I := 0 to FSizeNames.Count - 1 do
@@ -1185,15 +1284,15 @@ end;
 
 function TBikeFitPage.CurrentRiderPath: string;
 begin
-  Result := ResolveRiderGlbPath(Settings.SelectedRiderGlb);
+  Result := ResolveRiderGlbPath(FRiderSettings.SelectedRiderGlb);
   if Result = '' then
-    Result := ResolveRiderGlbPath(RiderGlbUrlForGender(Settings.GetGender));
-  Result:=WardrobeRiderPath(Result);
+    Result := ResolveRiderGlbPath(RiderGlbUrlForGender(FRiderSettings.GetGender));
+  Result:=WardrobeRiderPath(Result, FProfileIndex);
 end;
 
 function TBikeFitPage.CurrentRiderName: string;
 begin
-  if SameText(Settings.GetGender, 'female') then
+  if SameText(FRiderSettings.GetGender, 'female') then
     Result := 'FEM'
   else
     Result := 'MEN';
@@ -1287,11 +1386,11 @@ begin
     Btn.FontScale := 0.85;
     Btn.CustomBackground := True;
     if I = FSelBike then
-      Btn.CustomColorNormal := Vector4(0.13,0.30,0.34,1)
+      Btn.CustomColorNormal := MenuSelected
     else
-      Btn.CustomColorNormal := Vector4(0.105,0.157,0.192,1);
-    Btn.CustomColorFocused := Vector4(0.15,0.23,0.28,1);
-    Btn.CustomColorPressed := Vector4(0.13,0.30,0.34,1);
+      Btn.CustomColorNormal := MenuInset;
+    Btn.CustomColorFocused := MenuInset;
+    Btn.CustomColorPressed := MenuSelected;
     Btn.Tag := I;
     Btn.OnClick := @ClickPopupBike;
     FPopupList.InsertFront(Btn);
@@ -1332,11 +1431,11 @@ begin
     Btn.FontScale := 0.9;
     Btn.CustomBackground := True;
     if I = FSelSize then
-      Btn.CustomColorNormal := Vector4(0.13,0.30,0.34,1)
+      Btn.CustomColorNormal := MenuSelected
     else
-      Btn.CustomColorNormal := Vector4(0.105,0.157,0.192,1);
-    Btn.CustomColorFocused := Vector4(0.15,0.23,0.28,1);
-    Btn.CustomColorPressed := Vector4(0.13,0.30,0.34,1);
+      Btn.CustomColorNormal := MenuInset;
+    Btn.CustomColorFocused := MenuInset;
+    Btn.CustomColorPressed := MenuSelected;
     Btn.Tag := I;
     Btn.OnClick := @ClickPopupSize;
     FPopupList.InsertFront(Btn);
@@ -1667,7 +1766,7 @@ begin
   ApplyResultPose;
   ReapplyColorsAfterBuild;
   Logger.Info(Format('[BikeFit]   Pose %d ms', [GetTickCount64 - T0]));
-  if FLiveRide then ViewPlay.BikeFitChanged;
+  if FLiveRide then ViewPlay.LocalBikeFitChanged(FProfileIndex);
   UpdateLabels;
 end;
 
@@ -1708,7 +1807,7 @@ begin
   Logger.Info('[BikeFit] rider path=' + Rider +
     ' exists=' + BoolToStr((Rider <> '') and FileExists(Rider), True));
   if Rider <> '' then
-    JsonText := InjectRiderPath(JsonText, Rider);
+    JsonText := InjectRiderPath(JsonText, Rider, True, FProfileIndex);
 
   T0 := GetTickCount64;
   try
@@ -1766,7 +1865,7 @@ begin
     Logger.Info(Format('[BikeFit]   FitCam/pose %d ms', [GetTickCount64 - T0]));
     { The first visit may precede the first ride. Use the same personal fit
       here instead of persisting the catalogue's arbitrary default post. }
-    if not Settings.FitParamsValid and FResultBike.HasTripoRider and
+    if not FRiderSettings.FitParamsValid and FResultBike.HasTripoRider and
       (FSizeNames.Count>0)then FAutoFitPending:=True;
   end;
   UpdateLabels;
@@ -1895,15 +1994,15 @@ const
   DyeIdxRim    = 8;
   DyeIdxHelmet = 9;
 
-function DyeSlotTitle(Index:Integer):string;
+function DyeSlotTitle(Index,FProfileIndex:Integer):string;
 begin
   Result:=DyeSlotCaption[Index];
   case Index of
-    0:if WardrobeSelection(2)<>''then Result:='Outer layer'
-      else if WardrobeSelection(0)<>''then Result:='Top';
-    1:if WardrobeSelection(1)<>''then Result:='Bottom';
+    0:if WardrobeSelection(2, FProfileIndex)<>''then Result:='Outer layer'
+      else if WardrobeSelection(0, FProfileIndex)<>''then Result:='Top';
+    1:if WardrobeSelection(1, FProfileIndex)<>''then Result:='Bottom';
     3:Result:='Footwear';
-    9:if(WardrobeSelection(4)<>'')or(UserPreference('rider_headwear','helmet')<>'helmet')then Result:='Headwear';
+    9:if(WardrobeSelection(4, FProfileIndex)<>'')or(RiderPreference('rider_headwear','helmet', FProfileIndex)<>'helmet')then Result:='Headwear';
   end;
 end;
 
@@ -1938,7 +2037,16 @@ end;
 procedure TBikeFitPage.BuildHairSelector;
 var C,I:Integer;B:TMenuButton;L:TCastleLabel;
 begin
+  FNameCaption:=TMenuLabel.Create(FUiOwner);BindUiText(FNameCaption,'Game name');
+  FColParams.InsertFront(FNameCaption);
+  FNameEdit:=TMenuEdit.Create(FUiOwner);FNameEdit.Name:='RiderGameName';
+  FNameEdit.Text:=EffectiveRiderProfile(FProfileIndex).Nickname;
+  FColParams.InsertFront(FNameEdit);
+  B:=TMenuButton.Create(FUiOwner);FNameSave:=B;B.Name:='SaveRiderGameName';
+  BindUiText(B,'Save');B.Width:=80;B.Height:=30;B.OnClick:=@SaveGameName;
+  B.Anchor(hpRight,-10);B.Anchor(vpTop,-94);FColParams.InsertFront(B);
   FWardrobePanel:=TGameWardrobePanel.Create(FUiOwner);
+  FWardrobePanel.ProfileIndex:=FProfileIndex;
   FWardrobePanel.OnChange:=@ClothingChanged;
   FWardrobePanel.OnColorClick:=@ClickDyeSlot;
   FAppearanceRows.ScrollArea.InsertFront(FWardrobePanel);
@@ -2037,13 +2145,13 @@ end;
 procedure TBikeFitPage.ApplyHairStyle;
 var Style:TRiderHairStyle;C,I:Integer;Selected:Boolean;Id:String;
 begin
-  Style:=ParseRiderHairStyle(UserPreference('rider_hair_style','short'));
+  Style:=ParseRiderHairStyle(RiderPreference('rider_hair_style','short', FProfileIndex));
   if FHairSelect<>nil then begin
     BindUiText(FHairSelect,'Head editor');
     FHairPreview.Url:=HeadPreviewUrl(1,RiderHairStyleId(Style),False);
   end;
   for C:=0 to 3 do begin
-    Id:=UserPreference(HeadKeys[C],HeadDefaults[C]);
+    Id:=RiderPreference(HeadKeys[C],HeadDefaults[C], FProfileIndex);
     if C=1 then Id:=RiderHairStyleId(Style);
     for I:=0 to HeadOptionCount(C)-1 do if FHeadRows[C,I]<>nil then begin
       Selected:=HeadOptionId(C,I)=Id;SelectMenuButton(FHeadRows[C,I],Selected);
@@ -2068,21 +2176,21 @@ end;
 procedure TBikeFitPage.RefreshGarment;
 var P:TRiderGarmentParameters;I:Integer;Fit,Len:string;
 begin
-  P:=AvatarGarment;
+  P:=AvatarGarment(FProfileIndex);
   if P.Ease< -0.3 then Fit:='Jersey: snug'
   else if P.Ease>0.5 then Fit:='Jersey: relaxed'else Fit:='Jersey: fitted';
   if P.LengthEase< -0.3 then Len:='Length: short'
   else if P.LengthEase>0.3 then Len:='Length: long'else Len:='Length: regular';
   BindUiText(FGarmentButtons[0],Fit);BindUiText(FGarmentButtons[1],Len);
   BindUiText(FGarmentButtons[2],'Rearrange folds');BindUiText(FGarmentButtons[3],'Pull jersey down');
-  for I:=0 to 3 do FGarmentButtons[I].Enabled:=(WardrobeSelection(0)='')and(WardrobeSelection(2)='');
+  for I:=0 to 3 do FGarmentButtons[I].Enabled:=(WardrobeSelection(0, FProfileIndex)='')and(WardrobeSelection(2, FProfileIndex)='');
 end;
 
 procedure TBikeFitPage.ClickGarment(Sender:TObject);
 var P:TRiderGarmentParameters;Index:Integer;
 begin
   if not TMenuButton(Sender).Enabled then Exit;
-  P:=AvatarGarment;Index:=TComponent(Sender).Tag;
+  P:=AvatarGarment(FProfileIndex);Index:=TComponent(Sender).Tag;
   if Index=0 then begin
     if P.Ease< -0.3 then P.Ease:=0.15 else if P.Ease<0.5 then P.Ease:=0.85 else P.Ease:=-0.7;
   end else if Index=1 then begin
@@ -2090,7 +2198,7 @@ begin
   end else begin Inc(P.Revision);P.Adjusted:=Index=3 end;
   if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)and(FResultBike.TripoRider.Garment<>nil)then
     FResultBike.TripoRider.Garment.ConfigureGarment(P,Index<2);
-  SaveAvatarGarment(P);RefreshGarment;
+  SaveAvatarGarment(P, FProfileIndex);RefreshGarment;
 end;
 
 procedure TBikeFitPage.McpClothing(AParams:TJSONObject;AResult:TJSONObject);
@@ -2098,19 +2206,19 @@ var I:Integer;Changed:Boolean;P:TRiderGarmentParameters;D:TJSONData;
 begin
   Changed:=False;
   for I:=0 to High(WardrobeSlots)do if AParams.Find(WardrobeSlots[I])<>nil then begin
-    SelectWardrobe(WardrobeSlots[I],AParams.Get(WardrobeSlots[I],''));Changed:=True;
+    SelectWardrobe(WardrobeSlots[I],AParams.Get(WardrobeSlots[I],''), FProfileIndex);Changed:=True;
   end;
   if Changed then begin FWardrobePanel.Refresh;ClothingChanged(nil) end;
   D:=AParams.Find('garment');
   if D is TJSONObject then begin
-    P:=ReadRiderGarment(TJSONObject(D),AvatarGarment);SaveAvatarGarment(P);
-    if FResultBike<>nil then ApplyAvatarGarment(FResultBike.TripoRider);
+    P:=ReadRiderGarment(TJSONObject(D),AvatarGarment(FProfileIndex));SaveAvatarGarment(P, FProfileIndex);
+    if FResultBike<>nil then ApplyAvatarGarment(FResultBike.TripoRider, FProfileIndex);
     RefreshGarment;
   end;
   if AParams.Get('pull_jersey',False)then ClickGarment(FGarmentButtons[3]);
   if AParams.Get('rearrange_folds',False)then ClickGarment(FGarmentButtons[2]);
   FSection:=2;LayoutSections;McpFillStatus(AResult);AResult.Add('ok',True);
-  AResult.Add('garment',WriteRiderGarment(AvatarGarment));
+  AResult.Add('garment',WriteRiderGarment(AvatarGarment(FProfileIndex)));
 end;
 
 procedure TBikeFitPage.McpCamera(AParams:TJSONObject;AResult:TJSONObject);
@@ -2141,8 +2249,8 @@ end;
 procedure TBikeFitPage.ApplyHeadAppearance;
 begin
   if (FResultBike=nil)or(FResultBike.TripoRider=nil)then Exit;
-  FResultBike.TripoRider.SetHeadAppearance(WardrobeHeadwear,
-    ParseBeard(UserPreference(HeadKeys[3],HeadDefaults[3])),ParseMustache(UserPreference(HeadKeys[2],HeadDefaults[2])));
+  FResultBike.TripoRider.SetHeadAppearance(WardrobeHeadwear(FProfileIndex),
+    ParseBeard(RiderPreference(HeadKeys[3],HeadDefaults[3], FProfileIndex)),ParseMustache(RiderPreference(HeadKeys[2],HeadDefaults[2], FProfileIndex)));
 end;
 
 procedure TBikeFitPage.McpSetHair(const Id:String);
@@ -2150,7 +2258,7 @@ var Style:TRiderHairStyle;
 begin
   Style:=ParseRiderHairStyle(Id);
   if not SameText(Id,RiderHairStyleId(Style))then raise Exception.Create('Unknown hairstyle: '+Id);
-  SetUserPreference('rider_hair_style',RiderHairStyleId(Style));
+  SetRiderPreference('rider_hair_style',RiderHairStyleId(Style), FProfileIndex);
   FSection:=2;ApplyHairStyle;LayoutSections;
 end;
 
@@ -2158,10 +2266,10 @@ procedure TBikeFitPage.ClickHair(Sender:TObject);
 var C,I:Integer;
 begin
   C:=TMenuButton(Sender).Tag div 16;I:=TMenuButton(Sender).Tag mod 16;
-  if(C=0)and(WardrobeSelection(4)<>'')then begin
-    SelectWardrobe('head','');FWardrobePanel.Refresh;ClothingChanged(nil);
+  if(C=0)and(WardrobeSelection(4, FProfileIndex)<>'')then begin
+    SelectWardrobe('head','', FProfileIndex);FWardrobePanel.Refresh;ClothingChanged(nil);
   end;
-  SetUserPreference(HeadKeys[C],HeadOptionId(C,I));ApplyHairStyle;LayoutHairList;
+  SetRiderPreference(HeadKeys[C],HeadOptionId(C,I), FProfileIndex);ApplyHairStyle;LayoutHairList;
   if C=1 then UpdateHeadCamera(True);
 end;
 
@@ -2173,10 +2281,10 @@ begin
     Id:=AParams.Get(Params[C],'');Found:=False;
     for I:=0 to HeadOptionCount(C)-1 do if Id=HeadOptionId(C,I)then Found:=True;
     if not Found then raise Exception.Create('Unknown '+Params[C]+': '+Id);
-    if(C=0)and(WardrobeSelection(4)<>'')then begin
-      SelectWardrobe('head','');FWardrobePanel.Refresh;ClothingChanged(nil);
+    if(C=0)and(WardrobeSelection(4, FProfileIndex)<>'')then begin
+      SelectWardrobe('head','', FProfileIndex);FWardrobePanel.Refresh;ClothingChanged(nil);
     end;
-    SetUserPreference(HeadKeys[C],Id);
+    SetRiderPreference(HeadKeys[C],Id, FProfileIndex);
   end;
   FSection:=2;ApplyHairStyle;LayoutSections;
   if AParams.Get('open',True)then begin
@@ -2301,7 +2409,7 @@ end;
 procedure TBikeFitPage.ScrollHeadSelection;
 var I:Integer;Id:String;S:Single;
 begin
-  Id:=UserPreference(HeadKeys[FHeadCategory],HeadDefaults[FHeadCategory]);
+  Id:=RiderPreference(HeadKeys[FHeadCategory],HeadDefaults[FHeadCategory], FProfileIndex);
   if FHeadCategory=1 then Id:=RiderHairStyleId(ParseRiderHairStyle(Id));
   S:=Max(0.65,Min(1,UIScale));FHairScroll.Scroll:=0;
   for I:=0 to HeadOptionCount(FHeadCategory)-1 do if Id=HeadOptionId(FHeadCategory,I)then begin
@@ -2348,7 +2456,7 @@ var
   Lbl: TCastleLabel;
 begin
   FDyeStrip := TCastleRectangleControl.Create(FUiOwner);
-  FDyeStrip.Color := Vector4(0.05, 0.08, 0.07, 0.85);
+  FDyeStrip.Color := MenuSurface;
   FDyeStrip.Width := 54 + 10 * 48 + 6;
   FDyeStrip.Height := 50;
   FDyeStrip.Anchor(hpMiddle, 0);
@@ -2367,7 +2475,7 @@ begin
   begin
     B := TMenuButton.Create(FUiOwner);
     B.Name:='AppearanceColor'+IntToStr(I);
-    BindUiText(B, DyeSlotTitle(I));
+    BindUiText(B, DyeSlotTitle(I,FProfileIndex));
     B.FontScale := 0.85;
     TMenuButton(B).AutoIcon := False;
     B.AutoSize := False;
@@ -2384,14 +2492,14 @@ begin
 
   { попап палитры: [0] = «выкл», дальше 12 swatch'ей сеткой 7×2 }
   FDyePop := TCastleRectangleControl.Create(FUiOwner);
-  FDyePop.Color := Vector4(0.08, 0.11, 0.10, 0.98);
+  FDyePop.Color := MenuSurface;
   FDyePop.Width := 7 * 44 + 12;
   FDyePop.Height := 2 * 44 + 44;
   FDyePop.Anchor(hpMiddle);
   FDyePop.Anchor(vpTop, -90);
   FDyePop.Exists := False;
   FColResult.InsertFront(FDyePop);
-  FDyeTitle:=TMenuLabel.Create(FUiOwner);FDyeTitle.Color:=White;
+  FDyeTitle:=TMenuLabel.Create(FUiOwner);FDyeTitle.Color:=MenuText;
   FDyeTitle.FontSize:=18;FDyeTitle.Anchor(hpLeft,8);FDyeTitle.Anchor(vpTop,-6);
   FDyePop.InsertFront(FDyeTitle);
   for I := 0 to 12 do
@@ -2410,7 +2518,8 @@ begin
     FDyePopSw[I] := B;
   end;
 
-  UpdateDyeStripVisuals;
+  { The wardrobe is constructed next. ApplyHairStyle refreshes all colours
+    once both groups exist, never while one still belongs to the old layout. }
 end;
 
 procedure TBikeFitPage.CloseDyePopup;
@@ -2506,7 +2615,7 @@ var
   Idx: Integer;
 begin
   Idx := TCastleButton(Sender).Tag;
-  FDyeTitle.Caption:=UiText(DyeSlotTitle(Idx));
+  FDyeTitle.Caption:=UiText(DyeSlotTitle(Idx,FProfileIndex));
   if FDyePopSlot = Idx then
     CloseDyePopup
   else
@@ -2546,7 +2655,7 @@ begin
   for I := 0 to 9 do
   begin
     if FDyeBtns[I] = nil then Continue;
-    BindUiText(FDyeBtns[I],DyeSlotTitle(I));
+    BindUiText(FDyeBtns[I],DyeSlotTitle(I,FProfileIndex));
     if I <= Ord(High(TClothSlot)) then
     begin
       On_ := FDyeOn[TClothSlot(I)];
@@ -2686,7 +2795,7 @@ begin
     if FBikeFrameOn then SL.Add(HexOf(FBikeFrameC)) else SL.Add('');
     if FBikeRimOn then SL.Add(HexOf(FBikeRimC)) else SL.Add('');
     if FHelmetOn then SL.Add(HexOf(FHelmetC)) else SL.Add('');
-    Settings.BikeFitColors := SL.DelimitedText;
+    FRiderSettings.BikeFitColors := SL.DelimitedText;
   finally
     SL.Free;
   end;
@@ -2719,7 +2828,7 @@ begin
   try
     SL.StrictDelimiter := True;
     SL.Delimiter := ',';
-    SL.DelimitedText := Settings.BikeFitColors;
+    SL.DelimitedText := FRiderSettings.BikeFitColors;
     for S := Low(TClothSlot) to High(TClothSlot) do
     begin
       I := Ord(S);
@@ -2769,6 +2878,7 @@ end;
 
 procedure TBikeFitPage.Resize;
 begin
+  if FBuildingLayout then Exit;
   inherited;
   LayoutSections;
   if FLabelStatus <> nil then FLabelStatus.MaxWidth := Max(100, EffectiveWidth - 32);
@@ -2813,6 +2923,7 @@ var S,W,TabW:Single;I:Integer;
       end;
   end;
 begin
+  if FBuildingLayout then Exit;
   if(FSectionButtons[2]=nil)or(FDyeStrip=nil)or(FHairBox=nil)or(FBottomRow.EffectiveWidth<=0)then Exit;
   S:=Max(0.65,Min(1,UIScale));W:=Min(420/S,FBottomRow.EffectiveWidth*0.46);
   if FMainHost<>nil then FMainHost.Border.Bottom:=42/S;
@@ -2867,7 +2978,14 @@ begin
   Row(FBtnSpacersDown,0,2,224);Row(FBtnStemDown,0,3,224);
   FBodyRows.Exists:=FSection=1;
   FBodyRows.Name:='RiderBodyRows';
-  FBodyRows.Border.Top:=92/S;FBodyRows.Border.Bottom:=158/S;
+  FNameCaption.Exists:=FSection=1;FNameCaption.Anchor(hpLeft,10/S);FNameCaption.Anchor(vpTop,-94/S);
+  FNameCaption.FontSize:=13/S;
+  FNameSave.Exists:=FSection=1;FNameSave.Width:=80/S;FNameSave.Height:=30/S;
+  FNameSave.Anchor(hpRight,-10/S);FNameSave.Anchor(vpTop,-118/S);
+  FNameEdit.Exists:=FSection=1;
+  FNameEdit.Width:=W-105/S;FNameEdit.Height:=30/S;
+  FNameEdit.Anchor(hpLeft,10/S);FNameEdit.Anchor(vpTop,-118/S);
+  FBodyRows.Border.Top:=156/S;FBodyRows.Border.Bottom:=158/S;
   FBodyRows.ScrollArea.Height:=540/S;
   Row(FBtnSexDown,1,0,4);Row(FBtnHeightDown,1,1,4);
   Row(FBtnBulkDown,1,2,4);Row(FBtnBellyDown,1,3,4);
@@ -2947,6 +3065,7 @@ end;
 
 procedure TBikeFitPage.Update(const SecondsPassed: Single; var HandleInput: Boolean);
 begin
+  if FBuildingLayout or (FUiOwner=nil) then Exit;
   inherited;
   if (not Exists) or FLoadingPreview then Exit;
   if FVpResult<>nil then
@@ -2968,6 +3087,9 @@ begin
       PageHidden;
     end;
   end;
+  if FProfileRebindPending then begin
+    FProfileRebindPending:=False;SetProfileIndex(FPendingProfileIndex);Exit;
+  end;
   if not Exists then Exit;
   FBtnAutoFit.Enabled:=(FResultBike<>nil)and FResultBike.HasTripoRider and
     not FAutoFitPending and not FDirtyResult and(FWantRiderPath='')and(FSizeNames.Count>0);
@@ -2982,11 +3104,11 @@ begin
   end;
   if FLiveRide then
   begin
-    if FOnFootPreview then begin FWalkPreviewSpeed:=Abs(ViewPlay.RideSpeed);UpdateLabels;Exit end;
-    if (Round(FCadenceRpm) <> Round(ViewPlay.RideCadence)) or
+    if FOnFootPreview then begin FWalkPreviewSpeed:=Abs(ViewPlay.RiderSpeed(FProfileIndex));UpdateLabels;Exit end;
+    if (Round(FCadenceRpm) <> Round(ViewPlay.RiderCadence(FProfileIndex))) or
        (Round(FLastLiveEffortPct) <> Round(CurrentEffortPct)) then
     begin
-      FCadenceRpm := ViewPlay.RideCadence;
+      FCadenceRpm := ViewPlay.RiderCadence(FProfileIndex);
       FLastLiveEffortPct := CurrentEffortPct;
       UpdateLabels;
     end;
@@ -3144,7 +3266,7 @@ begin
     FFitSpacers:=Fit.Spacers;FFitStem:=Fit.Stem;FFitInited:=True;
     ReapplyColorsAfterBuild;
     ApplyPreviewAnimation;
-    if FLiveRide then ViewPlay.BikeFitChanged else FitCameraToItems(FVpResult);
+    if FLiveRide then ViewPlay.LocalBikeFitChanged(FProfileIndex) else FitCameraToItems(FVpResult);
     FLiveSettingsDirty:=True;
     ClickApply(nil);
     if not FLiveSettingsDirty then begin
@@ -3199,7 +3321,7 @@ end;
 procedure TBikeFitPage.LoadBodyFields;
 var P:TRiderBodyParameters;
 begin
-  P:=AvatarBodyParameters;
+  P:=AvatarBodyParameters(FProfileIndex);
   FFitSex:=P.Sex;FFitHeightCm:=P.HeightCm;FFitInseamCm:=P.InseamCm;
   FFitWeightKg:=P.WeightKg;FFitComposition:=P.Composition;
   FFitArmCm:=P.ArmLengthCm;FFitHead:=P.HeadShape;
@@ -3219,7 +3341,10 @@ var TagValue,Direction:Integer;
 begin
   TagValue:=TComponent(Sender).Tag;Direction:=Sign(TagValue);
   case Abs(TagValue) of
-    1:FFitSex:=EnsureRange(FFitSex+Direction*0.05,0,1);
+    1:begin
+      FFitSex:=EnsureRange(FFitSex+Direction*0.05,0,1);
+      SelectAvatarBodySex(FFitSex,FProfileIndex);FFitHead:=FFitSex;
+    end;
     2:FFitArmCm:=EnsureRange(RiderBodyArmCm(CurrentBody)+Direction,FFitHeightCm*0.24,FFitHeightCm*0.40);
     3:FFitHead:=EnsureRange(FFitHead+Direction*0.05,0,1);
     4..8:FFitDimensions[Abs(TagValue)-4]:=EnsureRange(FFitDimensions[Abs(TagValue)-4]+Direction*0.02,
@@ -3234,7 +3359,7 @@ begin
   FAutoFitStatus:=0;
   SeedRiderShapeFromBike;
   FResultBike.BodyParameters:=CurrentBody;
-  ApplyAvatarGarment(FResultBike.TripoRider);
+  ApplyAvatarGarment(FResultBike.TripoRider, FProfileIndex);
   LiveFitChanged;
 end;
 
@@ -3419,7 +3544,9 @@ begin
     G := 'male'
   else
     G := 'female';
-  Settings.SetGender(G);
+  FRiderSettings.SetGender(G);
+  if G='female' then SelectAvatarBodySex(1,FProfileIndex)
+  else SelectAvatarBodySex(0,FProfileIndex);
   LoadBodyFields;
   ApplyRiderShapeToPreview;
   if FResultBike <> nil then
@@ -3431,7 +3558,7 @@ end;
 
 procedure TBikeFitPage.McpBody(AParams,AResult:TJSONObject);
 begin
-  SaveAvatarBody(ReadRiderBody(AParams,CurrentBody));
+  SaveAvatarBody(ReadRiderBody(AParams,CurrentBody), FProfileIndex);
   LoadBodyFields;ApplyRiderShapeToPreview;UpdateLabels;
   McpFillStatus(AResult);
 end;
@@ -3480,14 +3607,14 @@ end;
 procedure TBikeFitPage.McpFillStatus(AResult: TJSONObject);
 var FaceState, HairState: TJSONObject;
 begin
-  if FResultBike<>nil then WardrobeState(FResultBike.TripoRider,AResult)
-  else WardrobeState(nil,AResult);
+  if FResultBike<>nil then WardrobeState(FResultBike.TripoRider,AResult, FProfileIndex)
+  else WardrobeState(nil,AResult, FProfileIndex);
   AResult.Add('auto_fit_pending',FAutoFitPending);
   AResult.Add('auto_fit_status',FAutoFitStatus);
   if(FSelBike>=0)and(FSelBike<FBikePaths.Count)then
     AResult.Add('bike_path',FBikePaths[FSelBike]);
   AResult.Add('bike_size',CurrentSizeName);
-  AResult.Add('hair_style',UserPreference('rider_hair_style','short'));
+  AResult.Add('hair_style',RiderPreference('rider_hair_style','short', FProfileIndex));
   AResult.Add('head_editor_open',(FHairOverlay<>nil)and FHairOverlay.Exists);
   AResult.Add('head_category',FHeadCategory);
   AResult.Add('preview_loading',FLoadingPreview or FDirtyResult or (FWantRiderPath<>''));
@@ -3495,12 +3622,14 @@ begin
   if(FResultBike<>nil)and(FResultBike.TripoRider<>nil)then
     AResult.Add('applied_hair_style',RiderHairStyleId(FResultBike.TripoRider.HairStyle));
   AResult.Add('riders', 2);
-  if SameText(Settings.GetGender, 'female') then
+  if SameText(FRiderSettings.GetGender, 'female') then
     AResult.Add('sel_rider', 1)
   else
     AResult.Add('sel_rider', 0);
   AResult.Add('rider', CurrentRiderName);
-  AResult.Add('gender', Settings.GetGender);
+  AResult.Add('gender', FRiderSettings.GetGender);
+  AResult.Add('profile_index',FProfileIndex);
+  AResult.Add('game_name',EffectiveRiderProfile(FProfileIndex).Nickname);
   AResult.Add('sel_bike', FSelBike);
   AResult.Add('bike', CurrentBikeCaption);
   AResult.Add('size', CurrentSizeCaption);
@@ -3544,7 +3673,7 @@ begin
   end;
   if FLiveRide then
   begin
-    AResult.Add('same_bike', FResultBike = ViewPlay.Bike);
+    AResult.Add('same_bike', FResultBike = ViewPlay.RiderBike(FProfileIndex));
     AResult.Add('same_world', FVpResult.Items = ViewPlay.MainViewport.Items);
   end;
   if FVpResult <> nil then
@@ -3640,34 +3769,34 @@ procedure TBikeFitPage.ClickApply(Sender: TObject);
 var
   Saved: Boolean;
 begin
-  Settings.BeginUpdate;
+  FRiderSettings.BeginUpdate;
   try
     if (FSelBike >= 0) and (FSelBike < FBikePaths.Count) then
-      Settings.SelectedBikeJson := FBikePaths[FSelBike]
+      FRiderSettings.SelectedBikeJson := FBikePaths[FSelBike]
     else
-      Settings.SelectedBikeJson := '';
-    Settings.SelectedBikeSize := CurrentSizeName;
-    Settings.SetGender(Settings.GetGender); { preserve selected preset label }
-    Settings.SetFitAdjustments(FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem);
-    Settings.SetRiderShape(FFitHeightCm, FFitInseamCm, 0, 0,
+      FRiderSettings.SelectedBikeJson := '';
+    FRiderSettings.SelectedBikeSize := CurrentSizeName;
+    FRiderSettings.SetGender(FRiderSettings.GetGender); { preserve selected preset label }
+    FRiderSettings.SetFitAdjustments(FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem);
+    FRiderSettings.SetRiderShape(FFitHeightCm, FFitInseamCm, 0, 0,
       FFitKneeFlare, FFitAnkleFlex);
   finally
-    Saved := Settings.EndUpdate;
+    Saved := FRiderSettings.EndUpdate;
   end;
   if not Saved then
   begin
     BindUiText(FLabelStatus, 'Could not save settings. Please try again.');
     Exit;
   end;
-  SaveAvatarBody(CurrentBody);
+  SaveAvatarBody(CurrentBody, FProfileIndex);
   FLiveSettingsDirty := False;
   if FLiveRide then
     BindTravelText(FLabelStatus, 'Saved and applied to the current ride.')
   else
     BindTravelText(FLabelStatus, 'Saved — applies to the next ride.');
   Logger.Info(Format('[BikeFit] apply bike=%s size=%s rider=%s fit seat=%0.0f off=%0.0f sp=%0.0f stem=%0.0f h=%0.0f in=%0.0f bulk=%0.2f belly=%0.2f knee=%0.2f ankle=%0.0f',
-    [Settings.SelectedBikeJson, Settings.SelectedBikeSize,
-     Settings.SelectedRiderGlb, FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem,
+    [FRiderSettings.SelectedBikeJson, FRiderSettings.SelectedBikeSize,
+     FRiderSettings.SelectedRiderGlb, FFitSeatExt, FFitSaddleOff, FFitSpacers, FFitStem,
      FFitHeightCm, FFitInseamCm, FFitWeightKg, FFitComposition,
      FFitKneeFlare, FFitAnkleFlex]));
 end;
